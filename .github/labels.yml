@@ -103,15 +103,7 @@
 
 - name: ready
   color: 0e8a16
-  description: Triaged and ready to move from Backlog to Todo in Plane
-
-- name: plane-sync
-  color: 5319e7
-  description: Maintainer-approved synchronization with the Plane board
-
-- name: plane-cancelled
-  color: b60205
-  description: Explicitly cancel the linked Plane work item when this closes unmerged
+  description: Triaged and ready to pick up
 
 - name: roadmap
   color: 5319e7
@@ -200,9 +192,7 @@
 # gh label create "wontfix" --color "ffffff" --description "This will not be worked on"
 # gh label create "invalid" --color "e4e669" --description "This doesn't seem right"
 # gh label create "blocked" --color "e4e669" --description "Blocked by another issue, dependency, or decision"
-# gh label create "ready" --color "0e8a16" --description "Triaged and ready to move from Backlog to Todo in Plane"
-# gh label create "plane-sync" --color "5319e7" --description "Maintainer-approved synchronization with the Plane board"
-# gh label create "plane-cancelled" --color "b60205" --description "Explicitly cancel the linked Plane work item when this closes unmerged"
+# gh label create "ready" --color "0e8a16" --description "Triaged and ready to pick up"
 # gh label create "roadmap" --color "5319e7" --description "Proposed product direction tracked in GitHub Discussions"
 #
 # gh label create "area:core" --color "1d76db" --description "Shared Swift core (Sources/OpenZCineCore)"

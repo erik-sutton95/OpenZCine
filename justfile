@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check typos lint-md check-links check-editorconfig lint-actions secrets plane-sync-test check-demo-isolation swift-lint swift-test
+check: hygiene site-check typos lint-md check-links check-editorconfig lint-actions secrets check-demo-isolation swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -58,10 +58,6 @@ secrets:
         echo "gitleaks not installed — run 'just setup'." >&2
         exit 1
     fi
-
-# Verify the dependency-free GitHub-to-Plane synchronization engine.
-plane-sync-test:
-    node --test scripts/plane-sync.test.mjs
 
 # ── Native production stack ─────────────────────────────────────────────────
 # Format shared Swift and iOS app sources.

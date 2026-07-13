@@ -33,7 +33,7 @@ Install local tooling with `just setup` (macOS / Homebrew).
 - `ref/` — **gitignored** local reference material.
 - `docs/` — engineering references: `commit-hygiene.md` (what must never be committed),
   `nikon-mtp.md` (protocol sourcing and maintenance policy), `nikon-sdk.md` (no-vendor-SDK policy),
-  `PROJECT-MANAGEMENT.md` (Plane board conventions + agent sync contract).
+  `PROJECT-MANAGEMENT.md` (Kaneo board conventions + agent sync contract).
 - `docs/design/` — design specs, implementation plans, and archived browser prototypes.
 - `docs/investigations/` — resolved or pending engineering investigations and debugging records.
 - `site/` — deploy-ready GitHub Pages landing page; no raw design sources.
@@ -47,8 +47,7 @@ OpenZCine supports **Claude Code** and **Codex** only:
 
 - Shared instructions live in `AGENTS.md`; both clients follow them.
 - Claude Code configuration lives under tracked `.claude/`, with personal settings ignored.
-- Codex uses `AGENTS.md` plus reusable skills under `.agents/skills/`; personal `.codex/` state is
-  ignored.
+- Codex uses `AGENTS.md`; personal `.codex/` state is ignored.
 
 Do not add Cursor, Copilot, Gemini, Windsurf, Aider, Cline, Roo, Kilo, Continue, or OpenCode-specific
 instructions. Put guidance needed by both supported clients here or in the relevant project docs.
@@ -81,20 +80,21 @@ For production Swift/iOS changes, also run:
 just native-check
 ```
 
-## Project management (Plane)
+## Project management (Kaneo)
 
-Work is tracked on the OpenZCine Plane board (project `OZC`). Keep it in sync as part of normal
+Work is tracked on the OpenZCine Kaneo board (project `OPE`). Keep it in sync as part of normal
 work — this is a standing contract, not a request-driven step:
 
-- **Start** a deliverable → set its work item to **In Progress**.
-- **Open/update its PR** → keep it **In Progress** through review, even after local Verification.
-- **Finish** it → set it to **Done** only after merge and successful default-branch CI.
-- **Abandon** it → set it to **Cancelled** explicitly; never infer cancellation from a closed PR.
-- **New scope** → create a work item under its phase; add real deliverables to `docs/ROADMAP.md`.
-- Roadmap = scope source of truth; Plane = live status mirror. Move them together.
+- **Start** a deliverable → set its task to **in-progress**.
+- **Open/update its PR** → move it to **in-review** through review, even after local Verification.
+- **Finish** it → set it to **done** only after merge and successful default-branch CI.
+- **Abandon** it → move it to **archived** explicitly; never infer cancellation from a closed PR.
+- **New scope** → create a task (backlog ideas go to **planned** with the `investigation` label);
+  add real deliverables to `docs/ROADMAP.md`.
+- Roadmap = scope source of truth; Kaneo = live status mirror. Move them together.
 
-Board identity, state UUIDs, the epic=phase / work-item=deliverable model, and which MCP tools work
-on this self-hosted instance are in `docs/PROJECT-MANAGEMENT.md`. Read it before touching Plane.
+Board identity, statuses, the GitHub issue sync behavior, and which MCP tools work on this
+self-hosted instance are in `docs/PROJECT-MANAGEMENT.md`. Read it before touching the board.
 
 ## Coding principles
 
