@@ -98,16 +98,16 @@ jobs:
     needs: changes
     # Skip the slow macOS build for docs-only changes; Meta checks still lint the docs.
     if: ${{ needs.changes.outputs.code == 'true' }}
-    runs-on: macos-latest
+    # Self-hosted Mac while the repo is private (hosted macOS minutes bill at 10x). The machine's
+    # default toolchain is Xcode 26.2, so no setup-xcode step. IMPORTANT: switch back to
+    # macos-latest before the repository goes public — self-hosted runners must never serve
+    # fork PRs.
+    runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          # `Glass` (iOS 26 Liquid Glass) needs the iOS 26 SDK; macos-latest's default Xcode lags.
-          xcode-version: latest-stable
       - name: Install native tooling
-        run: brew install just swift-format
+        run: brew install just swift-format || true
       - name: Run native checks
         run: just native-check
