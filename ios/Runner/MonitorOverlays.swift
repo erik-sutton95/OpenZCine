@@ -799,7 +799,8 @@ struct FeedLevelView: View {
         let pitch = model.cameraLevelPitch ?? device.pitch
         Group {
             if style == .gauge {
-                LevelGaugeView(roll: roll, pitch: pitch, feed: feed)
+                LevelGaugeView(
+                    roll: roll, pitch: pitch, feed: feed, isPortrait: model.monitorIsPortrait)
             } else {
                 LevelHorizonView(roll: roll)
                     .position(x: feed.midX, y: feed.midY)
@@ -811,27 +812,50 @@ struct FeedLevelView: View {
         .onChange(of: usesDeviceFallback) { _, fallback in
             fallback ? device.start() : device.stop()
         }
+        // The gravity→roll mapping depends on which way the interface is rotated, so keep the
+        // motion source told about the current shell orientation.
+        .onChange(of: model.monitorIsPortrait, initial: true) { _, portrait in
+            device.isPortrait = portrait
+        }
         .onDisappear { device.stop() }
     }
 }
 
-/// Streams the device's gravity-derived roll/pitch (degrees) while the level overlay is on. The app
-/// is locked landscape, so gravity is projected into the screen plane for the horizon tilt. The axis
-/// signs are best-effort and may want a one-line flip on hardware — the simulator reports no motion,
-/// so this can't be calibrated headlessly.
+/// Streams the device's gravity-derived roll/pitch (degrees) while the level overlay is on. Gravity
+/// arrives in CoreMotion's fixed, portrait-referenced device frame (+x out the right edge, +y out
+/// the top, +z out of the screen), so the screen-plane roll depends on which way the interface is
+/// rotated — `isPortrait` selects the mapping for the two orientations the app supports (Portrait,
+/// LandscapeRight). The simulator reports no motion, so the mapping is derived from CoreMotion's
+/// documented axis conventions; on-hardware sign calibration may still want a one-line flip.
 @Observable
 final class DeviceLevel {
     var roll: Double = 0
     var pitch: Double = 0
+    /// True while the monitor shell is laid out portrait; kept current by the hosting view.
+    var isPortrait = false
 
     @ObservationIgnored private let manager = CMMotionManager()
+
+    /// Screen-plane roll in degrees from the device-frame gravity vector: 0 = upright for the
+    /// given interface orientation, positive = tilted clockwise from the viewer's perspective.
+    ///
+    /// Roll is the angle of gravity off screen-down, toward screen-right: `atan2(g·right, g·down)`.
+    /// Portrait: screen right/down = device +x/−y. LandscapeRight (home side right, device +x
+    /// pointing at the sky, so g.x = −1 when level): screen right/down = device −y/−x.
+    static func displayRoll(gravityX: Double, gravityY: Double, isPortrait: Bool) -> Double {
+        let radians =
+            isPortrait
+            ? atan2(gravityX, -gravityY)
+            : atan2(-gravityY, -gravityX)
+        return radians * 180 / .pi
+    }
 
     func start() {
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
         manager.deviceMotionUpdateInterval = 1.0 / 30.0
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let self, let g = motion?.gravity else { return }
-            let newRoll = atan2(g.x, -g.y) * 180 / .pi
+            let newRoll = Self.displayRoll(gravityX: g.x, gravityY: g.y, isPortrait: isPortrait)
             let newPitch = atan2(g.z, (g.x * g.x + g.y * g.y).squareRoot()) * 180 / .pi
             // Light low-pass so the readout settles instead of jittering on every sample.
             roll = roll * 0.75 + newRoll * 0.25
@@ -869,13 +893,17 @@ struct LevelGaugeView: View {
     let roll: Double
     let pitch: Double
     let feed: CGRect
+    let isPortrait: Bool
 
     var body: some View {
         ZStack {
             LevelAxisGauge(orientation: .horizontal, value: roll)
-                // Seated just above the bottom capture/assist bars (chrome bottom inset 12 +
-                // control height 58, plus the gauge's own readout half-height and a small gap).
-                .position(x: feed.midX, y: feed.maxY - 104)
+                // Landscape: seated just above the bottom capture/assist bars that overlay the
+                // feed (chrome bottom inset 12 + control height 58, plus the gauge's own readout
+                // half-height and a small gap). Portrait: no chrome overlays the feed band — the
+                // landscape offset would strand the track mid-image on the ~16:9 band, so hug the
+                // image's bottom edge instead.
+                .position(x: feed.midX, y: feed.maxY - (isPortrait ? 30 : 104))
             LevelAxisGauge(orientation: .vertical, value: pitch)
                 // Hugs the feed's trailing edge, beside the right-rail record button — the
                 // readout text sits on the track's feed side, so the whole gauge stays inside.
