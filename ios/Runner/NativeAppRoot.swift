@@ -879,7 +879,7 @@ final class NativeAppModel {
     }
 
     private func cameraWiFiJoinDeviceName() -> String {
-        guard let savedCamera = preferredJoinCameraWiFiSavedCamera() else { return "Nikon ZR" }
+        guard let savedCamera = preferredJoinCameraWiFiSavedCamera() else { return "Nikon camera" }
         return ConnectionProgressCopy.resolveDisplayName(
             rawName: savedCamera.displayName,
             savedCamera: savedCamera
