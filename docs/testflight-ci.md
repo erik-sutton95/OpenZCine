@@ -3,6 +3,63 @@
 Automated TestFlight builds run when code changes merge to `main`. The workflow archives the iOS app,
 assigns a monotonic build number, and uploads to App Store Connect.
 
+Two delivery paths exist:
+
+- **Xcode Cloud (primary)** — free compute (25 h/month with the Developer Program membership),
+  Apple-managed signing, native TestFlight upload. See [Xcode Cloud](#xcode-cloud).
+- **GitHub Actions (fallback)** — [`testflight.yml`](../.github/workflows/testflight.yml), disabled
+  unless the repo variable `TESTFLIGHT_UPLOAD_ENABLED` is `true`. Kept for manual dispatch if Xcode
+  Cloud is unavailable; setup below.
+
+## Xcode Cloud
+
+Xcode Cloud replaces most of the GitHub workflow with managed equivalents:
+
+| GitHub Actions step | Xcode Cloud equivalent |
+| --- | --- |
+| Path filter (`dorny/paths-filter`) | Workflow start condition → **Files and Folders** |
+| Signing secrets (cert + profiles) | Apple-managed cloud signing (nothing to rotate; new entitlements just work) |
+| ASC API key + `altool` upload | Native TestFlight post-action |
+| `ios-ci-version.sh` build number | Xcode Cloud's own build counter (stamped automatically) |
+| Frame.io xcconfig injection | [`ios/ci_scripts/ci_post_clone.sh`](../ios/ci_scripts/ci_post_clone.sh) + secret env vars |
+| Release-notes summary | [`ios/ci_scripts/ci_post_xcodebuild.sh`](../ios/ci_scripts/ci_post_xcodebuild.sh) → TestFlight "What to Test" |
+
+### One-time setup (App Store Connect / Xcode)
+
+1. **Grant repo access**: App Store Connect → Xcode Cloud → Settings → Source control, connect the
+   GitHub account/repo. (If a workflow existed before the repo history was recreated, re-grant and
+   point it at the current repo.)
+2. **Create the workflow** (Xcode → Report navigator → Cloud tab, or ASC → app → Xcode Cloud →
+   Manage Workflows):
+   - **Start condition**: Branch Changes on `main`, with Files and Folders restricted to
+     `Sources/`, `Tests/`, `ios/`, `Package.swift`, `scripts/`, `justfile`.
+   - **Environment**: latest released Xcode/macOS. Add **secret** environment variables
+     `FRAMEIO_CLIENT_ID`, `FRAMEIO_REDIRECT_URI`, `FRAMEIO_URL_SCHEME` (omit to ship with Frame.io
+     login disabled).
+   - **Actions**: Archive — iOS, scheme `Runner`, deployment preparation **TestFlight (Internal
+     Testing Only)**. A separate Test action is optional; PR CI already gates tests.
+   - **Post-actions**: TestFlight Internal Testing → your tester group.
+3. **Next build number**: in the workflow's settings, set it **above the highest existing
+   TestFlight build** (GitHub builds reached the 130s; `200` is safe). Xcode Cloud stamps its
+   counter into the app automatically — `Version.xcconfig` still owns the marketing version.
+4. Leave the repo variable `TESTFLIGHT_UPLOAD_ENABLED` set to `false` so GitHub Actions doesn't
+   double-upload (the earlier stray `0.1.0 (NN)` builds were exactly that, in reverse).
+
+### Repo-side pieces
+
+`ios/ci_scripts/` is picked up automatically because it sits next to `Runner.xcodeproj`:
+
+- `ci_post_clone.sh` — writes `ios/Runner/Frameio.local.xcconfig` from the secret env vars
+  (empty-safe, mirrors the GitHub step).
+- `ci_post_xcodebuild.sh` — runs `scripts/ios-release-notes.sh` and writes
+  `ios/TestFlight/WhatToTest.en-US.txt`, which Xcode Cloud attaches to the TestFlight build. It
+  deepens the shallow clone first so the last 25 commits are available.
+
+## GitHub Actions (fallback)
+
+Everything below describes the GitHub Actions path. It stays dormant while
+`TESTFLIGHT_UPLOAD_ENABLED` is `false`.
+
 ## Flow
 
 ```text
