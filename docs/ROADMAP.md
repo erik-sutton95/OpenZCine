@@ -1,8 +1,7 @@
 # Roadmap — OpenZCine
 
-> Live status is mirrored on the Plane board (project `OZC`). Each phase below is an epic; its
-> deliverables are child work items. Keep this file and the board in sync — see
-> `docs/PROJECT-MANAGEMENT.md`.
+> Live status is mirrored on the Kaneo board (project `OPE`). Keep this file and the board in
+> sync — see `docs/PROJECT-MANAGEMENT.md`.
 
 ## Current Milestone: Native iOS Implementation
 
@@ -108,7 +107,7 @@ Android.
 
 ## Additional shipped features (beyond the core phases)
 
-Feature work tracked as its own epics on the Plane board, outside the Phase 0–5 milestone spine:
+Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–5 milestone spine:
 
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
@@ -117,8 +116,6 @@ Feature work tracked as its own epics on the Plane board, outside the Phase 0–
 - **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow.
-- **GitHub–Plane lifecycle automation** (in progress) — deterministic PR/issue status mirroring,
-  verified completion, and scheduled drift reconciliation.
 
 ## Milestone Success Criteria
 
