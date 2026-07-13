@@ -20,7 +20,7 @@
   &nbsp;·&nbsp;
   <a href="https://openzcine.app/">Visit openzcine.app</a>
   &nbsp;·&nbsp;
-  <a href="docs/ROADMAP.md">Explore the roadmap</a>
+  <a href="https://github.com/erik-sutton95/OpenZCine/discussions/22">Explore the roadmap</a>
 </p>
 
 ## Made for the shot
@@ -93,9 +93,12 @@ the Watch companion, and the full iPad experience continue to be hardened with r
 
 ## Roadmap shaped in the open
 
-The roadmap lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). Use GitHub Discussions to vote on
-proposed features, add production context, or propose what OpenZCine should tackle next. Roadmap
-entries describe direction, not promised dates or release commitments.
+The roadmap lives in [GitHub Discussions](https://github.com/erik-sutton95/OpenZCine/discussions/22),
+where every proposed feature has its own thread. Browse the
+[Ideas category](https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas) to vote,
+add production context, or propose what OpenZCine should tackle next. Roadmap discussions describe
+direction, not promised dates or release commitments. Engineering-phase detail lives in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Free. Open source. Yours
 
