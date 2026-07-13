@@ -273,7 +273,7 @@ struct CommandHealthStrip: View {
             CommandStatusBlock(label: "Lens", value: Text(model.cameraState.lens))
             Spacer(minLength: 4)
             // Hold the FPS chip at its natural size; the wider status blocks scale down first.
-            FPSChip(fps: model.liveFPS)
+            FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
                 .fixedSize()
                 .layoutPriority(1)
         }

@@ -76,12 +76,24 @@ struct RecordChip: View {
 
 struct FPSChip: View {
     let fps: String
+    /// Live link quality (0–4 bars) from `NativeAppModel.liveSignalBars` — transport health, not
+    /// radio RSSI (which iOS apps can't read without special entitlements).
+    let signalBars: Int
+
+    private var signalTint: Color {
+        switch signalBars {
+        case 3...: LiveDesign.good
+        case 2: LiveDesign.accent
+        case 1: LiveDesign.rec
+        default: LiveDesign.faint
+        }
+    }
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "cellularbars")
+            Image(systemName: "cellularbars", variableValue: Double(signalBars) / 4.0)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(LiveDesign.good)
+                .foregroundStyle(signalTint)
             Text("FPS")
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(LiveDesign.faint)
