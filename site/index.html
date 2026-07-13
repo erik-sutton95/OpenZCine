@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+  <!-- Primary meta -->
+  <title>OpenZCine: Open-source field monitor for Nikon Z</title>
+  <meta name="description" content="OpenZCine is a free, open-source field-monitor app for Nikon Z mirrorless cameras. Pro monitoring scopes, playback, Camera-to-Cloud export with LUT baking.">
+  <meta name="theme-color" content="#0A0908">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests">
+
+  <!-- Open Graph / social -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="OpenZCine: Open-source field monitor for Nikon Z">
+  <meta property="og:description" content="Free, open-source field-monitor app for Nikon Z. Pro scopes, playback, C2C export with LUT baking.">
+  <meta property="og:image" content="assets/screens/hero-set.webp">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <!-- Icons -->
+  <link rel="icon" href="assets/icon.png">
+  <link rel="apple-touch-icon" href="assets/icon.png">
+
+  <!-- Fonts: Geist + Geist Mono (Google Fonts) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- The hero backdrop paints first; everything else lazy-loads. -->
+  <link rel="preload" as="image" href="assets/screens/hero-set.webp">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+
+  <!-- Ambient backdrop glow: soft gold bloom behind all content -->
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <!-- Film grain over the whole page + a gold light-check that follows the cursor -->
+  <div class="grain" aria-hidden="true"></div>
+  <div class="spotlight" aria-hidden="true"></div>
+
+  <!-- ============ NAV ============ -->
+  <header class="nav" id="nav">
+    <div class="container nav__inner">
+      <a href="#top" class="nav__brand">
+        <img src="assets/icon.png" alt="OpenZCine" width="28" height="28">
+        <span>OpenZCine</span>
+      </a>
+      <nav class="nav__links" aria-label="Primary">
+        <a href="#scopes">Scopes</a>
+        <a href="#assists">Assists</a>
+        <a href="#commander">Control</a>
+        <a href="#export">Export</a>
+        <a href="/support/">Support</a>
+        <a href="#open-source">Open Source</a>
+      </nav>
+      <div class="nav__cta">
+        <a class="nav__github" href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener" aria-label="OpenZCine on GitHub">★ GitHub</a>
+        <a class="btn btn--primary btn--magnetic" href="TESTFLIGHT_URL"><span class="btn__rec" aria-hidden="true"></span>Join the beta</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- ============ HERO - dimmed film-set backdrop + floating monitor ============ -->
+    <section class="hero" id="hero">
+      <!-- The set photo sits under the hero copy, dimmed hard, and fades out
+        into the page background at its bottom edge. -->
+      <div class="hero__backdrop" aria-hidden="true">
+        <img src="assets/screens/hero-set.webp" alt="" fetchpriority="high" decoding="async">
+      </div>
+      <p class="hero__disclaimer">Hero background generated with AI.</p>
+
+      <div class="hero__inner container">
+        <span class="section-label" data-intro><span class="rec-dot"></span> Field Monitor · Open Beta</span>
+        <h1 data-intro>The open field<br>monitor for <span class="gold">Nikon&nbsp;Z.</span></h1>
+        <p class="lead" data-intro>Pro monitoring scopes, playback, and Camera-to-Cloud export with
+          built-in, RED, or custom LUT baking. Free and open source.</p>
+        <div class="hero__cta" data-intro>
+          <a class="btn btn--primary btn--magnetic" href="TESTFLIGHT_URL"><span class="btn__rec" aria-hidden="true"></span>Join the TestFlight beta</a>
+          <a class="btn btn--ghost btn--magnetic" href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener">★ Star on GitHub<span class="btn__arrow" aria-hidden="true">→</span></a>
+        </div>
+
+        <div class="hero__mock" data-intro>
+          <img src="assets/screens/hero-monitor.webp"
+            alt="OpenZCine recording: red telltale ring, histogram, aspect markers, subject tracking, and full camera readout"
+            width="1600" height="900" decoding="async">
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SPEC TICKER - the vocabulary of the tool ============ -->
+    <div class="ticker" aria-hidden="true">
+      <div class="ticker__track">
+        <span class="ticker__group">
+          <span>Nikon ZR</span><i></i><span>6K · 25p</span><i></i><span>R3D NE</span><i></i>
+          <span>Log3G10</span><i></i><span>Waveform</span><i></i><span>RGB Parade</span><i></i>
+          <span>Histogram</span><i></i><span>Vectorscope</span><i></i><span>False Color</span><i></i>
+          <span>Focus Peaking</span><i></i><span>Zebras</span><i></i><span>Frame Markers</span><i></i>
+          <span>32-bit Float</span><i></i><span>Camera to Cloud</span><i></i>
+        </span>
+        <span class="ticker__group">
+          <span>Nikon ZR</span><i></i><span>6K · 25p</span><i></i><span>R3D NE</span><i></i>
+          <span>Log3G10</span><i></i><span>Waveform</span><i></i><span>RGB Parade</span><i></i>
+          <span>Histogram</span><i></i><span>Vectorscope</span><i></i><span>False Color</span><i></i>
+          <span>Focus Peaking</span><i></i><span>Zebras</span><i></i><span>Frame Markers</span><i></i>
+          <span>32-bit Float</span><i></i><span>Camera to Cloud</span><i></i>
+        </span>
+      </div>
+    </div>
+
+    <!-- ============ STATEMENT - words expose as you scroll ============ -->
+    <section class="statement" aria-label="OpenZCine in one sentence">
+      <p class="statement__text" id="statement">
+        <span class="w">Every</span> <span class="w">scope.</span>
+        <span class="w">Every</span> <span class="w">assist.</span>
+        <span class="w">Full</span> <span class="w">camera</span> <span class="w">control.</span>
+        <span class="w w--gold">Free,</span> <span class="w w--gold">and</span>
+        <span class="w w--gold">open</span> <span class="w w--gold">source.</span>
+      </p>
+    </section>
+
+    <!-- ============ SCOPES ============ -->
+    <section class="section feat-section" id="scopes">
+      <div class="container grid grid--2 feat-row">
+        <div class="feat-row__copy">
+          <span class="section-label"><span class="rec-dot"></span> Scopes</span>
+          <h2>Read the image like a colorist.</h2>
+          <p class="lead">Waveform, RGB parade, histogram, and vectorscope are rendered
+            live from the ZR feed, right where you pull focus.</p>
+        </div>
+        <div class="feat-row__visual">
+          <img src="assets/screens/scopes.webp"
+            alt="Histogram and RGB parade scopes over a live view"
+            width="1600" height="900" loading="lazy" decoding="async">
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ JOURNEY - pinned view-assist showcase ============ -->
+    <section class="journey" id="assists">
+      <div class="journey__pin" id="journey-pin">
+        <div class="journey__stage" id="journey-stage">
+          <img class="journey__shot is-active" data-shot="falsecolor"
+            src="assets/screens/false-color.webp"
+            alt="False color exposure map on the live view" width="1600" height="900" loading="lazy" decoding="async">
+          <img class="journey__shot" data-shot="trafficlights"
+            src="assets/screens/traffic-lights.webp"
+            alt="RED-style RGB Traffic Lights goal-post meter over the live view" width="1600" height="900" loading="lazy" decoding="async">
+          <img class="journey__shot" data-shot="peaking"
+            src="assets/screens/focus-peaking.webp"
+            alt="Focus peaking highlighting sharp edges on the live view" width="1600" height="900" loading="lazy" decoding="async">
+          <img class="journey__shot" data-shot="markers"
+            src="assets/screens/frame-markers.webp"
+            alt="Multiple 2.39:1 and 9:16 aspect markers over the live view" width="1600" height="900" loading="lazy" decoding="async">
+        </div>
+
+        <div class="journey__panels">
+          <div class="journey__panel is-active" data-panel="falsecolor">
+            <span class="section-label"><span class="rec-dot"></span> View Assist · False Color</span>
+            <h2>Exposure at a glance.</h2>
+            <p class="lead">IRE-mapped false color shows crushed shadows and clipped
+              highlights before they cost you the take.</p>
+          </div>
+          <div class="journey__panel" data-panel="trafficlights">
+            <span class="section-label"><span class="rec-dot"></span> View Assist · Traffic Lights</span>
+            <h2>Set-standard tools, at a glance.</h2>
+            <p class="lead">Inspired by RED&rsquo;s tried-and-true goal posts, Traffic
+              Lights give you an instant RGB read on exposure balance, clipped
+              highlights, and crushed shadows.</p>
+          </div>
+          <div class="journey__panel" data-panel="peaking">
+            <span class="section-label"><span class="rec-dot"></span> View Assist · Focus Peaking</span>
+            <h2>Focus you can trust.</h2>
+            <p class="lead">Industry-standard focus peaking works across every codec,
+              highlighting sharp edges so you can confirm critical focus at a glance.</p>
+          </div>
+          <div class="journey__panel" data-panel="markers">
+            <span class="section-label"><span class="rec-dot"></span> View Assist · Frame Markers</span>
+            <h2>Frame for every delivery.</h2>
+            <p class="lead">Keep multiple aspect markers on screen at once, from
+              2.39:1 and 9:16 to your own custom frames, so every shot stays ready
+              for cinema, broadcast, and social delivery.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ COMMANDER ============ -->
+    <section class="section feat-section" id="commander">
+      <div class="container grid grid--2 feat-row feat-row--reverse">
+        <div class="feat-row__visual">
+          <img src="assets/screens/camera-controls.webp"
+            alt="Full camera control screen: ISO, shutter, iris, white balance, codec, and autofocus"
+            width="1600" height="900" loading="lazy" decoding="async">
+        </div>
+        <div class="feat-row__copy">
+          <span class="section-label"><span class="rec-dot"></span> Camera Control</span>
+          <h2>Set the camera without touching the camera.</h2>
+          <p class="lead">Dial in ISO, shutter angle, iris, white balance, codec, and
+            AF mode from the phone on your cage, with temp, storage, and battery always
+            in view.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PLAYBACK ============ -->
+    <section class="section feat-section" id="playback">
+      <div class="container grid grid--2 feat-row">
+        <div class="feat-row__copy">
+          <span class="section-label"><span class="rec-dot"></span> Playback</span>
+          <h2>Review every clip, on-device.</h2>
+          <p class="lead">Frame-accurate scrubbing with scopes and markers live in
+            playback. Check focus before you strike the set.</p>
+        </div>
+        <div class="feat-row__visual">
+          <img src="assets/screens/playback-assists.webp"
+            alt="Clip playback with histogram and frame markers overlaid"
+            width="1600" height="900" loading="lazy" decoding="async">
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ EXPORT / C2C ============ -->
+    <section class="section feat-section" id="export">
+      <div class="container grid grid--2 feat-row feat-row--reverse">
+        <div class="feat-row__visual">
+          <img src="assets/screens/frameio-upload.webp"
+            alt="A clip uploading to Frame.io from the playback screen"
+            width="1600" height="900" loading="lazy" decoding="async">
+        </div>
+        <div class="feat-row__copy">
+          <span class="section-label"><span class="rec-dot"></span> Export &amp; Camera-to-Cloud</span>
+          <h2>Ship it. With LUTs baked in.</h2>
+          <p class="lead">Camera-to-Cloud to Frame.io, native iOS share, or direct export,
+            with built-in, RED, or your own custom <span class="mono">.cube</span> LUTs
+            applied on the way out.</p>
+          <a class="frameio-lockup" href="https://frame.io/" target="_blank" rel="noopener">
+            <img src="assets/frameio-mark.svg" alt="" width="32" height="32" loading="lazy">
+            <span>Frame.io</span>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ APPLE WATCH COMPANION ============ -->
+    <section class="section feat-section" id="watch">
+      <div class="container grid grid--2 feat-row">
+        <div class="feat-row__copy">
+          <span class="section-label"><span class="rec-dot"></span> Apple Watch Companion</span>
+          <h2>A monitor on your wrist.</h2>
+          <p class="lead">The live feed, LUT and all, is mirrored to your Apple Watch,
+            with timecode, storage, and battery at a glance. Roll and cut the take
+            without touching the rig.</p>
+        </div>
+        <div class="feat-row__visual feat-row__visual--watch">
+          <img src="assets/screens/apple-watch.webp"
+            alt="Apple Watch Ultra running the OpenZCine companion: live feed, timecode, storage, and a Record button"
+            width="1080" height="1016" loading="lazy" decoding="async">
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ OPEN SOURCE (spotlight) ============ -->
+    <section class="section section--spot spot" id="open-source">
+      <div class="spot__glow" aria-hidden="true"></div>
+      <div class="container spot-oss__inner">
+        <span class="section-label"><span class="rec-dot"></span> Identity Core</span>
+        <h2>100% free. Open source. Yours.</h2>
+        <p class="lead">No subscriptions, no paywalls, no telemetry. OpenZCine is Apache-2.0
+          licensed and built in the open by a community of filmmakers and developers.</p>
+        <div class="hero__cta">
+          <a class="btn btn--primary btn--magnetic" href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener"><span class="btn__rec" aria-hidden="true"></span>★ Star on GitHub</a>
+          <a class="btn btn--ghost btn--magnetic" href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener">Contribute<span class="btn__arrow" aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PLATFORMS & CAMERAS ============ -->
+    <section class="section" id="platforms">
+      <div class="container grid grid--2">
+        <article class="feat glass">
+          <h3>Platforms</h3>
+          <ul class="ticks">
+            <li>iPhone · iPad · Apple Watch <span class="badge">today</span></li>
+            <li>Android <span class="badge badge--soon">soon</span></li>
+          </ul>
+        </article>
+        <article class="feat glass">
+          <h3>Supported cameras</h3>
+          <ul class="ticks">
+            <li>Nikon ZR <span class="badge">first</span></li>
+            <li>Full Nikon Z mirrorless line <span class="badge badge--soon">roadmap</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ DOWNLOAD / FINAL CTA ============ -->
+    <section class="section" id="download">
+      <div class="container cta-final">
+        <h2>Ready to monitor like a pro?</h2>
+        <p class="lead">Join the TestFlight beta and help shape OpenZCine.</p>
+        <div class="hero__cta">
+          <a class="btn btn--primary btn--magnetic" href="TESTFLIGHT_URL"><span class="btn__rec" aria-hidden="true"></span>Join the TestFlight beta</a>
+          <a class="btn btn--ghost btn--magnetic" href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener">★ Star on GitHub<span class="btn__arrow" aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <img src="assets/icon.png" alt="OpenZCine" width="24" height="24">
+        <span>OpenZCine</span>
+      </div>
+      <p class="footer__meta">
+        <a href="/support/">Support</a> ·
+        Free &amp; open source · <a href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener">Apache-2.0</a>
+      </p>
+      <p class="footer__disclaimer">
+        Not affiliated with or endorsed by Nikon Corporation. &ldquo;Nikon&rdquo;,
+        &ldquo;Nikon Z&rdquo;, and &ldquo;ZR&rdquo; are trademarks of Nikon Corporation,
+        used for identification only.
+      </p>
+    </div>
+  </footer>
+
+  <!-- GSAP + ScrollTrigger (CDN) - scroll-driven animations -->
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+    integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt"
+    crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+    integrity="sha384-Z3REaz79l2IaAZqJsSABtTbhjgOUYyV3p90XNnAPCSHg3EMTz1fouunq9WZRtj3d"
+    crossorigin="anonymous"></script>
+  <script src="assets/app.js" defer></script>
+</body>
+</html>

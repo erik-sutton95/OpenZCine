@@ -1,0 +1,133 @@
+# ── Local-only material (see docs/nikon-sdk.md, docs/commit-hygiene.md) ─────
+# Anything vendor-proprietary or otherwise non-redistributable stays local.
+# NEVER commit these.
+vendor/
+ref/
+
+# ── Secrets & credentials (see docs/commit-hygiene.md) ─────────────────────────
+.env
+.env.*
+!.env.example
+secrets.*
+*.secret
+# Private keys, certificates, signing material
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+*.cer
+*.der
+*.certSigningRequest
+# Apple provisioning profiles
+*.mobileprovision
+*.provisionprofile
+# Cloud / service-account credential files
+google-services.json
+GoogleService-Info.plist
+*credentials*.json
+service-account*.json
+# Local Frame.io OAuth config (PKCE client ID) — kept out of the public repo (see docs/frameio-setup.md)
+ios/Runner/Frameio.local.xcconfig
+# CI-generated manual signing (see the matching examples under ios/Config/)
+ios/Config/CI-Signing.xcconfig
+ios/Config/CI-Watch-Signing.xcconfig
+
+# ── Reverse-engineering captures (proprietary; keep out of the public repo) ────
+*.pcap
+*.pcapng
+
+# ── Non-redistributable LUTs (e.g. RED IPP2 .cube) ─────────────────────────────
+# The app imports LUTs at runtime; they are never bundled.
+*.cube
+!Tests/**/*.cube
+
+# Raw design-source files are kept under .local/ and never shipped.
+*.psd
+*.psb
+
+# ── Supported agent tooling scratch space ─────────────────────────────────────
+.local/
+.codex/
+
+# ── Generated knowledge-graph output (graphify CLI) ───────────────────────────
+# Regenerated locally; never commit the ~200k-line artifacts.
+graphify-out/
+
+# ── OS / editor junk ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+*.swp
+*.swo
+*~
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+.build/
+build/
+
+# Xcode / SwiftPM per-user state (generated when the package is opened in Xcode)
+.swiftpm/
+**/xcuserdata/
+*.xcuserstate
+**/doc/api/
+.gradle/
+**/android/.gradle/
+
+# ── Retired agent clients ──────────────────────────────────────────────────────
+# OpenZCine supports Claude Code and Codex only. Keep other client-specific
+# instructions and caches out of the public repository.
+.cursor/
+.windsurf/
+.windsurfrules
+.gemini/
+GEMINI.md
+.aider*
+.cline/
+.clinerules*
+.roo/
+.rooignore
+.roomodes
+.roorules*
+.kilo/
+.kilocode/
+.kilocodeignore
+.kilocodemodes
+.continue/
+.opencode/
+opencode.json
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
+
+# ── Claude Code workspace ──────────────────────────────────────────────────────
+# Personal, machine-specific overrides stay local; team config is committed.
+.claude/settings.local.json
+.claude/*.log
+.claude/worktrees/
+.claude/preserved-edits/
+!.claude/commands/
+!.claude/agents/
+!.claude/hooks/
+!.claude/skills/
+!.claude/output-styles/
+!.claude/settings.json
+
+# Reference packet captures (proprietary protocol data — never commit)
+captures/
+.vercel
+.envrc
+
+# Local test footage (real camera clips are large; never commit)
+samples/
+.worktrees/

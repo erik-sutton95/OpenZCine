@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+# Keep GitHub's language stats honest.
+vendor/** linguist-vendored
+docs/**   linguist-documentation
+*.pdf     binary

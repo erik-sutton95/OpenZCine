@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Frame.io integration. Client ID, redirect URI, and URL scheme come from the gitignored
+	     Frameio.local.xcconfig via FRAMEIO_* build settings (see docs/frameio-setup.md). Adobe
+	     assigns a unique Native App redirect per credential — copy it exactly from the console. -->
+	<key>FrameioClientID</key>
+	<string>$(FRAMEIO_CLIENT_ID)</string>
+	<key>FrameioRedirectURI</key>
+	<string>$(FRAMEIO_REDIRECT_URI)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.opencapture.openzcine.frameio-oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(FRAMEIO_URL_SCHEME)</string>
+			</array>
+		</dict>
+	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>OpenZCine</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>openzcine</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- Export compliance: only standard/exempt encryption (ATS/HTTPS via Apple frameworks);
+	     no proprietary crypto. Lets TestFlight/App Store skip the per-build compliance prompt. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_ptp._tcp</string>
+		<string>_http._tcp</string>
+		<!-- Self-published beacon used only by the startup Local Network permission probe. -->
+		<string>_ozcprobe._tcp</string>
+	</array>
+	<!-- AccessorySetupKit (iOS 18+): system picker for Nikon ZR Wi‑Fi hotspots (NIKON_ZR_*).
+	     Descriptor SSID prefix must match entries declared here — undeclared rules crash at picker time. -->
+	<key>NSAccessorySetupSupports</key>
+	<array>
+		<string>WiFi</string>
+	</array>
+	<key>NSAccessorySetupWiFiSSIDPrefixes</key>
+	<array>
+		<string>NIKON_ZR_</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>OpenZCine uses the camera to scan the Wi-Fi SSID and key shown on your Nikon ZR's screen so it can connect to the camera.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>OpenZCine needs access to your Nikon ZR camera over the local Wi-Fi network (when your iPhone is connected to the camera's WiFi hotspot) for live view streaming and camera control.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>OpenZCine saves exported clips to your photo library when you choose Save to Photos.</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<!-- Portrait + LandscapeRight ONLY, by design — the monitor chrome is laid out for one
+	     landscape side (interface LandscapeRight = device rotated left, island on the left);
+	     do not re-add LandscapeLeft/upside-down. Careful: Xcode's orientation checkboxes
+	     regenerate this whole file (comments stripped, keys re-sorted) — edit here, not in
+	     the project editor. UIRequiresFullScreen opts out of iPad multitasking
+	     (App Store error 90474). -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- With UIViewControllerBasedStatusBarAppearance=false, SwiftUI's .statusBarHidden(true)
+	     is ignored and this plist key governs instead. iPhone masked the gap (landscape
+	     fullscreen hides the bar anyway); iPad showed the clock/battery bar over the monitor. -->
+	<key>UIStatusBarHidden</key>
+	<true/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+</dict>
+</plist>

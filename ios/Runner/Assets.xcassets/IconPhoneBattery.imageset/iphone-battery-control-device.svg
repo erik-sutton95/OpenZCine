@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="batt-v" viewBox="0 0 18 28" aria-hidden="true">
+        <rect class="body" x="1.8" y="2.8" width="14.4" height="22.4" rx="2.2"></rect>
+        <rect class="nub" x="7.2" y="0.4" width="3.6" height="2.6" rx="0.7"></rect>
+        <rect class="fill" id="phone-fill" x="3.6" y="7.64" width="10.8" height="15.96" rx="1.1"></rect>
+      </svg>

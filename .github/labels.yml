@@ -1,0 +1,248 @@
+# OpenZCine GitHub Labels
+#
+# This file documents the canonical labels used for issues, pull requests,
+# and (where relevant) discussions in this repository.
+#
+# These labels help with triage, prioritization, contributor onboarding,
+# and finding work in specific areas of the codebase.
+#
+# ------------------------------------------------------------------
+# How to apply these labels
+# ------------------------------------------------------------------
+#
+# Option A: GitHub CLI (recommended, run once when the repo is public)
+#
+#   gh label create "bug" --color "d73a4a" --description "Something isn't working"
+#   gh label create "enhancement" --color "a2eeef" --description "New feature or request"
+#   ... (see full list of commands below)
+#
+# Option B: GitHub web UI
+#   Go to Issues → Labels → New label (or edit the defaults)
+#
+# Option C: Label sync tools
+#   Tools such as github-label-sync can consume a similar structure.
+#
+# After initial creation, labels are managed manually or via PRs that
+# update this file + the corresponding gh commands.
+
+# ------------------------------------------------------------------
+# Type labels (primary classification)
+# ------------------------------------------------------------------
+- name: bug
+  color: d73a4a
+  description: Something isn't working as expected
+
+- name: enhancement
+  color: a2eeef
+  description: New feature, improvement, or request
+
+- name: documentation
+  color: 0075ca
+  description: Improvements or additions to documentation
+
+- name: question
+  color: d876e3
+  description: Further information is requested
+
+- name: chore
+  color: fef2c0
+  description: Maintenance, cleanup, or non-user-facing work
+
+# ------------------------------------------------------------------
+# Priority
+# ------------------------------------------------------------------
+- name: P0
+  color: b60205
+  description: Critical / blocking — must be addressed immediately
+
+- name: P1
+  color: d93f0b
+  description: High priority — important for current cycle
+
+- name: P2
+  color: 0e8a16
+  description: Normal / medium priority
+
+# ------------------------------------------------------------------
+# Community & contribution
+# ------------------------------------------------------------------
+- name: good first issue
+  color: 7057ff
+  description: Good for newcomers / first-time contributors
+
+- name: help wanted
+  color: 008672
+  description: Extra attention is needed — community help appreciated
+
+# ------------------------------------------------------------------
+# Triage & status
+# ------------------------------------------------------------------
+- name: needs-triage
+  color: ededed
+  description: New issue that has not yet been triaged
+
+- name: needs-info
+  color: e4e669
+  description: More information is needed from the reporter
+
+- name: duplicate
+  color: cfd3d7
+  description: This issue or pull request already exists
+
+- name: wontfix
+  color: ffffff
+  description: This will not be worked on
+
+- name: invalid
+  color: e4e669
+  description: This doesn't seem right
+
+- name: blocked
+  color: e4e669
+  description: Blocked by another issue, dependency, or decision
+
+- name: ready
+  color: 0e8a16
+  description: Triaged and ready to move from Backlog to Todo in Plane
+
+- name: plane-sync
+  color: 5319e7
+  description: Maintainer-approved synchronization with the Plane board
+
+- name: plane-cancelled
+  color: b60205
+  description: Explicitly cancel the linked Plane work item when this closes unmerged
+
+- name: roadmap
+  color: 5319e7
+  description: Proposed product direction tracked in GitHub Discussions
+
+# ------------------------------------------------------------------
+# Area / component labels (highly recommended for this project)
+# ------------------------------------------------------------------
+- name: area:core
+  color: 1d76db
+  description: Shared Swift core (Sources/OpenZCineCore)
+
+- name: area:protocol
+  color: 1d76db
+  description: PTP/MTP protocol, camera communication, discovery
+
+- name: area:ios
+  color: 1d76db
+  description: iOS SwiftUI shell (ios/Runner)
+
+- name: area:live-view
+  color: 1d76db
+  description: Live view streaming, rendering, and related pipeline
+
+- name: area:monitoring
+  color: 1d76db
+  description: Monitoring assists (false color, scopes, zebra, guides, etc.)
+
+- name: area:control
+  color: 1d76db
+  description: Camera control (ISO, shutter, iris, white balance, record, etc.)
+
+- name: area:media
+  color: 1d76db
+  description: Media browsing, playback, LUT export, clip handling
+
+- name: area:ui
+  color: 1d76db
+  description: General UI/UX, layout, design system
+
+- name: area:watch
+  color: 1d76db
+  description: Apple Watch companion app
+
+- name: area:android
+  color: 1d76db
+  description: Android / Jetpack Compose work (future)
+
+- name: area:docs
+  color: 1d76db
+  description: Documentation, README, specs, contributing guides
+
+# ------------------------------------------------------------------
+# Other useful labels
+# ------------------------------------------------------------------
+- name: security
+  color: ee0701
+  description: Security-related issue or pull request
+
+- name: dependencies
+  color: 0366d6
+  description: Dependency updates or related changes
+
+# ------------------------------------------------------------------
+# Full gh label create commands (copy-paste ready)
+# ------------------------------------------------------------------
+# Run these once after making the repository public (or on a fresh clone).
+# You only need to run this the first time. After that, labels persist.
+#
+# gh label create "bug" --color "d73a4a" --description "Something isn't working as expected"
+# gh label create "enhancement" --color "a2eeef" --description "New feature or improvement"
+# gh label create "documentation" --color "0075ca" --description "Improvements or additions to documentation"
+# gh label create "question" --color "d876e3" --description "Further information is requested"
+# gh label create "chore" --color "fef2c0" --description "Maintenance, cleanup, or non-user-facing work"
+#
+# gh label create "P0" --color "b60205" --description "Critical / blocking — must be addressed immediately"
+# gh label create "P1" --color "d93f0b" --description "High priority — important for current cycle"
+# gh label create "P2" --color "0e8a16" --description "Normal / medium priority"
+#
+# gh label create "good first issue" --color "7057ff" --description "Good for newcomers / first-time contributors"
+# gh label create "help wanted" --color "008672" --description "Extra attention is needed — community help appreciated"
+#
+# gh label create "needs-triage" --color "ededed" --description "New issue that has not yet been triaged"
+# gh label create "needs-info" --color "e4e669" --description "More information is needed from the reporter"
+# gh label create "duplicate" --color "cfd3d7" --description "This issue or pull request already exists"
+# gh label create "wontfix" --color "ffffff" --description "This will not be worked on"
+# gh label create "invalid" --color "e4e669" --description "This doesn't seem right"
+# gh label create "blocked" --color "e4e669" --description "Blocked by another issue, dependency, or decision"
+# gh label create "ready" --color "0e8a16" --description "Triaged and ready to move from Backlog to Todo in Plane"
+# gh label create "plane-sync" --color "5319e7" --description "Maintainer-approved synchronization with the Plane board"
+# gh label create "plane-cancelled" --color "b60205" --description "Explicitly cancel the linked Plane work item when this closes unmerged"
+# gh label create "roadmap" --color "5319e7" --description "Proposed product direction tracked in GitHub Discussions"
+#
+# gh label create "area:core" --color "1d76db" --description "Shared Swift core (Sources/OpenZCineCore)"
+# gh label create "area:protocol" --color "1d76db" --description "PTP/MTP protocol, camera communication, discovery"
+# gh label create "area:ios" --color "1d76db" --description "iOS SwiftUI shell (ios/Runner)"
+# gh label create "area:live-view" --color "1d76db" --description "Live view streaming, rendering, and related pipeline"
+# gh label create "area:monitoring" --color "1d76db" --description "Monitoring assists (false color, scopes, zebra, guides, etc.)"
+# gh label create "area:control" --color "1d76db" --description "Camera control (ISO, shutter, iris, white balance, record, etc.)"
+# gh label create "area:media" --color "1d76db" --description "Media browsing, playback, LUT export, clip handling"
+# gh label create "area:ui" --color "1d76db" --description "General UI/UX, layout, design system"
+# gh label create "area:watch" --color "1d76db" --description "Apple Watch companion app"
+# gh label create "area:android" --color "1d76db" --description "Android / Jetpack Compose work (future)"
+# gh label create "area:docs" --color "1d76db" --description "Documentation, README, specs, contributing guides"
+#
+# gh label create "security" --color "ee0701" --description "Security-related issue or pull request"
+# gh label create "dependencies" --color "0366d6" --description "Dependency updates or related changes"
+
+# ------------------------------------------------------------------
+# Automatic PR labeling (area labels)
+# ------------------------------------------------------------------
+# We also ship .github/labeler.yml. When the "actions/labeler" workflow
+# is enabled, pull requests will automatically receive appropriate
+# `area:*` labels based on the files changed.
+#
+# To enable:
+# 1. Add a workflow that uses https://github.com/actions/labeler
+#    (or enable GitHub's repository labeler configuration).
+# 2. The area labels defined above will be applied automatically.
+
+# ------------------------------------------------------------------
+# Quick bootstrap script (run in terminal)
+# ------------------------------------------------------------------
+# Copy the block below and paste into your terminal (after the repo is public
+# or you have write access). This will create all labels safely (skips existing).
+#
+# while IFS= read -r line; do
+#   if [[ $line =~ gh\ label\ create\ \"([^\"]+)\"\ --color\ \"([^\"]+)\"\ --description\ \"([^\"]+)\" ]]; then
+#     name="${BASH_REMATCH[1]}"
+#     color="${BASH_REMATCH[2]}"
+#     desc="${BASH_REMATCH[3]}"
+#     gh label create "$name" --color "$color" --description "$desc" || true
+#   fi
+# done < <(grep 'gh label create' .github/labels.yml)

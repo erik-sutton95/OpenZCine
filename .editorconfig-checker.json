@@ -1,0 +1,15 @@
+{
+  "Exclude": [
+    "LICENSE",
+    ".local/",
+    "graphify-out/",
+    ".claude/skills/",
+    ".claude/worktrees/",
+    ".worktrees/",
+    "docs/flows/",
+    "docs/design/",
+    "ios/",
+    "android/",
+    "build/"
+  ]
+}

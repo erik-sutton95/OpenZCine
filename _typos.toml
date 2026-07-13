@@ -1,0 +1,33 @@
+[files]
+# Generated files carry pseudo-random IDs that trip typos: Xcode storyboards/projects
+# (scene IDs like "tne-QT-ifu", hex UUIDs) and Excalidraw scenes (element IDs like "el42ba8311").
+extend-exclude = [
+    "vendor/**",
+    "ref/**",
+    "graphify-out/**",
+    "CHANGELOG.md",
+    "*.lock",
+    "**/*.storyboard",
+    "**/*.pbxproj",
+    "**/*.excalidraw",
+]
+
+[default.extend-words]
+# Camera / protocol domain terms that are not misspellings.
+ZR = "ZR"
+MTP = "MTP"
+PTP = "PTP"
+UVC = "UVC"
+# Simulator device identifier (not a UUID misspelling) — appears in verification recipes.
+UDID = "UDID"
+# Upstream libgphoto2 symbol name (ptp.h) reproduced verbatim for interop provenance —
+# misspelled at the source, so it must be quoted as-is.
+Flourescent = "Flourescent"
+
+[default]
+# Cinema/imaging tokens that appear inside identifiers or comments (R3D NE, ND filter, PNG).
+extend-ignore-re = [
+    "R3DNE",
+    "ND'd",
+    "PNGs?",
+]

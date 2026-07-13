@@ -1,0 +1,46 @@
+name: Plane reconciliation
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply proposed changes instead of reporting them
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: plane-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile GitHub and Plane
+    if: ${{ vars.PLANE_SYNC_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: plane-sync
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/plane-sync.json
+            scripts/plane-sync.mjs
+            scripts/plane-sync
+      - name: Reconcile recent pull requests
+        env:
+          APPLY_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.apply || vars.PLANE_SYNC_APPLY == 'true' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PLANE_API_KEY: ${{ secrets.PLANE_SYNC_API_KEY }}
+        run: |
+          args=(reconcile --repo "$GITHUB_REPOSITORY" --lookback-days 30)
+          if [[ "$APPLY_REQUESTED" == "true" ]]; then args+=(--apply); fi
+          node scripts/plane-sync.mjs "${args[@]}"

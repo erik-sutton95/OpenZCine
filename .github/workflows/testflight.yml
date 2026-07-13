@@ -1,0 +1,140 @@
+name: TestFlight
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: "Override the marketing version (e.g. 0.2.0). Leave empty to use Version.xcconfig."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Never cancel an in-progress upload; queue instead.
+concurrency:
+  group: testflight-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  # Keep above your last manual TestFlight build number (currently 9).
+  IOS_BUILD_NUMBER_OFFSET: "100"
+
+jobs:
+  changes:
+    name: Detect changes
+    # Uploads stay off until the repo variable is explicitly set; the repo-name guard alone would
+    # re-arm on rename.
+    if: >-
+      ${{ github.repository == 'erik-sutton95/openzcine' &&
+          vars.TESTFLIGHT_UPLOAD_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'Sources/**'
+              - 'Tests/**'
+              - 'ios/**'
+              - 'Package.swift'
+              - '.swift-format'
+              - 'scripts/add-*.rb'
+              - 'scripts/ios-*.sh'
+              - 'justfile'
+
+  testflight:
+    name: Build & upload
+    needs: changes
+    if: >-
+      github.repository == 'erik-sutton95/openzcine' &&
+      (needs.changes.outputs.code == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: macos-latest
+    environment: testflight
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install tooling
+        run: brew install just swift-format
+
+      - name: Run native checks
+        run: just native-check
+
+      - name: Compute version
+        id: version
+        env:
+          MARKETING_VERSION_INPUT: ${{ github.event.inputs.marketing_version }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: ./scripts/ios-ci-version.sh
+
+      - name: Install App Store Connect API key
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+        run: ./scripts/ios-install-asc-api-key.sh
+
+      # Frameio.local.xcconfig is gitignored (PKCE public-client values, kept out of the public
+      # repo), so without this step TestFlight builds ship with an EMPTY FrameioClientID and the
+      # Frame.io login can never start. Empty-safe: missing secrets reproduce today's behaviour.
+      - name: Configure Frame.io credentials
+        env:
+          FRAMEIO_CLIENT_ID: ${{ secrets.FRAMEIO_CLIENT_ID }}
+          FRAMEIO_REDIRECT_URI: ${{ secrets.FRAMEIO_REDIRECT_URI }}
+          FRAMEIO_URL_SCHEME: ${{ secrets.FRAMEIO_URL_SCHEME }}
+        run: |
+          cat > ios/Runner/Frameio.local.xcconfig <<EOF
+          FRAMEIO_CLIENT_ID = ${FRAMEIO_CLIENT_ID}
+          FRAMEIO_REDIRECT_URI = ${FRAMEIO_REDIRECT_URI}
+          FRAMEIO_URL_SCHEME = ${FRAMEIO_URL_SCHEME}
+          EOF
+          if [ -z "${FRAMEIO_CLIENT_ID}" ]; then
+            echo "::warning::FRAMEIO_CLIENT_ID secret is not set — Frame.io login will be disabled in this build."
+          fi
+
+      - name: Generate release notes
+        run: |
+          mkdir -p build/ios
+          ./scripts/ios-release-notes.sh 25 > build/ios/release-notes.txt
+          cat build/ios/release-notes.txt
+
+      - name: Archive and upload to TestFlight
+        env:
+          CI: "true"
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64 }}
+        run: ./scripts/ios-testflight-upload.sh
+
+      - name: Summary
+        run: |
+          {
+            echo "### TestFlight upload"
+            echo ""
+            echo "- **Version:** ${{ steps.version.outputs.marketing_version }}"
+            echo "- **Build:** ${{ steps.version.outputs.build_number }}"
+            echo "- **Commit:** \`${{ github.sha }}\`"
+            echo ""
+            echo "<details><summary>What to test</summary>"
+            echo ""
+            cat build/ios/release-notes.txt
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

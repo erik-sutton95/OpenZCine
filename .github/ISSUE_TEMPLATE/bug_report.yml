@@ -1,0 +1,76 @@
+name: Report a problem
+description: Tell us when something is not working. No technical experience is needed.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve OpenZCine. Describe what you saw in your own words.
+        Only the first question is required, and you can skip anything marked **optional**.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What went wrong?
+      description: Tell us what you expected to happen and what happened instead.
+      placeholder: |
+        Example: I expected the live camera view to keep playing, but it froze after about 10 seconds.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: What were you doing when it happened? (optional)
+      description: A short list of the last few things you tapped or changed is enough.
+      placeholder: |
+        Example:
+        1. Connected to my Nikon ZR over Wi-Fi
+        2. Opened the live monitor
+        3. Tapped Record
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Add screenshots, videos, or logs (optional)
+      description: Paste from your clipboard, drag and drop files here, or click below to choose files.
+      placeholder: You can also paste log text or add any other information that helps explain the problem.
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Optional details
+
+        The details below can help us investigate faster, but it is completely fine to leave them blank.
+
+  - type: input
+    id: camera
+    attributes:
+      label: Camera and connection (optional)
+      description: Include the camera model and how your Apple device was connected, if you know.
+      placeholder: "Example: Nikon ZR over Wi-Fi, Personal Hotspot, or USB-C"
+
+  - type: input
+    id: platform
+    attributes:
+      label: App version and Apple device (optional)
+      description: Include your OpenZCine version, iPhone or iPad model, and OS version, if you know.
+      placeholder: "Example: OpenZCine 0.3.12, iPhone 16 Pro, iOS 18.5"
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does this happen? (optional)
+      options:
+        - I am not sure
+        - It happened once
+        - It happens sometimes
+        - It happens every time
+
+  - type: checkboxes
+    id: advanced-context
+    attributes:
+      label: Advanced context (optional)
+      options:
+        - label: This worked in an earlier version of OpenZCine
+        - label: I can reproduce this in the simulator without a real camera

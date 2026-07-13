@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="batt-v" viewBox="0 0 18 28" aria-hidden="true">
+        <rect class="body" x="1.8" y="2.8" width="14.4" height="22.4" rx="2.2"></rect>
+        <rect class="nub" x="7.2" y="0.4" width="3.6" height="2.6" rx="0.7"></rect>
+        <rect class="fill" id="cam-fill" x="3.6" y="10.87" width="10.8" height="12.73" rx="1.1" style="fill:var(--accent)"></rect>
+        <!-- tiny lens dot inside cam battery face for instant ID -->
+        <circle cx="10" cy="14.5" r="2.1" fill="currentColor" opacity="0.42"></circle>
+      </svg>

@@ -1,0 +1,6 @@
+// App semver and build number — single source of truth for local builds and CI.
+//
+// Keep MARKETING_VERSION stable across TestFlight builds; bump it only for a new version train.
+// CI overwrites CURRENT_PROJECT_VERSION on each TestFlight upload (monotonic build numbers).
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 9
