@@ -1,0 +1,7 @@
+# Xcode user and generated state. Shared schemes and workspace settings remain tracked.
+**/DerivedData/
+**/xcuserdata/
+*.xcuserstate
+*.moved-aside
+**/.generated/
+ServiceDefinitions.json

@@ -1,0 +1,84 @@
+# Automatic area labels for pull requests.
+# actions/labeler v5 requires each label to contain match configuration objects.
+
+"area:core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/OpenZCineCore/**/*"
+
+"area:protocol":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/OpenZCineCore/PT*.swift"
+          - "Sources/OpenZCineCore/*PTP*.swift"
+          - "Sources/OpenZCineCore/Camera*.swift"
+          - "Sources/OpenZCineCore/CameraDiscovery.swift"
+          - "Sources/OpenZCineCore/CameraTransport.swift"
+
+"area:ios":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ios/Runner/**/*"
+
+"area:watch":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ios/OpenZCineWatch/**/*"
+
+"area:live-view":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/OpenZCineCore/Live*.swift"
+          - "ios/Runner/*Live*.swift"
+          - "ios/Runner/Metal*.swift"
+          - "ios/Runner/Frame*.swift"
+
+"area:monitoring":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/OpenZCineCore/*Assist*.swift"
+          - "Sources/OpenZCineCore/*Scope*.swift"
+          - "Sources/OpenZCineCore/FalseColor.swift"
+          - "Sources/OpenZCineCore/Guides*.swift"
+          - "Sources/OpenZCineCore/TrafficLightsMeter.swift"
+          - "ios/Runner/*Scope*.swift"
+          - "ios/Runner/*Assist*.swift"
+          - "ios/Runner/Monitor*.swift"
+
+"area:control":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/OpenZCineCore/*Control*.swift"
+          - "Sources/OpenZCineCore/ISOPicker*.swift"
+          - "Sources/OpenZCineCore/Record*.swift"
+          - "ios/Runner/*Control*.swift"
+
+"area:media":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Sources/OpenZCineCore/Media*.swift"
+          - "Sources/OpenZCineCore/*LUT*.swift"
+          - "ios/Runner/Media*.swift"
+          - "ios/Runner/*LUT*.swift"
+
+"area:ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ios/Runner/*View.swift"
+          - "ios/Runner/*View*.swift"
+          - "ios/Runner/Design*.swift"
+          - "ios/Runner/Branding.swift"
+
+"area:docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**/*"
+          - ".github/**/*"
+          - "README.md"
+          - "CONTRIBUTING.md"
+
+"area:android":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Apps/Android/**/*"

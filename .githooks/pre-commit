@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# OpenZCine pre-commit guard. Enabled per-clone by `just setup`
+# (sets core.hooksPath to .githooks). Policy: docs/commit-hygiene.md.
+#
+# Emergency override (discouraged — CI still scans): git commit --no-verify
+set -euo pipefail
+
+# 1. Never commit proprietary, credential, raw-design, or generated files, even if force-added.
+if ! ./scripts/check-repository-hygiene.sh --staged; then
+  echo "✖ pre-commit: staged files violate the public-repository hygiene policy." >&2
+  exit 1
+fi
+
+# 2. Refuse commits authored with a locally-forbidden identity (e.g. an employer
+#    address). Configure per-clone (NOT committed, so no private domain leaks):
+#      git config hooks.forbiddenEmailPattern 'example\.com'
+forbidden=$(git config --get hooks.forbiddenEmailPattern || true)
+if [ -n "$forbidden" ]; then
+  author_email=$(git var GIT_AUTHOR_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')
+  if printf '%s' "$author_email" | grep -qiE "$forbidden"; then
+    echo "✖ pre-commit: commit author <$author_email> matches the forbidden identity pattern." >&2
+    echo "  Set your public identity:  git config user.email <you@example.com>" >&2
+    exit 1
+  fi
+fi
+
+# 3. Scan staged changes for secrets.
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "✖ pre-commit: gitleaks not installed — cannot scan staged changes for secrets." >&2
+  echo "  Fix: run 'just setup' (installs gitleaks), then commit again." >&2
+  exit 1
+fi
+
+cfg=()
+[ -f .gitleaks.toml ] && cfg=(--config .gitleaks.toml)
+if ! gitleaks protect --staged --redact --no-banner "${cfg[@]}"; then
+  echo "✖ pre-commit: potential secret detected in staged changes (see gitleaks output above)." >&2
+  echo "  Remove the secret, or allowlist a confirmed false positive in .gitleaks.toml." >&2
+  exit 1
+fi

@@ -1,0 +1,52 @@
+name: Plane PR sync
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, edited, labeled, unlabeled, closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+concurrency:
+  group: plane-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Validate Plane contract
+    if: ${{ vars.PLANE_SYNC_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      # pull_request_target has secrets: checkout only trusted default-branch code, never PR code.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/plane-sync.json
+            scripts/plane-sync.mjs
+            scripts/plane-sync
+      - name: Require one primary Plane work item
+        run: node scripts/plane-sync.mjs validate
+
+  sync:
+    name: Mirror PR state to Plane
+    if: ${{ vars.PLANE_SYNC_ENABLED == 'true' }}
+    needs: contract
+    runs-on: ubuntu-latest
+    environment: plane-sync
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/plane-sync.json
+            scripts/plane-sync.mjs
+            scripts/plane-sync
+      - name: Synchronize trusted metadata
+        env:
+          PLANE_API_KEY: ${{ secrets.PLANE_SYNC_API_KEY }}
+        run: node scripts/plane-sync.mjs event --apply

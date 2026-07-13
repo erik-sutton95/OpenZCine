@@ -1,0 +1,30 @@
+# Strict Dart analysis standard for OpenZCine.
+#
+# Documentary until `flutter create` adds a pubspec.yaml (the analyzer needs a
+# package to act on). At that point this becomes ENFORCED by `just analyze` and
+# CI. When the app is scaffolded, add the very_good_analysis dev dependency and
+# replace the inline `linter.rules` block below with:
+#   include: package:very_good_analysis/analysis_options.yaml
+# while keeping the `analyzer.language` strict flags.
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  errors:
+    todo: ignore
+
+linter:
+  rules:
+    - always_declare_return_types
+    - avoid_dynamic_calls
+    - avoid_print
+    - cancel_subscriptions
+    - close_sinks
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - prefer_final_locals
+    - require_trailing_commas
+    - unawaited_futures
+    - use_super_parameters

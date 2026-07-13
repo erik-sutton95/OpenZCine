@@ -1,0 +1,5 @@
+#include "../Config/Version.xcconfig"
+#include? "../Config/CI-Watch-Signing.xcconfig"
+
+// The containing iOS app and embedded Watch app must use identical marketing
+// versions and build numbers. Version.xcconfig is CI's shared source of truth.

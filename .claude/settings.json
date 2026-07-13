@@ -1,0 +1,55 @@
+{
+  "model": "sonnet",
+  "env": {
+    "PROJECT_NAME": "OpenZCine",
+    "DEFAULT_SIMULATOR": "iPhone 16",
+    "SWIFT_VERSION": "6.0",
+    "IOS_DEPLOYMENT_TARGET": "17.0"
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(just:*)",
+      "Bash(swift:*)",
+      "Bash(xcodebuild:*)",
+      "Bash(xcrun:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "mcp__XcodeBuildMCP__build_sim_name_proj",
+      "mcp__XcodeBuildMCP__test_sim_name_proj",
+      "mcp__XcodeBuildMCP__swift_package_test",
+      "mcp__XcodeBuildMCP__list_simulators",
+      "mcp__XcodeBuildMCP__screenshot"
+    ],
+    "deny": [
+      "Edit(vendor/**)",
+      "Write(vendor/**)",
+      "Edit(ref/**)",
+      "Write(ref/**)",
+      "Read(./**/.env*)",
+      "Edit(./**/.env*)",
+      "Write(./**/.env*)",
+      "Edit(./**/*.secret)",
+      "Edit(./**/secrets.*)",
+      "Edit(./**/Secrets.swift)",
+      "Edit(./**/GoogleService-Info.plist)",
+      "Bash(rm -rf:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Edit|Write|MultiEdit", "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/file-protection.sh" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write|MultiEdit", "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-swift-edit.sh" }] }
+    ]
+  },
+  "worktree": {
+    "baseRef": "head"
+  }
+}

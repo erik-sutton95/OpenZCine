@@ -1,0 +1,10 @@
+// Copy this file to `Frameio.local.xcconfig` (gitignored) and paste from Adobe Developer Console:
+// Project → Credentials → OAuth Native App. See docs/frameio-setup.md.
+
+FRAMEIO_CLIENT_ID = your-adobe-client-id-here
+
+// Redirect URI — copy the full "Default redirect URI" verbatim (starts with adobe+…).
+FRAMEIO_REDIRECT_URI = adobe+your-unique-id://adobeid/your-adobe-client-id-here
+
+// URL scheme — everything before :// in FRAMEIO_REDIRECT_URI (usually adobe+…).
+FRAMEIO_URL_SCHEME = adobe+your-unique-id

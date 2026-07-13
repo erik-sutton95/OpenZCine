@@ -1,0 +1,51 @@
+title: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to share an idea! This template helps us understand
+        and evaluate your suggestion. The more detail you provide, the easier it is
+        for us to respond thoughtfully.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Who experiences it and when? What's painful or missing today?
+      placeholder: "As a filmmaker using the Nikon ZR, I want to … so that I can …"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe what you'd like to see happen. Mockups, sketches, or examples are welcome.
+      placeholder: "A live histogram overlay in the live-view screen…"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or other approaches have you thought about?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the app does this relate to?
+      options:
+        - Live view
+        - Camera control
+        - Monitoring / metadata
+        - Media browser
+        - Connection / pairing
+        - watchOS app
+        - Android app
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Willingness to contribute
+      options:
+        - label: I'd be willing to help implement this (code, design, docs, or testing)

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>OpenZCine Support — Connect, monitor, control, and deliver</title>
+  <meta name="description" content="Learn how to connect a Nikon ZR, monitor and record, use camera controls and view assists, review clips, and deliver media with OpenZCine.">
+  <meta name="theme-color" content="#0A0908">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests">
+  <link rel="canonical" href="https://openzcine.app/support/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="OpenZCine Support">
+  <meta property="og:description" content="Connection guides, camera controls, monitoring tools, media workflows, and troubleshooting for OpenZCine.">
+  <meta property="og:url" content="https://openzcine.app/support/">
+  <meta property="og:image" content="https://openzcine.app/assets/screens/hero-monitor.webp">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../assets/icon.png">
+  <link rel="apple-touch-icon" href="../assets/icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/app.css">
+</head>
+<body class="support-page">
+  <a class="skip-link" href="#support-content">Skip to support content</a>
+  <div class="bg-glow" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="support-nav">
+    <div class="container support-nav__inner">
+      <a href="/" class="nav__brand" aria-label="OpenZCine home">
+        <img src="../assets/icon.png" alt="" width="28" height="28">
+        <span>OpenZCine</span>
+      </a>
+      <nav class="support-nav__links" aria-label="Support navigation">
+        <a href="/">Home</a>
+        <a href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener">GitHub</a>
+        <a class="btn btn--primary" href="TESTFLIGHT_URL"><span class="btn__rec" aria-hidden="true"></span>Join the beta</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="support-content">
+    <section class="support-hero">
+      <div class="container support-hero__inner">
+        <span class="section-label"><span class="rec-dot"></span> Support Center</span>
+        <h1>Get the shot.<br><span class="gold">We’ll help with the rest.</span></h1>
+        <p class="lead">Connect your Nikon ZR, shape the monitor, control the camera, review the take, and send it on. OpenZCine is in active beta, so this guide also calls out what still needs real-world hardening.</p>
+        <p class="support-notice"><strong>Current focus:</strong> iPhone and iPad with Nikon ZR over Wi-Fi. USB-C, Apple Watch, and the full iPad experience are available but still being hardened across more setups.</p>
+      </div>
+    </section>
+
+    <section class="support-section support-section--compact" aria-labelledby="browse-title">
+      <div class="container">
+        <div class="support-heading">
+          <span class="section-label">Browse by task</span>
+          <h2 id="browse-title">Find what you need.</h2>
+        </div>
+        <nav class="support-grid" aria-label="Support topics">
+          <a class="support-card glass" href="#connect"><span>01</span><h3>Connect a camera</h3><p>Choose Wi-Fi, hotspot, or USB-C and pair your Nikon ZR.</p></a>
+          <a class="support-card glass" href="#monitor"><span>02</span><h3>Monitor &amp; record</h3><p>Start live view, understand status, and roll safely.</p></a>
+          <a class="support-card glass" href="#controls"><span>03</span><h3>Camera controls</h3><p>Adjust exposure, focus, recording format, and frame rate.</p></a>
+          <a class="support-card glass" href="#assists"><span>04</span><h3>Scopes &amp; assists</h3><p>Configure LUTs, exposure tools, focus aids, and guides.</p></a>
+          <a class="support-card glass" href="#media"><span>05</span><h3>Media &amp; delivery</h3><p>Browse, review, export, share, and send to Frame.io.</p></a>
+          <a class="support-card glass" href="#troubleshooting"><span>06</span><h3>Troubleshooting</h3><p>Work through the most common connection and stream issues.</p></a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="support-section" id="connect" aria-labelledby="connect-title">
+      <div class="container support-article">
+        <div class="support-heading"><span class="section-label">01 · Connection</span><h2 id="connect-title">Connect your Nikon ZR.</h2><p class="lead">On first launch, OpenZCine walks through permissions, transport choice, camera preparation, network setup, discovery, and pairing.</p></div>
+        <div class="support-columns">
+          <div>
+            <h3>Choose a connection</h3>
+            <ol class="support-steps">
+              <li><strong>Camera Wi-Fi</strong><span>Use the ZR’s access-point network. OpenZCine can scan the SSID and password shown on the camera, or you can enter them.</span></li>
+              <li><strong>iPhone Personal Hotspot</strong><span>Let the camera join your phone’s hotspot when you want the phone to remain the center of the link.</span></li>
+              <li><strong>USB-C</strong><span>Connect directly with a data-capable cable and allow camera accessory access when iOS asks.</span></li>
+            </ol>
+          </div>
+          <div class="support-callout glass">
+            <h3>Returning to set</h3>
+            <p>Saved cameras appear on the home screen. Tap one to reconnect, or use <strong>Pair new camera</strong>. You can rename or remove a saved camera and give it a name, color, and icon for quick identification.</p>
+            <p>Wi-Fi and USB-C are separate transports for a session. Disconnect before changing transport.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="support-section" id="monitor" aria-labelledby="monitor-title">
+      <div class="container support-article">
+        <div class="support-heading"><span class="section-label">02 · Live monitor</span><h2 id="monitor-title">See the feed. Roll the camera.</h2><p class="lead">After connection, OpenZCine starts Nikon live view and opens the monitor when the first readable frame arrives.</p></div>
+        <div class="support-columns">
+          <div>
+            <h3>Monitor controls</h3>
+            <ul class="support-list">
+              <li>Use the trailing record control to start or stop in-camera recording.</li>
+              <li>Switch <strong>DISP</strong> modes to change the visible monitor layout.</li>
+              <li>Open Settings or Media from the side controls.</li>
+              <li>Lock the interface to prevent accidental picker changes.</li>
+              <li>Watch timecode, REC state, codec, media, frame rate, battery, storage, temperature, and warnings when the camera reports them.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Safer record control</h3>
+            <ul class="support-list">
+              <li>Enable record confirmation when an accidental roll would be costly.</li>
+              <li>Turn on haptics and keep-screen-awake in Settings › Controls.</li>
+              <li>A Bluetooth shutter or supported phone volume control can trigger recording when enabled.</li>
+              <li>The Apple Watch companion can mirror the feed and status, then roll or cut remotely.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="support-section" id="controls" aria-labelledby="controls-title">
+      <div class="container support-article">
+        <div class="support-heading"><span class="section-label">03 · Camera control</span><h2 id="controls-title">Set the camera from the monitor.</h2><p class="lead">Tap a live-view readout to open its picker. OpenZCine uses values advertised by the connected camera wherever Nikon exposes them.</p></div>
+        <div class="support-feature-list">
+          <article><h3>Exposure</h3><p>Adjust ISO, shutter angle or speed, iris, white-balance temperature, and supported exposure modes.</p></article>
+          <article><h3>Focus</h3><p>Choose supported focus mode, AF-area mode, and subject-detection options. Availability changes with the camera’s current mode.</p></article>
+          <article><h3>Recording setup</h3><p>Select supported resolution/frame-rate combinations and codec or file-type options reported by the camera.</p></article>
+          <article><h3>Stabilization</h3><p>Stabilization controls appear where supported. Behavior varies with camera firmware, lens, recording mode, and transport.</p></article>
+        </div>
+        <p class="support-note"><strong>Beta note:</strong> camera modes can make a property unavailable or read-only. Format, codec, named white-balance presets, exposure mode, and stabilization are still being verified across real Nikon ZR configurations. If a write is rejected, confirm the camera mode and change that setting on-camera.</p>
+      </div>
+    </section>
+
+    <section class="support-section" id="assists" aria-labelledby="assists-title">
+      <div class="container support-article">
+        <div class="support-heading"><span class="section-label">04 · View assists</span><h2 id="assists-title">Build the monitor you need.</h2><p class="lead">Tap an assist to toggle it. Long-press the tool to open its configuration. Reorder or hide tools and DISP modes in Settings.</p></div>
+        <div class="support-feature-list support-feature-list--three">
+          <article><h3>Exposure &amp; color</h3><p>Waveform, RGB parade, histogram, false color, zebras, and RED-inspired Traffic Lights.</p></article>
+          <article><h3>Focus</h3><p>Focus peaking with adjustable sensitivity and color.</p></article>
+          <article><h3>Framing</h3><p>Multiple aspect guides, masks, thirds/phi/diagonal grids, crosshair, horizon level, and anamorphic de-squeeze.</p></article>
+          <article><h3>LUT preview</h3><p>Preview built-in looks, downloaded RED LUTs, or imported <code>.cube</code> files from 2³ through 64³.</p></article>
+          <article><h3>Movable scopes</h3><p>Position scope panels where they do not cover the part of the frame you are judging. Layout positions persist.</p></article>
+          <article><h3>Clean display</h3><p>Hide REC, CODEC, MEDIA, or FPS readouts you do not need during a take.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="support-section" id="media" aria-labelledby="media-title">
+      <div class="container support-article">
+        <div class="support-heading"><span class="section-label">05 · Media</span><h2 id="media-title">Review and deliver the take.</h2><p class="lead">Open Media from the home screen or monitor to browse clips on the camera, then review progressively while the file continues to cache.</p></div>
+        <div class="support-columns">
+          <div>
+            <h3>Browse &amp; review</h3>
+            <ul class="support-list">
+              <li>Switch between grid and list layouts and choose thumbnail size.</li>
+              <li>Filter by format, resolution, date, or card slot; sort, favorite, and multi-select clips.</li>
+              <li>Play or scrub, jump ±15 seconds, mute, pinch to zoom, pan, or move between clips.</li>
+              <li>Apply scopes, markers, and the selected LUT during playback review.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Share &amp; Camera-to-Cloud</h3>
+            <ul class="support-list">
+              <li>Share with the iOS share sheet or save to Photos.</li>
+              <li>Export MOV or MP4 and optionally bake the selected LUT into the result.</li>
+              <li>When Frame.io is configured in the build, sign in under Settings › Storage, choose or create a project, and upload.</li>
+              <li>If the camera Wi-Fi has no internet, OpenZCine can temporarily hop to an internet connection, deliver, then reconnect the camera.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="support-section" id="settings" aria-labelledby="settings-title">
+      <div class="container support-article">
+        <div class="support-heading"><span class="section-label">Settings</span><h2 id="settings-title">Tune OpenZCine for the operator.</h2></div>
+        <div class="support-feature-list support-feature-list--three">
+          <article><h3>Link</h3><p>Check connection health, choose a live-view stream preset and quality bias, or disconnect.</p></article>
+          <article><h3>View Assist</h3><p>Configure tools and arrange the assist toolbar for the current job.</p></article>
+          <article><h3>Controls</h3><p>Set record confirmation, Bluetooth shutter behavior, haptics, and screen wake behavior.</p></article>
+          <article><h3>Display</h3><p>Reorder or hide monitor tools, readouts, and DISP modes.</p></article>
+          <article><h3>Storage</h3><p>Manage Frame.io sign-in and clear the local cache without losing favorites, upload history, or the media index.</p></article>
+          <article><h3>System</h3><p>Find the app version, protocol implementation details, and this support center.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="support-section" id="troubleshooting" aria-labelledby="troubleshooting-title">
+      <div class="container support-article">
+        <div class="support-heading"><span class="section-label">06 · Troubleshooting</span><h2 id="troubleshooting-title">Start with the signal closest to the problem.</h2></div>
+        <div class="support-faq">
+          <details><summary>The camera does not appear</summary><div><p>Confirm the camera is in its Wi-Fi connection screen or connected by a data-capable USB-C cable. On iPhone, allow Local Network, Bluetooth, and camera accessory access requested by OpenZCine. Make sure the phone joined the exact network shown by the camera, then retry discovery. You can also use the manual connection option when you know the camera address.</p></div></details>
+          <details><summary>Pairing never finishes</summary><div><p>Keep the Nikon pairing screen visible and accept any confirmation shown on the camera. If the camera was paired with an earlier install or device identity, remove the saved camera in OpenZCine, clear the camera’s old pairing entry, and pair again.</p></div></details>
+          <details><summary>Live view stalls or drops frames</summary><div><p>Move closer to the camera or access point, reduce network congestion, and choose a lighter Stream Preset under Settings › Link. Recording increases camera load, so OpenZCine intentionally reduces nonessential polling during a take. If recovery does not complete, disconnect and reconnect.</p></div></details>
+          <details><summary>A camera setting will not change</summary><div><p>Nikon only allows some values in specific exposure, focus, codec, or recording modes. OpenZCine normally offers the camera-advertised list, but firmware and transport differences can still reject a write. Confirm the mode on-camera and try the change there; include the camera firmware and exact mode in a bug report.</p></div></details>
+          <details><summary>Frame.io is unavailable</summary><div><p>If Settings › Storage says “Not set up in this build,” that beta build does not include Frame.io credentials. Otherwise sign in before the shoot. Upload requires internet, so approve the temporary internet hop if you are connected directly to camera Wi-Fi.</p></div></details>
+          <details><summary>Cached media is using too much space</summary><div><p>Open Settings › Storage and clear the cache. This removes cached clip data and thumbnails while preserving favorites, upload history, and the media index.</p></div></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="support-section support-contact" aria-labelledby="contact-title">
+      <div class="container support-contact__inner glass">
+        <span class="section-label"><span class="rec-dot"></span> Still stuck?</span>
+        <h2 id="contact-title">Bring it to the open.</h2>
+        <p class="lead">Report a reproducible problem on GitHub, or start an Ideas discussion for a workflow you want OpenZCine to support.</p>
+        <div class="hero__cta">
+          <a class="btn btn--primary" href="https://github.com/erik-sutton95/OpenZCine/issues/new/choose" target="_blank" rel="noopener">Report a bug<span class="btn__arrow" aria-hidden="true">→</span></a>
+          <a class="btn btn--ghost" href="https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas" target="_blank" rel="noopener">Request a feature<span class="btn__arrow" aria-hidden="true">→</span></a>
+        </div>
+        <p class="support-contact__hint">Include the app build, iPhone or iPad model, iOS version, Nikon firmware, connection type, recording mode, and the last message shown in the app. Never post Wi-Fi passwords, pairing codes, or private media.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand"><img src="../assets/icon.png" alt="" width="24" height="24"><span>OpenZCine</span></div>
+      <p class="footer__meta"><a href="/">Home</a> · <a href="https://github.com/erik-sutton95/OpenZCine" target="_blank" rel="noopener">Source</a> · <a href="https://github.com/erik-sutton95/OpenZCine/discussions" target="_blank" rel="noopener">Community</a></p>
+      <p class="footer__disclaimer">OpenZCine is an independent application, not affiliated with or endorsed by Nikon Corporation. “Nikon”, “Nikon Z”, and “ZR” are trademarks of Nikon Corporation, used for identification only.</p>
+    </div>
+  </footer>
+</body>
+</html>

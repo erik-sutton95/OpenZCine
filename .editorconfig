@@ -1,0 +1,31 @@
+# https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Dart uses 2-space indentation (matches `dart format`, the project's `just format`).
+[*.dart]
+indent_size = 2
+
+[*.{kt,kts,java,gradle,swift}]
+indent_size = 4
+
+# Recipe bodies are 4-space indented, but bash continuation lines inside recipes
+# intentionally hang at +2 — don't enforce a single indent size.
+[{justfile,*.just}]
+indent_size = unset
+
+# Ordered-list continuation lines align under the list marker (3 spaces for `1. `),
+# which a fixed indent_size would flag.
+[*.md]
+indent_size = unset
+trim_trailing_whitespace = false
+
+[*.{yml,yaml,json,jsonc}]
+indent_size = 2

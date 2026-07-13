@@ -1,0 +1,18 @@
+# gitleaks secret-scan config for OpenZCine.
+# Extends the built-in ruleset and allowlists values that are known-safe for
+# this repo. See docs/commit-hygiene.md for the policy this enforces.
+title = "OpenZCine secret scan"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Repo-specific known-safe values and paths"
+regexes = [
+  # Functional PTP-IP pairing friendly-name handed to the camera — not a secret.
+  '''WTU-iPhone''',
+]
+paths = [
+  # This config talks about secret patterns on purpose.
+  '''\.gitleaks\.toml$''',
+]

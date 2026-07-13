@@ -1,0 +1,16 @@
+#include "../Config/Version.xcconfig"
+#include? "../Config/CI-Signing.xcconfig"
+
+// Frame.io OAuth build configuration (base — committed).
+//
+// The client ID and redirect URI are PKCE public-client values (not secrets), but we still keep them
+// out of the public repo. They are supplied via the *gitignored* Frameio.local.xcconfig: copy
+// Frameio.local.xcconfig.example -> Frameio.local.xcconfig and paste the values from the Adobe
+// Developer Console (OAuth Native App credential).
+//
+// With no local file present, these stay empty and the app shows "Frame.io not set up".
+FRAMEIO_CLIENT_ID =
+FRAMEIO_REDIRECT_URI =
+FRAMEIO_URL_SCHEME =
+
+#include? "Frameio.local.xcconfig"

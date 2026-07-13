@@ -1,0 +1,10 @@
+OpenZCine
+Copyright 2026 Erik Sutton and OpenZCine contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+Third-party software distributed with this product is listed in THIRD-PARTY-NOTICES.md.
+
+This project is not affiliated with or endorsed by Nikon Corporation.
+"Nikon", "Nikon Z", and "ZR" are trademarks of Nikon Corporation, used for identification only.
+No Nikon SDK or proprietary Nikon documentation is included in, distributed with, or required by
+this project (see docs/nikon-sdk.md).

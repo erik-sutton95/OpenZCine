@@ -1,0 +1,9 @@
+// Copy to `CI-Signing.xcconfig` (gitignored) for local manual App Store signing,
+// or let CI generate it via scripts/ios-install-distribution-signing.sh.
+//
+// Applies to the Runner app target only (via Frameio.xcconfig). SPM resource bundles
+// stay on automatic signing with DEVELOPMENT_TEAM from the xcodebuild command line.
+
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = Apple Distribution
+PROVISIONING_PROFILE_SPECIFIER = OpenZCine_AppStore

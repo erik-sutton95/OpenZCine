@@ -1,0 +1,31 @@
+title: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask away! Before posting, please check existing Q&A discussions to see if
+        your question has already been answered.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What do you want to know? Be as specific as possible.
+      placeholder: "How do I connect to my Nikon ZR over Wi-Fi?"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Live view
+        - Camera control
+        - Monitoring / metadata
+        - Media browser
+        - Connection / pairing
+        - watchOS app
+        - Android app
+        - Build / development
+        - Other
+    validations:
+      required: true

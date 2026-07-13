@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    # Paused for the pre-launch phase; raise the limit to re-enable update PRs.
+    open-pull-requests-limit: 0
+  # Add production native ecosystems here once Swift/iOS/Android package manifests settle.

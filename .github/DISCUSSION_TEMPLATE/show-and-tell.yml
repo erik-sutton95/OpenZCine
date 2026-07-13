@@ -1,0 +1,19 @@
+title: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Built something cool with OpenZCine? Showing off a rig or a workflow?
+        Share it here! Photos, videos, and links are all welcome.
+  - type: textarea
+    id: content
+    attributes:
+      label: What do you want to share?
+      description: Tell us about it. Screenshots, photos, or video links are great.
+    validations:
+      required: true
+  - type: input
+    id: gear
+    attributes:
+      label: Gear used
+      placeholder: "Nikon ZR, iPhone 16 Pro, …"
