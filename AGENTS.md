@@ -47,8 +47,7 @@ OpenZCine supports **Claude Code** and **Codex** only:
 
 - Shared instructions live in `AGENTS.md`; both clients follow them.
 - Claude Code configuration lives under tracked `.claude/`, with personal settings ignored.
-- Codex uses `AGENTS.md` plus reusable skills under `.agents/skills/`; personal `.codex/` state is
-  ignored.
+- Codex uses `AGENTS.md`; personal `.codex/` state is ignored.
 
 Do not add Cursor, Copilot, Gemini, Windsurf, Aider, Cline, Roo, Kilo, Continue, or OpenCode-specific
 instructions. Put guidance needed by both supported clients here or in the relevant project docs.
