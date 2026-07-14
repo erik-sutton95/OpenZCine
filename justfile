@@ -150,6 +150,21 @@ run:
 clean:
     swift package clean
 
+# ── Android production stack ────────────────────────────────────────────────
+# JAVA_HOME falls back to the Homebrew OpenJDK so recipes work without shell setup.
+
+# Build the Android app (debug APK).
+android-build:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug
+
+# Run Android JVM unit tests.
+android-test:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew test
+
+# Run all Android checks: build, unit tests, and Android lint.
+android-check:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug test lint
+
 # ── App-flow design (ExcaliDash) ────────────────────────────────────────────
 # Start the local ExcaliDash server (http://localhost:6767).
 flows-up:
