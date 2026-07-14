@@ -31,6 +31,27 @@ public struct FacadeMediaClip: Equatable, Sendable {
 }
 
 extension PTPIPClientSession {
+    /// Reads the first camera storage slot that reports valid capacity data.
+    ///
+    /// This mirrors the iOS monitor policy: Nikon's standard storage-ID list
+    /// may contain placeholder slot values, so valid IDs are gathered through
+    /// the vendor operation first and each candidate is probed with
+    /// `GetStorageInfo`. `nil` means no card answered, not a fabricated empty
+    /// storage value.
+    public func readStorageInfo() throws -> PTPStorageInfo? {
+        for storageID in try usableStorageIDs() {
+            let result = try executeTransaction(
+                .getStorageInfo, parameters: [storageID], dataPhase: .dataIn)
+            guard result.operationResponse.responseCode == .ok,
+                let info = PTPStorageInfo(Array(result.data))
+            else {
+                continue
+            }
+            return info
+        }
+        return nil
+    }
+
     /// Lists browsable media on the camera's cards, applying the iOS browse
     /// policies: media-library filtering (movies, stills, R3D masters) and the
     /// R3D-hide pairing rule (a master with a same-stem playable proxy is

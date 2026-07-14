@@ -438,6 +438,56 @@
         return javaString(env, value)
     }
 
+    /// `SwiftCore.sessionRefreshPropertySnapshot(request, recording, propertyCode): String?` —
+    /// performs one bounded semantic Android monitor refresh. Kotlin supplies
+    /// only a lifecycle selector, recording state, and a raw `DevicePropChanged`
+    /// value that it already received; Swift owns the property-code allowlist,
+    /// PTP reads, byte decoders, storage lookup, and semantic wire shape.
+    /// Blocking; Kotlin invokes it from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionRefreshPropertySnapshot")
+    public func swiftCoreSessionRefreshPropertySnapshot(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, request: jint,
+        recording: jboolean, propertyCode: jlong
+    ) -> jstring? {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return javaString(
+                env,
+                AndroidCameraPropertyReadbackWire.encode(
+                    AndroidCameraPropertyReadback(
+                        result: .noSession, properties: PTPCameraPropertySnapshot(), storage: nil)))
+        }
+
+        let refreshRequest: AndroidCameraPropertyRefreshRequest
+        switch request {
+        case 0:
+            refreshRequest = .bootstrap
+        case 1:
+            refreshRequest = .next(isRecording: recording != 0)
+        case 2:
+            guard propertyCode >= 0, propertyCode <= jlong(UInt32.max) else {
+                return javaString(
+                    env,
+                    AndroidCameraPropertyReadbackWire.encode(
+                        AndroidCameraPropertyReadback(
+                            result: .unsupported, properties: PTPCameraPropertySnapshot(),
+                            storage: nil)))
+            }
+            refreshRequest = .propertyChanged(UInt32(propertyCode))
+        default:
+            return javaString(
+                env,
+                AndroidCameraPropertyReadbackWire.encode(
+                    AndroidCameraPropertyReadback(
+                        result: .unsupported,
+                        properties: PTPCameraPropertySnapshot(),
+                        storage: nil)))
+        }
+        return javaString(
+            env,
+            AndroidCameraPropertyReadbackWire.encode(
+                session.refreshAndroidPropertySnapshot(refreshRequest)))
+    }
+
     /// `SwiftCore.sessionStartEventStream(listener)` — starts the active
     /// facade session's dedicated PTP-IP event reader. Valid raw event codes,
     /// transaction IDs, and UINT32 parameters cross as primitives; Kotlin
