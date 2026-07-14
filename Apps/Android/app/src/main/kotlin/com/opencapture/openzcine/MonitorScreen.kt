@@ -116,6 +116,15 @@ internal fun Modifier.zone(frame: ZoneFrame): Modifier =
 internal const val IOS_ISLAND_LANE_DP = 59f
 
 /**
+ * The bottom inset handed to the portrait zone map while Android's system bars
+ * are hidden. The SM-A127F reports a zero bottom inset in sticky immersive
+ * mode, but the physical gesture/home-indicator area is still present. This
+ * floor keeps the 83dp record control comfortably above that edge after the
+ * shared layout reclaims its 14dp system-bar lift.
+ */
+internal const val PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP = 30f
+
+/**
  * Leading inset handed to the zone map, in dp: the display cutout floored at
  * [IOS_ISLAND_LANE_DP], plus any transient system-bar lane on this edge.
  *
@@ -130,6 +139,21 @@ internal const val IOS_ISLAND_LANE_DP = 59f
  */
 internal fun monitorLeadingInsetDp(cutoutDp: Float, transientBarDp: Float): Float =
     maxOf(cutoutDp, IOS_ISLAND_LANE_DP) + maxOf(0f, transientBarDp - cutoutDp)
+
+/**
+ * Bottom inset handed to the zone map, in dp.
+ *
+ * Sticky immersive mode can report no Android navigation-bar inset even
+ * though a device still reserves its gesture area at the physical bottom.
+ * Keep a portrait-only floor so the fixed system rail and its record button
+ * never touch that edge; a real, larger system-bar/cutout inset still wins.
+ */
+internal fun monitorBottomInsetDp(rawInsetDp: Float, isPortrait: Boolean): Float =
+    if (isPortrait) {
+        maxOf(rawInsetDp, PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP)
+    } else {
+        rawInsetDp
+    }
 
 /** Unwraps the owning [android.app.Activity] (a ComposeView's context is a wrapper). */
 private tailrec fun android.content.Context.findActivity(): android.app.Activity? =
@@ -405,7 +429,10 @@ fun MonitorScreen(
             label = "safeTop",
         )
         val safeBottom by animateFloatAsState(
-            edgeDp(cutout.getBottom(density), barInsets.bottom),
+            monitorBottomInsetDp(
+                rawInsetDp = edgeDp(cutout.getBottom(density), barInsets.bottom),
+                isPortrait = isPortrait,
+            ),
             label = "safeBottom",
         )
         // Leading carries the synthesized iPhone island lane (see
