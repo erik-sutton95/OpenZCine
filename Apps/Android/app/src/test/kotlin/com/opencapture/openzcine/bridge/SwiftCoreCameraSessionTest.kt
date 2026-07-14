@@ -1,12 +1,17 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraIdentity
+import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -105,6 +110,90 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
+    fun `camera control passes only a typed selector and human readable label`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        session.applyControl(CameraControl.WHITE_BALANCE, "5600K")
+
+        assertEquals(listOf(CameraControl.WHITE_BALANCE to "5600K"), bridge.controlRequests)
+    }
+
+    @Test
+    fun `camera control maps native failures to typed exceptions`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        bridge.controlResult = SwiftCore.CONTROL_COMMAND_MEDIA_BUSY
+        assertControlFailure(session, CameraControlException.MediaBusy)
+
+        bridge.controlResult = SwiftCore.CONTROL_COMMAND_NO_SESSION
+        assertControlFailure(session, CameraControlException.NotConnected)
+
+        bridge.controlResult = SwiftCore.CONTROL_COMMAND_UNSUPPORTED
+        assertControlFailure(session, CameraControlException.UnsupportedSelection)
+
+        bridge.controlResult = SwiftCore.CONTROL_COMMAND_REJECTED
+        assertControlFailure(session, CameraControlException.CommandRejected)
+
+        bridge.controlResult = SwiftCore.CONTROL_COMMAND_TRANSPORT_FAILED
+        assertControlFailure(session, CameraControlException.TransportFailed)
+    }
+
+    @Test
+    fun `camera control rejects a disconnected session before native work`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+
+        assertControlFailure(session, CameraControlException.NotConnected)
+
+        assertEquals(emptyList(), bridge.controlRequests)
+    }
+
+    @Test
+    fun `camera control serializes with disconnect`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        val controlStarted = CountDownLatch(1)
+        val releaseControl = CountDownLatch(1)
+        bridge.controlHandler = { _, _ ->
+            controlStarted.countDown()
+            check(releaseControl.await(5, TimeUnit.SECONDS))
+            SwiftCore.CONTROL_COMMAND_ACCEPTED
+        }
+        val controlling = async { session.applyControl(CameraControl.ISO, "800") }
+        runCurrent()
+        try {
+            assertTrue(controlStarted.await(5, TimeUnit.SECONDS))
+            val disconnecting = async { session.disconnect() }
+            runCurrent()
+
+            assertEquals(0, bridge.disconnects)
+
+            releaseControl.countDown()
+            controlling.await()
+            disconnecting.await()
+        } finally {
+            releaseControl.countDown()
+        }
+
+        assertEquals(1, bridge.disconnects)
+    }
+
+    @Test
     fun `camera events preserve raw property data and authoritatively update recording`() = runTest {
         val bridge = FakeBridge()
         val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
@@ -173,6 +262,9 @@ class SwiftCoreCameraSessionTest {
         val listeners = mutableListOf<SwiftCore.SessionListener>()
         val eventListeners = mutableListOf<SwiftCore.SessionEventListener>()
         val recordingRequests = mutableListOf<Boolean>()
+        val controlRequests = mutableListOf<Pair<CameraControl, String>>()
+        var controlResult = SwiftCore.CONTROL_COMMAND_ACCEPTED
+        var controlHandler: ((CameraControl, String) -> Int)? = null
         var disconnects = 0
 
         override fun connect(host: String, listener: SwiftCore.SessionListener) {
@@ -190,8 +282,25 @@ class SwiftCoreCameraSessionTest {
             return SwiftCore.RECORDING_COMMAND_ACCEPTED
         }
 
+        override fun applyControl(control: CameraControl, label: String): Int {
+            controlRequests += control to label
+            return controlHandler?.invoke(control, label) ?: controlResult
+        }
+
         override fun disconnect() {
             disconnects++
+        }
+    }
+
+    private suspend fun assertControlFailure(
+        session: SwiftCoreCameraSession,
+        expected: CameraControlException,
+    ) {
+        try {
+            session.applyControl(CameraControl.ISO, "800")
+            throw AssertionError("Expected $expected")
+        } catch (actual: CameraControlException) {
+            assertEquals(expected, actual)
         }
     }
 }

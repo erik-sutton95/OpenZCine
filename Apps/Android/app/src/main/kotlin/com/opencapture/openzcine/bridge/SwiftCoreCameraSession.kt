@@ -1,6 +1,8 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraIdentity
+import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
@@ -34,6 +36,8 @@ internal interface SwiftCoreSessionBridge {
 
     fun setRecording(recording: Boolean): Int
 
+    fun applyControl(control: CameraControl, label: String): Int
+
     fun disconnect()
 
     data object Production : SwiftCoreSessionBridge {
@@ -53,11 +57,33 @@ internal interface SwiftCoreSessionBridge {
         override fun setRecording(recording: Boolean): Int =
             SwiftCore.sessionSetRecording(recording)
 
+        override fun applyControl(control: CameraControl, label: String): Int =
+            SwiftCore.sessionApplyControl(control.nativeSelector, label)
+
         override fun disconnect() {
             SwiftCore.sessionDisconnect()
         }
     }
 }
+
+/** Stable semantic selector mirrored by `AndroidCameraControlWire` in Swift. */
+private val CameraControl.nativeSelector: Int
+    get() =
+        when (this) {
+            CameraControl.ISO -> 0
+            CameraControl.SHUTTER -> 1
+            CameraControl.IRIS -> 2
+            CameraControl.WHITE_BALANCE -> 3
+            CameraControl.FOCUS_MODE -> 4
+            CameraControl.FOCUS_AREA -> 5
+            CameraControl.FOCUS_SUBJECT -> 6
+            CameraControl.EXPOSURE_MODE -> 7
+            CameraControl.AUDIO_SENSITIVITY -> 8
+            CameraControl.AUDIO_INPUT -> 9
+            CameraControl.WIND_FILTER -> 10
+            CameraControl.ATTENUATOR -> 11
+            CameraControl.AUDIO_32_BIT_FLOAT -> 12
+        }
 
 /**
  * Production [CameraSession] backed by the shared Swift core's PTP-IP
@@ -99,8 +125,12 @@ class SwiftCoreCameraSession internal constructor(
         )
     override val events: SharedFlow<CameraSessionEvent> = _events.asSharedFlow()
 
-    /** Serializes record commands with disconnect so an in-flight JNI call never races teardown. */
-    private val recordingCommandMutex = Mutex()
+    /**
+     * Serializes camera-changing commands with each other and with disconnect,
+     * so an in-flight JNI call never races teardown or a competing record /
+     * property-control transaction.
+     */
+    private val cameraCommandMutex = Mutex()
 
     /**
      * The iOS shell defers camera-header readback for 1.5 seconds after an app
@@ -194,7 +224,7 @@ class SwiftCoreCameraSession internal constructor(
      * already reached the body.
      */
     override suspend fun setRecording(recording: Boolean) {
-        recordingCommandMutex.withLock {
+        cameraCommandMutex.withLock {
             if (_state.value !is CameraSessionState.Connected) {
                 throw CameraRecordingException.NotConnected
             }
@@ -253,8 +283,36 @@ class SwiftCoreCameraSession internal constructor(
         }
     }
 
+    /**
+     * Applies a typed human-readable camera-control selection through the Swift
+     * core. Kotlin passes no PTP property bytes: Swift validates [label],
+     * selects the Nikon property write(s), and serializes them with live view.
+     */
+    override suspend fun applyControl(control: CameraControl, label: String) {
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected) {
+                throw CameraControlException.NotConnected
+            }
+            if (!core.isAvailable) {
+                throw CameraControlException.CoreUnavailable
+            }
+
+            try {
+                val nativeResult =
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        core.applyControl(control, label)
+                    }
+                nativeResult.throwIfControlCommandFailed()
+            } catch (error: CameraControlException) {
+                throw error
+            } catch (_: Throwable) {
+                throw CameraControlException.TransportFailed
+            }
+        }
+    }
+
     override suspend fun disconnect() {
-        recordingCommandMutex.withLock {
+        cameraCommandMutex.withLock {
             invalidateAttempt()
             if (core.isAvailable) {
                 withContext(Dispatchers.IO + NonCancellable) { core.disconnect() }
@@ -393,6 +451,19 @@ class SwiftCoreCameraSession internal constructor(
             SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED ->
                 throw CameraRecordingException.TransportFailed
             else -> throw CameraRecordingException.TransportFailed
+        }
+    }
+
+    private fun Int.throwIfControlCommandFailed() {
+        when (this) {
+            SwiftCore.CONTROL_COMMAND_ACCEPTED -> Unit
+            SwiftCore.CONTROL_COMMAND_NO_SESSION -> throw CameraControlException.NotConnected
+            SwiftCore.CONTROL_COMMAND_MEDIA_BUSY -> throw CameraControlException.MediaBusy
+            SwiftCore.CONTROL_COMMAND_UNSUPPORTED -> throw CameraControlException.UnsupportedSelection
+            SwiftCore.CONTROL_COMMAND_REJECTED -> throw CameraControlException.CommandRejected
+            SwiftCore.CONTROL_COMMAND_TRANSPORT_FAILED ->
+                throw CameraControlException.TransportFailed
+            else -> throw CameraControlException.TransportFailed
         }
     }
 

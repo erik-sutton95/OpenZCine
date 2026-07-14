@@ -540,6 +540,19 @@
         case transportFailed = 4
     }
 
+    /// Stable scalar results for `SwiftCore.sessionApplyControl`. Kotlin maps
+    /// these to its typed `CameraControlException` hierarchy; Nikon property
+    /// bytes and protocol errors never cross the JNI boundary as unstructured
+    /// control flow.
+    private enum ControlCommandResult: jint {
+        case accepted = 0
+        case noSession = 1
+        case mediaBusy = 2
+        case unsupported = 3
+        case rejected = 4
+        case transportFailed = 5
+    }
+
     /// `SwiftCore.sessionSetRecording(recording): Int` — sends Nikon's
     /// `StartMovieRecInCard` / `EndMovieRec` through the active facade
     /// session. The session transaction lock serializes this with live view;
@@ -569,6 +582,42 @@
             }
         } catch {
             return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionApplyControl(control, label): Int` — validates the
+    /// semantic Kotlin selector, then applies its human-readable selection on
+    /// the active facade session. Swift resolves every Nikon property ID and
+    /// data payload through `PTPCameraPropertyWrite`, including Kelvin's
+    /// mode-then-temperature sequence. Kotlin invokes this blocking call from
+    /// `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionApplyControl")
+    public func swiftCoreSessionApplyControl(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, control: jint, label: jstring?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return ControlCommandResult.noSession.rawValue
+        }
+        guard let cameraControl = AndroidCameraControlWire.control(selector: Int(control)) else {
+            return ControlCommandResult.unsupported.rawValue
+        }
+        let selection = swiftString(env, label) ?? ""
+        do {
+            try session.applyControl(cameraControl, label: selection)
+            return ControlCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return ControlCommandResult.mediaBusy.rawValue
+            case .unsupportedControl:
+                return ControlCommandResult.unsupported.rawValue
+            case .operationRejected:
+                return ControlCommandResult.rejected.rawValue
+            default:
+                return ControlCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return ControlCommandResult.transportFailed.rawValue
         }
     }
 

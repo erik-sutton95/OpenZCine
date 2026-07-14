@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.bridge
 
+import com.opencapture.openzcine.core.CameraControl
+
 /**
  * JNI binding to `libOpenZCineAndroid.so` — the shared Swift core
  * (`Sources/OpenZCineCore`) plus its facade (`Sources/OpenZCineAndroidFacade`).
@@ -205,6 +207,24 @@ object SwiftCore {
     /** The command channel failed before the recording operation completed. */
     const val RECORDING_COMMAND_TRANSPORT_FAILED: Int = 4
 
+    /** `sessionApplyControl` completed and the camera accepted every write. */
+    const val CONTROL_COMMAND_ACCEPTED: Int = 0
+
+    /** No active facade session existed when `sessionApplyControl` ran. */
+    const val CONTROL_COMMAND_NO_SESSION: Int = 1
+
+    /** Camera media owns the command channel, so a control cannot change. */
+    const val CONTROL_COMMAND_MEDIA_BUSY: Int = 2
+
+    /** The typed control selector or its human-readable label was unsupported. */
+    const val CONTROL_COMMAND_UNSUPPORTED: Int = 3
+
+    /** The camera sent a non-OK response to a property write. */
+    const val CONTROL_COMMAND_REJECTED: Int = 4
+
+    /** The command channel failed before every requested write completed. */
+    const val CONTROL_COMMAND_TRANSPORT_FAILED: Int = 5
+
     /**
      * Connects to the camera at [host] (numeric IPv4, port 15740): PTP-IP Init
      * handshake on both channels, then the Nikon open/pair/identify sequence,
@@ -240,6 +260,21 @@ object SwiftCore {
      * [RECORDING_COMMAND_REJECTED], or [RECORDING_COMMAND_TRANSPORT_FAILED].
      */
     external fun sessionSetRecording(recording: Boolean): Int
+
+    /**
+     * Applies one typed camera control selection on the active session. [control]
+     * is a stable semantic selector owned by [CameraControl]; [label] is the
+     * operator-facing selection such as `"5600K"` or `"AF-C"`. Swift owns all
+     * Nikon property identifiers, payload bytes, Kelvin multi-write behavior,
+     * and standard-versus-extended PTP operation selection. Blocking — call
+     * from a background dispatcher.
+     *
+     * Returns one of [CONTROL_COMMAND_ACCEPTED],
+     * [CONTROL_COMMAND_NO_SESSION], [CONTROL_COMMAND_MEDIA_BUSY],
+     * [CONTROL_COMMAND_UNSUPPORTED], [CONTROL_COMMAND_REJECTED], or
+     * [CONTROL_COMMAND_TRANSPORT_FAILED].
+     */
+    external fun sessionApplyControl(control: Int, label: String): Int
 
     /**
      * Gracefully tears down the active session: best-effort `CloseSession` so

@@ -128,6 +128,101 @@ struct PTPIPClientSessionTests {
         #expect(!server.receivedOperations().contains(.startMovieRecInCard))
     }
 
+    @Test func writesStandardAndExtendedControlsWithTheCorrectPTPOperations() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        // ISO is a 32-bit 0x0001_Dxxx extended property; focus area is a
+        // 16-bit 0xDxxx property. The operation must follow property width,
+        // not the payload's byte count.
+        try session.applyControl(.iso, label: "800")
+        try session.applyControl(.focusArea, label: "Subject")
+
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieISOSensitivity.rawValue,
+                        data: Data([0x20, 0x03, 0x00, 0x00])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                        data: Data([0x33, 0x80])),
+                ])
+        // Every data-out write remains a normal serialized PTP transaction.
+        let transactionIDs = server.receivedTransactionIDs()
+        #expect(transactionIDs == Array(0..<UInt32(transactionIDs.count)))
+    }
+
+    @Test func kelvinWhiteBalanceWritesModeThenTemperatureAsOneControlSequence() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.applyControl(.whiteBalanceKelvin, label: "5600K")
+        try session.startRecording()
+
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWhiteBalance.rawValue,
+                        data: Data([0x12, 0x80])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWBColorTemp.rawValue,
+                        data: Data([0xE0, 0x15])),
+                ])
+        let operations = server.receivedOperations()
+        #expect(operations.filter { $0 == .setDevicePropValue }.count == 2)
+        #expect(operations.contains(.startMovieRecInCard))
+        if let secondWrite = operations.lastIndex(of: .setDevicePropValue),
+            let recordStart = operations.lastIndex(of: .startMovieRecInCard)
+        {
+            #expect(secondWrite < recordStart)
+        }
+    }
+
+    @Test func rejectsUnsupportedOrMediaBusyCameraControlsBeforeWriting() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedControl(.codec, "H.265")
+        ) {
+            try session.applyControl(.codec, label: "H.265")
+        }
+        session.enterMediaMode()
+        #expect(throws: PTPIPClientSessionError.mediaModeActive) {
+            try session.applyControl(.iso, label: "800")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func surfacesCameraRejectionForPropertyWrites() throws {
+        var options = FakeZRServer.Options()
+        options.propertyWriteResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(
+                .setDevicePropValue, .deviceBusy)
+        ) {
+            try session.applyControl(.focusMode, label: "AF-C")
+        }
+        #expect(server.receivedPropertyWrites().count == 1)
+    }
+
     @Test func surfacesCameraRejectionForMovieRecordStart() throws {
         var options = FakeZRServer.Options()
         options.startRecordingResponseCode = PTPResponseCode.deviceBusy.rawValue
