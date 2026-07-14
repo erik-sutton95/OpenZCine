@@ -165,6 +165,13 @@ android-test:
 android-check:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug test lint
 
+# Build and install the debug APK on a connected device/emulator, then launch it.
+# With several devices attached, pass the serial: `just android-install R58R92BL76K`.
+android-install serial="":
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug
+    "${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}/platform-tools/adb" {{ if serial == "" { "" } else { "-s " + serial } }} install -r Apps/Android/app/build/outputs/apk/debug/app-debug.apk
+    "${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}/platform-tools/adb" {{ if serial == "" { "" } else { "-s " + serial } }} shell am start -n com.opencapture.openzcine/.MainActivity
+
 # ── App-flow design (ExcaliDash) ────────────────────────────────────────────
 # Start the local ExcaliDash server (http://localhost:6767).
 flows-up:
