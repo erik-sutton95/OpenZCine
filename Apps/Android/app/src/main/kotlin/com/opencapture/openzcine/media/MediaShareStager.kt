@@ -207,7 +207,7 @@ class MediaShareStager private constructor(
                     return StagedMediaShare(target, filename, mimeType)
                 }
 
-                Files.deleteIfExists(target)
+                replaceUnusableTargetIfExpired(target, now)
                 reclaimReadyCache(
                     protectedPath = target,
                     incomingBytes = copied.byteCount,
@@ -352,6 +352,30 @@ class MediaShareStager private constructor(
         }
     }
 
+    /**
+     * Keeps an unusable artifact intact while its temporary FileProvider grant
+     * may still be in use. Even a corrupt content-addressed file can belong to
+     * a recipient that has not finished reading its granted URI yet.
+     */
+    private fun replaceUnusableTargetIfExpired(target: Path, now: Long) {
+        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return
+        val existing =
+            readyArtifact(target)
+                ?: throw InvalidMediaShareSourceException(
+                    "Existing share artifact cannot be safely inspected for replacement.",
+                )
+        if (!existing.isExpired(now)) {
+            throw MediaShareCacheLimitException(
+                "An existing share artifact is still within its URI-grant retention window.",
+            )
+        }
+        if (!Files.deleteIfExists(target)) {
+            throw InvalidMediaShareSourceException(
+                "Existing share artifact disappeared before it could be safely replaced.",
+            )
+        }
+    }
+
     /** Reclaims only artifacts that have outlived the documented URI-grant grace period. */
     private fun reclaimReadyCache(
         protectedPath: Path,
@@ -413,6 +437,20 @@ class MediaShareStager private constructor(
             }
             artifacts
         }
+
+    private fun readyArtifact(path: Path): ReadyArtifact? {
+        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return null
+        return try {
+            ReadyArtifact(
+                path = path,
+                byteCount = Files.size(path),
+                lastGrantedAtMillis =
+                    Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toMillis(),
+            )
+        } catch (_: IOException) {
+            null
+        }
+    }
 
     private fun ReadyArtifact.isExpired(now: Long): Boolean =
         lastGrantedAtMillis <= now - grantRetentionMillis

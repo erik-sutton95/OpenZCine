@@ -2,6 +2,7 @@ package com.opencapture.openzcine.media
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import java.util.concurrent.CancellationException
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -154,6 +155,33 @@ class MediaShareStagerTest {
             assertTrue(Files.exists(first.file))
             Files.list(root.resolve("cache/share/ready")).use { files -> assertEquals(1, files.count()) }
             Files.list(root.resolve("cache/share/staging")).use { files -> assertEquals(0, files.count()) }
+        }
+
+    @Test
+    fun `stage preserves an unusable same name artifact until its grant retention expires`() =
+        withRoot { root ->
+            var now = 10_000L
+            val stager = constrainedStager(root) { now }
+            val source = byteArrayOf(1, 2, 3, 4)
+            val entry = completedEntry(root, "C0004DA.MOV", source)
+            val first = stager.stage(entry, "C0004DA.MOV")
+            val corrupt = byteArrayOf(9, 9, 9, 9)
+            Files.write(first.file, corrupt)
+            Files.setLastModifiedTime(first.file, FileTime.fromMillis(now))
+
+            assertFailsWith<MediaShareCacheLimitException> {
+                stager.stage(entry, "C0004DA.MOV")
+            }
+
+            assertContentEquals(corrupt, Files.readAllBytes(first.file))
+            Files.list(root.resolve("cache/share/ready")).use { files -> assertEquals(1, files.count()) }
+            Files.list(root.resolve("cache/share/staging")).use { files -> assertEquals(0, files.count()) }
+
+            now += 101L
+            val replacement = stager.stage(entry, "C0004DA.MOV")
+
+            assertEquals(first.file, replacement.file)
+            assertContentEquals(source, Files.readAllBytes(replacement.file))
         }
 
     @Test
