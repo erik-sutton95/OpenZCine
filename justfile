@@ -165,6 +165,33 @@ android-test:
 android-check:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug test lint
 
+# Generate the Play upload keystore into gitignored .local/ (never committed;
+# refuses to overwrite). keytool prompts for the store password interactively.
+android-keystore:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out=".local/android/upload-keystore.jks"
+    if [ -e "$out" ]; then
+        echo "Refusing to overwrite existing $out — move it aside first if you really mean to regenerate." >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$out")"
+    export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
+    "$JAVA_HOME/bin/keytool" -genkeypair -v \
+        -keystore "$out" -alias upload \
+        -keyalg RSA -keysize 2048 -validity 9125 \
+        -dname "CN=OpenZCine Upload"
+    echo ""
+    echo "Created $out (gitignored). Next steps (details: docs/android-distribution.md):"
+    echo "  1. Back the file + password up somewhere safe (losing it means a Play support reset)."
+    echo "  2. GitHub 'play' environment secrets:"
+    echo "       ANDROID_KEYSTORE_BASE64   base64 -i $out | pbcopy"
+    echo "       ANDROID_KEYSTORE_PASSWORD the password you just entered"
+    echo "       ANDROID_KEY_ALIAS         upload"
+    echo "       ANDROID_KEY_PASSWORD      same as the store password"
+    echo "  3. Local signed build: export ANDROID_KEYSTORE_PATH=\"\$PWD/$out\" plus the three vars above,"
+    echo "     then: cd Apps/Android && ./gradlew bundleRelease"
+
 # Build and install the debug APK on a connected device/emulator, then launch it.
 # With several devices attached, pass the serial: `just android-install R58R92BL76K`.
 android-install serial="":
