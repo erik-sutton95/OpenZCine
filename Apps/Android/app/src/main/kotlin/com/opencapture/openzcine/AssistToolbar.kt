@@ -38,12 +38,15 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /**
- * The eight v1 assist-toolbar tools, mirroring the iOS bottom-left strip
- * (`MonitorAssistTool` in the shared core): four feed effects and four scopes.
+ * The assist-toolbar tools, mirroring the iOS bottom-left strip
+ * (`MonitorAssistTool` in the shared core): four feed effects and five scopes.
  * The iOS-only framing aids (guides/grid/crosshair/level/de-sq) and audio
  * meters land with their engines.
  */
@@ -56,6 +59,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     PARADE("PARADE", "Parade"),
     HISTO("HISTO", "Histogram"),
     VECTOR("VECTOR", "Vectorscope"),
+    LIGHTS("LIGHTS", "Traffic Lights"),
 
     ;
 
@@ -68,9 +72,9 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
 
 /**
  * Assist toggle state behind the toolbar: the feed-effect set (LUT / false
- * colour / peaking / zebra, baked by [FeedEffectsRenderer]) and the active
- * scope panel. Every change is mirrored into [FeedEffectsState.current] (the
- * engine input `LiveFeedView` reads) and handed to [persist].
+ * colour / peaking / zebra, baked by [FeedEffectsRenderer]) and independently
+ * selected scope panels. Every change is mirrored into [FeedEffectsState.current]
+ * (the engine input `LiveFeedView` reads) and handed to [persist].
  *
  * Debug intents still win a session: when the launch intent carried any
  * `zc.assist`/`zc.scopes` selection, [restore] seeds from it verbatim instead
@@ -79,17 +83,37 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
 class AssistState(
     initialEffects: FeedEffects,
     initialScope: ScopeKind?,
+    initialScopes: Set<ScopeKind> = initialScope?.let(::setOf) ?: emptySet(),
+    initialScopeActivationOrder: List<ScopeKind> = ScopeKind.canonical.filter(initialScopes::contains),
     initialLut: FeedLut = initialEffects.lut ?: FeedLut.LOG3G10_709,
     initialFalseColorScale: FeedFalseColorScale =
         initialEffects.falseColor ?: FeedFalseColorScale.STOPS,
     private val persistSelections: (FeedLut, FeedFalseColorScale) -> Unit = { _, _ -> },
+    private val persistScopeSelections: (Set<ScopeKind>, List<ScopeKind>) -> Unit = { _, _ -> },
     private val persist: (FeedEffects, ScopeKind?) -> Unit = { _, _ -> },
 ) {
     var effects: FeedEffects by mutableStateOf(initialEffects)
         private set
 
-    var scope: ScopeKind? by mutableStateOf(initialScope)
+    /** Every independently enabled scope tool, in the iOS canonical domain. */
+    var selectedScopes: Set<ScopeKind> by mutableStateOf(ScopeKind.canonical.filter(initialScopes::contains).toSet())
         private set
+
+    /** Oldest-to-newest scope activation history, used by portrait's two-panel selection. */
+    var scopeActivationOrder: List<ScopeKind> by
+        mutableStateOf(normalizeScopeOrder(initialScopeActivationOrder, selectedScopes))
+        private set
+
+    /**
+     * Compatibility view of the legacy one-scope preference: the most recently
+     * activated scope, or the canonical last active scope after an old migration.
+     */
+    val scope: ScopeKind?
+        get() = scopeActivationOrder.lastOrNull() ?: ScopeKind.canonical.lastOrNull(selectedScopes::contains)
+
+    /** The at-most-two scopes portrait fit mode mounts, matching iOS recency policy. */
+    val displayedPortraitScopes: List<ScopeKind>
+        get() = portraitDisplayedScopes(selectedScopes, scopeActivationOrder)
 
     /** The LUT that will be enabled next, retained even while LUT is off. */
     var selectedLut: FeedLut by mutableStateOf(initialLut)
@@ -110,20 +134,19 @@ class AssistState(
             AssistTool.PEAK -> effects.peaking
             AssistTool.FALSE -> effects.falseColor != null
             AssistTool.ZEBRA -> effects.zebra
-            AssistTool.WAVE -> scope == ScopeKind.WAVEFORM
-            AssistTool.PARADE -> scope == ScopeKind.PARADE
-            AssistTool.HISTO -> scope == ScopeKind.HISTOGRAM
-            AssistTool.VECTOR -> scope == ScopeKind.VECTORSCOPE
+            AssistTool.WAVE -> ScopeKind.WAVEFORM in selectedScopes
+            AssistTool.PARADE -> ScopeKind.PARADE in selectedScopes
+            AssistTool.HISTO -> ScopeKind.HISTOGRAM in selectedScopes
+            AssistTool.VECTOR -> ScopeKind.VECTORSCOPE in selectedScopes
+            AssistTool.LIGHTS -> ScopeKind.TRAFFIC_LIGHTS in selectedScopes
         }
 
     /**
      * Toggles [tool]. LUT and false colour are mutually exclusive (false
-     * colour *is* the monitoring image, iOS semantics); scopes are
-     * single-active in v1 — tapping another scope switches to it.
+     * colour *is* the monitoring image, iOS semantics). Scopes are independent:
+     * tapping another scope leaves an existing scope visible and records the
+     * recency Android's portrait layout needs.
      */
-    // ponytail: scopes remain single-active until Android grows the iOS
-    // multi-scope composition model; LUT and false-colour selections do
-    // persist independently so a temporary toggle never loses the look.
     fun toggle(tool: AssistTool) {
         when (tool) {
             AssistTool.LUT ->
@@ -147,6 +170,7 @@ class AssistState(
             AssistTool.PARADE -> toggleScope(ScopeKind.PARADE)
             AssistTool.HISTO -> toggleScope(ScopeKind.HISTOGRAM)
             AssistTool.VECTOR -> toggleScope(ScopeKind.VECTORSCOPE)
+            AssistTool.LIGHTS -> toggleScope(ScopeKind.TRAFFIC_LIGHTS)
         }
     }
 
@@ -171,7 +195,17 @@ class AssistState(
     }
 
     private fun toggleScope(kind: ScopeKind) {
-        scope = if (scope == kind) null else kind
+        val next = selectedScopes.toMutableSet()
+        val nextOrder = scopeActivationOrder.toMutableList()
+        if (next.add(kind)) {
+            nextOrder.remove(kind)
+            nextOrder += kind
+        } else {
+            next.remove(kind)
+            nextOrder.remove(kind)
+        }
+        selectedScopes = ScopeKind.canonical.filter(next::contains).toSet()
+        scopeActivationOrder = normalizeScopeOrder(nextOrder, selectedScopes)
         persistState()
     }
 
@@ -183,11 +217,14 @@ class AssistState(
 
     private fun persistState() {
         persist(effects, scope)
+        persistScopeSelections(selectedScopes, scopeActivationOrder)
         persistSelections(selectedLut, selectedFalseColorScale)
     }
 
     companion object {
         private const val PREFS = "assist"
+        private const val SCOPES_KEY = "scopes"
+        private const val SCOPE_ACTIVATION_ORDER_KEY = "scopeActivationOrder"
 
         /** Serializes [effects] back into the `zc.assist` token grammar. */
         fun tokens(effects: FeedEffects): String =
@@ -201,11 +238,17 @@ class AssistState(
         /**
          * Restores the persisted toggles from SharedPreferences — unless the
          * launch intent specified a selection ([intentEffects] non-identity or
-         * [intentScope] non-null), which then IS the session state.
+         * [intentScopes] non-null), which then IS the session state. [intentScope]
+         * remains the source-compatible single-scope bridge for existing callers.
          */
-        fun restore(context: Context, intentEffects: FeedEffects, intentScope: ScopeKind?): AssistState {
+        fun restore(
+            context: Context,
+            intentEffects: FeedEffects,
+            intentScope: ScopeKind?,
+            intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
+        ): AssistState {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            return restore(prefs, intentEffects, intentScope)
+            return restore(prefs, intentEffects, intentScope, intentScopes)
         }
 
         /** Restores local assist state from [preferences]; exposed to JVM tests through `internal`. */
@@ -213,8 +256,9 @@ class AssistState(
             preferences: SharedPreferences,
             intentEffects: FeedEffects,
             intentScope: ScopeKind?,
+            intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
         ): AssistState {
-            val fromIntent = !intentEffects.isIdentity || intentScope != null
+            val fromIntent = !intentEffects.isIdentity || intentScopes != null
             val storedLut =
                 preferences.getString("lut", null)
                     ?.let(FeedLut::fromId)
@@ -233,15 +277,40 @@ class AssistState(
                         preferences.getString("fcScale", null),
                     )
                 }
-            val scope =
-                if (fromIntent) intentScope else ScopeKind.fromToken(preferences.getString("scope", null))
+            val storedScopes =
+                ScopeKind.parseTokens(preferences.getString(SCOPES_KEY, null))
+                    ?: ScopeKind.fromToken(preferences.getString("scope", null))?.let(::listOf)
+                    ?: emptyList()
+            val selectedScopes =
+                if (fromIntent) {
+                    intentScopes.orEmpty()
+                } else {
+                    storedScopes
+                }
+            val scopeActivationOrder =
+                if (fromIntent) {
+                    intentScopes.orEmpty()
+                } else {
+                    ScopeKind.parseTokens(preferences.getString(SCOPE_ACTIVATION_ORDER_KEY, null)).orEmpty()
+                }
             return AssistState(
                 effects,
-                scope,
+                initialScope = selectedScopes.lastOrNull(),
+                initialScopes = selectedScopes.toSet(),
+                initialScopeActivationOrder = scopeActivationOrder,
                 persist = { nextEffects, nextScope ->
                     preferences.edit()
                         .putString("tokens", tokens(nextEffects))
                         .putString("scope", nextScope?.token)
+                        .apply()
+                },
+                persistScopeSelections = { nextScopes, nextOrder ->
+                    preferences.edit()
+                        .putString(SCOPES_KEY, ScopeKind.tokens(nextScopes))
+                        .putString(SCOPE_ACTIVATION_ORDER_KEY, nextOrder.joinToString(",") { it.token })
+                        // Keep the old single selection current for an app version
+                        // that has not learned the multi-scope key yet.
+                        .putString("scope", nextOrder.lastOrNull()?.token ?: nextScopes.lastOrNull()?.token)
                         .apply()
                 },
                 initialLut = effects.lut ?: storedLut,
@@ -372,6 +441,10 @@ private fun AssistToolCell(tool: AssistTool, isOn: Boolean, onClick: () -> Unit)
             Modifier
                 .background(if (isOn) LiveDesign.accentDim else Color.Transparent, ChromeShape)
                 .chromeClickable(onClick)
+                .semantics {
+                    contentDescription = tool.settingsTitle
+                    stateDescription = if (isOn) "On" else "Off"
+                }
                 .padding(vertical = 5.dp, horizontal = 8.dp)
                 .widthIn(min = 36.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -500,6 +573,21 @@ private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = 
                 drawLine(tint, Offset(c.x, c.y + gap), Offset(c.x, c.y + r), 1.6.dp.toPx())
                 drawLine(tint, Offset(c.x - r, c.y), Offset(c.x - gap, c.y), 1.6.dp.toPx())
                 drawLine(tint, Offset(c.x + gap, c.y), Offset(c.x + r, c.y), 1.6.dp.toPx())
+            }
+            // Three compact RED-style goal posts: top clip dots, centre line,
+            // and bottom crush dots. The live panel carries the actual meter.
+            AssistTool.LIGHTS -> {
+                val columns = listOf(0.2f, 0.5f, 0.8f)
+                val top = size.height * 0.16f
+                val bottom = size.height * 0.84f
+                val centre = size.height / 2
+                for (xFraction in columns) {
+                    val x = size.width * xFraction
+                    drawCircle(tint, size.minDimension * 0.075f, Offset(x, top))
+                    drawLine(tint, Offset(x, top + size.height * 0.13f), Offset(x, bottom - size.height * 0.13f), 1.6.dp.toPx())
+                    drawLine(tint, Offset(x - size.width * 0.10f, centre), Offset(x + size.width * 0.10f, centre), 1.2.dp.toPx())
+                    drawCircle(tint, size.minDimension * 0.075f, Offset(x, bottom))
+                }
             }
         }
     }

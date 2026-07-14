@@ -189,8 +189,10 @@
     }
 
     /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve): FloatArray`
-    /// — one scope tick's waveform/parade/histogram payload per
-    /// `ScopeFrameWire.traces`. Blocking; Kotlin calls it off the main thread.
+    /// — one scope tick's waveform/parade/histogram payload plus the additive
+    /// Swift-owned Traffic Lights trailer described by `ScopeFrameWire.traces`.
+    /// The JNI signature is unchanged; the trailer is versioned so malformed
+    /// data fails closed in Kotlin. Blocking; Kotlin calls it off the main thread.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeTraces")
     public func swiftCoreScopeTraces(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,

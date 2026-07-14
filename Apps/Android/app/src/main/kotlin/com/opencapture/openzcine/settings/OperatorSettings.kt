@@ -213,6 +213,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         visibleAssistToolsState.value = next
         preferences.edit()
             .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, next.mapTo(linkedSetOf()) { it.name })
+            .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -241,6 +242,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         preferences.edit()
             .putString(ASSIST_TOOLBAR_ORDER_KEY, defaultOrder.joinToString(separator = ",") { it.name })
             .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, defaultOrder.mapTo(linkedSetOf()) { it.name })
+            .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -277,10 +279,22 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     private fun loadVisibleAssistTools(): Set<AssistTool> {
         if (!preferences.contains(VISIBLE_ASSIST_TOOLS_KEY)) return AssistTool.entries.toSet()
-        return preferences.getStringSet(VISIBLE_ASSIST_TOOLS_KEY, emptySet())
+        val stored =
+            preferences.getStringSet(VISIBLE_ASSIST_TOOLS_KEY, emptySet())
             ?.mapNotNull(AssistTool::fromStoredName)
             ?.toSet()
             .orEmpty()
+        if (preferences.getBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, false)) return stored
+
+        // This key predates `AssistTool.LIGHTS`. Add it once for existing
+        // custom toolbar configurations, then mark the set so a later manual
+        // hide remains a durable operator choice.
+        val migrated = stored + AssistTool.LIGHTS
+        preferences.edit()
+            .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, migrated.mapTo(linkedSetOf()) { it.name })
+            .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
+            .apply()
+        return migrated
     }
 
     private fun loadFramingGuide(): LocalFramingGuide =
@@ -296,6 +310,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val STORE_NAME = "openzcine.operator-settings"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
         const val VISIBLE_ASSIST_TOOLS_KEY = "display.assistToolbar.visible.v1"
+        const val TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY =
+            "display.assistToolbar.trafficLights.visibility.migrated.v1"
         const val FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
     }

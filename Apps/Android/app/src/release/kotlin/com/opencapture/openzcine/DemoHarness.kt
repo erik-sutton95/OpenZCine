@@ -46,4 +46,8 @@ object DemoHarness {
     /** Always null: the debug scope toggle does not exist in release builds. */
     @Suppress("UNUSED_PARAMETER")
     fun scopeKind(intent: Intent): ScopeKind? = null
+
+    /** Always null: release builds cannot activate debug scope selections. */
+    @Suppress("UNUSED_PARAMETER")
+    fun scopeKinds(intent: Intent): List<ScopeKind>? = null
 }

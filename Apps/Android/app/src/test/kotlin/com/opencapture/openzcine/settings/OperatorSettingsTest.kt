@@ -75,6 +75,21 @@ class OperatorSettingsTest {
     }
 
     @Test
+    fun `legacy visible assist set adds traffic lights once without undoing a later hide`() {
+        store.edit()
+            .putStringSet("display.assistToolbar.visible.v1", linkedSetOf("LUT", "PEAK"))
+            .apply()
+
+        val migrated = OperatorSettings(store)
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.LIGHTS))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.PEAK))
+        assertFalse(migrated.isAssistToolbarToolVisible(AssistTool.WAVE))
+
+        migrated.toggleAssistToolbarToolVisibility(AssistTool.LIGHTS)
+        assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.LIGHTS))
+    }
+
+    @Test
     fun `toolbar order reconciles malformed stored data and retains moves`() {
         store.edit()
             .putString("display.assistToolbar.order.v1", "VECTOR,UNKNOWN,VECTOR,LUT")

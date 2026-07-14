@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BlendMode
@@ -9,8 +10,10 @@ import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,13 +21,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -34,6 +41,12 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -41,6 +54,8 @@ import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.bridge.ScopeAnchors
 import com.opencapture.openzcine.bridge.ScopeTraces
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.bridge.TrafficLightsBarSide
+import com.opencapture.openzcine.bridge.TrafficLightsReading
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.LiveFrame
 import java.nio.ByteBuffer
@@ -69,40 +84,155 @@ private const val SCOPE_PERIOD_NANOS = 100_000_000L
 /** Widest reduction frame handed to the core sampler (1280→160, 1024→128). */
 private const val REDUCTION_MAX_WIDTH = 160
 
-/**
- * The four v1 scopes, selectable through the debug intent
- * `--es zc.scopes wave|parade|histo|vector` (the real scope picker is chrome
- * work, out of scope here).
- */
+/** Matches iOS's fixed 14pt bottom inset below its 58pt monitor control band. */
+private const val LANDSCAPE_SCOPE_BOTTOM_CHROME_CLEARANCE = 14f + LiveDesign.CONTROL_HEIGHT_DP
+
+/** iOS `feedOutsideCenter` gap between a floating panel and its cleared edge. */
+private const val SCOPE_PANEL_EDGE_GAP = 10f
+
+/** Android mirror of iOS's canonical scope-tool order. */
 enum class ScopeKind(val token: String, val title: String, val chip: String) {
     WAVEFORM("wave", "WAVE", "LUMA"),
     PARADE("parade", "PARADE", "RGB"),
     HISTOGRAM("histo", "HISTO", "RGBL"),
     VECTORSCOPE("vector", "VECTOR", "MON · 1X"),
+    TRAFFIC_LIGHTS("lights", "TL", "RGB"),
     ;
 
     companion object {
-        /** Parses an intent token; null for absent/unknown values. */
-        fun fromToken(value: String?): ScopeKind? = entries.firstOrNull { it.token == value }
+        /** Canonical presentation order, matching `MonitorAssistTool.scopeTools` on iOS. */
+        val canonical: List<ScopeKind> = entries.toList()
+
+        /** Parses a persisted or debug-intent token, accepting old friendly aliases safely. */
+        fun fromToken(value: String?): ScopeKind? =
+            when (value?.trim()?.lowercase()) {
+                "wave" -> WAVEFORM
+                "parade" -> PARADE
+                "histo", "histogram" -> HISTOGRAM
+                "vector", "vectorscope" -> VECTORSCOPE
+                "lights", "traffic", "traffic-lights", "trafficlights", "tl" -> TRAFFIC_LIGHTS
+                else -> null
+            }
+
+        /**
+         * Decodes comma-separated scope tokens in activation order. Unknown and
+         * duplicate values are ignored; all-invalid input remains `null` so it
+         * preserves the old intent semantics of falling back to saved state.
+         */
+        fun parseTokens(value: String?): List<ScopeKind>? {
+            if (value == null) return null
+            val parsed = value.split(',').mapNotNull(::fromToken).distinct()
+            return parsed.takeIf { it.isNotEmpty() }
+        }
+
+        /** Persists an active set in stable canonical order. */
+        fun tokens(selected: Set<ScopeKind>): String =
+            canonical.filter(selected::contains).joinToString(",") { it.token }
     }
 }
 
+/** Which Swift payloads the shared monitor sampler must request for visible scopes. */
+data class ScopeSamplingDemand(
+    val traces: Boolean,
+    val vector: Boolean,
+    val pointTrace: Boolean,
+    val histogram: Boolean,
+    val trafficLights: Boolean,
+)
+
+/** Pure scope-demand planner: no panel can start a redundant sampling loop. */
+fun scopeSamplingDemand(selected: Set<ScopeKind>): ScopeSamplingDemand {
+    val pointTrace = ScopeKind.WAVEFORM in selected || ScopeKind.PARADE in selected
+    val histogram = ScopeKind.HISTOGRAM in selected
+    val trafficLights = ScopeKind.TRAFFIC_LIGHTS in selected
+    return ScopeSamplingDemand(
+        traces = pointTrace || histogram || trafficLights,
+        vector = ScopeKind.VECTORSCOPE in selected,
+        pointTrace = pointTrace,
+        histogram = histogram,
+        trafficLights = trafficLights,
+    )
+}
+
 /**
- * Default frame for the floating scope panel, mirroring the iOS landscape
- * `MovablePanel` sizes anchored inside the feed's top-leading corner, below
- * the info deck (the landscape zone map carries no scopes zone — scopes float
- * over the feed on both platforms).
+ * Normalizes a persisted scope history without inventing recency for a
+ * pre-migration selection. Keeping an empty order is how portrait uses the
+ * iOS canonical-prefix fallback for legacy data.
  */
-// ponytail: fixed top-leading anchor for the single debug scope; per-kind iOS
-// default corners + dragging arrive with the real scope-picker chrome.
-fun floatingScopeFrame(kind: ScopeKind, feed: ZoneFrame, infoBar: ZoneFrame): ZoneFrame {
-    val (width, height) =
+fun normalizeScopeOrder(order: List<ScopeKind>, selected: Set<ScopeKind>): List<ScopeKind> {
+    val seen = mutableSetOf<ScopeKind>()
+    return order.filter { it in selected && seen.add(it) }
+}
+
+/** iOS portrait-fit policy: two newest active scopes, displayed in canonical order. */
+fun portraitDisplayedScopes(selected: Set<ScopeKind>, activationOrder: List<ScopeKind>): List<ScopeKind> {
+    val active = ScopeKind.canonical.filter(selected::contains)
+    val ordered = normalizeScopeOrder(activationOrder, selected)
+    val chosen = if (ordered.isEmpty()) active.take(2) else ordered.takeLast(2)
+    return ScopeKind.canonical.filter(chosen::contains)
+}
+
+/** One floating panel's default physical size, mirroring the iOS base footprints. */
+fun scopePanelSize(kind: ScopeKind): Pair<Float, Float> =
+    when (kind) {
+        ScopeKind.WAVEFORM, ScopeKind.PARADE -> 250f to 153f
+        ScopeKind.HISTOGRAM -> 250f to 77f
+        ScopeKind.VECTORSCOPE -> 190f to 190f
+        ScopeKind.TRAFFIC_LIGHTS -> 74f to 168f
+    }
+
+/**
+ * Default landscape frame for a floating panel. The anchors mirror iOS's
+ * movable panels (wave top-leading, parade/vector top side, histogram
+ * bottom-trailing, traffic lights bottom-leading) but give every Android
+ * default a distinct initial location. Dragging can always refine a crowded
+ * five-scope setup and persists a normalized centre across viewport changes.
+ */
+fun floatingScopeFrame(
+    kind: ScopeKind,
+    feed: ZoneFrame,
+    infoBar: ZoneFrame,
+    viewport: ZoneFrame = feed,
+): ZoneFrame {
+    val (width, height) = scopePanelSize(kind)
+    val top = max(feed.y, infoBar.y + infoBar.height) + SCOPE_PANEL_EDGE_GAP
+    val bottomEdge =
+        min(
+            feed.y + feed.height,
+            viewport.y + viewport.height - LANDSCAPE_SCOPE_BOTTOM_CHROME_CLEARANCE,
+        )
+    val bottom = bottomEdge - SCOPE_PANEL_EDGE_GAP - height
+    val leading = feed.x + SCOPE_PANEL_EDGE_GAP
+    val trailing = feed.x + feed.width - width - SCOPE_PANEL_EDGE_GAP
+    val candidate =
         when (kind) {
-            ScopeKind.WAVEFORM, ScopeKind.PARADE -> 250f to 153f
-            ScopeKind.HISTOGRAM -> 250f to 77f
-            ScopeKind.VECTORSCOPE -> 190f to 190f
+            ScopeKind.WAVEFORM -> ZoneFrame(leading, top, width, height)
+            ScopeKind.PARADE -> ZoneFrame(trailing, top, width, height)
+            ScopeKind.VECTORSCOPE ->
+                ZoneFrame(
+                    feed.x + (feed.width - width) / 2f,
+                    viewport.y + (viewport.height - height) / 2f,
+                    width,
+                    height,
+                )
+            ScopeKind.HISTOGRAM -> ZoneFrame(trailing, bottom, width, height)
+            ScopeKind.TRAFFIC_LIGHTS -> ZoneFrame(leading, bottom, width, height)
         }
-    return ZoneFrame(feed.x + 12f, infoBar.y + infoBar.height + 8f, width, height)
+    return clampScopeFrame(candidate, viewport)
+}
+
+/** Keeps a floating panel wholly inside the physical viewport's safe drawing bounds. */
+fun clampScopeFrame(frame: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
+    val width = min(frame.width, bounds.width)
+    val height = min(frame.height, bounds.height)
+    val maxX = bounds.x + bounds.width - width
+    val maxY = bounds.y + bounds.height - height
+    return ZoneFrame(
+        x = frame.x.coerceIn(bounds.x, maxX),
+        y = frame.y.coerceIn(bounds.y, maxY),
+        width = width,
+        height = height,
+    )
 }
 
 // ── Scope palette (iOS MonitorOverlays.swift `ScopePalette`, values 1:1) ──
@@ -129,6 +259,9 @@ private object ScopePalette {
     val histogramBlueStroke = rgba(45, 76, 255, 0.94f)
     val histogramLumaStroke = rgba(245, 242, 232, 0.58f)
     val panelBackground = Color(0.025f, 0.036f, 0.03f, 0.72f)
+    val trafficRed = rgba(255, 92, 82, 1f)
+    val trafficGreen = rgba(86, 235, 132, 1f)
+    val trafficBlue = rgba(96, 158, 255, 1f)
 
     /** Phosphor persistence: the previous tick draws first at this opacity. */
     const val TRAIL_DECAY = 0.35f
@@ -136,7 +269,7 @@ private object ScopePalette {
 
 // ── Tick payload ──
 
-/** One presented scope tick: the current payload plus the previous one (trail). */
+/** Immutable monitor-wide scope snapshot: every visible panel reads this same clean-frame tick. */
 private class ScopeDrawData(
     val traces: ScopeTraces? = null,
     val trailTraces: ScopeTraces? = null,
@@ -144,6 +277,7 @@ private class ScopeDrawData(
     val histogram: HistogramDisplay? = null,
     val vector: ImageBitmap? = null,
     val vectorTrail: ImageBitmap? = null,
+    val trafficLights: TrafficLightsReading? = null,
 )
 
 private class HistogramDisplay(
@@ -154,31 +288,189 @@ private class HistogramDisplay(
     val peak: Float,
 )
 
-// ── Panel ──
+// ── Shared monitor coordinator ──
 
 /**
- * One scope panel — waveform, RGB parade, histogram, or vectorscope — fed by
- * the live JPEG stream at ~10 Hz. All axis/curve math comes from the Swift
- * core over the facade ([SwiftCore.scopeTraces] / [SwiftCore.scopeVector] /
- * [SwiftCore.scopeAnchors]); this composable only reduces the frame and draws.
+ * Renders every selected scope from one monitor-owned sampler. A panel is a
+ * pure view of [ScopeDrawData], so enabling five tools never creates five
+ * JPEG decoders, frame collectors, or timer loops.
  */
 @Composable
-fun ScopePanel(kind: ScopeKind, source: com.opencapture.openzcine.core.LiveFrameSource, modifier: Modifier = Modifier) {
-    val anchors = remember { ScopeAnchors.parse(SwiftCore.scopeAnchors(CURVE_LOG3G10)) }
-    val data = remember { mutableStateOf<ScopeDrawData?>(null) }
+fun ScopePanels(
+    selectedScopes: Set<ScopeKind>,
+    portraitScopes: List<ScopeKind>,
+    source: com.opencapture.openzcine.core.LiveFrameSource,
+    isPortrait: Boolean,
+    feed: ZoneFrame,
+    infoBar: ZoneFrame,
+    scopeZone: ZoneFrame?,
+    viewport: ZoneFrame,
+) {
+    val displayed =
+        if (isPortrait) {
+            portraitScopes.filter(selectedScopes::contains)
+        } else {
+            ScopeKind.canonical.filter(selectedScopes::contains)
+        }
+    // This guard also stops all collection when no displayed panel exists.
+    if (displayed.isEmpty()) return
+    if (isPortrait && scopeZone == null) return
 
-    LaunchedEffect(source, kind) {
-        withContext(Dispatchers.Default) {
-            pumpScope(source.frames, kind) { data.value = it }
+    val snapshot = rememberScopeSnapshot(source, displayed.toSet())
+    val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
+    val anchors =
+        remember(needsAnchors) {
+            if (needsAnchors) ScopeAnchors.parse(SwiftCore.scopeAnchors(CURVE_LOG3G10)) else null
+        }
+
+    if (isPortrait) {
+        val zone = requireNotNull(scopeZone)
+        PortraitScopePanels(displayed, zone, anchors, snapshot)
+    } else {
+        LandscapeScopePanels(displayed, feed, infoBar, viewport, anchors, snapshot)
+    }
+}
+
+/** Renders the portrait subset into the shared stack zone from the core layout map. */
+@Composable
+private fun PortraitScopePanels(
+    displayed: List<ScopeKind>,
+    zone: ZoneFrame,
+    anchors: ScopeAnchors?,
+    snapshot: ScopeDrawData?,
+) {
+    val spacing = 8f
+    val panelHeight = max(0f, (zone.height - spacing * (displayed.size - 1)) / displayed.size)
+    Box(Modifier.zone(zone)) {
+        displayed.forEachIndexed { index, kind ->
+            ScopePanel(
+                kind = kind,
+                anchors = anchors,
+                data = snapshot,
+                fillsWidth = kind == ScopeKind.TRAFFIC_LIGHTS,
+                modifier =
+                    Modifier.zone(
+                        ZoneFrame(
+                            x = 12f,
+                            y = index * (panelHeight + spacing),
+                            width = max(0f, zone.width - 24f),
+                            height = panelHeight,
+                        ),
+                    ),
+            )
         }
     }
+}
 
+/** Renders draggable, normalized-persisted landscape panels at distinct iOS-informed defaults. */
+@Composable
+private fun LandscapeScopePanels(
+    displayed: List<ScopeKind>,
+    feed: ZoneFrame,
+    infoBar: ZoneFrame,
+    viewport: ZoneFrame,
+    anchors: ScopeAnchors?,
+    snapshot: ScopeDrawData?,
+) {
+    val context = LocalContext.current.applicationContext
+    val store = remember(context) { ScopePanelPlacementStore(context) }
+    Box(Modifier.fillMaxSize()) {
+        displayed.forEach { kind ->
+            val default = floatingScopeFrame(kind, feed, infoBar, viewport)
+            FloatingScopePanel(kind, default, viewport, store) { modifier ->
+                ScopePanel(
+                    kind = kind,
+                    anchors = anchors,
+                    data = snapshot,
+                    fillsWidth = false,
+                    modifier = modifier,
+                )
+            }
+        }
+    }
+}
+
+/** Current Android equivalent of iOS's persisted movable panel centre. */
+private class ScopePanelPlacementStore(context: Context) {
+    private val preferences = context.getSharedPreferences("scopePanelPlacement", Context.MODE_PRIVATE)
+
+    fun resolve(kind: ScopeKind, default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
+        val xKey = "${kind.token}.centerX"
+        val yKey = "${kind.token}.centerY"
+        if (!preferences.contains(xKey) || !preferences.contains(yKey)) return default
+        val normalizedX = preferences.getFloat(xKey, 0.5f)
+        val normalizedY = preferences.getFloat(yKey, 0.5f)
+        if (!normalizedX.isFinite() || !normalizedY.isFinite()) return default
+        val centerX = bounds.x + normalizedX * bounds.width
+        val centerY = bounds.y + normalizedY * bounds.height
+        return clampScopeFrame(
+            ZoneFrame(centerX - default.width / 2f, centerY - default.height / 2f, default.width, default.height),
+            bounds,
+        )
+    }
+
+    fun save(kind: ScopeKind, frame: ZoneFrame, bounds: ZoneFrame) {
+        val centerX = (frame.x + frame.width / 2f - bounds.x) / max(1f, bounds.width)
+        val centerY = (frame.y + frame.height / 2f - bounds.y) / max(1f, bounds.height)
+        preferences.edit()
+            .putFloat("${kind.token}.centerX", centerX.coerceIn(0f, 1f))
+            .putFloat("${kind.token}.centerY", centerY.coerceIn(0f, 1f))
+            .apply()
+    }
+}
+
+/** Drag wrapper for a floating panel. The persisted state commits only after a completed drag. */
+@Composable
+private fun FloatingScopePanel(
+    kind: ScopeKind,
+    default: ZoneFrame,
+    bounds: ZoneFrame,
+    store: ScopePanelPlacementStore,
+    content: @Composable (Modifier) -> Unit,
+) {
+    val density = LocalDensity.current
+    var frame by remember(kind, default, bounds) { mutableStateOf(store.resolve(kind, default, bounds)) }
+    content(
+        Modifier
+            .zone(frame)
+            .pointerInput(kind, bounds, default.width, default.height) {
+                detectDragGestures(
+                    onDragEnd = { store.save(kind, frame, bounds) },
+                ) { change, dragAmount ->
+                    change.consume()
+                    frame =
+                        clampScopeFrame(
+                            frame.copy(
+                                x = frame.x + dragAmount.x / density.density,
+                                y = frame.y + dragAmount.y / density.density,
+                            ),
+                            bounds,
+                        )
+                }
+            },
+    )
+}
+
+/** One panel view of the shared [ScopeDrawData]; it never samples or collects frames itself. */
+@Composable
+private fun ScopePanel(
+    kind: ScopeKind,
+    anchors: ScopeAnchors?,
+    data: ScopeDrawData?,
+    fillsWidth: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (kind == ScopeKind.TRAFFIC_LIGHTS) {
+        TrafficLightsPanel(data?.trafficLights ?: TrafficLightsReading.EMPTY, fillsWidth, modifier)
+        return
+    }
+    val resolvedAnchors = anchors ?: return
     Box(
         modifier
             .background(ScopePalette.panelBackground, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape),
     ) {
-        Canvas(Modifier.fillMaxSize()) { drawScope(kind, anchors, data.value) }
+        Canvas(Modifier.fillMaxSize()) { drawScope(kind, resolvedAnchors, data) }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -200,23 +492,207 @@ fun ScopePanel(kind: ScopeKind, source: com.opencapture.openzcine.core.LiveFrame
     }
 }
 
-// ── Pump: absolute-schedule ~10 Hz reduction ──
+/** Real RED-style RGB goal-post meter; side/fill arrives fully computed from Swift. */
+@Composable
+private fun TrafficLightsPanel(
+    reading: TrafficLightsReading,
+    fillsWidth: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(
+        modifier
+            .background(ScopePalette.panelBackground, ChromeShape)
+            .border(1.dp, LiveDesign.hairline, ChromeShape)
+            .semantics {
+                contentDescription = "Traffic Lights"
+                stateDescription = trafficLightsStateDescription(reading)
+            },
+    ) {
+        val uiScale = min(maxWidth.value / 74f, maxHeight.value / 168f).coerceAtLeast(0f)
+        Canvas(Modifier.fillMaxSize()) { drawTrafficLights(reading, fillsWidth, uiScale) }
+        Text(
+            "TL",
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = (8f * uiScale).dp),
+            style = chromeStyle(8.5f * uiScale, FontWeight.Bold, mono = true),
+            color = LiveDesign.text.copy(alpha = 0.58f),
+            maxLines = 1,
+        )
+    }
+}
+
+private fun trafficLightsStateDescription(reading: TrafficLightsReading): String {
+    fun channel(name: String, value: com.opencapture.openzcine.bridge.TrafficLightsChannel): String {
+        val direction =
+            when (value.side) {
+                TrafficLightsBarSide.NEUTRAL -> "balanced"
+                TrafficLightsBarSide.OVER -> "over"
+                TrafficLightsBarSide.UNDER -> "under"
+            }
+        val flags = listOfNotNull("clip".takeIf { value.clip }, "crush".takeIf { value.crush })
+        return "$name $direction${if (flags.isEmpty()) "" else " (${flags.joinToString()})"}"
+    }
+    return listOf(
+        channel("red", reading.red),
+        channel("green", reading.green),
+        channel("blue", reading.blue),
+    ).joinToString(", ")
+}
+
+private fun DrawScope.drawTrafficLights(
+    reading: TrafficLightsReading,
+    fillsWidth: Boolean,
+    uiScale: Float,
+) {
+    val channels =
+        listOf(
+            ScopePalette.trafficRed to reading.red,
+            ScopePalette.trafficGreen to reading.green,
+            ScopePalette.trafficBlue to reading.blue,
+        )
+    val scale = uiScale.coerceAtLeast(0f)
+    val dotRadius = 4.dp.toPx() * scale
+    val columnGap = 6.dp.toPx() * scale
+    // These base positions reproduce the iOS `TrafficLightsMeterMini` stack:
+    // 8pt top padding, title, 6pt gap, 8pt clip dot, 4pt gap, 108pt track,
+    // 4pt gap, then the 8pt crush dot. The full panel scales from 74×168.
+    val topDotY = 28.dp.toPx() * scale
+    val trackTop = 36.dp.toPx() * scale
+    val trackHeight = 108.dp.toPx() * scale
+    val trackBottom = trackTop + trackHeight
+    val centreY = (trackTop + trackBottom) / 2f
+    val centerLineHeight = max(1.dp.toPx(), 0.85.dp.toPx() * scale)
+    val halfHeight = (trackHeight - centerLineHeight) / 2f
+    val columnWidth =
+        if (fillsWidth) {
+            min(
+                44.dp.toPx(),
+                max(11.dp.toPx() * scale, (size.width - 16.dp.toPx() * scale) / 6f),
+            )
+        } else {
+            11.dp.toPx() * scale
+        }
+    val centres =
+        if (fillsWidth) {
+            val horizontalPadding = 8.dp.toPx() * scale
+            val cellWidth = (size.width - horizontalPadding * 2f - columnGap * 2f) / 3f
+            List(3) { index ->
+                horizontalPadding + cellWidth / 2f + index * (cellWidth + columnGap)
+            }
+        } else {
+            val centre = size.width / 2f
+            listOf(centre - columnWidth - columnGap, centre, centre + columnWidth + columnGap)
+        }
+    channels.forEachIndexed { index, (color, channel) ->
+        val centreX = centres[index]
+        val trackLeft = centreX - columnWidth / 2f
+        val fillHeight = halfHeight * channel.fill
+        val trackColor = LiveDesign.text.copy(alpha = 0.08f)
+        drawRoundRect(
+            trackColor,
+            topLeft = Offset(trackLeft, trackTop),
+            size = Size(columnWidth, trackHeight),
+            cornerRadius = CornerRadius(2.dp.toPx() * scale),
+        )
+        drawRect(
+            LiveDesign.text.copy(alpha = 0.14f),
+            topLeft = Offset(trackLeft, centreY - centerLineHeight / 2f),
+            size = Size(columnWidth, centerLineHeight),
+        )
+        when (channel.side) {
+            TrafficLightsBarSide.OVER ->
+                if (fillHeight > 0f) {
+                    val height = max(1.5.dp.toPx() * scale, fillHeight)
+                    val top = centreY - height
+                    drawRoundRect(
+                        brush =
+                            Brush.verticalGradient(
+                                listOf(color.copy(alpha = 0.92f), color.copy(alpha = 0.35f)),
+                                startY = top,
+                                endY = centreY,
+                            ),
+                        topLeft = Offset(trackLeft, top),
+                        size = Size(columnWidth, height),
+                        cornerRadius = CornerRadius(2.dp.toPx() * scale),
+                    )
+                }
+            TrafficLightsBarSide.UNDER ->
+                if (fillHeight > 0f) {
+                    val height = max(1.5.dp.toPx() * scale, fillHeight)
+                    drawRoundRect(
+                        brush =
+                            Brush.verticalGradient(
+                                listOf(color.copy(alpha = 0.35f), color.copy(alpha = 0.92f)),
+                                startY = centreY,
+                                endY = centreY + height,
+                            ),
+                        topLeft = Offset(trackLeft, centreY),
+                        size = Size(columnWidth, height),
+                        cornerRadius = CornerRadius(2.dp.toPx() * scale),
+                    )
+                }
+            TrafficLightsBarSide.NEUTRAL -> Unit
+        }
+        drawTrafficIndicator(color, channel.clip, dotRadius, Offset(centreX, topDotY), scale)
+        drawTrafficIndicator(
+            color,
+            channel.crush,
+            dotRadius,
+            Offset(centreX, 152.dp.toPx() * scale),
+            scale,
+        )
+    }
+}
+
+/** iOS-matched hollow/filled Traffic Lights clip or crush indicator. */
+private fun DrawScope.drawTrafficIndicator(
+    color: Color,
+    active: Boolean,
+    radius: Float,
+    centre: Offset,
+    uiScale: Float,
+) {
+    if (active) drawCircle(color, radius, centre)
+    drawCircle(
+        color.copy(alpha = if (active) 1f else 0.75f),
+        radius,
+        centre,
+        style = Stroke(width = max(1.dp.toPx(), 1.5.dp.toPx() * uiScale)),
+    )
+}
 
 /**
- * Decodes the live JPEG at 1/8-class resolution and drives one scope tick
- * through the facade every [SCOPE_PERIOD_NANOS].
- *
- * Cadence is timer-driven against an absolute schedule (`start + n·period`) —
- * NEVER an `elapsed >= interval` gate against the frame stream, which only
- * ever locks onto integer divisions of the source rate (the repo's wall-clock
- * aliasing scar, fixed 4ae1544 on iOS). A tick that finds no new frame skips
- * the work and keeps the schedule.
+ * One cancellation-safe clean-frame sampling loop per monitor. It reduces
+ * the source JPEG once per tick, asks Swift only for demanded trace/vector
+ * payloads, and publishes one immutable snapshot to every visible panel.
  */
-private suspend fun pumpScope(
+@Composable
+private fun rememberScopeSnapshot(
+    source: com.opencapture.openzcine.core.LiveFrameSource,
+    selected: Set<ScopeKind>,
+): ScopeDrawData? {
+    val data = remember { mutableStateOf<ScopeDrawData?>(null) }
+    val ordered = ScopeKind.canonical.filter(selected::contains)
+    LaunchedEffect(source, ordered) {
+        data.value = null
+        withContext(Dispatchers.Default) {
+            pumpScopes(source.frames, ordered.toSet()) { data.value = it }
+        }
+    }
+    return data.value
+}
+
+/**
+ * Absolute-schedule sampler: never gates by source-frame cadence, so it
+ * retains the iOS wall-clock anti-aliasing policy while sharing one decoder.
+ */
+private suspend fun pumpScopes(
     frames: Flow<LiveFrame>,
-    kind: ScopeKind,
+    selected: Set<ScopeKind>,
     present: (ScopeDrawData) -> Unit,
 ): Unit = coroutineScope {
+    val demand = scopeSamplingDemand(selected)
+    if (!demand.traces && !demand.vector) return@coroutineScope
+
     val latest = AtomicReference<ByteArray?>(null)
     launch { frames.collect { latest.set(it.jpegData) } }
 
@@ -235,45 +711,55 @@ private suspend fun pumpScope(
         if (waitMillis > 0) delay(waitMillis)
 
         val jpeg = latest.get() ?: continue
-        if (jpeg === lastProcessed) continue // static feed — hold the trace
+        if (jpeg === lastProcessed) continue // static feed — retain the last immutable snapshot
         lastProcessed = jpeg
 
         val tickStart = System.nanoTime()
         val reduced = tap.reduce(jpeg) ?: continue
-        when (kind) {
-            ScopeKind.WAVEFORM, ScopeKind.PARADE -> {
-                val traces =
+        val traces =
+            if (demand.traces) {
+                try {
                     ScopeTraces.parse(
                         SwiftCore.scopeTraces(
                             reduced.rgba, reduced.width, reduced.height,
                             reduced.bytesPerRow, CURVE_LOG3G10,
                         ),
                     )
-                present(ScopeDrawData(traces = traces, trailTraces = previousTraces))
-                previousTraces = traces
+                } catch (error: IllegalArgumentException) {
+                    Log.w(TAG, "discarding malformed Swift scope payload", error)
+                    continue
+                }
+            } else {
+                null
             }
-            ScopeKind.HISTOGRAM -> {
-                val traces =
-                    ScopeTraces.parse(
-                        SwiftCore.scopeTraces(
-                            reduced.rgba, reduced.width, reduced.height,
-                            reduced.bytesPerRow, CURVE_LOG3G10,
-                        ),
-                    )
-                present(ScopeDrawData(histogram = histogramDisplay(traces, previousHistogram)))
-                previousHistogram = traces
-            }
-            ScopeKind.VECTORSCOPE -> {
-                val pixels =
+        val vector =
+            if (demand.vector) {
+                vectorBitmaps.imageFrom(
                     SwiftCore.scopeVector(
                         reduced.rgba, reduced.width, reduced.height,
                         reduced.bytesPerRow, CURVE_LOG3G10,
-                    )
-                val image = vectorBitmaps.imageFrom(pixels)
-                present(ScopeDrawData(vector = image, vectorTrail = previousVector))
-                previousVector = image
+                    ),
+                )
+            } else {
+                null
             }
-        }
+
+        val traceForPanel = traces.takeIf { demand.pointTrace }
+        val histogram = traces?.takeIf { demand.histogram }?.let { histogramDisplay(it, previousHistogram) }
+        val trafficLights = traces?.trafficLights?.takeIf { demand.trafficLights }
+        present(
+            ScopeDrawData(
+                traces = traceForPanel,
+                trailTraces = previousTraces.takeIf { demand.pointTrace },
+                histogram = histogram,
+                vector = vector,
+                vectorTrail = previousVector.takeIf { demand.vector },
+                trafficLights = trafficLights,
+            ),
+        )
+        if (demand.pointTrace) previousTraces = traces
+        if (demand.histogram) previousHistogram = traces
+        if (demand.vector) previousVector = vector
         stats.tickCompleted(System.nanoTime() - tickStart, System.nanoTime())
     }
 }
@@ -435,6 +921,7 @@ private fun DrawScope.drawScope(kind: ScopeKind, anchors: ScopeAnchors, data: Sc
             data?.vector?.let { drawVectorDensity(it, square, 1f) }
             drawVectorGraticule(anchors, square)
         }
+        ScopeKind.TRAFFIC_LIGHTS -> Unit // Rendered by TrafficLightsPanel, never this Canvas path.
     }
 }
 
@@ -489,7 +976,7 @@ private fun fillChannel(
 
 private fun DrawScope.drawTrace(kind: ScopeKind, traces: ScopeTraces, plot: Rect, opacity: Float) {
     if (traces.pointCount == 0) return
-    var scratch = pointScratch.get()
+    var scratch = pointScratch.get() ?: FloatArray(0)
     if (scratch.size < traces.pointCount * 2) {
         scratch = FloatArray(traces.pointCount * 2)
         pointScratch.set(scratch)

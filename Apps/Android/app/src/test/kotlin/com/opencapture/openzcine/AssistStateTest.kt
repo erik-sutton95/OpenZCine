@@ -30,15 +30,31 @@ class AssistStateTest {
     }
 
     @Test
-    fun `scopes are single-active - another scope switches, same scope clears`() {
+    fun `scopes are independently active and reactivation updates recency`() {
         val state = AssistState(FeedEffects.NONE, null)
         state.toggle(AssistTool.WAVE)
         assertEquals(ScopeKind.WAVEFORM, state.scope)
         state.toggle(AssistTool.VECTOR)
         assertEquals(ScopeKind.VECTORSCOPE, state.scope)
+        assertTrue(state.isOn(AssistTool.WAVE))
+        assertTrue(state.isOn(AssistTool.VECTOR))
+        assertEquals(
+            listOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE),
+            state.scopeActivationOrder,
+        )
+        state.toggle(AssistTool.WAVE)
         assertFalse(state.isOn(AssistTool.WAVE))
-        state.toggle(AssistTool.VECTOR)
-        assertNull(state.scope)
+        state.toggle(AssistTool.WAVE)
+        assertTrue(state.isOn(AssistTool.WAVE))
+        assertEquals(ScopeKind.WAVEFORM, state.scope)
+        assertEquals(
+            listOf(ScopeKind.VECTORSCOPE, ScopeKind.WAVEFORM),
+            state.scopeActivationOrder,
+        )
+        assertEquals(
+            listOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE),
+            state.displayedPortraitScopes,
+        )
     }
 
     @Test
@@ -105,5 +121,47 @@ class AssistStateTest {
         assertEquals(FeedFalseColorScale.IRE, restored.selectedFalseColorScale)
         restored.toggle(AssistTool.LUT)
         assertEquals(FeedLut.NLOG_709, restored.effects.lut)
+    }
+
+    @Test
+    fun `legacy single scope migrates without inventing portrait recency`() {
+        val preferences = TestSharedPreferences()
+        preferences.edit().putString("scope", "vector").apply()
+
+        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+
+        assertEquals(setOf(ScopeKind.VECTORSCOPE), state.selectedScopes)
+        assertEquals(emptyList(), state.scopeActivationOrder)
+        assertEquals(listOf(ScopeKind.VECTORSCOPE), state.displayedPortraitScopes)
+    }
+
+    @Test
+    fun `multi scope persistence keeps canonical selection and portrait recency`() {
+        val preferences = TestSharedPreferences()
+        preferences.edit()
+            .putString("scopes", "wave,parade,histo,lights")
+            .putString("scopeActivationOrder", "wave,parade,histo,lights")
+            .apply()
+
+        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+
+        assertEquals(
+            setOf(
+                ScopeKind.WAVEFORM,
+                ScopeKind.PARADE,
+                ScopeKind.HISTOGRAM,
+                ScopeKind.TRAFFIC_LIGHTS,
+            ),
+            state.selectedScopes,
+        )
+        assertEquals(
+            listOf(ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS),
+            state.displayedPortraitScopes,
+        )
+
+        state.toggle(AssistTool.WAVE)
+        assertEquals("parade,histo,lights", preferences.getString("scopes", null))
+        assertEquals("parade,histo,lights", preferences.getString("scopeActivationOrder", null))
+        assertEquals("lights", preferences.getString("scope", null))
     }
 }

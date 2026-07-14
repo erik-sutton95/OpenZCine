@@ -68,7 +68,8 @@ struct ScopeFrameWireTests {
         #expect(count == 4)
         #expect(
             flat.count
-                == 1 + count * ScopeFrameWire.pointStride + 4 * ScopeFrameWire.histogramBins)
+                == 1 + count * ScopeFrameWire.pointStride + 4 * ScopeFrameWire.histogramBins
+                + ScopeFrameWire.trafficTrailerFloatCount)
         let allFinite = flat.allSatisfy { $0.isFinite }
         #expect(allFinite)
     }
@@ -114,7 +115,60 @@ struct ScopeFrameWireTests {
         let flat = ScopeFrameWire.traces(
             rgba: [0, 0, 0], width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0)
         #expect(flat[0] == 0)
-        #expect(flat.count == 1 + 4 * ScopeFrameWire.histogramBins)
+        #expect(
+            flat.count
+                == 1 + 4 * ScopeFrameWire.histogramBins
+                + ScopeFrameWire.trafficTrailerFloatCount)
+    }
+
+    @Test func tracesTrailerCarriesCoreTrafficLightsDisplay() {
+        let (rgba, width, height) = syntheticBuffer()
+        let flat = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0)
+        let count = Int(flat[0])
+        let start = 1 + count * ScopeFrameWire.pointStride + 4 * ScopeFrameWire.histogramBins
+        #expect(flat[start] == ScopeFrameWire.trafficTrailerMagic)
+        #expect(flat[start + 1] == ScopeFrameWire.trafficTrailerVersion)
+
+        for channel in 0..<3 {
+            let offset = start + 2 + channel * ScopeFrameWire.trafficChannelStride
+            let level = flat[offset]
+            let clip = flat[offset + 1]
+            let crush = flat[offset + 2]
+            let side = flat[offset + 3]
+            let fill = flat[offset + 4]
+            #expect(level >= 0 && level <= 1)
+            #expect(clip == 0 || clip == 1)
+            #expect(crush == 0 || crush == 1)
+            #expect(side == 0 || side == 1 || side == 2)
+            #expect(fill >= 0 && fill <= 1)
+        }
+
+        let samples = ScopeSampler.sample(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            stride: ScopeFrameWire.sampleStride)
+        let expected = TrafficLightsMeter.measure(
+            samples: samples,
+            noiseFloorCompensation: AssistConfiguration.CrushClipCompensation.quarter,
+            mapping: ExposureSignalMapping(curve: .redLog3G10))
+        let expectedChannels = [expected.red, expected.green, expected.blue]
+        for channel in expectedChannels.indices {
+            let expectedChannel = expectedChannels[channel]
+            let expectedDisplay = TrafficLightsMeter.channelDisplay(for: expectedChannel)
+            let expectedSide: Float =
+                switch expectedDisplay.side {
+                case .neutral: 0
+                case .over: 1
+                case .under: 2
+                }
+            let offset = start + 2 + channel * ScopeFrameWire.trafficChannelStride
+            #expect(flat[offset] == Float(expectedChannel.level))
+            #expect(flat[offset + 1] == (expectedChannel.clip ? 1 : 0))
+            #expect(flat[offset + 2] == (expectedChannel.crush ? 1 : 0))
+            #expect(flat[offset + 3] == expectedSide)
+            #expect(flat[offset + 4] == Float(expectedDisplay.barFill))
+        }
     }
 
     // MARK: - Vectorscope
