@@ -1,13 +1,15 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.LiveFrame
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -37,25 +39,29 @@ class SwiftCoreLiveFrameSourceTest {
     }
 
     @Test
-    fun `bridges callbacks into frames`() = runTest {
+    fun `bridges callbacks into frames and recording state`() = runTest {
         val jpeg = byteArrayOf(1, 2, 3)
         lateinit var listener: SwiftCore.LiveFrameListener
+        var recordingState: Boolean? = null
         val source =
             SwiftCoreLiveFrameSource(
                 available = { true },
                 start = { listener = it },
                 stop = {},
                 sharingScope = backgroundScope,
+                onRecordingState = { recordingState = it },
             )
 
         val result = async { source.frames.first() }
         runCurrent()
-        listener.onFrame(jpeg, 7L)
+        listener.onFrame(jpeg, 7L, true)
         runCurrent()
         val frame = result.await()
 
         assertContentEquals(jpeg, frame.jpegData)
         assertEquals(7L, frame.timestampNanos)
+        assertTrue(frame.isRecording)
+        assertEquals(true, recordingState)
     }
 
     @Test
@@ -80,7 +86,7 @@ class SwiftCoreLiveFrameSourceTest {
         assertEquals(1, starts)
         assertEquals(0, stops)
 
-        listener.onFrame(byteArrayOf(1), 1L)
+        listener.onFrame(byteArrayOf(1), 1L, false)
         runCurrent()
         feed.await()
         scope.await()
@@ -115,13 +121,33 @@ class SwiftCoreLiveFrameSourceTest {
 
         assertEquals(2, starts)
         assertEquals(1, stops)
-        listener.onFrame(byteArrayOf(9), 9L)
+        listener.onFrame(byteArrayOf(9), 9L, true)
         runCurrent()
 
         assertEquals(1, frames.size)
         assertContentEquals(byteArrayOf(9), frames.single().jpegData)
+        assertTrue(frames.single().isRecording)
         collector.cancelAndJoin()
         runCurrent()
         assertEquals(2, stops)
+    }
+
+    @Test
+    fun `cancelling collection stops the pump`() = runTest {
+        val stopped = AtomicBoolean(false)
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener -> listener.onFrame(byteArrayOf(1), 1L, false) },
+                stop = { stopped.set(true) },
+                sharingScope = backgroundScope,
+            )
+
+        val job = launch { source.frames.first() }
+        runCurrent()
+        job.join()
+        runCurrent()
+
+        assertTrue(stopped.get())
     }
 }

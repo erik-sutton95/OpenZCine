@@ -415,6 +415,49 @@
         return javaString(env, value)
     }
 
+    /// Stable scalar results for `SwiftCore.sessionSetRecording`. Kotlin maps
+    /// these to its typed `CameraRecordingException` hierarchy; no protocol
+    /// error string crosses the JNI boundary as unstructured control flow.
+    private enum RecordingCommandResult: jint {
+        case accepted = 0
+        case noSession = 1
+        case mediaBusy = 2
+        case rejected = 3
+        case transportFailed = 4
+    }
+
+    /// `SwiftCore.sessionSetRecording(recording): Int` — sends Nikon's
+    /// `StartMovieRecInCard` / `EndMovieRec` through the active facade
+    /// session. The session transaction lock serializes this with live view;
+    /// Kotlin invokes the blocking JNI call from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetRecording")
+    public func swiftCoreSessionSetRecording(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, recording: jboolean
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            if recording != 0 {
+                try session.startRecording()
+            } else {
+                try session.stopRecording()
+            }
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
     /// `SwiftCore.sessionDisconnect()` — graceful teardown of the active
     /// session: best-effort `CloseSession` then both sockets (the iOS
     /// reconnect-wedge fix semantics). No-op when nothing is connected.
@@ -442,8 +485,9 @@
 
     /// `SwiftCore.sessionStartLiveView(listener)` — starts live view on the
     /// active session (blocking `StartLiveView` + readiness poll on the caller
-    /// thread) and pumps JPEG frames to `listener.onFrame(jpeg, timestampNanos)`
-    /// from the facade's pump thread. `onEnded` fires exactly once when the
+    /// thread) and pumps JPEG frames to
+    /// `listener.onFrame(jpeg, timestampNanos, isRecording)` from the facade's
+    /// pump thread. `onEnded` fires exactly once when the
     /// stream ends — stop, disconnect, a transport error, or (immediately, on
     /// the calling thread) when there is no active session or the start fails.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartLiveView")
@@ -455,7 +499,7 @@
         guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
         guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
         guard let cls = fns.GetObjectClass!(env, global),
-            let onFrame = fns.GetMethodID!(env, cls, "onFrame", "([BJ)V"),
+            let onFrame = fns.GetMethodID!(env, cls, "onFrame", "([BJZ)V"),
             let onEnded = fns.GetMethodID!(env, cls, "onEnded", "()V")
         else {
             fns.DeleteGlobalRef!(env, global)
@@ -482,7 +526,9 @@
             // detach-once-at-the-end pairing below sound.
             try session.startLiveView(
                 onFrame: { frame, timestampNanos in
-                    pushLiveFrame(handle, jpeg: frame.jpeg, timestampNanos: timestampNanos)
+                    pushLiveFrame(
+                        handle, jpeg: frame.jpeg, timestampNanos: timestampNanos,
+                        isRecording: frame.isRecording)
                 },
                 onEnded: { finishLiveFrameStream(handle) })
         } catch {
@@ -503,7 +549,8 @@
     /// Attaches the thread on every call (idempotent and cheap when already
     /// attached); the matching single detach happens in `finishLiveFrameStream`.
     private func pushLiveFrame(
-        _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64
+        _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64,
+        isRecording: Bool
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -519,7 +566,10 @@
                 env, array, 0, jsize(jpeg.count),
                 base.assumingMemoryBound(to: jbyte.self))
         }
-        var args = [jvalue(l: array), jvalue(j: timestampNanos)]
+        var args = [
+            jvalue(l: array), jvalue(j: timestampNanos),
+            jvalue(z: isRecording ? 1 : 0),
+        ]
         fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &args)
         fns.DeleteLocalRef!(env, array)
     }

@@ -2,6 +2,7 @@ package com.opencapture.openzcine.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
 
 class FakeCameraSessionTest {
@@ -39,5 +40,22 @@ class FakeCameraSessionTest {
         session.disconnect()
 
         assertEquals(CameraSessionState.Disconnected, session.state.value)
+        assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
+    }
+
+    @Test
+    fun `recording commands follow the connected session state`() = runTest {
+        val session = FakeCameraSession(discoverable = zr)
+
+        assertFailsWith<CameraRecordingException.NotConnected> {
+            session.setRecording(true)
+        }
+
+        session.connect()
+        session.setRecording(true)
+        assertEquals(CameraRecordingState.RECORDING, session.recordingState.value)
+
+        session.setRecording(false)
+        assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
     }
 }

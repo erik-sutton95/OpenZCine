@@ -97,6 +97,8 @@ class SwiftCoreCameraSessionTest {
 
         override fun readProperty(code: Int): String? = null
 
+        override fun setRecording(recording: Boolean): Int = SwiftCore.RECORDING_COMMAND_ACCEPTED
+
         override fun disconnect() {
             disconnects++
         }

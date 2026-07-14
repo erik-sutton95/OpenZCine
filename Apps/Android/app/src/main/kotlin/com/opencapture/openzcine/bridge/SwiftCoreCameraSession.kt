@@ -1,6 +1,8 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraIdentity
+import com.opencapture.openzcine.core.CameraRecordingException
+import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
@@ -12,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Injectable JNI seam for deterministic Android session lifecycle tests. */
 internal interface SwiftCoreSessionBridge {
@@ -20,6 +24,8 @@ internal interface SwiftCoreSessionBridge {
     fun connect(host: String, listener: SwiftCore.SessionListener)
 
     fun readProperty(code: Int): String?
+
+    fun setRecording(recording: Boolean): Int
 
     fun disconnect()
 
@@ -32,6 +38,9 @@ internal interface SwiftCoreSessionBridge {
         }
 
         override fun readProperty(code: Int): String? = SwiftCore.sessionReadProperty(code)
+
+        override fun setRecording(recording: Boolean): Int =
+            SwiftCore.sessionSetRecording(recording)
 
         override fun disconnect() {
             SwiftCore.sessionDisconnect()
@@ -68,13 +77,27 @@ class SwiftCoreCameraSession internal constructor(
     private var nextAttempt = 0L
     private var activeAttempt: Long? = null
 
+    private val _recordingState = MutableStateFlow(CameraRecordingState.STANDBY)
+    override val recordingState: StateFlow<CameraRecordingState> = _recordingState.asStateFlow()
+
+    /** Serializes record commands with disconnect so an in-flight JNI call never races teardown. */
+    private val recordingCommandMutex = Mutex()
+
+    /**
+     * The iOS shell defers camera-header readback for 1.5 seconds after an app
+     * record command. The Android facade does the same: some bodies publish a
+     * stale live-view header for a few frames after accepting the operation.
+     */
+    @Volatile private var ignoreLiveRecordingStateUntilNanos: Long = 0L
+
     /**
      * Live-view frames from the Swift core's pump. Collect only while the
      * session is [CameraSessionState.Connected]; collection starts live view
      * on the camera and cancelling it sends `EndLiveView` (never leave the
      * body streaming to a hidden feed — the heat-audit rule).
      */
-    val liveFrames: LiveFrameSource = SwiftCoreLiveFrameSource()
+    val liveFrames: LiveFrameSource =
+        SwiftCoreLiveFrameSource(onRecordingState = ::applyCameraRecordingState)
 
     /**
      * Connects and suspends until the session is [CameraSessionState.Connected]
@@ -94,14 +117,23 @@ class SwiftCoreCameraSession internal constructor(
                     }
 
                     override fun onConnected(name: String, model: String, serialNumber: String) {
-                        updateAttempt(
-                            attempt,
-                            CameraSessionState.Connected(CameraIdentity(name, model, serialNumber)),
-                        )
+                        if (
+                            updateAttempt(
+                                attempt,
+                                CameraSessionState.Connected(
+                                    CameraIdentity(name, model, serialNumber),
+                                ),
+                            )
+                        ) {
+                            ignoreLiveRecordingStateUntilNanos = 0L
+                            _recordingState.value = CameraRecordingState.STANDBY
+                        }
                     }
 
                     override fun onFailed(message: String) {
                         if (updateAttempt(attempt, CameraSessionState.Disconnected)) {
+                            ignoreLiveRecordingStateUntilNanos = 0L
+                            _recordingState.value = CameraRecordingState.STANDBY
                             phaseLogger("failed", message)
                         }
                     }
@@ -129,11 +161,87 @@ class SwiftCoreCameraSession internal constructor(
             null
         }
 
-    override suspend fun disconnect() {
-        invalidateAttempt()
-        if (core.isAvailable) {
-            withContext(Dispatchers.IO) { core.disconnect() }
+    /**
+     * Sends the Nikon movie-record operation through Swift and updates the
+     * state flow only after that command is accepted by the camera. Once a
+     * command begins it runs non-cancellably: cancelling the Compose scope
+     * cannot leave the shell reporting an old state after a native operation
+     * already reached the body.
+     */
+    override suspend fun setRecording(recording: Boolean) {
+        recordingCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected) {
+                throw CameraRecordingException.NotConnected
+            }
+            if (!core.isAvailable) {
+                throw CameraRecordingException.CoreUnavailable
+            }
+
+            val target = if (recording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
+            if (_recordingState.value == target) return
+
+            val rollback = if (recording) CameraRecordingState.STANDBY else CameraRecordingState.RECORDING
+            _recordingState.value =
+                if (recording) CameraRecordingState.STARTING else CameraRecordingState.STOPPING
+            // Suppress a stale live-view header both while the command is
+            // queued behind a frame read and during the body handoff after it.
+            ignoreLiveRecordingStateUntilNanos = Long.MAX_VALUE
+
+            try {
+                val nativeResult =
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        core.setRecording(recording)
+                    }
+                nativeResult.throwIfRecordingCommandFailed()
+                _recordingState.value = target
+                ignoreLiveRecordingStateUntilNanos =
+                    System.nanoTime() + RECORDING_READBACK_GRACE_NANOS
+            } catch (error: CameraRecordingException) {
+                _recordingState.value = rollback
+                ignoreLiveRecordingStateUntilNanos = 0L
+                throw error
+            } catch (_: Throwable) {
+                _recordingState.value = rollback
+                ignoreLiveRecordingStateUntilNanos = 0L
+                throw CameraRecordingException.TransportFailed
+            }
         }
+    }
+
+    override suspend fun disconnect() {
+        recordingCommandMutex.withLock {
+            invalidateAttempt()
+            if (core.isAvailable) {
+                withContext(Dispatchers.IO + NonCancellable) { core.disconnect() }
+            }
+            ignoreLiveRecordingStateUntilNanos = 0L
+            _recordingState.value = CameraRecordingState.STANDBY
+            _state.value = CameraSessionState.Disconnected
+        }
+    }
+
+    /** Applies camera-authoritative record state from a decoded live-view frame. */
+    private fun applyCameraRecordingState(recording: Boolean) {
+        if (_state.value !is CameraSessionState.Connected) return
+        if (System.nanoTime() < ignoreLiveRecordingStateUntilNanos) return
+        _recordingState.value =
+            if (recording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
+    }
+
+    private fun Int.throwIfRecordingCommandFailed() {
+        when (this) {
+            SwiftCore.RECORDING_COMMAND_ACCEPTED -> Unit
+            SwiftCore.RECORDING_COMMAND_NO_SESSION -> throw CameraRecordingException.NotConnected
+            SwiftCore.RECORDING_COMMAND_MEDIA_BUSY -> throw CameraRecordingException.MediaBusy
+            SwiftCore.RECORDING_COMMAND_REJECTED -> throw CameraRecordingException.CommandRejected
+            SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED ->
+                throw CameraRecordingException.TransportFailed
+            else -> throw CameraRecordingException.TransportFailed
+        }
+    }
+
+    private companion object {
+        const val RECORDING_READBACK_GRACE_NANOS: Long = 1_500_000_000L
     }
 
     private fun beginAttempt(): Long? =

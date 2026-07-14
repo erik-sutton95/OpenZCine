@@ -37,6 +37,7 @@ class SwiftCoreLiveFrameSource(
     private val sharingScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val restartDelayMillis: Long = 250L,
+    private val onRecordingState: (Boolean) -> Unit = {},
 ) : LiveFrameSource {
     init {
         require(restartDelayMillis >= 0L) { "restartDelayMillis must not be negative." }
@@ -52,8 +53,13 @@ class SwiftCoreLiveFrameSource(
                 }
                 start(
                     object : SwiftCore.LiveFrameListener {
-                        override fun onFrame(jpeg: ByteArray, timestampNanos: Long) {
-                            trySend(LiveFrame(timestampNanos, jpeg))
+                        override fun onFrame(
+                            jpeg: ByteArray,
+                            timestampNanos: Long,
+                            isRecording: Boolean,
+                        ) {
+                            onRecordingState(isRecording)
+                            trySend(LiveFrame(timestampNanos, jpeg, isRecording))
                         }
 
                         override fun onEnded() {

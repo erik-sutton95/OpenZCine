@@ -1,6 +1,8 @@
 package com.opencapture.openzcine.transport
 
 import com.opencapture.openzcine.core.CameraIdentity
+import com.opencapture.openzcine.core.CameraRecordingException
+import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import java.io.IOException
@@ -38,6 +40,10 @@ internal class TransportCameraSession(
 
     override val state: StateFlow<CameraSessionState> = mutableState.asStateFlow()
 
+    private val mutableRecordingState = MutableStateFlow(CameraRecordingState.STANDBY)
+    override val recordingState: StateFlow<CameraRecordingState> =
+        mutableRecordingState.asStateFlow()
+
     private var transport: PtpIpSocketTransport? = null
 
     override suspend fun connect() {
@@ -63,9 +69,16 @@ internal class TransportCameraSession(
             )
     }
 
+    override suspend fun setRecording(recording: Boolean) {
+        // This raw-socket probe never opened a protocol session, so it must
+        // not pretend a local toggle controls a camera.
+        throw CameraRecordingException.Unsupported
+    }
+
     override suspend fun disconnect() {
         transport?.disconnect()
         transport = null
         mutableState.value = CameraSessionState.Disconnected
+        mutableRecordingState.value = CameraRecordingState.STANDBY
     }
 }

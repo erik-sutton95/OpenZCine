@@ -59,7 +59,13 @@ val ChromeShape = RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)
 /** Click without the Material ripple (chrome buttons highlight by state, not ripple). */
 @Composable
 fun Modifier.chromeClickable(onClick: () -> Unit): Modifier =
+    chromeClickable(enabled = true, onClick = onClick)
+
+/** Disabled chrome controls keep their visual state but reject touch input. */
+@Composable
+fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier =
     clickable(
+        enabled = enabled,
         interactionSource = remember { MutableInteractionSource() },
         indication = null,
         onClick = onClick,
@@ -284,8 +290,13 @@ fun AuxCircleButton(
 
 /** Record control: red gradient disc, white ring, disc→stop square (iOS `RecordButton`). */
 @Composable
-fun RecordButton(recording: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Canvas(modifier.chromeClickable(onClick)) {
+fun RecordButton(
+    recording: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    Canvas(modifier.chromeClickable(enabled = enabled, onClick = onClick)) {
         val d = size.minDimension
         val center = Offset(size.width / 2, size.height / 2)
         if (recording) {

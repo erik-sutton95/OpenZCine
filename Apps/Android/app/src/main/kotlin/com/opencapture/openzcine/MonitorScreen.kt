@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -29,12 +30,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
@@ -49,6 +52,8 @@ import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.core.CameraRecordingException
+import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import androidx.lifecycle.Lifecycle
@@ -56,6 +61,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Fake monitor readouts behind the state seam — mirrors the iOS demo state
@@ -150,6 +156,7 @@ fun MonitorScreen(
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
 ) {
+    val appContext = LocalContext.current.applicationContext
     val sessionState by session.state.collectAsState()
     LaunchedEffect(session) { session.connect() }
 
@@ -172,11 +179,32 @@ fun MonitorScreen(
     }
 
     // Shell state, iOS-model-equivalent: DISP index (0 live, 1 clean,
-    // 2 command), the interface lock, the record toggle, and the fake-clock
-    // timecode tick.
+    // 2 command), the interface lock, and the fake-clock timecode tick.
+    // Recording is owned by the CameraSession; the shell only renders its
+    // state and asks it to send a Nikon command.
     var dispIndex by remember { mutableIntStateOf(0) }
     var locked by remember { mutableStateOf(false) }
-    var recording by remember { mutableStateOf(false) }
+    val recordingState by session.recordingState.collectAsState()
+    val recording =
+        recordingState == CameraRecordingState.STARTING ||
+            recordingState == CameraRecordingState.RECORDING
+    val recordCommandPending =
+        recordingState == CameraRecordingState.STARTING ||
+            recordingState == CameraRecordingState.STOPPING
+    val recordControlEnabled =
+        sessionState is CameraSessionState.Connected && !recordCommandPending
+    val recordScope = rememberCoroutineScope()
+    val requestRecordToggle: () -> Unit = {
+        if (recordControlEnabled) {
+            recordScope.launch {
+                try {
+                    session.setRecording(!recording)
+                } catch (error: CameraRecordingException) {
+                    Toast.makeText(appContext, error.message, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
     var frameCount by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) {
         val startNanos = System.nanoTime()
@@ -426,7 +454,8 @@ fun MonitorScreen(
                     assist = assist,
                     dispIndex = dispIndex,
                     onLock = { locked = !locked },
-                    onRecord = { recording = !recording },
+                    recordEnabled = recordControlEnabled,
+                    onRecord = requestRecordToggle,
                     onDisp = { dispIndex = (dispIndex + 1) % 3 },
                     onOpenMedia = onOpenMedia,
                     onOpenSettings = onOpenSettings,
@@ -513,7 +542,12 @@ fun MonitorScreen(
                 ) { glyphModifier, tint ->
                     MediaStackGlyph(tint, glyphModifier)
                 }
-                RecordButton(recording, Modifier.zone(zones.record)) { recording = !recording }
+                RecordButton(
+                    recording = recording,
+                    modifier = Modifier.zone(zones.record),
+                    enabled = recordControlEnabled,
+                    onClick = requestRecordToggle,
+                )
                 DispButton(
                     activeIndex = dispIndex,
                     modeCount = 3, // Live / Clean / Command, matching iOS.
@@ -590,6 +624,7 @@ private fun PortraitChrome(
     assist: AssistState,
     dispIndex: Int,
     onLock: () -> Unit,
+    recordEnabled: Boolean,
     onRecord: () -> Unit,
     onDisp: () -> Unit,
     onOpenMedia: () -> Unit,
@@ -667,7 +702,12 @@ private fun PortraitChrome(
             onClick = onDisp,
         )
         Spacer(Modifier.weight(1f))
-        RecordButton(recording, Modifier.size(83.dp), onClick = onRecord)
+        RecordButton(
+            recording = recording,
+            modifier = Modifier.size(83.dp),
+            enabled = recordEnabled,
+            onClick = onRecord,
+        )
         Spacer(Modifier.weight(1f))
         AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
             MediaStackGlyph(tint, glyphModifier)

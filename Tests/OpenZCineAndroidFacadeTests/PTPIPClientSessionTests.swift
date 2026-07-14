@@ -98,6 +98,53 @@ struct PTPIPClientSessionTests {
         #expect(transactionIDs == Array(0..<UInt32(transactionIDs.count)))
     }
 
+    @Test func startsAndStopsMovieRecordingOverTheLiveViewSession() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.startRecording()
+        #expect(server.isRecording())
+
+        try session.stopRecording()
+        #expect(!server.isRecording())
+
+        let operations = server.receivedOperations()
+        #expect(operations.contains(.startMovieRecInCard))
+        #expect(operations.contains(.endMovieRec))
+    }
+
+    @Test func rejectsRecordingWhileMediaOwnsTheCommandChannel() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        session.enterMediaMode()
+        #expect(throws: PTPIPClientSessionError.mediaModeActive) {
+            try session.startRecording()
+        }
+        #expect(!server.receivedOperations().contains(.startMovieRecInCard))
+    }
+
+    @Test func surfacesCameraRejectionForMovieRecordStart() throws {
+        var options = FakeZRServer.Options()
+        options.startRecordingResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(
+                .startMovieRecInCard, .deviceBusy)
+        ) {
+            try session.startRecording()
+        }
+        #expect(!server.isRecording())
+    }
+
     @Test func disconnectSendsGracefulCloseSession() throws {
         let server = try FakeZRServer()
         defer { server.stop() }

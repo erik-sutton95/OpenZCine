@@ -5,6 +5,8 @@ import android.util.Log
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.core.CameraIdentity
+import com.opencapture.openzcine.core.CameraRecordingException
+import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.FakeCameraSession
@@ -206,8 +208,11 @@ object DemoHarness {
     private class ScriptedPairingSession : CameraSession {
         private val mutableState =
             MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
+        private val mutableRecordingState = MutableStateFlow(CameraRecordingState.STANDBY)
 
         override val state: StateFlow<CameraSessionState> = mutableState.asStateFlow()
+        override val recordingState: StateFlow<CameraRecordingState> =
+            mutableRecordingState.asStateFlow()
 
         override suspend fun connect() {
             // Idempotent: the monitor shell re-connects the handed-off session.
@@ -220,8 +225,19 @@ object DemoHarness {
                 )
         }
 
+        override suspend fun setRecording(recording: Boolean) {
+            if (mutableState.value !is CameraSessionState.Connected) {
+                throw CameraRecordingException.NotConnected
+            }
+            mutableRecordingState.value =
+                if (recording) CameraRecordingState.STARTING else CameraRecordingState.STOPPING
+            mutableRecordingState.value =
+                if (recording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
+        }
+
         override suspend fun disconnect() {
             mutableState.value = CameraSessionState.Disconnected
+            mutableRecordingState.value = CameraRecordingState.STANDBY
         }
     }
 }
