@@ -40,6 +40,7 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case pairingChallengeUnavailable
     case appControlUnavailable
     case unsupportedProperty(UInt32)
+    case liveViewAlreadyActive
 
     public var errorDescription: String? {
         switch self {
@@ -64,6 +65,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "The camera did not open app-control mode after pairing."
         case .unsupportedProperty(let code):
             return "Property 0x\(PTPIPClientSession.hexString(code)) is not known to the core."
+        case .liveViewAlreadyActive:
+            return "Live view is already streaming on this session."
         }
     }
 }
@@ -101,6 +104,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private let transactionLock = NSLock()
     private var nextTransactionID: UInt32 = 1
     private var isClosed = false
+
+    /// Live-view pump state, guarded by `liveViewCondition` (never by
+    /// `transactionLock` — the pump holds that per transaction, and stop/join
+    /// must be able to run while a frame fetch is in flight).
+    private let liveViewCondition = NSCondition()
+    private var liveViewPumpActive = false
+    private var liveViewStopRequested = false
 
     /// Camera identity resolved during `connect`. Written once by
     /// `identify()` during establishment, before the session escapes to
@@ -303,6 +313,154 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return "0x\(Self.hexString(value))"
     }
 
+    // MARK: - Live view
+
+    /// Poll ceiling for the live-view pump (~30 fps). The camera itself paces
+    /// a blocking `GetLiveViewImageEx`, so this only matters against a source
+    /// that answers faster than real frames (the fake ZR, a hot cache).
+    public static let liveViewFrameIntervalNanoseconds: UInt64 = 33_000_000
+
+    /// Starts live view and pumps frames from a dedicated background thread.
+    ///
+    /// Synchronous start, asynchronous stream: `StartLiveView` plus the
+    /// `DeviceReady` readiness poll (the iOS shell's 40 × 50 ms cadence) run on
+    /// the caller's thread and throw on failure — when this returns, the pump
+    /// thread is running and neither callback has fired yet. `onFrame` and
+    /// `onEnded` are then all delivered from that one pump thread; `onEnded`
+    /// fires exactly once, after the final frame, whether the stream ends by
+    /// `stopLiveView`, `disconnect`, or a transport error.
+    ///
+    /// Backpressure is latest-wins by construction: frames are *pulled* one at
+    /// a time and delivered synchronously, so a slow consumer polls less often
+    /// and each poll returns the camera's newest frame — nothing queues.
+    /// Poll pacing uses an absolute schedule (`start + n × interval`), never an
+    /// elapsed-time gate, per the wall-clock aliasing lesson.
+    public func startLiveView(
+        frameIntervalNanoseconds: UInt64 = PTPIPClientSession.liveViewFrameIntervalNanoseconds,
+        onFrame: @escaping @Sendable (PTPLiveViewFrame, Int64) -> Void,
+        onEnded: @escaping @Sendable () -> Void
+    ) throws {
+        liveViewCondition.lock()
+        guard !liveViewPumpActive else {
+            liveViewCondition.unlock()
+            throw PTPIPClientSessionError.liveViewAlreadyActive
+        }
+        liveViewPumpActive = true
+        liveViewStopRequested = false
+        liveViewCondition.unlock()
+
+        do {
+            try transactExpectingOK(.startLiveView)
+            try waitForDeviceReady()
+        } catch {
+            liveViewCondition.lock()
+            liveViewPumpActive = false
+            liveViewCondition.unlock()
+            throw error
+        }
+
+        Thread.detachNewThread { [self] in
+            runLiveViewPump(
+                frameIntervalNanoseconds: frameIntervalNanoseconds,
+                onFrame: onFrame, onEnded: onEnded)
+        }
+    }
+
+    /// Stops the live-view pump and blocks until it has exited — which
+    /// includes the pump's best-effort `EndLiveView`, so the camera is never
+    /// left streaming (the heat-audit rule). Bounded by the socket timeout
+    /// plus margin; a no-op when no pump is running. Safe to call repeatedly.
+    public func stopLiveView() {
+        liveViewCondition.lock()
+        defer { liveViewCondition.unlock() }
+        guard liveViewPumpActive else { return }
+        liveViewStopRequested = true
+        let deadline = Date().addingTimeInterval(
+            Double(command.timeoutMilliseconds) / 1_000 + 2)
+        while liveViewPumpActive {
+            guard liveViewCondition.wait(until: deadline) else { return }
+        }
+    }
+
+    /// The iOS shell's post-`StartLiveView` readiness poll: `DeviceReady`
+    /// until OK, 40 attempts 50 ms apart.
+    private func waitForDeviceReady() throws {
+        for _ in 0..<40 {
+            let ready = try executeTransaction(.deviceReady)
+            if ready.operationResponse.responseCode == .ok { return }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        throw PTPIPClientSessionError.timeout("Device readiness polling")
+    }
+
+    /// Pump body: fetch → deliver → sleep-to-schedule, until stop or a
+    /// transport error, then best-effort `EndLiveView` and exactly one
+    /// `onEnded`.
+    private func runLiveViewPump(
+        frameIntervalNanoseconds: UInt64,
+        onFrame: (PTPLiveViewFrame, Int64) -> Void,
+        onEnded: () -> Void
+    ) {
+        let startNanos = Self.monotonicNanoseconds()
+        var pollIndex: UInt64 = 0
+        while !liveViewStopIsRequested() {
+            do {
+                let result = try transactExpectingOK(.getLiveViewImageEx, dataPhase: .dataIn)
+                let frame = try PTPLiveViewObject.frame(from: result.data)
+                onFrame(frame, Int64(Self.monotonicNanoseconds()))
+            } catch is PTPLiveViewObjectError {
+                // A single unparsable frame is stream jitter, not a stream
+                // death — skip it, like the iOS watchdog's bad-frame budget.
+                // ponytail: no stall watchdog yet; restart machinery arrives
+                // with the Android reconnect slice.
+            } catch {
+                break  // Transport error / rejection: the stream is over.
+            }
+            // Absolute schedule: poll k is due at start + k × interval. When a
+            // fetch overruns, re-anchor to now instead of accumulating debt —
+            // an elapsed>=interval gate against a paced source only ever locks
+            // onto source/N (the wall-clock aliasing lesson, 4ae1544).
+            pollIndex += 1
+            let elapsed = Self.monotonicNanoseconds() - startNanos
+            let due = pollIndex * frameIntervalNanoseconds
+            if due > elapsed {
+                Thread.sleep(forTimeInterval: Double(due - elapsed) / 1_000_000_000)
+            } else {
+                pollIndex = elapsed / frameIntervalNanoseconds
+            }
+        }
+
+        // Release the camera's encoder before signalling the stream end —
+        // never leave the body streaming to nobody (the heat-audit EndLiveView
+        // rule). Best-effort: on a dead link this fails fast and teardown
+        // proceeds.
+        _ = try? transactExpectingOK(.endLiveView)
+
+        // `onEnded` before the join broadcast, so a returned `stopLiveView`
+        // (and therefore `disconnect`) guarantees the terminal callback has
+        // already been delivered.
+        onEnded()
+        liveViewCondition.lock()
+        liveViewPumpActive = false
+        liveViewStopRequested = false
+        liveViewCondition.broadcast()
+        liveViewCondition.unlock()
+    }
+
+    private func liveViewStopIsRequested() -> Bool {
+        liveViewCondition.lock()
+        defer { liveViewCondition.unlock() }
+        return liveViewStopRequested
+    }
+
+    /// `CLOCK_MONOTONIC` in nanoseconds — frame timestamps that match the
+    /// semantics of Kotlin's `System.nanoTime()`.
+    static func monotonicNanoseconds() -> UInt64 {
+        var time = timespec()
+        clock_gettime(CLOCK_MONOTONIC, &time)
+        return UInt64(time.tv_sec) * 1_000_000_000 + UInt64(time.tv_nsec)
+    }
+
     // MARK: - Teardown
 
     /// Graceful teardown: best-effort `CloseSession` so the camera releases its
@@ -310,7 +468,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// the iOS reconnect-wedge fix (`NativeCameraSession.shutdown`). Bounded:
     /// the read timeout is dropped to 2 s first, so a dead link cannot stall
     /// teardown. Safe to call more than once.
+    ///
+    /// A running live-view pump is stopped (and joined) first, so the wire
+    /// order on teardown is always `EndLiveView` → `CloseSession`.
     public func disconnect() {
+        stopLiveView()
         transactionLock.lock()
         let alreadyClosed = isClosed
         isClosed = true

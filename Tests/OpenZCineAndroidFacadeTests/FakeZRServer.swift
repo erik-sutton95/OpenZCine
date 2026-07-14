@@ -28,6 +28,14 @@ final class FakeZRServer: @unchecked Sendable {
         var acceptsAppControlImmediately = true
         /// Reply `Init_Fail` to every `Init_Command_Request`.
         var refusesInit = false
+        /// TCP port to listen on; 0 picks an ephemeral port. The on-device
+        /// end-to-end run binds the real PTP-IP port (15740) so
+        /// `adb reverse tcp:15740 tcp:15740` can reach it.
+        var port: UInt16 = 0
+        /// Cadence of the synthesized live-view stream: the served frame
+        /// counter advances by wall clock at this period, so a slow poller
+        /// sees counter gaps (frames dropped at the source, never queued).
+        var liveViewFrameIntervalNanoseconds: UInt64 = 40_000_000  // 25 fps
         var cameraName = "ZR_6001234"
         var pairingPIN = "1234"
         var batteryPercent: UInt8 = 80
@@ -46,6 +54,8 @@ final class FakeZRServer: @unchecked Sendable {
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
     private var stopped = false
+    private var liveViewActive = false
+    private var liveViewEpoch = Date()
 
     init(options: Options = Options()) throws {
         self.options = options
@@ -61,7 +71,7 @@ final class FakeZRServer: @unchecked Sendable {
             address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         #endif
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0  // ephemeral
+        address.sin_port = in_port_t(options.port).bigEndian  // 0 = ephemeral
         address.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian  // 127.0.0.1
 
         let bindResult = withUnsafePointer(to: &address) { pointer in
@@ -107,6 +117,20 @@ final class FakeZRServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return transactionIDLog
+    }
+
+    /// Whether the fake body believes it is streaming live view — false again
+    /// only after a client `EndLiveView` (the heat-audit assertion hook).
+    func isLiveViewActive() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return liveViewActive
+    }
+
+    /// Reconstructs the served frame counter from a delivered frame's header
+    /// timecode (the base-256 encoding `liveViewObject` writes).
+    static func frameCounter(of timecode: Timecode) -> Int {
+        ((timecode.hour * 256 + timecode.minute) * 256 + timecode.second) * 256 + timecode.frame
     }
 
     // MARK: - Connection handling
@@ -177,6 +201,32 @@ final class FakeZRServer: @unchecked Sendable {
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .getDeviceInfo:
             sendDataIn(connection, data: deviceInfoDataset(), transactionID: transactionID)
+        case .startLiveView:
+            lock.lock()
+            liveViewActive = true
+            liveViewEpoch = Date()
+            lock.unlock()
+            sendResponse(connection, code: 0x2001, transactionID: transactionID)
+        case .deviceReady:
+            sendResponse(connection, code: 0x2001, transactionID: transactionID)
+        case .endLiveView:
+            lock.lock()
+            liveViewActive = false
+            lock.unlock()
+            sendResponse(connection, code: 0x2001, transactionID: transactionID)
+        case .getLiveViewImageEx:
+            lock.lock()
+            let active = liveViewActive
+            let elapsedNanos = UInt64(max(0, -liveViewEpoch.timeIntervalSinceNow) * 1e9)
+            lock.unlock()
+            guard active else {
+                sendResponse(connection, code: 0x2019, transactionID: transactionID)  // busy
+                return
+            }
+            let frameIndex = elapsedNanos / options.liveViewFrameIntervalNanoseconds
+            sendDataIn(
+                connection, data: liveViewObject(frameIndex: frameIndex),
+                transactionID: transactionID)
         case .getDevicePropValueEx:
             let propertyCode = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
             switch PTPPropertyCode(rawValue: propertyCode) {
@@ -214,6 +264,30 @@ final class FakeZRServer: @unchecked Sendable {
         bytes += ptpString(options.deviceVersion)
         bytes += ptpString(options.serialNumber)
         return Data(bytes)
+    }
+
+    /// Synthesized Nikon LiveViewObject: the 1024-byte display-info header
+    /// followed by a tiny real color-bars JPEG (decodable by any consumer,
+    /// including Android's `BitmapFactory` in the on-device end-to-end).
+    ///
+    /// The header carries only what the facade parses today: the declared
+    /// JPEG length at offset 12 and the timecode block — with `frameIndex`
+    /// encoded base-256 across the hour/minute/second/frame bytes as a
+    /// test-only frame counter (see `frameCounter(of:)`). The JPEG variant
+    /// alternates every 25 frames so a watching human sees the stream move.
+    private func liveViewObject(frameIndex: UInt64) -> Data {
+        let jpeg =
+            (frameIndex / 25).isMultiple(of: 2)
+            ? FakeZRLiveViewFrames.colorBarsJPEG
+            : FakeZRLiveViewFrames.colorBarsMarkerJPEG
+        var header = [UInt8](repeating: 0, count: 1024)
+        header.replaceSubrange(12..<16, with: ByteCoding.uint32LE(UInt32(jpeg.count)))
+        header[831] = 1  // timecode on
+        header[832] = UInt8((frameIndex >> 24) & 0xFF)
+        header[833] = UInt8((frameIndex >> 16) & 0xFF)
+        header[834] = UInt8((frameIndex >> 8) & 0xFF)
+        header[835] = UInt8(frameIndex & 0xFF)
+        return Data(header + jpeg)
     }
 
     /// PTP string: UINT8 code-unit count (including trailing NUL) + UTF-16LE units.

@@ -117,7 +117,42 @@ object SwiftCore {
     /**
      * Gracefully tears down the active session: best-effort `CloseSession` so
      * the camera frees its connection slot, then both sockets. Blocking
-     * (bounded ~2 s) — call from a background dispatcher. Safe when idle.
+     * (bounded ~2 s) — call from a background dispatcher. A running live-view
+     * pump is stopped first (`EndLiveView` before `CloseSession`). Safe when
+     * idle.
      */
     external fun sessionDisconnect()
+
+    /** Receives live-view frames pushed from Swift (the facade's pump thread). */
+    interface LiveFrameListener {
+        /**
+         * One live-view JPEG, freshly pulled from the camera. [timestampNanos]
+         * is `CLOCK_MONOTONIC` at delivery — the same clock as
+         * `System.nanoTime()`.
+         */
+        fun onFrame(jpeg: ByteArray, timestampNanos: Long)
+
+        /**
+         * The stream ended — stop, disconnect, a transport error, or an
+         * immediately-failed start. Called exactly once per
+         * [sessionStartLiveView].
+         */
+        fun onEnded()
+    }
+
+    /**
+     * Starts live view on the active session (blocking `StartLiveView` +
+     * readiness poll — call from a background dispatcher) and pumps JPEG
+     * frames to [listener] from a Swift background thread. Backpressure is
+     * latest-wins: frames are pulled one at a time, so a slow consumer skips
+     * camera frames instead of queueing latency.
+     */
+    external fun sessionStartLiveView(listener: LiveFrameListener)
+
+    /**
+     * Stops the live-view pump and blocks until the camera got its
+     * `EndLiveView` (never leave the body streaming — the heat-audit rule).
+     * Call from a background dispatcher. Safe when idle.
+     */
+    external fun sessionStopLiveView()
 }

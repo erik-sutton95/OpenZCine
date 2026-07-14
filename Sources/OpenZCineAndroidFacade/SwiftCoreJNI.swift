@@ -292,6 +292,121 @@
         ActiveSessionSlot.shared.replace(with: nil)?.disconnect()
     }
 
+    // MARK: - Live view
+
+    /// Kotlin-side `LiveFrameListener`, resolved to a global ref + method IDs
+    /// so the facade's pump thread can push into it.
+    ///
+    /// The raw pointers are a JNI global reference, process-wide `jmethodID`s,
+    /// and the process-wide `JavaVM*` — all valid across threads per the JNI
+    /// spec, hence `@unchecked Sendable`.
+    private struct LiveFrameListenerHandle: @unchecked Sendable {
+        let vm: UnsafeMutablePointer<JavaVM?>
+        let listener: jobject
+        let onFrame: jmethodID
+        let onEnded: jmethodID
+    }
+
+    /// `SwiftCore.sessionStartLiveView(listener)` — starts live view on the
+    /// active session (blocking `StartLiveView` + readiness poll on the caller
+    /// thread) and pumps JPEG frames to `listener.onFrame(jpeg, timestampNanos)`
+    /// from the facade's pump thread. `onEnded` fires exactly once when the
+    /// stream ends — stop, disconnect, a transport error, or (immediately, on
+    /// the calling thread) when there is no active session or the start fails.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartLiveView")
+    public func swiftCoreSessionStartLiveView(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, listener: jobject?
+    ) {
+        let fns = table(env)
+        var vm: UnsafeMutablePointer<JavaVM?>?
+        guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
+        guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
+        guard let cls = fns.GetObjectClass!(env, global),
+            let onFrame = fns.GetMethodID!(env, cls, "onFrame", "([BJ)V"),
+            let onEnded = fns.GetMethodID!(env, cls, "onEnded", "()V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        let handle = LiveFrameListenerHandle(
+            vm: vm, listener: global, onFrame: onFrame, onEnded: onEnded)
+
+        /// Terminal path on the CALLING (JVM-owned) thread: report the end and
+        /// release the listener without ever detaching this thread.
+        func endOnCallerThread() {
+            var noArguments = jvalue()
+            fns.CallVoidMethodA!(env, global, onEnded, &noArguments)
+            fns.DeleteGlobalRef!(env, global)
+        }
+
+        guard let session = ActiveSessionSlot.shared.current() else {
+            endOnCallerThread()
+            return
+        }
+        do {
+            // Both callbacks run on the ONE pump thread, `onEnded` last —
+            // that ordering is what makes the attach-per-callback /
+            // detach-once-at-the-end pairing below sound.
+            try session.startLiveView(
+                onFrame: { frame, timestampNanos in
+                    pushLiveFrame(handle, jpeg: frame.jpeg, timestampNanos: timestampNanos)
+                },
+                onEnded: { finishLiveFrameStream(handle) })
+        } catch {
+            endOnCallerThread()
+        }
+    }
+
+    /// `SwiftCore.sessionStopLiveView()` — stops the pump and blocks until it
+    /// has exited (the camera got its `EndLiveView`). No-op when idle.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStopLiveView")
+    public func swiftCoreSessionStopLiveView(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.stopLiveView()
+    }
+
+    /// Delivers one JPEG frame to the Kotlin listener from the pump thread.
+    /// Attaches the thread on every call (idempotent and cheap when already
+    /// attached); the matching single detach happens in `finishLiveFrameStream`.
+    private func pushLiveFrame(
+        _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64
+    ) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else { return }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else { return }
+        jpeg.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(jpeg.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        var args = [jvalue(l: array), jvalue(j: timestampNanos)]
+        fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &args)
+        fns.DeleteLocalRef!(env, array)
+    }
+
+    /// Terminal upcall from the pump thread: report the end, release the
+    /// listener, and detach the (Swift-owned) thread from the JVM.
+    private func finishLiveFrameStream(_ handle: LiveFrameListenerHandle) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else { return }
+        let fns = table(env)
+        var noArguments = jvalue()
+        fns.CallVoidMethodA!(env, handle.listener, handle.onEnded, &noArguments)
+        fns.DeleteGlobalRef!(env, handle.listener)
+        _ = invoke.DetachCurrentThread!(handle.vm)
+    }
+
     /// Pushes `discovering → handshaking → connected` copy from the core to the
     /// registered listener, then releases it.
     private func pushDemoPhases(_ handle: ListenerHandle) {

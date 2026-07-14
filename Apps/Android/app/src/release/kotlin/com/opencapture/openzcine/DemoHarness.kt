@@ -13,7 +13,10 @@ object DemoHarness {
     /** Never matched in release: the extra is read only by the debug harness. */
     const val EXTRA_DEMO_FEED = "zc.demo.feed"
 
-    /** Always null: release builds carry no demo frame source. */
+    /** Never matched in release: the extra is read only by the debug harness. */
+    const val EXTRA_SESSION_HOST = "zc.session.host"
+
+    /** Always null: release builds carry no demo session or frame source. */
     @Suppress("UNUSED_PARAMETER")
-    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource>? = null
+    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource?>? = null
 }

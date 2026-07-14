@@ -3,6 +3,7 @@ package com.opencapture.openzcine.bridge
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.LiveFrameSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,14 @@ class SwiftCoreCameraSession(
 ) : CameraSession {
     private val _state = MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
     override val state: StateFlow<CameraSessionState> = _state.asStateFlow()
+
+    /**
+     * Live-view frames from the Swift core's pump. Collect only while the
+     * session is [CameraSessionState.Connected]; collection starts live view
+     * on the camera and cancelling it sends `EndLiveView` (never leave the
+     * body streaming to a hidden feed — the heat-audit rule).
+     */
+    val liveFrames: LiveFrameSource = SwiftCoreLiveFrameSource()
 
     /**
      * Connects and suspends until the session is [CameraSessionState.Connected]

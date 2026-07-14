@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
@@ -289,10 +290,18 @@ fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
             }
         val isClean = dispIndex == 1
 
-        // Feed at the zone map's feed frame; LiveFeedView aspect-fits within it.
+        // Feed at the zone map's feed frame; LiveFeedView aspect-fits within
+        // it. An explicit frameSource (demo harness) wins; otherwise a
+        // connected Swift-core session streams its own live view — collecting
+        // starts the camera's stream, leaving composition ends it.
+        val activeFrameSource =
+            frameSource
+                ?: (session as? SwiftCoreCameraSession)
+                    ?.liveFrames
+                    ?.takeIf { sessionState is CameraSessionState.Connected }
         Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
-            if (frameSource != null) {
-                LiveFeedView(frameSource, Modifier.fillMaxSize())
+            if (activeFrameSource != null) {
+                LiveFeedView(activeFrameSource, Modifier.fillMaxSize())
             } else {
                 Text(
                     text =
