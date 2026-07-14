@@ -108,6 +108,8 @@ enum StartupColors {
 }
 
 struct StartupHeader: View {
+    @Environment(\.openURL) private var openURL
+
     var title: String = "Connection setup"
     let statusTitle: String
     let isBusy: Bool
@@ -119,11 +121,15 @@ struct StartupHeader: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .tracking(1.3)
                     .foregroundStyle(StartupColors.muted)
-                Text(title)
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                    Text(title)
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(StartupColors.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    legalLink("Privacy", path: "privacy")
+                    legalLink("Terms", path: "terms")
+                }
             }
 
             Spacer(minLength: 8)
@@ -142,6 +148,21 @@ struct StartupHeader: View {
             .background(StartupColors.surface.opacity(0.50), in: Capsule())
             .overlay(Capsule().stroke(statusColor.opacity(0.40), lineWidth: 1))
         }
+    }
+
+    /// Quiet utility text link to a policy page on openzcine.app — deliberately dimmer than the
+    /// title so it never competes with it.
+    private func legalLink(_ label: String, path: String) -> some View {
+        Button(label) {
+            guard let url = URL(string: "https://openzcine.app/\(path)") else { return }
+            openURL(url)
+        }
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .foregroundStyle(StartupColors.dim)
+        .lineLimit(1)
+        .fixedSize()
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Open the OpenZCine \(label) page")
     }
 
     private var statusColor: Color {
