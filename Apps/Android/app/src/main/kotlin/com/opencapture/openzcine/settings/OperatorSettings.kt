@@ -7,6 +7,93 @@ import androidx.compose.runtime.mutableStateOf
 import com.opencapture.openzcine.AssistTool
 
 /**
+ * A local delivery-frame guide drawn over the Android monitor feed.
+ *
+ * This deliberately models only OpenZCine's composited guide. It is not the
+ * Nikon body's `GridDisplay` camera property, which remains camera-owned.
+ */
+public enum class LocalFramingGuide(
+    /** Operator-facing ratio label. */
+    public val label: String,
+    /** Width divided by height for the guide, or `null` when hidden. */
+    public val aspectRatio: Float?,
+) {
+    /** Do not draw a delivery-frame guide. */
+    OFF("Off", null),
+    /** Cinema delivery frame. */
+    CINEMA_239("2.39:1", 2.39f),
+    /** Widescreen delivery frame. */
+    WIDESCREEN_16_9("16:9", 16f / 9f),
+    ;
+
+    internal companion object {
+        fun fromStoredName(value: String?): LocalFramingGuide? =
+            entries.firstOrNull { it.name == value }
+    }
+}
+
+/**
+ * Local horizontal presentation scale for anamorphic material.
+ *
+ * The scale mirrors the iOS monitor's horizontal de-squeeze geometry: a
+ * selected squeeze factor occupies a centred `1 / factor` presentation rect.
+ * It affects only the Android monitor composition and never writes to camera
+ * properties or media files.
+ */
+public enum class LocalDesqueezePresentation(
+    /** Operator-facing squeeze factor label. */
+    public val label: String,
+    /** Horizontal monitor scale applied to the local presentation. */
+    public val horizontalPresentationScale: Float,
+) {
+    /** Preserve the source presentation. */
+    OFF("Off", 1f),
+    /** Present with a 1.33× horizontal anamorphic factor. */
+    X133("1.33×", 1f / 1.33f),
+    /** Present with a 1.5× horizontal anamorphic factor. */
+    X150("1.5×", 1f / 1.5f),
+    /** Present with a 1.65× horizontal anamorphic factor. */
+    X165("1.65×", 1f / 1.65f),
+    /** Present with a 1.8× horizontal anamorphic factor. */
+    X180("1.8×", 1f / 1.8f),
+    /** Present with a 2× horizontal anamorphic factor. */
+    X200("2×", 0.5f),
+    ;
+
+    internal companion object {
+        fun fromStoredName(value: String?): LocalDesqueezePresentation? =
+            entries.firstOrNull { it.name == value }
+    }
+}
+
+/**
+ * The local monitor-only framing configuration consumed by the Compose feed
+ * overlay. Camera framing-grid state is intentionally absent.
+ */
+public data class LocalFramingAssistConfiguration(
+    /** Whether the local thirds grid is drawn. */
+    public val ruleOfThirdsEnabled: Boolean,
+    /** Whether the local centre crosshair is drawn. */
+    public val centerCrosshairEnabled: Boolean,
+    /** The local delivery-frame guide. */
+    public val guide: LocalFramingGuide,
+    /** The local anamorphic presentation choice. */
+    public val desqueezePresentation: LocalDesqueezePresentation,
+) {
+    /** Human-readable accessibility summary that distinguishes local from camera state. */
+    public val accessibilitySummary: String
+        get() =
+            buildString {
+                append("Local framing assists. ")
+                append(if (ruleOfThirdsEnabled) "Rule-of-thirds grid on. " else "Rule-of-thirds grid off. ")
+                append(if (centerCrosshairEnabled) "Centre crosshair on. " else "Centre crosshair off. ")
+                append("Frame guide ${guide.label}. ")
+                append("Desqueeze presentation ${desqueezePresentation.label}. ")
+                append("Camera Grid Display is unchanged.")
+            }
+}
+
+/**
  * Persisted operator preferences — the Android counterpart of the iOS shell's
  * `OperatorPreferences` (UserDefaults-backed). Every value is Compose-observable
  * and writes through to app-private [SharedPreferences] on change.
@@ -63,6 +150,41 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         Toggle("controls.recordConfirmation", default = true)
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
+
+    // View Assist — local composited framing aids. These values deliberately
+    // stay separate from the camera-owned GridDisplay property so a monitor
+    // operator never accidentally changes the body while composing a shot.
+    public val ruleOfThirdsEnabled: Toggle = Toggle("assist.local.ruleOfThirds", default = false)
+    public val centerCrosshairEnabled: Toggle = Toggle("assist.local.centerCrosshair", default = false)
+
+    private val framingGuideState = mutableStateOf(loadFramingGuide())
+    private val desqueezePresentationState = mutableStateOf(loadDesqueezePresentation())
+
+    /** Selected local delivery-frame guide; persisted immediately on change. */
+    public var framingGuide: LocalFramingGuide
+        get() = framingGuideState.value
+        set(new) {
+            framingGuideState.value = new
+            preferences.edit().putString(FRAMING_GUIDE_KEY, new.name).apply()
+        }
+
+    /** Selected local anamorphic presentation; persisted immediately on change. */
+    public var desqueezePresentation: LocalDesqueezePresentation
+        get() = desqueezePresentationState.value
+        set(new) {
+            desqueezePresentationState.value = new
+            preferences.edit().putString(DESQUEEZE_PRESENTATION_KEY, new.name).apply()
+        }
+
+    /** Compose-observable framing state for the monitor overlay. */
+    public val localFramingAssistConfiguration: LocalFramingAssistConfiguration
+        get() =
+            LocalFramingAssistConfiguration(
+                ruleOfThirdsEnabled = ruleOfThirdsEnabled.value,
+                centerCrosshairEnabled = centerCrosshairEnabled.value,
+                guide = framingGuide,
+                desqueezePresentation = desqueezePresentation,
+            )
 
     private val assistToolbarOrderState = mutableStateOf(loadAssistToolbarOrder())
     private val visibleAssistToolsState = mutableStateOf(loadVisibleAssistTools())
@@ -139,6 +261,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             recordConfirmationEnabled,
             hapticsEnabled,
             keepScreenAwake,
+            ruleOfThirdsEnabled,
+            centerCrosshairEnabled,
         )
 
     private fun loadAssistToolbarOrder(): List<AssistTool> {
@@ -159,10 +283,21 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .orEmpty()
     }
 
+    private fun loadFramingGuide(): LocalFramingGuide =
+        LocalFramingGuide.fromStoredName(preferences.getString(FRAMING_GUIDE_KEY, null))
+            ?: LocalFramingGuide.OFF
+
+    private fun loadDesqueezePresentation(): LocalDesqueezePresentation =
+        LocalDesqueezePresentation.fromStoredName(
+            preferences.getString(DESQUEEZE_PRESENTATION_KEY, null),
+        ) ?: LocalDesqueezePresentation.OFF
+
     private companion object {
         const val STORE_NAME = "openzcine.operator-settings"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
         const val VISIBLE_ASSIST_TOOLS_KEY = "display.assistToolbar.visible.v1"
+        const val FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
+        const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
     }
 }
 

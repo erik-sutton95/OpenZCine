@@ -91,6 +91,12 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
   --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
   with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).
+- **Local framing assists:** Operator Setup → View Assist persists a monitor-only rule-of-thirds
+  grid, centre crosshair, 2.39:1 / 16:9 delivery-frame guide, and horizontal anamorphic
+  presentation choice. `FramingAssists.kt` composes them inside the existing shared-core feed
+  zone; clean output retains delivery framing and de-squeeze presentation while hiding the busier
+  grid and crosshair. These controls are explicitly local — they never write Nikon's camera-owned
+  `GridDisplay` property.
 - **Real-session diagnostics:** connect phases use the `SwiftCoreCameraSession` logcat tag and
   frame pacing uses `ZCLiveFeed`. For a
   fake-ZR server on the development Mac (scripted twin, incl. a synthesized live-view stream:
