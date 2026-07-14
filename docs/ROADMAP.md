@@ -112,7 +112,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
 - **Bluetooth shutter remote** — record start/stop from a BT remote.
-- **Media browser & playback** — on-camera clip browse and playback.
+- **Media browser & playback** — on-camera clip browse, progressive proxy playback, and a
+  transfer-backed Android still-photo viewer (JPEG/PNG progressive preview; explicit thumbnail
+  fallback for unsupported HEIF/RAW decoders).
 - **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow.

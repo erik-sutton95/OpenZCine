@@ -45,6 +45,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,9 +82,10 @@ private sealed interface BrowseState {
  * Full-screen media browse — the Android port of the iOS
  * `MediaBrowserView` main column (ios/Runner/MediaBrowser.swift): the
  * MULTIMEDIA header, the adaptive dark clip grid with size/codec badges, and
- * the listing/empty states. Playable proxy cells open the progressive player;
- * stills and R3D masters remain explicitly view-only. Renders over the monitor;
- * [onClose] releases media ownership and returns to live view.
+ * the listing/empty states. Playable proxy cells open the progressive player,
+ * stills open the transfer-backed photo viewer, and R3D masters remain
+ * explicitly non-previewable. Renders over the monitor; [onClose] releases
+ * media ownership and returns to live view.
  */
 @Composable
 fun MediaBrowseScreen(
@@ -92,6 +97,7 @@ fun MediaBrowseScreen(
     var state by remember { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var reloadKey by remember { mutableIntStateOf(0) }
     var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
+    var viewingPhoto by remember { mutableStateOf<MediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
 
     LaunchedEffect(closeRequested) {
@@ -99,7 +105,7 @@ fun MediaBrowseScreen(
         withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode() }
         onClose()
     }
-    BackHandler(enabled = playingClip == null) { closeRequested = true }
+    BackHandler(enabled = playingClip == null && viewingPhoto == null) { closeRequested = true }
 
     LaunchedEffect(reloadKey, cameraConnected) {
         state = BrowseState.Loading
@@ -116,7 +122,10 @@ fun MediaBrowseScreen(
             }
         state = loadedState
         if (autoPlayFirstProxy && loadedState is BrowseState.Loaded && playingClip == null) {
-            playingClip = loadedState.clips.firstOrNull { it.isPlayableProxy }
+            playingClip =
+                loadedState.clips.firstOrNull {
+                    it.contentKind == MediaContentKind.PLAYABLE_PROXY
+                }
         }
     }
 
@@ -158,7 +167,18 @@ fun MediaBrowseScreen(
                     if (current.clips.isEmpty()) {
                         EmptyState()
                     } else {
-                        ClipGrid(current.clips, onPlay = { playingClip = it })
+                        ClipGrid(
+                            current.clips,
+                            onOpen = { clip ->
+                                when (clip.contentKind) {
+                                    MediaContentKind.PLAYABLE_PROXY -> playingClip = clip
+                                    MediaContentKind.STILL_PHOTO -> viewingPhoto = clip
+                                    MediaContentKind.R3D_MASTER,
+                                    MediaContentKind.UNSUPPORTED,
+                                    -> Unit
+                                }
+                            },
+                        )
                     }
             }
         }
@@ -174,6 +194,13 @@ fun MediaBrowseScreen(
                 clip = clip,
                 cameraID = cameraID,
                 onClose = { playingClip = null },
+            )
+        }
+        viewingPhoto?.let { clip ->
+            MediaStillViewer(
+                clip = clip,
+                cameraID = cameraID,
+                onClose = { viewingPhoto = null },
             )
         }
     }
@@ -214,7 +241,7 @@ private fun BrowseHeader(state: BrowseState) {
 
 /** The adaptive dark clip grid (iOS `gridCells`, medium thumbnail preset). */
 @Composable
-private fun ClipGrid(clips: List<MediaClipRecord>, onPlay: (MediaClipRecord) -> Unit) {
+private fun ClipGrid(clips: List<MediaClipRecord>, onOpen: (MediaClipRecord) -> Unit) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 210.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -222,13 +249,13 @@ private fun ClipGrid(clips: List<MediaClipRecord>, onPlay: (MediaClipRecord) -> 
         // iOS parity: the grid scrolls its last row clear of the fold.
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
-        items(clips, key = { it.handle }) { clip -> ClipCell(clip, onPlay) }
+        items(clips, key = { it.handle }) { clip -> ClipCell(clip, onOpen) }
     }
 }
 
 /** One clip cell: 16:9 thumbnail, badge bottom-right, filename below. */
 @Composable
-private fun ClipCell(clip: MediaClipRecord, onPlay: (MediaClipRecord) -> Unit) {
+private fun ClipCell(clip: MediaClipRecord, onOpen: (MediaClipRecord) -> Unit) {
     var thumbnail by remember(clip.handle) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(clip.handle) {
         if (thumbnail != null) return@LaunchedEffect
@@ -240,6 +267,24 @@ private fun ClipCell(clip: MediaClipRecord, onPlay: (MediaClipRecord) -> Unit) {
             }
     }
 
+    val actionLabel =
+        when (clip.contentKind) {
+            MediaContentKind.PLAYABLE_PROXY -> "PLAY"
+            MediaContentKind.STILL_PHOTO -> "VIEW PHOTO"
+            MediaContentKind.R3D_MASTER -> "R3D MASTER"
+            MediaContentKind.UNSUPPORTED -> "VIEW ONLY"
+        }
+    val isOpenable =
+        clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
+            clip.contentKind == MediaContentKind.STILL_PHOTO
+    val accessibilityLabel =
+        when (clip.contentKind) {
+            MediaContentKind.PLAYABLE_PROXY -> "Play ${clip.filename}"
+            MediaContentKind.STILL_PHOTO -> "View photo ${clip.filename}"
+            MediaContentKind.R3D_MASTER -> "${clip.filename}, R3D master preview unavailable"
+            MediaContentKind.UNSUPPORTED -> "${clip.filename}, preview unavailable"
+        }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             Modifier.fillMaxWidth()
@@ -247,10 +292,13 @@ private fun ClipCell(clip: MediaClipRecord, onPlay: (MediaClipRecord) -> Unit) {
                 .clip(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
                 .background(LiveDesign.surface)
                 .then(
-                    if (clip.isPlayableProxy) {
-                        Modifier.chromeClickable { onPlay(clip) }
+                    if (isOpenable) {
+                        Modifier.semantics {
+                            contentDescription = accessibilityLabel
+                            role = Role.Button
+                        }.chromeClickable { onOpen(clip) }
                     } else {
-                        Modifier
+                        Modifier.semantics { contentDescription = accessibilityLabel }
                     },
                 )
                 .border(
@@ -264,7 +312,7 @@ private fun ClipCell(clip: MediaClipRecord, onPlay: (MediaClipRecord) -> Unit) {
             if (image != null) {
                 Image(
                     bitmap = image,
-                    contentDescription = clip.filename,
+                    contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
@@ -282,9 +330,9 @@ private fun ClipCell(clip: MediaClipRecord, onPlay: (MediaClipRecord) -> Unit) {
                         .padding(horizontal = 6.dp, vertical = 3.dp),
             )
             Text(
-                if (clip.isPlayableProxy) "PLAY" else "VIEW ONLY",
+                actionLabel,
                 style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = if (clip.isPlayableProxy) LiveDesign.accent else LiveDesign.faint,
+                color = if (isOpenable) LiveDesign.accent else LiveDesign.faint,
                 modifier =
                     Modifier.align(Alignment.TopStart)
                         .padding(8.dp)

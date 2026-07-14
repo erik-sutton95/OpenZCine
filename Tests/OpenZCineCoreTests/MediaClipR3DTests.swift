@@ -22,6 +22,29 @@ import Testing
     #expect(!MediaClipFilename.isPhoto("clip.MP4"))
 }
 
+@Test func sharedMediaClassificationCarriesStillPreviewPolicy() {
+    let jpeg = MediaClipFilename.mediaClassification(for: "DSC_0001.JPG")
+    #expect(jpeg.kind == .stillPhoto)
+    #expect(jpeg.stillPreview?.formatLabel == "JPEG")
+    #expect(jpeg.stillPreview?.strategy == .progressive)
+
+    let heif = MediaClipFilename.mediaClassification(for: "DSC_0002.HEIC")
+    #expect(heif.kind == .stillPhoto)
+    #expect(heif.stillPreview?.formatLabel == "HEIF")
+    #expect(heif.stillPreview?.strategy == .completeFile)
+
+    let raw = MediaClipFilename.mediaClassification(for: "DSC_0003.NEF")
+    #expect(raw.kind == .stillPhoto)
+    #expect(raw.stillPreview?.formatLabel == "Nikon RAW")
+    #expect(raw.stillPreview?.strategy == .thumbnailOnly)
+
+    let r3d = MediaClipFilename.mediaClassification(for: "A001_C004_0714RC.R3D")
+    #expect(r3d.kind == .r3dMaster)
+    #expect(r3d.stillPreview == nil)
+
+    #expect(MediaClipFilename.mediaClassification(for: "metadata.bin").kind == .unsupported)
+}
+
 @Test func cameraMediaBasenameAcceptsOrdinaryUnicodeNames() {
     #expect(MediaClipFilename.safeCameraBasename("A002_C046_0630SB.MP4") != nil)
     #expect(MediaClipFilename.safeCameraBasename("Scene 12 – Göteborg.MOV") != nil)

@@ -40,6 +40,12 @@ struct MediaBrowseTests {
         #expect(newest.captureDate == "20260714T110000")
         #expect(newest.pixelWidth == 5760)
         #expect(newest.pixelHeight == 3240)
+        #expect(newest.contentClassification.kind == .playableProxy)
+
+        let still = try #require(clips.first(where: { $0.filename == "DSC_0007.JPG" }))
+        #expect(still.contentClassification.kind == .stillPhoto)
+        #expect(still.contentClassification.stillPreview?.formatLabel == "JPEG")
+        #expect(still.contentClassification.stillPreview?.strategy == .progressive)
 
         // Card-present volume discovery went through the vendor op first.
         let operations = server.receivedOperations()
@@ -94,21 +100,31 @@ struct MediaBrowseTests {
         #expect(try session.thumbnail(handle: 0x100A) == nil)
     }
 
-    @Test func encodesWireRecords() throws {
+    @Test func serializesCoreMediaPolicyIntoWireRecords() throws {
         let clips = [
             FacadeMediaClip(
                 handle: 0x1001, storageID: 0x0001_0001, sizeBytes: 1_284_505_600,
                 captureDate: "20260713T101010", pixelWidth: 5760, pixelHeight: 3240,
-                filename: "C0001.MOV", isPlayableProxy: true),
+                filename: "C0001.MOV"),
             FacadeMediaClip(
                 handle: 0x1008, storageID: 0x0001_0001, sizeBytes: 8_400_000,
                 captureDate: "20260714T102030", pixelWidth: 8256, pixelHeight: 5504,
-                filename: "DSC_0007.JPG", isPlayableProxy: false),
+                filename: "DSC_0007.JPG"),
+            FacadeMediaClip(
+                handle: 0x100A, storageID: 0x0001_0001, sizeBytes: 10_400_000,
+                captureDate: "20260714T103030", pixelWidth: 8256, pixelHeight: 5504,
+                filename: "DSC_0008.HEIC"),
+            FacadeMediaClip(
+                handle: 0x100B, storageID: 0x0001_0001, sizeBytes: 50_400_000,
+                captureDate: "20260714T104030", pixelWidth: 8256, pixelHeight: 5504,
+                filename: "DSC_0009.NEF"),
         ]
         #expect(
             MediaListWire.encode(clips) == """
-                4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t1\tC0001.MOV
-                4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\tDSC_0007.JPG
+                4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t1\tproxy\t\t\tC0001.MOV
+                4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\tstill\tprogressive\tJPEG\tDSC_0007.JPG
+                4106\t65537\t10400000\t20260714T103030\t8256\t5504\t0\tstill\tcomplete\tHEIF\tDSC_0008.HEIC
+                4107\t65537\t50400000\t20260714T104030\t8256\t5504\t0\tstill\tthumbnail\tNikon RAW\tDSC_0009.NEF
                 """)
         #expect(MediaListWire.encode([]).isEmpty)
     }

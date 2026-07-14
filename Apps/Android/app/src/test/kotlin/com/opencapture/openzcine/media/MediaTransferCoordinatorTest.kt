@@ -24,7 +24,7 @@ class MediaTransferCoordinatorTest {
                     prepares++
                     preparationStarted.complete(Unit)
                     allowPreparationToFinish.await()
-                    PlaybackPreparation.Failed("synthetic preparation result")
+                    MediaTransferPreparation.Failed("synthetic preparation result")
                 },
                 stopTransfer = { stops++ },
             )
@@ -36,12 +36,12 @@ class MediaTransferCoordinatorTest {
 
         assertEquals(0, stops)
         allowPreparationToFinish.complete(Unit)
-        assertIs<PlaybackPreparation.Failed>(preparation.await())
+        assertIs<MediaTransferPreparation.Failed>(preparation.await())
         closing.await()
 
         assertEquals(1, prepares)
         assertEquals(1, stops)
-        assertEquals(PlaybackPreparation.Cancelled, coordinator.prepare())
+        assertEquals(MediaTransferPreparation.Cancelled, coordinator.prepare())
         coordinator.close()
         assertEquals(1, stops)
     }

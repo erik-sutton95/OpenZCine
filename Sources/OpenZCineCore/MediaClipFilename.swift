@@ -1,6 +1,56 @@
 import Foundation
 
-/// Filename helpers for pairing Nikon ZR proxy MP4/MOV clips with sibling R3D masters.
+/// The browser action authorized by the portable camera-media policy.
+public enum MediaContentKind: String, Equatable, Sendable {
+    /// A MOV, MP4, or M4V proxy that can enter the progressive player.
+    case playableProxy = "proxy"
+
+    /// A still image that can enter the Android/iOS photo viewer.
+    case stillPhoto = "still"
+
+    /// An unpaired RED master that remains intentionally non-previewable.
+    case r3dMaster = "r3d"
+
+    /// A media-library object with no supported browser action yet.
+    case unsupported = "unsupported"
+}
+
+/// The safe decoding path for a still image on a platform shell.
+public enum MediaStillPreviewStrategy: String, Equatable, Sendable {
+    /// JPEG and PNG may be decoded while their object cache is still growing.
+    case progressive = "progressive"
+
+    /// HEIF and TIFF must wait for an atomically published complete cache.
+    case completeFile = "complete"
+
+    /// The platform must retain the camera thumbnail instead of claiming a full preview.
+    case thumbnailOnly = "thumbnail"
+}
+
+/// The platform-neutral preview policy for one supported still-image format.
+public struct MediaStillPreview: Equatable, Sendable {
+    /// Operator-facing media format name, for example `JPEG` or `Nikon RAW`.
+    public let formatLabel: String
+
+    /// The only safe decoder path for this format.
+    public let strategy: MediaStillPreviewStrategy
+}
+
+/// Shared media-browser presentation classification for a sanitized camera filename.
+public struct MediaContentClassification: Equatable, Sendable {
+    /// The shell action authorized for this media object.
+    public let kind: MediaContentKind
+
+    /// Still-only decoding policy; absent for proxies, R3D masters, and unknown objects.
+    public let stillPreview: MediaStillPreview?
+
+    init(kind: MediaContentKind, stillPreview: MediaStillPreview? = nil) {
+        self.kind = kind
+        self.stillPreview = stillPreview
+    }
+}
+
+/// Filename helpers and portable media-browser policy for Nikon ZR camera objects.
 public enum MediaClipFilename {
     /// Returns `filename` only when it is a single filesystem-safe basename supplied by a camera.
     ///
@@ -33,6 +83,11 @@ public enum MediaClipFilename {
         fileExtension(of: filename) == "r3d"
     }
 
+    private static let jpegPhotoExtensions: Set<String> = ["jpg", "jpeg", "jpe"]
+    private static let heifPhotoExtensions: Set<String> = ["heif", "heic"]
+    private static let rawPhotoExtensions: Set<String> = ["nef", "nrw", "dng"]
+    private static let tiffPhotoExtensions: Set<String> = ["tif", "tiff"]
+
     /// Lowercased extensions treated as still images in the Media browser.
     public static let photoExtensions: Set<String> = [
         "jpg", "jpeg", "jpe", "heif", "heic", "nef", "nrw", "tif", "tiff", "dng", "png",
@@ -40,7 +95,7 @@ public enum MediaClipFilename {
 
     /// True for still-image files (JPEG, HEIF, Nikon RAW, etc.).
     public static func isPhoto(_ filename: String) -> Bool {
-        photoExtensions.contains(fileExtension(of: filename))
+        mediaClassification(for: filename).kind == .stillPhoto
     }
 
     /// True for playable proxy containers shown in the Videos tab.
@@ -48,9 +103,43 @@ public enum MediaClipFilename {
         ["mov", "mp4", "m4v"].contains(fileExtension(of: filename))
     }
 
+    /// Produces the single shared media-browser policy used by iOS, Android, and facade wires.
+    ///
+    /// Platform shells must consume this result rather than reclassifying camera filenames locally.
+    public static func mediaClassification(for filename: String) -> MediaContentClassification {
+        if isPlayableProxy(filename) {
+            return MediaContentClassification(kind: .playableProxy)
+        }
+        if isR3D(filename) {
+            return MediaContentClassification(kind: .r3dMaster)
+        }
+
+        let fileExtension = fileExtension(of: filename)
+        let stillPreview: MediaStillPreview?
+        switch fileExtension {
+        case let ext where jpegPhotoExtensions.contains(ext):
+            stillPreview = MediaStillPreview(formatLabel: "JPEG", strategy: .progressive)
+        case "png":
+            stillPreview = MediaStillPreview(formatLabel: "PNG", strategy: .progressive)
+        case let ext where heifPhotoExtensions.contains(ext):
+            stillPreview = MediaStillPreview(formatLabel: "HEIF", strategy: .completeFile)
+        case let ext where rawPhotoExtensions.contains(ext):
+            stillPreview = MediaStillPreview(formatLabel: "Nikon RAW", strategy: .thumbnailOnly)
+        case let ext where tiffPhotoExtensions.contains(ext):
+            stillPreview = MediaStillPreview(formatLabel: "TIFF", strategy: .completeFile)
+        default:
+            stillPreview = nil
+        }
+
+        guard let stillPreview else {
+            return MediaContentClassification(kind: .unsupported)
+        }
+        return MediaContentClassification(kind: .stillPhoto, stillPreview: stillPreview)
+    }
+
     /// True for any browsable media object (video proxy or still).
     public static func isBrowsableMedia(_ filename: String) -> Bool {
-        isPlayableProxy(filename) || isPhoto(filename) || isR3D(filename)
+        mediaClassification(for: filename).kind != .unsupported
     }
 
     /// R3D masters are hidden when a playable proxy with the same stem exists.
