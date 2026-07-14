@@ -24,7 +24,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -54,9 +53,8 @@ import androidx.compose.ui.unit.Dp
 /** Rounded chrome shape (iOS `LiveDesign.cornerRadius`). */
 val ChromeShape = RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)
 
-/** iOS `liquidGlass` fallback treatment: glass fill + hairline stroke. */
-fun Modifier.glass(shape: Shape = ChromeShape): Modifier =
-    background(LiveDesign.glass, shape).border(1.dp, LiveDesign.hairline, shape)
+// The glass treatment itself (Modifier.glass / Modifier.chipGlass and the
+// tiered GPU backdrop pipeline behind it) lives in GlassChrome.kt.
 
 /** Click without the Material ripple (chrome buttons highlight by state, not ripple). */
 @Composable
@@ -92,7 +90,7 @@ fun timecodeAnnotated(frameCount: Long, fps: Int): AnnotatedString {
 @Composable
 fun RecordChip(recording: Boolean) {
     Row(
-        modifier = Modifier.glass(CircleShape).padding(horizontal = 12.dp, vertical = 7.dp),
+        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 12.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -112,7 +110,7 @@ fun RecordChip(recording: Boolean) {
 @Composable
 fun ReadoutPill(value: String, icon: @Composable () -> Unit) {
     Row(
-        modifier = Modifier.glass(CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -137,7 +135,7 @@ fun FpsChip(signalBars: Int, fps: String) {
             else -> LiveDesign.faint
         }
     Row(
-        modifier = Modifier.glass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
+        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
