@@ -1,6 +1,8 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -35,6 +37,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -44,15 +47,23 @@ import androidx.compose.ui.unit.dp
  * The iOS-only framing aids (guides/grid/crosshair/level/de-sq) and audio
  * meters land with their engines.
  */
-enum class AssistTool(val label: String) {
-    LUT("LUT"),
-    PEAK("PEAK"),
-    FALSE("FALSE"),
-    ZEBRA("ZEBRA"),
-    WAVE("WAVE"),
-    PARADE("PARADE"),
-    HISTO("HISTO"),
-    VECTOR("VECTOR"),
+enum class AssistTool(val label: String, val settingsTitle: String) {
+    LUT("LUT", "LUT"),
+    PEAK("PEAK", "Focus Peaking"),
+    FALSE("FALSE", "False Color"),
+    ZEBRA("ZEBRA", "Zebra"),
+    WAVE("WAVE", "Waveform"),
+    PARADE("PARADE", "Parade"),
+    HISTO("HISTO", "Histogram"),
+    VECTOR("VECTOR", "Vectorscope"),
+
+    ;
+
+    companion object {
+        /** Decodes a persisted enum name while safely ignoring retired or malformed values. */
+        internal fun fromStoredName(value: String): AssistTool? =
+            entries.firstOrNull { it.name == value }
+    }
 }
 
 /**
@@ -68,12 +79,24 @@ enum class AssistTool(val label: String) {
 class AssistState(
     initialEffects: FeedEffects,
     initialScope: ScopeKind?,
+    initialLut: FeedLut = initialEffects.lut ?: FeedLut.LOG3G10_709,
+    initialFalseColorScale: FeedFalseColorScale =
+        initialEffects.falseColor ?: FeedFalseColorScale.STOPS,
+    private val persistSelections: (FeedLut, FeedFalseColorScale) -> Unit = { _, _ -> },
     private val persist: (FeedEffects, ScopeKind?) -> Unit = { _, _ -> },
 ) {
     var effects: FeedEffects by mutableStateOf(initialEffects)
         private set
 
     var scope: ScopeKind? by mutableStateOf(initialScope)
+        private set
+
+    /** The LUT that will be enabled next, retained even while LUT is off. */
+    var selectedLut: FeedLut by mutableStateOf(initialLut)
+        private set
+
+    /** The false-colour scale that will be enabled next, retained while off. */
+    var selectedFalseColorScale: FeedFalseColorScale by mutableStateOf(initialFalseColorScale)
         private set
 
     init {
@@ -98,15 +121,15 @@ class AssistState(
      * colour *is* the monitoring image, iOS semantics); scopes are
      * single-active in v1 — tapping another scope switches to it.
      */
-    // ponytail: no LUT-restore memory when false colour turns off, and one
-    // scope at a time; multi-scope + remembered looks arrive with the iOS
-    // preference model.
+    // ponytail: scopes remain single-active until Android grows the iOS
+    // multi-scope composition model; LUT and false-colour selections do
+    // persist independently so a temporary toggle never loses the look.
     fun toggle(tool: AssistTool) {
         when (tool) {
             AssistTool.LUT ->
                 update(
                     effects.copy(
-                        lut = if (effects.lut == null) FeedLut.LOG3G10_709 else null,
+                        lut = if (effects.lut == null) selectedLut else null,
                         falseColor = null,
                     ),
                 )
@@ -114,7 +137,7 @@ class AssistState(
                 update(
                     effects.copy(
                         falseColor =
-                            if (effects.falseColor == null) FeedFalseColorScale.STOPS else null,
+                            if (effects.falseColor == null) selectedFalseColorScale else null,
                         lut = null,
                     ),
                 )
@@ -127,15 +150,40 @@ class AssistState(
         }
     }
 
+    /** Selects the LUT used the next time (or currently while) LUT is enabled. */
+    fun selectLut(lut: FeedLut) {
+        selectedLut = lut
+        if (effects.lut != null) {
+            update(effects.copy(lut = lut))
+        } else {
+            persistSelections(selectedLut, selectedFalseColorScale)
+        }
+    }
+
+    /** Selects the false-colour scale used the next time (or currently while) it is enabled. */
+    fun selectFalseColorScale(scale: FeedFalseColorScale) {
+        selectedFalseColorScale = scale
+        if (effects.falseColor != null) {
+            update(effects.copy(falseColor = scale))
+        } else {
+            persistSelections(selectedLut, selectedFalseColorScale)
+        }
+    }
+
     private fun toggleScope(kind: ScopeKind) {
         scope = if (scope == kind) null else kind
-        persist(effects, scope)
+        persistState()
     }
 
     private fun update(next: FeedEffects) {
         effects = next
         FeedEffectsState.current = next
+        persistState()
+    }
+
+    private fun persistState() {
         persist(effects, scope)
+        persistSelections(selectedLut, selectedFalseColorScale)
     }
 
     companion object {
@@ -157,27 +205,54 @@ class AssistState(
          */
         fun restore(context: Context, intentEffects: FeedEffects, intentScope: ScopeKind?): AssistState {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return restore(prefs, intentEffects, intentScope)
+        }
+
+        /** Restores local assist state from [preferences]; exposed to JVM tests through `internal`. */
+        internal fun restore(
+            preferences: SharedPreferences,
+            intentEffects: FeedEffects,
+            intentScope: ScopeKind?,
+        ): AssistState {
             val fromIntent = !intentEffects.isIdentity || intentScope != null
+            val storedLut =
+                preferences.getString("lut", null)
+                    ?.let(FeedLut::fromId)
+                    ?: FeedLut.LOG3G10_709
+            val storedFalseColorScale =
+                preferences.getString("fcScale", null)
+                    ?.let(FeedFalseColorScale::fromId)
+                    ?: FeedFalseColorScale.STOPS
             val effects =
                 if (fromIntent) {
                     intentEffects
                 } else {
                     FeedEffects.parse(
-                        prefs.getString("tokens", null),
-                        prefs.getString("lut", null),
-                        prefs.getString("fcScale", null),
+                        preferences.getString("tokens", null),
+                        preferences.getString("lut", null),
+                        preferences.getString("fcScale", null),
                     )
                 }
             val scope =
-                if (fromIntent) intentScope else ScopeKind.fromToken(prefs.getString("scope", null))
-            return AssistState(effects, scope) { nextEffects, nextScope ->
-                prefs.edit()
-                    .putString("tokens", tokens(nextEffects))
-                    .putString("lut", nextEffects.lut?.id)
-                    .putString("fcScale", nextEffects.falseColor?.id)
-                    .putString("scope", nextScope?.token)
-                    .apply()
-            }
+                if (fromIntent) intentScope else ScopeKind.fromToken(preferences.getString("scope", null))
+            return AssistState(
+                effects,
+                scope,
+                persist = { nextEffects, nextScope ->
+                    preferences.edit()
+                        .putString("tokens", tokens(nextEffects))
+                        .putString("scope", nextScope?.token)
+                        .apply()
+                },
+                initialLut = effects.lut ?: storedLut,
+                initialFalseColorScale = effects.falseColor ?: storedFalseColorScale,
+                persistSelections = { lut, falseColorScale ->
+                    preferences.edit()
+                        .putString("lut", lut.id)
+                        .putString("fcScale", falseColorScale.id)
+                        .apply()
+                },
+            )
         }
     }
 }
@@ -190,8 +265,14 @@ class AssistState(
  * live mode and the portrait fit-mode toolbar band.
  */
 @Composable
-fun AssistToolbar(state: AssistState, modifier: Modifier = Modifier) {
+fun AssistToolbar(
+    state: AssistState,
+    modifier: Modifier = Modifier,
+    visibleTools: List<AssistTool> = AssistTool.entries.toList(),
+    hapticsEnabled: Boolean = true,
+) {
     val scroll = rememberScrollState()
+    val view = LocalView.current
     val leadingFade = scroll.canScrollBackward
     val trailingFade = scroll.canScrollForward
     Box(modifier.glass(ChromeShape)) {
@@ -229,7 +310,7 @@ fun AssistToolbar(state: AssistState, modifier: Modifier = Modifier) {
                 .horizontalScroll(scroll),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AssistTool.entries.forEachIndexed { index, tool ->
+            visibleTools.forEachIndexed { index, tool ->
                 if (index > 0 && index % 3 == 0) {
                     Box(
                         Modifier.padding(horizontal = 4.dp)
@@ -237,7 +318,12 @@ fun AssistToolbar(state: AssistState, modifier: Modifier = Modifier) {
                             .background(LiveDesign.hairlineStrong),
                     )
                 }
-                AssistToolCell(tool, state.isOn(tool)) { state.toggle(tool) }
+                AssistToolCell(tool, state.isOn(tool)) {
+                    state.toggle(tool)
+                    if (hapticsEnabled) {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                }
             }
         }
         ScrollChevron(leading = true, visible = leadingFade, Modifier.align(Alignment.CenterStart))

@@ -4,10 +4,10 @@ package com.opencapture.openzcine
  * Built-in monitor looks. [wireOrdinal] mirrors `FeedEffectsWire.look` in the
  * Swift facade — the core generates each look's cube, Kotlin only uploads it.
  */
-enum class FeedLut(val id: String, val wireOrdinal: Int) {
-    LOG3G10_709("log3g10", 0),
-    NLOG_709("nlog", 1),
-    MONO("mono", 2);
+enum class FeedLut(val id: String, val wireOrdinal: Int, val label: String) {
+    LOG3G10_709("log3g10", 0, "LOG→709"),
+    NLOG_709("nlog", 1, "N-LOG"),
+    MONO("mono", 2, "MONO");
 
     companion object {
         fun fromId(id: String): FeedLut? = entries.firstOrNull { it.id == id }
@@ -15,9 +15,9 @@ enum class FeedLut(val id: String, val wireOrdinal: Int) {
 }
 
 /** False-colour scales. [wireOrdinal] mirrors `FeedEffectsWire.bakedFalseColor`. */
-enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int) {
-    STOPS("stops", 0),
-    IRE("ire", 1);
+enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int, val label: String) {
+    STOPS("stops", 0, "STOPS"),
+    IRE("ire", 1, "IRE");
 
     companion object {
         fun fromId(id: String): FeedFalseColorScale? = entries.firstOrNull { it.id == id }
@@ -29,9 +29,10 @@ enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int) {
  * `LiveImageEffects`. False colour and the LUT are mutually exclusive — false
  * colour *is* the monitoring image, so it replaces the creative look.
  *
- * Until the assist toolbar lands this is driven by debug intent extras only
- * (see `DemoHarness`): `--es zc.assist lut,falsecolor,peaking,zebra`
- * plus `--es zc.lut <log3g10|nlog|mono>` and `--es zc.fc.scale <stops|ire>`.
+ * The shared [AssistState] owns this in normal operation. Debug intent extras
+ * (see `DemoHarness`) still seed deterministic sessions: `--es zc.assist
+ * lut,falsecolor,peaking,zebra`, plus `--es zc.lut <log3g10|nlog|mono>` and
+ * `--es zc.fc.scale <stops|ire>`.
  */
 data class FeedEffects(
     val lut: FeedLut? = null,
