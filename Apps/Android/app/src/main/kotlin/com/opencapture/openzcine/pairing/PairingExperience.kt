@@ -218,9 +218,8 @@ internal object PairingCopy {
                 if (keyRemembered) {
                     "The key for this camera is remembered — check the SSID and tap Join."
                 } else {
-                    "The camera now shows its Wi‑Fi SSID and key. Enter them below — " +
-                        "Android will confirm the connection, and we remember the key " +
-                        "for next time."
+                    "Enter the SSID and key from the camera's screen — " +
+                        "we remember the key for next time."
                 }
             PairingPath.PHONE_HOTSPOT -> "Keep your phone's Wi‑Fi hotspot on. Then on the camera:"
         }
