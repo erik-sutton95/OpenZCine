@@ -28,6 +28,13 @@ final class FakeZRServer: @unchecked Sendable {
         var acceptsAppControlImmediately = true
         /// Reply `Init_Fail` to every `Init_Command_Request`.
         var refusesInit = false
+        /// TCP port to listen on; 0 picks an ephemeral port. The on-device
+        /// end-to-end run binds the real PTP-IP port (15740) so
+        /// `adb reverse tcp:15740 tcp:15740` can reach it.
+        var port: UInt16 = 0
+        /// Scripted card contents served by the storage/object operations
+        /// (`FakeZRMediaCard.objects` by default; empty = an empty card).
+        var mediaObjects: [FakeZRMediaObject] = FakeZRMediaCard.objects
         var cameraName = "ZR_6001234"
         var pairingPIN = "1234"
         var batteryPercent: UInt8 = 80
@@ -61,7 +68,7 @@ final class FakeZRServer: @unchecked Sendable {
             address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         #endif
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0  // ephemeral
+        address.sin_port = in_port_t(options.port).bigEndian  // 0 = ephemeral
         address.sin_addr.s_addr = UInt32(0x7F00_0001).bigEndian  // 127.0.0.1
 
         let bindResult = withUnsafePointer(to: &address) { pointer in
@@ -177,6 +184,41 @@ final class FakeZRServer: @unchecked Sendable {
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .getDeviceInfo:
             sendDataIn(connection, data: deviceInfoDataset(), transactionID: transactionID)
+        case .getVendorStorageIDs, .getStorageIDs:
+            // One valid volume (both ops report the same card, like a
+            // single-card body).
+            let payload = ByteCoding.uint32LE(1) + ByteCoding.uint32LE(FakeZRMediaCard.storageID)
+            sendDataIn(connection, data: Data(payload), transactionID: transactionID)
+        case .getObjectHandles:
+            let storageID = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            guard storageID == FakeZRMediaCard.storageID else {
+                // Invalid_StorageID.
+                sendResponse(connection, code: 0x2008, transactionID: transactionID)
+                return
+            }
+            var payload = ByteCoding.uint32LE(UInt32(options.mediaObjects.count))
+            for object in options.mediaObjects {
+                payload += ByteCoding.uint32LE(object.handle)
+            }
+            sendDataIn(connection, data: Data(payload), transactionID: transactionID)
+        case .getObjectInfo:
+            let handle = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            guard let object = options.mediaObjects.first(where: { $0.handle == handle }) else {
+                // Invalid_ObjectHandle.
+                sendResponse(connection, code: 0x2009, transactionID: transactionID)
+                return
+            }
+            sendDataIn(connection, data: objectInfoDataset(object), transactionID: transactionID)
+        case .getThumb:
+            let handle = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            guard let object = options.mediaObjects.first(where: { $0.handle == handle }),
+                !object.thumbnail.isEmpty
+            else {
+                // No_Thumbnail_Present.
+                sendResponse(connection, code: 0x2010, transactionID: transactionID)
+                return
+            }
+            sendDataIn(connection, data: Data(object.thumbnail), transactionID: transactionID)
         case .getDevicePropValueEx:
             let propertyCode = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
             switch PTPPropertyCode(rawValue: propertyCode) {
@@ -213,6 +255,33 @@ final class FakeZRServer: @unchecked Sendable {
         bytes += ptpString(options.model)
         bytes += ptpString(options.deviceVersion)
         bytes += ptpString(options.serialNumber)
+        return Data(bytes)
+    }
+
+    /// Standard PTP `ObjectInfo` dataset (PIMA 15740 §5.3.1): the 52-byte
+    /// fixed prefix, then filename / capture date / modification date /
+    /// keywords strings — the layout `PTPObjectInfo` decodes.
+    private func objectInfoDataset(_ object: FakeZRMediaObject) -> Data {
+        var bytes: [UInt8] = []
+        bytes += ByteCoding.uint32LE(FakeZRMediaCard.storageID)  // @0  StorageID
+        bytes += ByteCoding.uint16LE(object.objectFormat)  // @4  ObjectFormat
+        bytes += ByteCoding.uint16LE(0)  // @6  ProtectionStatus
+        bytes += ByteCoding.uint32LE(object.sizeBytes)  // @8  ObjectCompressedSize
+        bytes += ByteCoding.uint16LE(0x3801)  // @12 ThumbFormat (EXIF JPEG)
+        bytes += ByteCoding.uint32LE(UInt32(object.thumbnail.count))  // @14 ThumbCompressedSize
+        bytes += ByteCoding.uint32LE(160)  // @18 ThumbPixWidth
+        bytes += ByteCoding.uint32LE(90)  // @22 ThumbPixHeight
+        bytes += ByteCoding.uint32LE(object.pixelWidth)  // @26 ImagePixWidth
+        bytes += ByteCoding.uint32LE(object.pixelHeight)  // @30 ImagePixHeight
+        bytes += ByteCoding.uint32LE(0)  // @34 ImageBitDepth
+        bytes += ByteCoding.uint32LE(0)  // @38 ParentObject
+        bytes += ByteCoding.uint16LE(0)  // @42 AssociationType
+        bytes += ByteCoding.uint32LE(0)  // @44 AssociationDesc
+        bytes += ByteCoding.uint32LE(0)  // @48 SequenceNumber
+        bytes += ptpString(object.filename)
+        bytes += ptpString(object.captureDate)
+        bytes += ptpString("")  // ModificationDate
+        bytes += ptpString("")  // Keywords
         return Data(bytes)
     }
 

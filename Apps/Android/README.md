@@ -29,9 +29,16 @@ app falls back to the placeholder monitor ("No camera").
   (`Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift`): Init handshake, the Nikon
   open/pair/identify sequence, core-decoded property reads, and graceful `CloseSession` teardown
   all run inside the `.so` — the facade owns the session sockets (decision record: the feasibility
-  doc's "Where sockets go"). Point the debug probe at a camera or fake server:
+  doc's "Where sockets go"). Drive the real shell session against a camera or fake server:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.session.host <ipv4>`
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
+- **Media browse (v1, browse-only):** the monitor's media button opens `media/MediaBrowseScreen`,
+  an iOS-look dark clip grid (thumbnails, size/codec badges, listing/empty/error states) listed
+  through the facade's bounded `sessionListMedia`/`sessionThumbnail` (`GetObjectHandles`/
+  `GetObjectInfo`/`GetThumb` in the Swift core). Playback is a later slice. Demo against the fake
+  ZR's scripted card: `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForMediaBrowse` on
+  the Mac, `adb reverse tcp:15740 tcp:15740`, launch with `--es zc.session.host 127.0.0.1`, tap
+  the media button (`ZC_FAKE_ZR_CLIPS=0` serves the empty-card state).
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).

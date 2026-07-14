@@ -325,8 +325,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Transaction executor
 
+    // Internal (not private): the media-browse slice (MediaBrowse.swift)
+    // extends the session with object/storage transactions.
     @discardableResult
-    private func transactExpectingOK(
+    func transactExpectingOK(
         _ operationCode: PTPOperationCode,
         parameters: [UInt32] = [],
         dataPhase: PTPDataPhase = .noDataOrDataIn
@@ -344,7 +346,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// then packets in until `Operation_Response`, collected by the core.
     // ponytail: read-only slice — the host→camera data-out phase arrives with
     // property writes; nothing in connect/read/disconnect needs it.
-    private func executeTransaction(
+    func executeTransaction(
         _ operationCode: PTPOperationCode,
         transactionID explicitTransactionID: UInt32? = nil,
         parameters: [UInt32] = [],

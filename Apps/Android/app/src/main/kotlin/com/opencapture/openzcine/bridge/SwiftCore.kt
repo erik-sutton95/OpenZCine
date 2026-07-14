@@ -120,4 +120,23 @@ object SwiftCore {
      * (bounded ~2 s) — call from a background dispatcher. Safe when idle.
      */
     external fun sessionDisconnect()
+
+    // ── Media browse (OPE-34) ──
+
+    /**
+     * Lists browsable media (clips, stills, unpaired R3D masters) on the
+     * active session's cards, flattened one record per line (see
+     * `MediaClips.parse`). Enumeration is bounded to [maxObjects] ObjectInfo
+     * reads so a packed card never blocks the session unboundedly. Null when
+     * no session is active or the listing failed; empty string for an empty
+     * card. Blocking — call from a background dispatcher.
+     */
+    external fun sessionListMedia(maxObjects: Int): String?
+
+    /**
+     * The camera's embedded thumbnail JPEG for one object handle, or null
+     * when disconnected or the object has no thumbnail. Blocking — call from
+     * a background dispatcher.
+     */
+    external fun sessionThumbnail(handle: Int): ByteArray?
 }
