@@ -81,6 +81,17 @@ enum DemoHarness {
                     model.showPicker(
                         picker, mode: env["ZC_DEMO_PICKER_MODE"].flatMap(Int.init) ?? 0)
                 }
+                if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
+                    // Demo/screenshot affordance: launch straight into a DISP mode (live/clean/
+                    // command) for headless mode-state captures.
+                    model.displayMode = mode
+                }
+                if env["ZC_DEMO_RECORDING"] == "1" {
+                    // Demo/screenshot affordance: stage the recording state (REC chip, tally
+                    // border, stop-square record button) without tapping the record control.
+                    model.isRecording = true
+                    model.cameraState = model.cameraState.updating(recordState: .recording)
+                }
                 if let raw = env["ZC_DEMO_LUT"] {
                     // Demo/screenshot affordance: seed a LUT and switch the tool on. `custom:<file>`
                     // selects a stored custom cube; otherwise the value names a built-in look.
