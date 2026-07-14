@@ -2845,6 +2845,12 @@ struct OperatorSettingsPanel: View {
                     } else {
                         VStack(spacing: 8) {
                             settingsTop
+                                // The floating CloseButton overlays this row's leading corner
+                                // whenever no Dynamic Island lane pushes the content past it
+                                // (iPad, non-notched devices); inset the title to clear it. On
+                                // notched iPhones the safe-area padding already clears the
+                                // button and this resolves to 0.
+                                .padding(.leading, closeButtonClearance)
                             HStack(alignment: .top, spacing: 8) {
                                 settingsRail
                                 settingsContent(portrait: portrait)
@@ -2875,6 +2881,15 @@ struct OperatorSettingsPanel: View {
                 .padding(.top, max(CGFloat(safeArea.top) + 6, 22))
         }
         .ignoresSafeArea()
+    }
+
+    /// Extra leading inset the landscape header needs to clear the floating ``CloseButton``.
+    /// The button sits at a fixed 16pt from the screen edge (37pt wide); the panel's own leading
+    /// padding is `max(safeArea.leading + 6, 16)`. On notched iPhones the Dynamic Island lane
+    /// already pushes the content past the button (result: 0); on iPad there is no leading
+    /// safe-area inset, so the title would otherwise start exactly under the button.
+    private var closeButtonClearance: CGFloat {
+        max(0, (16 + 37 + 8) - max(CGFloat(safeArea.leading) + 6, 16))
     }
 
     private var settingsTop: some View {
