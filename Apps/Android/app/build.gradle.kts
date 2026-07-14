@@ -56,7 +56,7 @@ android {
 
     buildFeatures {
         compose = true
-        // BuildConfig.DEBUG gates the feed pacing logs.
+        // BuildConfig.DEBUG gates the feed pacing logs and the Swift-core smoke check.
         buildConfig = true
     }
 

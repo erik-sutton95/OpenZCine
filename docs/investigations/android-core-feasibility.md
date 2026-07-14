@@ -362,3 +362,14 @@ the artifact is 3.9 MB; the test suite passes on-device unmodified. Caveats carr
 - Do not reintroduce `import FoundationNetworking` into the core — it adds 16 MB, re-links ICU
   transitively, and its static archives are incomplete in the 6.3.3 bundle.
 - swift-java/JNI facade and on-device debugging remain untested (Phase 1 scope, as planned).
+
+### Phase 1 note (2026-07-14) — facade shape decided: manual JNI shims
+
+swift-java/jextract was evaluated first, as planned, and set aside for now: the newest release is
+0.4.2 (2026-06-26, pre-1.0, no API-stability guarantee), and its supporting Java libraries are
+**not published to Maven Central** — consumers must clone swift-java and `./gradlew
+publishToMavenLocal`, which is unacceptable as a build prerequisite for this repo's Gradle CI. For
+a facade of a dozen coarse functions, hand-written `@_cdecl` shims
+(`Sources/OpenZCineAndroidFacade`, importing the NDK's `<jni.h>` through the header-only `CJNI`
+target) cost ~150 lines and zero new dependencies. Revisit jextract when its runtime jars reach
+Maven Central and the API stabilizes; the facade surface is deliberately small enough to migrate.

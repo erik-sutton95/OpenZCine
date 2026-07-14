@@ -9,7 +9,12 @@ let package = Package(
         .watchOS(.v10),
     ],
     products: [
-        .library(name: "OpenZCineCore", targets: ["OpenZCineCore"])
+        .library(name: "OpenZCineCore", targets: ["OpenZCineCore"]),
+        // JNI facade consumed by the Android app (`just android-core`). The facade
+        // sources are fully `#if os(Android)`-gated, so on Darwin this product
+        // compiles to an empty module and iOS/macOS behavior is unchanged.
+        .library(
+            name: "OpenZCineAndroid", type: .dynamic, targets: ["OpenZCineAndroidFacade"]),
     ],
     dependencies: [
         // Non-Darwin SHA256 for PKCE (FrameioOAuth); Darwin builds keep using CryptoKit.
@@ -27,6 +32,12 @@ let package = Package(
         .testTarget(
             name: "OpenZCineCoreTests",
             dependencies: ["OpenZCineCore"]
+        ),
+        // Header-only shim exposing the NDK's <jni.h> to Swift; empty on Darwin.
+        .target(name: "CJNI"),
+        .target(
+            name: "OpenZCineAndroidFacade",
+            dependencies: ["OpenZCineCore", "CJNI"]
         ),
     ]
 )
