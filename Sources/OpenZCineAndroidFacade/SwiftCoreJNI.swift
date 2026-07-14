@@ -73,6 +73,19 @@
         return array
     }
 
+    /// Copies unsigned PTP values (represented losslessly as signed Int64s)
+    /// into a JVM-owned `long[]` local reference.
+    private func javaLongArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [Int64]
+    ) -> jlongArray? {
+        let fns = table(env)
+        guard let array = fns.NewLongArray!(env, jsize(values.count)) else { return nil }
+        values.withUnsafeBufferPointer { buffer in
+            fns.SetLongArrayRegion!(env, array, 0, jsize(values.count), buffer.baseAddress)
+        }
+        return array
+    }
+
     /// Copies a Swift float buffer into a new JVM `float[]` local reference.
     private func javaFloatArray(
         _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [Float]
@@ -307,6 +320,16 @@
         let onFailed: jmethodID
     }
 
+    /// Kotlin-side listener for one active session's PTP-IP event stream.
+    /// The global reference and method IDs remain valid on the Swift-owned
+    /// event reader thread until its single terminal callback releases them.
+    private struct SessionEventListenerHandle: @unchecked Sendable {
+        let vm: UnsafeMutablePointer<JavaVM?>
+        let listener: jobject
+        let onEvent: jmethodID
+        let onEnded: jmethodID
+    }
+
     /// Process-wide active session slot behind the coarse JNI facade: one
     /// camera at a time, matching the app's single-camera model.
     private final class ActiveSessionSlot: @unchecked Sendable {
@@ -413,6 +436,97 @@
             let value = try? session.readPropertyDisplayValue(code: UInt32(bitPattern: code))
         else { return nil }
         return javaString(env, value)
+    }
+
+    /// `SwiftCore.sessionStartEventStream(listener)` — starts the active
+    /// facade session's dedicated PTP-IP event reader. Valid raw event codes,
+    /// transaction IDs, and UINT32 parameters cross as primitives; Kotlin
+    /// decides which established event semantics to apply. The native reader
+    /// owns the global listener reference until `onEnded` fires exactly once.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartEventStream")
+    public func swiftCoreSessionStartEventStream(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, listener: jobject?
+    ) {
+        let fns = table(env)
+        var vm: UnsafeMutablePointer<JavaVM?>?
+        guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
+        guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
+        guard let cls = fns.GetObjectClass!(env, global),
+            let onEvent = fns.GetMethodID!(env, cls, "onEvent", "(IJ[J)V"),
+            let onEnded = fns.GetMethodID!(env, cls, "onEnded", "(Ljava/lang/String;)V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        let handle = SessionEventListenerHandle(
+            vm: vm, listener: global, onEvent: onEvent, onEnded: onEnded)
+
+        /// Failure before a Swift-owned reader exists: invoke the callback on
+        /// the JVM-owned caller thread and only release the global reference.
+        func endOnCallerThread(_ message: String?) {
+            let value = message.flatMap { javaString(env, $0) }
+            var args = [jvalue(l: value)]
+            fns.CallVoidMethodA!(env, global, onEnded, &args)
+            if let value { fns.DeleteLocalRef!(env, value) }
+            fns.DeleteGlobalRef!(env, global)
+        }
+
+        guard let session = ActiveSessionSlot.shared.current() else {
+            endOnCallerThread("Not connected to a camera.")
+            return
+        }
+        do {
+            try session.startEventDrain(
+                onEvent: { pushSessionEvent(handle, event: $0) },
+                onEnded: { finishSessionEventStream(handle, message: $0) })
+        } catch {
+            endOnCallerThread(error.localizedDescription)
+        }
+    }
+
+    /// Delivers one parsed PTP event from the Swift-owned event reader. PTP
+    /// UINT16/UINT32 fields fit losslessly in signed JVM `Int`/`Long`; Kotlin
+    /// exposes them as non-negative raw values rather than guessing unknown
+    /// Nikon semantics.
+    private func pushSessionEvent(_ handle: SessionEventListenerHandle, event: PTPEvent) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else { return }
+        let fns = table(env)
+        let parameters = event.parameters.map(Int64.init)
+        guard let parameterArray = javaLongArray(env, parameters) else { return }
+        var args = [
+            jvalue(i: jint(event.rawEventCode)),
+            jvalue(j: Int64(event.transactionID)),
+            jvalue(l: parameterArray),
+        ]
+        fns.CallVoidMethodA!(env, handle.listener, handle.onEvent, &args)
+        fns.DeleteLocalRef!(env, parameterArray)
+    }
+
+    /// Terminal event-reader callback: it releases the listener global
+    /// reference and detaches the one Swift-owned thread that delivered the
+    /// stream. It is intentionally separate from the caller-thread fast-fail
+    /// path above so the JVM is never detached by a JVM-owned thread.
+    private func finishSessionEventStream(
+        _ handle: SessionEventListenerHandle, message: String?
+    ) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else { return }
+        let fns = table(env)
+        let value = message.flatMap { javaString(env, $0) }
+        var args = [jvalue(l: value)]
+        fns.CallVoidMethodA!(env, handle.listener, handle.onEnded, &args)
+        if let value { fns.DeleteLocalRef!(env, value) }
+        fns.DeleteGlobalRef!(env, handle.listener)
+        _ = invoke.DetachCurrentThread!(handle.vm)
     }
 
     /// Stable scalar results for `SwiftCore.sessionSetRecording`. Kotlin maps

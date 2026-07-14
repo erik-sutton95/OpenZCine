@@ -19,7 +19,8 @@ public struct PTPEvent: Equatable, Sendable {
         guard bytes.count >= 6 else {
             throw PTPEventError.shortPayload(actualLength: bytes.count)
         }
-        eventCode = PTPEventCode(rawValue: ByteCoding.readUInt16LE(bytes, at: 0)) ?? .unknown
+        rawEventCode = ByteCoding.readUInt16LE(bytes, at: 0)
+        eventCode = PTPEventCode(rawValue: rawEventCode) ?? .unknown
         transactionID = ByteCoding.readUInt32LE(bytes, at: 2)
 
         var parsedParameters: [UInt32] = []
@@ -39,6 +40,12 @@ public struct PTPEvent: Equatable, Sendable {
         try self.init(payloadBytes: Array(packet.payload))
     }
 
+    /// The camera-sent event code, preserved even when this build does not
+    /// know its Nikon-specific meaning.
+    public let rawEventCode: UInt16
+
+    /// The subset of event codes whose semantics are established by the
+    /// shared core. Inspect [rawEventCode] for all other camera events.
     public let eventCode: PTPEventCode
     public let transactionID: UInt32
     public let parameters: [UInt32]
