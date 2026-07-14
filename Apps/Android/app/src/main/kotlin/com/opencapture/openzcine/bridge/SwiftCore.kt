@@ -42,6 +42,31 @@ object SwiftCore {
     external fun resolveDisplayName(rawName: String): String
 
     /**
+     * Monitor zone map from the shared core's `MonitorZoneLayout.map` — the
+     * exact frames the iOS shell lays chrome out with. Flat records of
+     * `[kind, style, x, y, width, height]` (see [MonitorZones.parse] and the
+     * Swift mirror `MonitorZoneMapWire`). All dimensions are dp.
+     *
+     * @param mode DispMode ordinal: 0 live, 1 clean, 2 command.
+     * @param aspectFill portrait feed aspect; false = fit 16:9.
+     * @param mirrored true for the mirrored landscape-right chrome.
+     */
+    external fun monitorZoneMap(
+        viewportWidth: Float,
+        viewportHeight: Float,
+        safeTop: Float,
+        safeLeading: Float,
+        safeBottom: Float,
+        safeTrailing: Float,
+        mode: Int,
+        isPortrait: Boolean,
+        aspectFill: Boolean,
+        scopeCount: Int,
+        mirrored: Boolean,
+        bottomBarHeight: Float,
+    ): FloatArray
+
+    /**
      * Registers [listener] and has Swift push a canned connection-phase
      * sequence from a background thread — the callback shape session events
      * and live-view frames will use.
