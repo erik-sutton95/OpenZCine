@@ -11,8 +11,19 @@ let package = Package(
     products: [
         .library(name: "OpenZCineCore", targets: ["OpenZCineCore"])
     ],
+    dependencies: [
+        // Non-Darwin SHA256 for PKCE (FrameioOAuth); Darwin builds keep using CryptoKit.
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0")
+    ],
     targets: [
-        .target(name: "OpenZCineCore"),
+        .target(
+            name: "OpenZCineCore",
+            dependencies: [
+                .product(
+                    name: "Crypto", package: "swift-crypto",
+                    condition: .when(platforms: [.linux, .android]))
+            ]
+        ),
         .testTarget(
             name: "OpenZCineCoreTests",
             dependencies: ["OpenZCineCore"]

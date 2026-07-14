@@ -1,5 +1,11 @@
-import CryptoKit
 import Foundation
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    // Non-Darwin platforms (e.g. Android): swift-crypto provides an API-compatible SHA256.
+    import Crypto
+#endif
 
 /// Configuration for the Frame.io V4 OAuth + API integration.
 ///
@@ -126,34 +132,6 @@ public enum FrameioOAuth {
         return comps.url!
     }
 
-    /// The token-exchange POST that trades the authorization `code` (+ PKCE verifier) for tokens.
-    public static func tokenExchangeRequest(
-        config: FrameioConfiguration, code: String, verifier: String
-    ) -> URLRequest {
-        formRequest(
-            url: publicClientTokenURL(config: config),
-            fields: [
-                "grant_type": "authorization_code",
-                "client_id": config.clientID,
-                "code": code,
-                "code_verifier": verifier,
-                "redirect_uri": config.redirectURI,
-            ])
-    }
-
-    /// The refresh POST that trades a refresh token for a new access token.
-    public static func refreshRequest(config: FrameioConfiguration, refreshToken: String)
-        -> URLRequest
-    {
-        formRequest(
-            url: publicClientTokenURL(config: config),
-            fields: [
-                "grant_type": "refresh_token",
-                "client_id": config.clientID,
-                "refresh_token": refreshToken,
-            ])
-    }
-
     /// Extracts the authorization `code` from the IMS redirect, validating `state` and surfacing
     /// `error` responses.
     public static func parseRedirect(_ url: URL, expectedState: String) throws -> String {
@@ -167,22 +145,57 @@ public enum FrameioOAuth {
         return code
     }
 
-    /// Builds an `application/x-www-form-urlencoded` POST, percent-encoding each field with the
-    /// RFC 3986 unreserved set (so `:`, `/`, `+` in values are encoded correctly).
-    private static func formRequest(url: URL, fields: [String: String]) -> URLRequest {
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        let body = fields.map { key, value in
-            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
-            let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-            return "\(encodedKey)=\(encodedValue)"
-        }.joined(separator: "&")
-        request.httpBody = Data(body.utf8)
-        return request
-    }
+    // On Android `URLRequest` lives in FoundationNetworking, which drags libcurl/ICU into the
+    // packaged app; the Android shell owns HTTP (OkHttp) and builds its own requests, so the
+    // URLRequest builders are Darwin-only. The pure pieces above compile everywhere.
+    #if !os(Android)
+        /// The token-exchange POST that trades the authorization `code` (+ PKCE verifier) for tokens.
+        public static func tokenExchangeRequest(
+            config: FrameioConfiguration, code: String, verifier: String
+        ) -> URLRequest {
+            formRequest(
+                url: publicClientTokenURL(config: config),
+                fields: [
+                    "grant_type": "authorization_code",
+                    "client_id": config.clientID,
+                    "code": code,
+                    "code_verifier": verifier,
+                    "redirect_uri": config.redirectURI,
+                ])
+        }
+
+        /// The refresh POST that trades a refresh token for a new access token.
+        public static func refreshRequest(config: FrameioConfiguration, refreshToken: String)
+            -> URLRequest
+        {
+            formRequest(
+                url: publicClientTokenURL(config: config),
+                fields: [
+                    "grant_type": "refresh_token",
+                    "client_id": config.clientID,
+                    "refresh_token": refreshToken,
+                ])
+        }
+
+        /// Builds an `application/x-www-form-urlencoded` POST, percent-encoding each field with the
+        /// RFC 3986 unreserved set (so `:`, `/`, `+` in values are encoded correctly).
+        private static func formRequest(url: URL, fields: [String: String]) -> URLRequest {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue(
+                "application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            var allowed = CharacterSet.alphanumerics
+            allowed.insert(charactersIn: "-._~")
+            let body = fields.map { key, value in
+                let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+                let encodedValue =
+                    value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+                return "\(encodedKey)=\(encodedValue)"
+            }.joined(separator: "&")
+            request.httpBody = Data(body.utf8)
+            return request
+        }
+    #endif
 }
 
 /// A decoded OAuth token response from Adobe IMS. The absolute expiry is computed by the shell when
