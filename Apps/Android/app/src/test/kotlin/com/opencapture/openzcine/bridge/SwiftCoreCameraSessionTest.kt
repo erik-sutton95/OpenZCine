@@ -24,7 +24,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.withTimeout
 
 /**
  * JVM-side behavior only: the native library is never present in unit tests
@@ -436,19 +435,28 @@ class SwiftCoreCameraSessionTest {
         }
 
         val refresh = async(Dispatchers.Default) { session.refreshProperties() }
+        val idleObserved = CountDownLatch(1)
+        val observeIdle =
+            async(Dispatchers.Default) {
+                session.propertyRefreshStatus.first { it == CameraPropertyRefreshStatus.Idle }
+                idleObserved.countDown()
+            }
         try {
             assertTrue(nativeReadStarted.await(5, TimeUnit.SECONDS))
             assertEquals(CameraPropertyRefreshStatus.Refreshing, session.propertyRefreshStatus.value)
 
             val disconnect = async(Dispatchers.Default) { session.disconnect() }
-            withTimeout(5_000) {
-                session.propertyRefreshStatus.first { it == CameraPropertyRefreshStatus.Idle }
-            }
+            // `runTest` advances virtual time immediately when a StateFlow await
+            // suspends. The teardown runs on the real default dispatcher, so a
+            // virtual `withTimeout` can race it on a busy CI runner. The latch
+            // observes the same public state transition against wall-clock time.
+            assertTrue(idleObserved.await(5, TimeUnit.SECONDS))
             releaseNativeRead.countDown()
             refresh.await()
             disconnect.await()
         } finally {
             releaseNativeRead.countDown()
+            observeIdle.cancelAndJoin()
         }
 
         assertEquals(CameraSessionState.Disconnected, session.state.value)
