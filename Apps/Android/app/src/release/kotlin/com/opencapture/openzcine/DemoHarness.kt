@@ -16,4 +16,8 @@ object DemoHarness {
     /** Always null: release builds carry no demo frame source. */
     @Suppress("UNUSED_PARAMETER")
     fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource>? = null
+
+    /** Always null: release builds always run the platform-resolved glass tier. */
+    @Suppress("UNUSED_PARAMETER")
+    fun glassTierOverride(intent: Intent): String? = null
 }

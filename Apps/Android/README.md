@@ -34,4 +34,10 @@ app falls back to the placeholder monitor ("No camera").
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
+- **Liquid-glass chrome:** monitor chrome glass is a custom GPU treatment (`GlassChrome.kt`) —
+  one shared blurred backdrop texture per feed frame, sampled by every pill (AGSL edge refraction
+  on API 33+, plain pre-blurred fill on 31–32, the hand-rolled flat fill below). A frame-budget
+  counter auto-degrades one tier under sustained overruns. Debug override:
+  `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
+  (`full`/`blur`/`flat`; lowers only).
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).

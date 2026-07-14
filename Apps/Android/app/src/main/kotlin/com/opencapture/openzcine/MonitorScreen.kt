@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,6 +29,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -124,11 +126,37 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * DISP / media / settings rail, DISP 1↔2 cycling. Deferred: the assist
  * toolbar zone (skipped — its capture-strip sibling renders at its own zone),
  * scopes, pickers/panels, portrait.
+ *
+ * Chrome glass runs the tiered GPU treatment (GlassChrome.kt) at this
+ * device's [resolveTier] ceiling; [glassTierOverride] (`zc.glass.tier`
+ * debug intent extra) forces a lower tier for testing.
  */
 @Composable
-fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
+fun MonitorScreen(
+    session: CameraSession,
+    frameSource: LiveFrameSource?,
+    glassTierOverride: String? = null,
+) {
     val sessionState by session.state.collectAsState()
     LaunchedEffect(session) { session.connect() }
+
+    // Shared glass state: the active tier plus the one blurred backdrop
+    // texture every glass pill samples. The frame-clock loop is the perf
+    // safety net — sustained overruns of the 48 ms p90 budget drop one tier
+    // (FULL → BLUR → FLAT) and stop the backdrop work with it.
+    val glass = remember {
+        MonitorGlass(resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride))
+    }
+    LaunchedEffect(glass) {
+        val budget = FrameBudgetWindow()
+        var last = 0L
+        while (glass.tier != GlassTier.FLAT) {
+            withFrameNanos { now ->
+                if (last != 0L && budget.frame(now - last)) glass.demote()
+                last = now
+            }
+        }
+    }
 
     // Shell state, iOS-model-equivalent: DISP index (0 live, 1 clean), the
     // interface lock, the record toggle, and the fake-clock timecode tick.
@@ -289,10 +317,29 @@ fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
             }
         val isClean = dispIndex == 1
 
+        // Backdrop geometry for the glass pipeline: the viewport and the feed
+        // zone in root px. The blurred texture covers the whole viewport
+        // (black letterbox included), so pills over black sample the same
+        // map. setLayout is idempotent per geometry, so calling it on every
+        // recomposition is free.
+        with(density) {
+            glass.backdrop.setLayout(
+                rootWidthPx = constraints.maxWidth.toFloat(),
+                rootHeightPx = constraints.maxHeight.toFloat(),
+                feedRectPx =
+                    android.graphics.RectF(
+                        zones.feed.x.dp.toPx(),
+                        zones.feed.y.dp.toPx(),
+                        (zones.feed.x + zones.feed.width).dp.toPx(),
+                        (zones.feed.y + zones.feed.height).dp.toPx(),
+                    ),
+            )
+        }
+
         // Feed at the zone map's feed frame; LiveFeedView aspect-fits within it.
         Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
             if (frameSource != null) {
-                LiveFeedView(frameSource, Modifier.fillMaxSize())
+                LiveFeedView(frameSource, Modifier.fillMaxSize(), onFrame = glass::submit)
             } else {
                 Text(
                     text =
@@ -307,60 +354,62 @@ fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
             }
         }
 
-        // Top info pill, centered in the deck band; compact in clean mode.
-        // The deck is feed-anchored and the synthesized island lane (see
-        // monitorLeadingInsetDp) starts the feed right of the lock, so the
-        // band always clears it — same as iPhone geometry.
-        Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
-            FitScale(zones.infoBar.width.dp) {
-                InfoPill(compact = isClean, recording = recording, frameCount = frameCount)
-            }
-        }
-
-        // Bottom capture strip — live mode only, dimmed while locked; the
-        // glass hugs its readouts against the band's trailing edge like the
-        // iOS content-hugging strip. The assist toolbar zone to its left is
-        // deferred (v1 skips assists).
-        if (!isClean) {
-            zones.captureStrip?.let { strip ->
-                Box(
-                    Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
-                    contentAlignment = Alignment.CenterEnd,
-                ) {
-                    FitScale(strip.width.dp) { CaptureStrip() }
+        CompositionLocalProvider(LocalMonitorGlass provides glass) {
+            // Top info pill, centered in the deck band; compact in clean mode.
+            // The deck is feed-anchored and the synthesized island lane (see
+            // monitorLeadingInsetDp) starts the feed right of the lock, so the
+            // band always clears it — same as iPhone geometry.
+            Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
+                FitScale(zones.infoBar.width.dp) {
+                    InfoPill(compact = isClean, recording = recording, frameCount = frameCount)
                 }
             }
-        }
 
-        // Side rails: lock + battery indicators + record / DISP / media / settings.
-        LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
-        zones.batteryPhone?.let {
-            BatteryIndicatorColumn(
-                percent = DemoMonitorState.PHONE_BATTERY,
-                isCamera = false,
-                modifier = Modifier.zone(it),
-            )
-        }
-        zones.batteryCamera?.let {
-            BatteryIndicatorColumn(
-                percent = DemoMonitorState.CAMERA_BATTERY,
-                isCamera = true,
-                modifier = Modifier.zone(it),
-            )
-        }
-        AuxCircleButton(Modifier.zone(zones.settings)) { glyphModifier, tint ->
-            GearGlyph(tint, glyphModifier)
-        }
-        AuxCircleButton(Modifier.zone(zones.media)) { glyphModifier, tint ->
-            MediaStackGlyph(tint, glyphModifier)
-        }
-        RecordButton(recording, Modifier.zone(zones.record)) { recording = !recording }
-        DispButton(
-            activeIndex = dispIndex,
-            modeCount = 3, // Live / Clean / Command dashes, matching iOS; Command lands later.
-            modifier = Modifier.zone(zones.disp),
-        ) {
-            dispIndex = (dispIndex + 1) % 2
+            // Bottom capture strip — live mode only, dimmed while locked; the
+            // glass hugs its readouts against the band's trailing edge like the
+            // iOS content-hugging strip. The assist toolbar zone to its left is
+            // deferred (v1 skips assists).
+            if (!isClean) {
+                zones.captureStrip?.let { strip ->
+                    Box(
+                        Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        FitScale(strip.width.dp) { CaptureStrip() }
+                    }
+                }
+            }
+
+            // Side rails: lock + battery indicators + record / DISP / media / settings.
+            LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
+            zones.batteryPhone?.let {
+                BatteryIndicatorColumn(
+                    percent = DemoMonitorState.PHONE_BATTERY,
+                    isCamera = false,
+                    modifier = Modifier.zone(it),
+                )
+            }
+            zones.batteryCamera?.let {
+                BatteryIndicatorColumn(
+                    percent = DemoMonitorState.CAMERA_BATTERY,
+                    isCamera = true,
+                    modifier = Modifier.zone(it),
+                )
+            }
+            AuxCircleButton(Modifier.zone(zones.settings)) { glyphModifier, tint ->
+                GearGlyph(tint, glyphModifier)
+            }
+            AuxCircleButton(Modifier.zone(zones.media)) { glyphModifier, tint ->
+                MediaStackGlyph(tint, glyphModifier)
+            }
+            RecordButton(recording, Modifier.zone(zones.record)) { recording = !recording }
+            DispButton(
+                activeIndex = dispIndex,
+                modeCount = 3, // Live / Clean / Command dashes, matching iOS; Command lands later.
+                modifier = Modifier.zone(zones.disp),
+            ) {
+                dispIndex = (dispIndex + 1) % 2
+            }
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).

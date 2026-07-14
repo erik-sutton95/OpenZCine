@@ -76,9 +76,17 @@ class JpegFrameDecoder {
  *
  * The frame state is read inside the [Canvas] draw lambda only, so a new
  * frame costs one draw invalidation — no recomposition, no layout.
+ *
+ * [onFrame] observes each presented frame on the decode thread — the glass
+ * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
+ * pooled; it stays valid until two more frames have been decoded.
  */
 @Composable
-fun LiveFeedView(source: LiveFrameSource, modifier: Modifier = Modifier) {
+fun LiveFeedView(
+    source: LiveFrameSource,
+    modifier: Modifier = Modifier,
+    onFrame: ((Bitmap) -> Unit)? = null,
+) {
     val frame = remember { mutableStateOf<ImageBitmap?>(null) }
 
     LaunchedEffect(source) {
@@ -94,7 +102,10 @@ fun LiveFeedView(source: LiveFrameSource, modifier: Modifier = Modifier) {
                 frames = source.frames,
                 stats = stats,
                 decode = decoder::decode,
-                present = { frame.value = it.asImageBitmap() },
+                present = {
+                    frame.value = it.asImageBitmap()
+                    onFrame?.invoke(it)
+                },
             )
         }
     }
