@@ -78,6 +78,7 @@
 		C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003D /* LiveViewWatchdog.swift */; };
 		C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003F /* RecordDurationEstimator.swift */; };
 		C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000041 /* CameraLinkHealth.swift */; };
+		C0DE000000000000000000CA /* LinkSignalBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000CB /* LinkSignalBars.swift */; };
 		C0DE00000000000000000042 /* PTPEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000043 /* PTPEvent.swift */; };
 		C0DE00000000000000000044 /* CameraWarningStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000045 /* CameraWarningStatus.swift */; };
 		C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000051 /* ConnectionProgressSheet.swift */; };
@@ -246,6 +247,7 @@
 		C0DE0000000000000000003D /* LiveViewWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveViewWatchdog.swift; path = ../Sources/OpenZCineCore/LiveViewWatchdog.swift; sourceTree = SOURCE_ROOT; };
 		C0DE0000000000000000003F /* RecordDurationEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecordDurationEstimator.swift; path = ../Sources/OpenZCineCore/RecordDurationEstimator.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000041 /* CameraLinkHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraLinkHealth.swift; path = ../Sources/OpenZCineCore/CameraLinkHealth.swift; sourceTree = SOURCE_ROOT; };
+		C0DE000000000000000000CB /* LinkSignalBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LinkSignalBars.swift; path = ../Sources/OpenZCineCore/LinkSignalBars.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000043 /* PTPEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPEvent.swift; path = ../Sources/OpenZCineCore/PTPEvent.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000045 /* CameraWarningStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraWarningStatus.swift; path = ../Sources/OpenZCineCore/CameraWarningStatus.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000051 /* ConnectionProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProgressSheet.swift; sourceTree = "<group>"; };
@@ -444,6 +446,7 @@
 				C0DE0000000000000000003B /* FrameRateSampler.swift */,
 				C0DE0000000000000000003D /* LiveViewWatchdog.swift */,
 				C0DE00000000000000000041 /* CameraLinkHealth.swift */,
+				C0DE000000000000000000CB /* LinkSignalBars.swift */,
 				C0DE0000000000000000003F /* RecordDurationEstimator.swift */,
 				4A371B3334DBAAA71593727B /* AssistToolActivation.swift */,
 				C08D59A4E8FE339FD74256B9 /* CubeLUT.swift */,
@@ -687,6 +690,7 @@
 				C0DE0000000000000000003A /* FrameRateSampler.swift in Sources */,
 				C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */,
 				C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */,
+				C0DE000000000000000000CA /* LinkSignalBars.swift in Sources */,
 				C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */,
 				C0DE00000000000000000014 /* PTPDeviceInfo.swift in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,

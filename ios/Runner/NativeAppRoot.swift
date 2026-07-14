@@ -552,6 +552,10 @@ final class NativeAppModel {
     // never invalidates every view observing the heavy HUD struct — only the readouts re-render.
     var liveTimecode = CameraDisplayState.preview.timecode
     var liveFPS = CameraDisplayState.preview.liveFPS
+    /// Top-bar signal indicator level (0–4 bars), derived from the continuously-scored
+    /// `linkHealth` transport health with hysteresis (`LinkSignalBars`) so it reads steadily.
+    /// USB-C sessions pin to full bars while linked — frame timing there isn't radio quality.
+    var liveSignalBars = 0
     /// Host-device thermal pressure, mirrored from `ProcessInfo.thermalState`. Gates graceful
     /// cosmetic load-shedding of the feed + scope refresh cadence (see `ThermalTier`). A no-op until
     /// the device is genuinely hot (`.serious`+); it never touches the camera stream or networking.
@@ -1986,6 +1990,7 @@ final class NativeAppModel {
     @ObservationIgnored private var consecutiveBadLiveFrames = 0
     @ObservationIgnored private var recentKeepaliveFailures = 0
     @ObservationIgnored private var isStreamRecovering = false
+    @ObservationIgnored private var signalBarsFilter = LinkSignalBars()
     private var eventDrainTask: Task<Void, Never>?
     /// The fire-and-forget `stopLiveView()` started on background, tracked so a quick return to the
     /// foreground awaits it before restarting the stream (otherwise the stop can land after the
@@ -3074,12 +3079,20 @@ final class NativeAppModel {
         isStreamRecovering = false
         linkHealth = 0
         linkHealthDetail = "Not connected"
+        signalBarsFilter = LinkSignalBars()
+        liveSignalBars = 0
     }
 
     private func refreshLinkHealth() {
         let snapshot = CameraLinkHealthScorer.score(currentLinkHealthInputs())
         linkHealth = snapshot.linkHealthScore
         linkHealthDetail = snapshot.detailCaption
+        // USB-C: frame timing isn't radio quality — show full bars whenever the link is alive.
+        let bars =
+            cameraSession?.transportKind == .usb
+            ? (linkHealth > 0 ? 4 : 0)
+            : signalBarsFilter.update(score: linkHealth)
+        if bars != liveSignalBars { liveSignalBars = bars }
     }
 
     private func currentLinkHealthInputs() -> CameraLinkHealthInputs {

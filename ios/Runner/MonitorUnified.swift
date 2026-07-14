@@ -52,7 +52,7 @@ struct MonitorInfoBar: View {
                         }
                     }
                     if chrome.fpsReadoutVisible {
-                        FPSChip(fps: model.liveFPS)
+                        FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
                     }
                 }
             }
