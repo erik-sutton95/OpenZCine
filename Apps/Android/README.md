@@ -4,7 +4,7 @@ Production Jetpack Compose shell. The landscape monitor screen is a 1:1 port of 
 shell's chrome, laid out by the shared core's zone map (`SwiftCore.monitorZoneMap` →
 `MonitorZoneLayout.map`) — no layout math lives in Kotlin. v1 covers the live feed, top
 info deck, capture readout strip, lock/battery band, and the record/DISP/media/settings
-rail with DISP 1↔2 cycling; assists, scopes, pickers, and portrait land later. Readouts
+rail with DISP 1↔2 cycling; assists, pickers, and portrait land later. Readouts
 are fake demo values until the session facade arrives. Without the staged Swift core the
 app falls back to the placeholder monitor ("No camera").
 
@@ -34,4 +34,12 @@ app falls back to the placeholder monitor ("No camera").
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
+- **Scopes v1:** waveform, RGB parade, histogram, and vectorscope render at ~10 Hz from the
+  live feed. All axis/curve math lives in the shared core behind the facade
+  (`Sources/OpenZCineAndroidFacade/ScopeFrameWire.swift` ↔ `bridge/ScopeWire.kt`): the 3-anchor
+  display axis (log-black floor → 5% crush line, fixed per-curve mid grey, clip warning → 95%
+  line) and the tone-mapped vectorscope come back as flat payloads; Kotlin only reduces the
+  JPEG (1/2ⁿ decode to ≤160 px wide) and draws (`ScopeView.kt`). Debug toggle until the scope
+  picker chrome lands:
+  `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true --es zc.scopes wave|parade|histo|vector`.
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).

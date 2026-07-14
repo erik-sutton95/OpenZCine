@@ -77,7 +77,11 @@ class MainActivity : ComponentActivity() {
                     // The real shell needs the shared core's zone map. An APK
                     // built without `just android-core` (plain CI android-check)
                     // has no native library, so it keeps the placeholder.
-                    MonitorScreen(session, frameSource = demo?.second)
+                    MonitorScreen(
+                        session,
+                        frameSource = demo?.second,
+                        scopeKind = DemoHarness.scopeKind(intent),
+                    )
                 } else {
                     MonitorShell(session, frameSource = demo?.second)
                 }
