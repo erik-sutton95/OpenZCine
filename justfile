@@ -150,6 +150,28 @@ run:
 clean:
     swift package clean
 
+# ── Android production stack ────────────────────────────────────────────────
+# JAVA_HOME falls back to the Homebrew OpenJDK so recipes work without shell setup.
+
+# Build the Android app (debug APK).
+android-build:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug
+
+# Run Android JVM unit tests.
+android-test:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew test
+
+# Run all Android checks: build, unit tests, and Android lint.
+android-check:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug test lint
+
+# Build and install the debug APK on a connected device/emulator, then launch it.
+# With several devices attached, pass the serial: `just android-install R58R92BL76K`.
+android-install serial="":
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug
+    "${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}/platform-tools/adb" {{ if serial == "" { "" } else { "-s " + serial } }} install -r Apps/Android/app/build/outputs/apk/debug/app-debug.apk
+    "${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}/platform-tools/adb" {{ if serial == "" { "" } else { "-s " + serial } }} shell am start -n com.opencapture.openzcine/.MainActivity
+
 # ── App-flow design (ExcaliDash) ────────────────────────────────────────────
 # Start the local ExcaliDash server (http://localhost:6767).
 flows-up:
