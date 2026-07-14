@@ -184,11 +184,6 @@ public enum MonitorFeedLayout {
     /// Native monitor preview aspect ratio.
     public static let aspectRatio = 16.0 / 9.0
 
-    /// Symmetric side lane reserved when the landscape viewport is narrower than 16:9 (4:3-ish
-    /// iPads): sized so the right control rail (record button plus margins) — and, mirrored, the
-    /// left battery rail — sits on the black bar beside the letterboxed feed instead of over it.
-    public static let constrainedSideLaneWidth = MonitorSideRailControlLayout.recordButtonSize + 30
-
     /// True for landscape viewports narrower than 16:9 (4:3-ish iPads), where the full-height
     /// feed would overflow the width. On these screens the side-rail chrome moves into the
     /// corners (battery inline beside the lock, settings/media top-trailing, record/DISP
@@ -233,16 +228,17 @@ public enum MonitorFeedLayout {
 
         // Landscape viewport narrower than 16:9 (4:3-ish iPads): the full-height frame would
         // overflow the right edge — and drag the feed-spanning top deck off-center with it.
-        // Shrink to leave symmetric rail lanes and center the letterboxed frame. The tolerance
-        // keeps exact-16:9 mounts (portrait fit/fill hand this function their own 16:9 box, where
-        // width == viewportWidth up to float drift) on the untouched full-height path.
+        // With the side-rail chrome relocated into the corners (see `isWidthConstrained`), the
+        // letterboxed frame spans the full width, vertically centered between the corner chrome
+        // bands. The tolerance keeps exact-16:9 mounts (portrait fit/fill hand this function
+        // their own 16:9 box, where width == viewportWidth up to float drift) on the untouched
+        // full-height path.
         if width > viewportWidth + 0.5 {
-            let lanedWidth = max(0, viewportWidth - 2 * constrainedSideLaneWidth)
-            let lanedHeight = lanedWidth / aspectRatio
+            let lanedHeight = viewportWidth / aspectRatio
             return MonitorFeedFrame(
-                x: (viewportWidth - lanedWidth) / 2,
+                x: 0,
                 y: (viewportHeight - lanedHeight) / 2,
-                width: lanedWidth,
+                width: viewportWidth,
                 height: lanedHeight
             )
         }

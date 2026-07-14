@@ -128,20 +128,19 @@ import Testing
     #expect(frame.height == 390)
 }
 
-@Test func feedLayoutLetterboxesAndCentersOnNarrowerThanSixteenByNineViewports() {
+@Test func feedLayoutLetterboxesFullWidthOnNarrowerThanSixteenByNineViewports() {
     // 11" iPad landscape (4:3-ish): the full-height 16:9 frame (1482.7pt) would overflow the
-    // 1194pt viewport. Expect a centered letterboxed frame with symmetric rail lanes.
+    // 1194pt viewport. With the side-rail chrome relocated into the corners, the letterboxed
+    // frame spans the full width, vertically centered.
     let frame = MonitorFeedLayout.fullBleedFrame(
         viewportWidth: 1194,
         viewportHeight: 834,
         safeArea: .zero
     )
 
-    let lane = MonitorFeedLayout.constrainedSideLaneWidth
-    #expect(abs(frame.x - lane) < 0.001)
-    #expect(abs(frame.width - (1194 - 2 * lane)) < 0.001)
+    #expect(frame.x == 0)
+    #expect(frame.width == 1194)
     #expect(abs(frame.width / frame.height - 16.0 / 9.0) < 0.001)
-    #expect(frame.x + frame.width <= 1194)
     #expect(abs(frame.y - (834 - frame.height) / 2) < 0.001)
 }
 
