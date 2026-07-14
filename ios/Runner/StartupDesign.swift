@@ -1117,15 +1117,15 @@ enum StartupWizardContent {
         switch transport {
         case .cameraAccessPoint:
             return [
-                "On the Nikon ZR: Network menu → Connect to computer → Network settings.",
+                "On the camera: Network menu → Connect to computer → Network settings.",
                 "Choose Create Profile and give the profile a name.",
-                "Select Direct connection to computer — the ZR shows its SSID and key.",
+                "Select Direct connection to computer — the camera shows its SSID and key.",
             ]
         case .phoneHotspot:
             return [
                 "Turn on Personal Hotspot on your iPhone (Settings → Personal Hotspot).",
                 "On the same screen, turn off Maximize Compatibility — it slows live view.",
-                "On the Nikon ZR: Network menu → Connect to computer.",
+                "On the camera: Network menu → Connect to computer.",
                 "We'll walk through joining your hotspot in the next step.",
             ]
         case .usbC:
@@ -1150,7 +1150,7 @@ enum StartupWizardContent {
                     steps: tight
                         ? ["Keep the SSID & key screen visible"]
                         : [
-                            "Leave the ZR on its Direct connection screen",
+                            "Leave the camera on its Direct connection screen",
                             "It shows the network SSID and key",
                         ]
                 ),
@@ -1220,7 +1220,7 @@ enum StartupWizardContent {
                 : "The camera now shows its Wi‑Fi SSID and key. Scan that screen with your phone and OpenZCine joins the camera's network for you — no typing."
         case .phoneHotspot:
             return
-                "On iPhone: Settings → Personal Hotspot → turn on Allow Others to Join. Then on the Nikon ZR:"
+                "On iPhone: Settings → Personal Hotspot → turn on Allow Others to Join. Then on the camera:"
         case .usbC:
             return tight
                 ? "Plug in the cable, allow camera access, then find your camera."
@@ -1434,7 +1434,7 @@ struct StartupFirstPairWizardView: View {
                 .minimumScaleFactor(0.7)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 10)
-            Text("We'll walk you through it — your ZR is connected in about a minute.")
+            Text("We'll walk you through it — your camera is connected in about a minute.")
                 .font(.system(size: 13, weight: .regular, design: .rounded))
                 .foregroundStyle(StartupColors.muted)
                 .lineSpacing(3)
@@ -1507,7 +1507,7 @@ struct StartupFirstPairWizardView: View {
                     yourCamerasButton
                 }
             }
-            Text("We'll walk you through it — your ZR is connected in about a minute.")
+            Text("We'll walk you through it — your camera is connected in about a minute.")
                 .font(.system(size: 12, weight: .regular, design: .rounded))
                 .foregroundStyle(StartupColors.muted)
                 .lineSpacing(2)
@@ -1533,7 +1533,7 @@ struct StartupFirstPairWizardView: View {
             return "Each trades battery, quality, and convenience — pick what fits the shoot."
         case .prepareCamera:
             return
-                "Menu names match the Nikon ZR; they may vary slightly by firmware version."
+                "Menu names match the Nikon ZR; they may vary by model and firmware version."
         case .connectNetwork:
             return "Get both devices onto the same network — we'll find the camera automatically."
         case .discoverAndPair:
