@@ -126,7 +126,11 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * scopes, pickers/panels, portrait.
  */
 @Composable
-fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
+fun MonitorScreen(
+    session: CameraSession,
+    frameSource: LiveFrameSource?,
+    onOpenSettings: () -> Unit = {},
+) {
     val sessionState by session.state.collectAsState()
     LaunchedEffect(session) { session.connect() }
 
@@ -348,7 +352,7 @@ fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
                 modifier = Modifier.zone(it),
             )
         }
-        AuxCircleButton(Modifier.zone(zones.settings)) { glyphModifier, tint ->
+        AuxCircleButton(Modifier.zone(zones.settings), onClick = onOpenSettings) { glyphModifier, tint ->
             GearGlyph(tint, glyphModifier)
         }
         AuxCircleButton(Modifier.zone(zones.media)) { glyphModifier, tint ->

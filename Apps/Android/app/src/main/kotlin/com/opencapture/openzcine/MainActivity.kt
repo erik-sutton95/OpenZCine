@@ -10,6 +10,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -23,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +35,7 @@ import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.pairing.PairingExperience
 import com.opencapture.openzcine.pairing.realPairingEnvironment
+import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 
@@ -83,7 +86,24 @@ class MainActivity : ComponentActivity() {
                     // The real shell needs the shared core's zone map. An APK
                     // built without `just android-core` (plain CI android-check)
                     // has no native library, so it keeps the placeholder.
-                    MonitorScreen(active, frameSource = demo?.second)
+                    // Operator Settings renders as a full-screen surface OVER
+                    // the monitor (iOS-style) so the shell keeps its state;
+                    // system back closes it first, like the panel's own X.
+                    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+                    Box {
+                        MonitorScreen(
+                            active,
+                            frameSource = demo?.second,
+                            onOpenSettings = { settingsOpen = true },
+                        )
+                        if (settingsOpen) {
+                            OperatorSettingsScreen(
+                                session = active,
+                                onClose = { settingsOpen = false },
+                            )
+                        }
+                    }
+                    BackHandler(enabled = settingsOpen) { settingsOpen = false }
                 } else {
                     MonitorShell(active, frameSource = demo?.second)
                 }
