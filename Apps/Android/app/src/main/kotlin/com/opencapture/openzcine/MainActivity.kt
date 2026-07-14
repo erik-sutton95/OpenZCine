@@ -34,6 +34,7 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.media.MediaBrowseScreen
+import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
 import com.opencapture.openzcine.pairing.SavedCameraRecords
@@ -42,6 +43,7 @@ import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
+import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 import kotlinx.coroutines.NonCancellable
@@ -92,6 +94,12 @@ class MainActivity : ComponentActivity() {
                 val savedCameraStore =
                     remember { SharedPreferencesSavedCameraStore(applicationContext) }
                 val operatorSettings = remember { OperatorSettings(applicationContext) }
+                val mediaCacheStore =
+                    remember {
+                        MediaCacheStore(
+                            applicationContext.noBackupFilesDir.resolve("media-cache").toPath(),
+                        )
+                    }
                 var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
                 // Keep the process-wide camera-AP binding alive while its
                 // handed-off session is active, then release it alongside the
@@ -113,6 +121,7 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
+                var standaloneSettingsPresented by rememberSaveable { mutableStateOf(false) }
                 fun acceptPairedCamera(paired: PairedCamera) {
                     val saved = paired.savedCamera
                     val updated =
@@ -142,33 +151,60 @@ class MainActivity : ComponentActivity() {
                 }
                 val active = monitorSession
                 if (active == null) {
+                    BackHandler(enabled = standaloneSettingsPresented) {
+                        standaloneSettingsPresented = false
+                    }
                     BackHandler(
                         enabled =
-                            startupSurface == StartupSurface.PAIRING && savedCameras.isNotEmpty(),
+                            !standaloneSettingsPresented &&
+                                startupSurface == StartupSurface.PAIRING &&
+                                savedCameras.isNotEmpty(),
                     ) {
                         startupSurface = StartupSurface.SAVED_CAMERAS
                     }
-                    when (startupSurface) {
-                        StartupSurface.SAVED_CAMERAS ->
-                            SavedCamerasExperience(
-                                cameras = savedCameras,
-                                environment = pairingEnvironment,
-                                onPaired = ::acceptPairedCamera,
-                                onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
-                                onRecordsChanged = { updated ->
-                                    savedCameras = updated
-                                    savedCameraStore.replace(updated)
-                                    if (updated.isEmpty()) {
-                                        startupSurface = StartupSurface.PAIRING
-                                    }
-                                },
+                    Box(Modifier.fillMaxSize()) {
+                        when (startupSurface) {
+                            StartupSurface.SAVED_CAMERAS ->
+                                SavedCamerasExperience(
+                                    cameras = savedCameras,
+                                    environment = pairingEnvironment,
+                                    onPaired = ::acceptPairedCamera,
+                                    onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
+                                    onOpenSettings = { standaloneSettingsPresented = true },
+                                    onRecordsChanged = { updated ->
+                                        savedCameras = updated
+                                        savedCameraStore.replace(updated)
+                                        if (updated.isEmpty()) {
+                                            startupSurface = StartupSurface.PAIRING
+                                        }
+                                    },
+                                )
+                            StartupSurface.PAIRING ->
+                                PairingExperience(
+                                    environment = pairingEnvironment,
+                                    script = pairingScript,
+                                    onPaired = ::acceptPairedCamera,
+                                    onOpenSettings = { standaloneSettingsPresented = true },
+                                )
+                        }
+                        if (standaloneSettingsPresented) {
+                            val standaloneAssist =
+                                remember {
+                                    AssistState.restore(
+                                        applicationContext,
+                                        FeedEffects.NONE,
+                                        intentScope = null,
+                                    )
+                                }
+                            OperatorSettingsScreen(
+                                session = null,
+                                assistState = standaloneAssist,
+                                settings = operatorSettings,
+                                mediaCacheStore = mediaCacheStore,
+                                initialTab = OperatorSettingsTab.STORAGE,
+                                onClose = { standaloneSettingsPresented = false },
                             )
-                        StartupSurface.PAIRING ->
-                            PairingExperience(
-                                environment = pairingEnvironment,
-                                script = pairingScript,
-                                onPaired = ::acceptPairedCamera,
-                            )
+                        }
                     }
                 } else {
                     LaunchedEffect(active, pairingEnvironment) {
@@ -232,6 +268,7 @@ class MainActivity : ComponentActivity() {
                                         session = active,
                                         assistState = assist,
                                         settings = operatorSettings,
+                                        mediaCacheStore = mediaCacheStore,
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                                 MonitorOverlay.MEDIA ->

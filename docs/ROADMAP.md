@@ -92,16 +92,23 @@ during hardware sessions, not in CI.
 
 ---
 
-### Phase 5 — Android Shell (Planned)
+### Phase 5 — Android Shell (In Progress)
 
 **Goal:** Jetpack Compose Android shell reusing `Sources/OpenZCineCore` via the Swift SDK for
 Android.
 
 **Deliverables:**
 
-- Android Gradle project at `Apps/Android/`.
-- Swift SDK for Android integration verified for the core build and runtime.
-- Feature parity with the iOS shell for connect, record, and live-view.
+- Android Gradle project at `Apps/Android/` and release-safe shared-core bridge packaging.
+- Swift SDK for Android integration verified for the current core build and runtime path.
+- Saved-camera reconnect and Wi-Fi pairing, plus Compose monitor record/live-view control surfaces.
+- Camera-property readback, command dashboard, and monitor-assist controls (in progress).
+- Media browse, progressive playback, safe Android sharing, still viewing, and library workflows
+  (in progress).
+- Standalone Operator Setup and app-owned progressive-media cache management (in progress).
+
+**Status:** In progress. Android follows the same product shell while platform-specific USB-camera
+transport, OCR, and cloud-account adapters remain separate, explicitly scoped follow-on work.
 
 ---
 

@@ -6,9 +6,11 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -90,6 +92,45 @@ class MediaCacheStateException(
 ) : MediaCacheException("Media cache entry is not writable in state $cacheState.")
 
 /**
+ * Aggregate storage occupied by app-owned progressive media artifacts.
+ *
+ * Incomplete entries are `.part` files and remain separate from complete
+ * `.media` files so Settings can clear safe-to-remove files without
+ * interrupting resumable transfers.
+ */
+public data class MediaCacheUsage(
+    /** Number of fully published cache files. */
+    public val completeEntryCount: Int,
+    /** Bytes occupied by fully published cache files. */
+    public val completeBytes: Long,
+    /** Number of incomplete or resumable cache files. */
+    public val incompleteEntryCount: Int,
+    /** Bytes occupied by incomplete or resumable cache files. */
+    public val incompleteBytes: Long,
+) {
+    /** Total bytes occupied by all recognized progressive cache artifacts. */
+    public val totalBytes: Long
+        get() = completeBytes.saturatingAdd(incompleteBytes)
+}
+
+/**
+ * Result of removing completed progressive-media cache entries.
+ *
+ * Incomplete entries are intentionally never deleted by this operation: their
+ * transfer owner can resume them safely after Settings is closed.
+ */
+public data class MediaCacheClearResult(
+    /** Number of completed cache entries removed. */
+    public val removedCompleteEntryCount: Int,
+    /** Bytes reclaimed from completed cache entries. */
+    public val removedCompleteBytes: Long,
+    /** Number of incomplete entries intentionally retained. */
+    public val preservedIncompleteEntryCount: Int,
+    /** Bytes intentionally retained for incomplete entries. */
+    public val preservedIncompleteBytes: Long,
+)
+
+/**
  * Persistent progressive-media cache rooted at an app-owned directory.
  *
  * Camera identities are SHA-256 bucketed so raw serials never become paths.
@@ -107,6 +148,62 @@ class MediaCacheStore(rootDirectory: Path) {
 
     init {
         Files.createDirectories(this.rootDirectory)
+        requireSafeDirectory(this.rootDirectory)
+    }
+
+    /**
+     * Returns the aggregate size of recognized, app-owned progressive cache
+     * files below [rootDirectory]. Share-provider artifacts, camera media, and
+     * any unrecognized files are outside this accounting boundary.
+     */
+    @Synchronized
+    public fun cacheUsage(): MediaCacheUsage {
+        val artifacts = scanArtifacts()
+        return usageFor(artifacts)
+    }
+
+    /**
+     * Removes only complete `.media` artifacts from the progressive cache.
+     *
+     * `.part` files are intentionally preserved so active, failed, and
+     * cancelled transfers keep their resumable bytes. The scan accepts only
+     * hash-named regular files below hash-named direct children of
+     * [rootDirectory], never follows symbolic links, and never visits the
+     * provider share cache.
+     */
+    @Synchronized
+    public fun clearCompletedEntries(): MediaCacheClearResult {
+        val artifacts = scanArtifacts()
+        val before = usageFor(artifacts)
+        val deletedPaths = mutableSetOf<Path>()
+        var removedEntries = 0
+        var removedBytes = 0L
+
+        artifacts
+            .asSequence()
+            .filter { it.kind == CacheArtifactKind.COMPLETE }
+            .forEach { artifact ->
+                if (Files.deleteIfExists(artifact.path)) {
+                    deletedPaths.add(artifact.path)
+                    removedEntries += 1
+                    removedBytes = removedBytes.saturatingAdd(artifact.bytes)
+                }
+            }
+
+        if (deletedPaths.isNotEmpty()) {
+            entries
+                .filterValues { entry -> entry.finalPath in deletedPaths }
+                .keys
+                .toList()
+                .forEach(entries::remove)
+        }
+
+        return MediaCacheClearResult(
+            removedCompleteEntryCount = removedEntries,
+            removedCompleteBytes = removedBytes,
+            preservedIncompleteEntryCount = before.incompleteEntryCount,
+            preservedIncompleteBytes = before.incompleteBytes,
+        )
     }
 
     /**
@@ -218,8 +315,82 @@ class MediaCacheStore(rootDirectory: Path) {
         }
     }
 
+    private fun scanArtifacts(): List<CacheArtifact> {
+        requireSafeDirectory(rootDirectory)
+        val artifacts = mutableListOf<CacheArtifact>()
+        Files.newDirectoryStream(rootDirectory).use { buckets ->
+            buckets.forEach { bucket ->
+                if (!isCacheBucket(bucket) || !isSafeDirectory(bucket)) return@forEach
+                Files.newDirectoryStream(bucket).use { entries ->
+                    entries.forEach { path ->
+                        val kind = artifactKind(path.fileName.toString()) ?: return@forEach
+                        val attributes = noFollowAttributesOrNull(path) ?: return@forEach
+                        if (!attributes.isRegularFile) return@forEach
+                        artifacts += CacheArtifact(path, kind, attributes.size())
+                    }
+                }
+            }
+        }
+        return artifacts
+    }
+
+    private fun usageFor(artifacts: List<CacheArtifact>): MediaCacheUsage {
+        val complete = artifacts.filter { it.kind == CacheArtifactKind.COMPLETE }
+        val incomplete = artifacts.filter { it.kind == CacheArtifactKind.INCOMPLETE }
+        return MediaCacheUsage(
+            completeEntryCount = complete.size,
+            completeBytes = complete.fold(0L) { total, artifact -> total.saturatingAdd(artifact.bytes) },
+            incompleteEntryCount = incomplete.size,
+            incompleteBytes = incomplete.fold(0L) { total, artifact -> total.saturatingAdd(artifact.bytes) },
+        )
+    }
+
+    private fun requireSafeDirectory(path: Path) {
+        check(isSafeDirectory(path)) { "Media cache directory is not a regular directory." }
+    }
+
+    private fun isSafeDirectory(path: Path): Boolean =
+        noFollowAttributesOrNull(path)?.isDirectory == true
+
+    private fun noFollowAttributesOrNull(path: Path): BasicFileAttributes? =
+        try {
+            Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        } catch (_: NoSuchFileException) {
+            null
+        }
+
+    private fun isCacheBucket(path: Path): Boolean =
+        path.parent == rootDirectory && CACHE_BUCKET_NAME.matches(path.fileName.toString())
+
+    private fun artifactKind(filename: String): CacheArtifactKind? =
+        when {
+            COMPLETE_ARTIFACT_NAME.matches(filename) -> CacheArtifactKind.COMPLETE
+            INCOMPLETE_ARTIFACT_NAME.matches(filename) -> CacheArtifactKind.INCOMPLETE
+            else -> null
+        }
+
+    private data class CacheArtifact(
+        val path: Path,
+        val kind: CacheArtifactKind,
+        val bytes: Long,
+    )
+
+    private enum class CacheArtifactKind {
+        COMPLETE,
+        INCOMPLETE,
+    }
+
+    private companion object {
+        val CACHE_BUCKET_NAME = Regex("[0-9a-f]{64}")
+        val COMPLETE_ARTIFACT_NAME = Regex("[0-9a-f]{64}\\.media")
+        val INCOMPLETE_ARTIFACT_NAME = Regex("[0-9a-f]{64}\\.part")
+    }
+
     private data class CacheKey(val bucket: String, val filename: String)
 }
+
+private fun Long.saturatingAdd(other: Long): Long =
+    if (other > Long.MAX_VALUE - this) Long.MAX_VALUE else this + other
 
 /**
  * One resumable progressive file shared by a sequential writer and one or

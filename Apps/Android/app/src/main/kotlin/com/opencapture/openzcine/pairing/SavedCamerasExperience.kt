@@ -63,7 +63,8 @@ private sealed interface SavedCameraPhase {
  *
  * It is deliberately the reconnect owner: camera-AP records rejoin only their
  * stored SSID, whereas hotspot records only use discovery/last-known PTP-IP
- * hosts and never ask Android to switch networks.
+ * hosts and never ask Android to switch networks. [onOpenSettings] opens
+ * app-local operator setup without constructing a camera session.
  */
 @Composable
 public fun SavedCamerasExperience(
@@ -71,6 +72,7 @@ public fun SavedCamerasExperience(
     environment: PairingEnvironment,
     onPaired: (PairedCamera) -> Unit,
     onPairNewCamera: () -> Unit,
+    onOpenSettings: () -> Unit,
     onRecordsChanged: (List<SavedCameraRecord>) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -205,7 +207,12 @@ public fun SavedCamerasExperience(
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .padding(horizontal = 24.dp, vertical = 12.dp),
         ) {
-            StartupHeader(title = "Your cameras", statusTitle = statusTitle, isBusy = busy)
+            StartupHeader(
+                title = "Your cameras",
+                statusTitle = statusTitle,
+                isBusy = busy,
+                onOpenSettings = if (busy) null else onOpenSettings,
+            )
             Spacer(Modifier.height(12.dp))
             BoxWithConstraints(Modifier.weight(1f)) {
                 val twoColumn = maxWidth >= 640.dp

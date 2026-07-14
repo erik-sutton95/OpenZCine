@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.settings
 
+import android.content.Context
+import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,17 +29,23 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -58,6 +66,12 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.media.MediaCacheClearResult
+import com.opencapture.openzcine.media.MediaCacheStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Operator Setup rail tabs — the Android v1 subset of the iOS
@@ -68,14 +82,16 @@ import com.opencapture.openzcine.glass
  */
 public enum class OperatorSettingsTab(
     public val title: String,
+    public val compactTitle: String,
     public val railSubtitle: String,
     public val subtitle: String,
     public val pill: String,
 ) {
-    ASSIST("View Assist", "Scopes & overlays", "Behavior for live-view tools.", "ASSIST"),
-    CONTROLS("Controls", "Dials & safety", "Touch behavior and safety.", "TOUCH"),
-    DISPLAY("Display", "Live view", "Live view buttons and chrome.", "VISIBILITY"),
-    SYSTEM("System", "App behavior", "App-level behavior.", "APP"),
+    ASSIST("View Assist", "Assist", "Scopes & overlays", "Behavior for live-view tools.", "ASSIST"),
+    CONTROLS("Controls", "Controls", "Dials & safety", "Touch behavior and safety.", "TOUCH"),
+    DISPLAY("Display", "Display", "Live view", "Live view buttons and chrome.", "VISIBILITY"),
+    STORAGE("Storage", "Storage", "Local media", "Local cache and offline media.", "STORAGE"),
+    SYSTEM("System", "System", "App behavior", "App-level behavior.", "APP"),
 }
 
 /**
@@ -84,12 +100,19 @@ public enum class OperatorSettingsTab(
  * button, eyebrow/title header with the live tile, vertical tab rail, and a
  * rounded content pane per tab. [assistState] is the monitor toolbar's state,
  * so view-assist changes apply immediately and persist through one seam.
+ *
+ * [session] is null for standalone startup settings. That state never creates
+ * a session or sends a camera command; the live tile instead explains that
+ * only app-local setup is available. [mediaCacheStore] is scoped to the
+ * app-owned progressive cache, not camera or share-provider storage.
  */
 @Composable
 public fun OperatorSettingsScreen(
-    session: CameraSession,
+    session: CameraSession?,
     assistState: AssistState,
     settings: OperatorSettings,
+    mediaCacheStore: MediaCacheStore,
+    initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
     onClose: () -> Unit,
 ) {
     val feedbackView = LocalView.current
@@ -112,7 +135,7 @@ public fun OperatorSettingsScreen(
             feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
-    var selectedTab by rememberSaveable { mutableStateOf(OperatorSettingsTab.ASSIST) }
+    var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
 
     BoxWithConstraints(
         Modifier.fillMaxSize()
@@ -141,6 +164,7 @@ public fun OperatorSettingsScreen(
                     selectedTab,
                     settings,
                     assistState,
+                    mediaCacheStore,
                     onSettingToggle = toggleSetting,
                     onAssistToggle = toggleAssist,
                     onInteraction = emitHaptic,
@@ -157,6 +181,7 @@ public fun OperatorSettingsScreen(
                         selectedTab,
                         settings,
                         assistState,
+                        mediaCacheStore,
                         onSettingToggle = toggleSetting,
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
@@ -174,7 +199,7 @@ public fun OperatorSettingsScreen(
 
 /** Eyebrow + title with the live tile pinned trailing (iOS `settingsTop`). */
 @Composable
-private fun SettingsHeader(session: CameraSession, compact: Boolean) {
+private fun SettingsHeader(session: CameraSession?, compact: Boolean) {
     if (compact) {
         Column(
             Modifier.fillMaxWidth(),
@@ -216,18 +241,24 @@ private fun SettingsTitle(modifier: Modifier = Modifier) {
 /** Link-state tile: status dot, title/detail, meter bars (iOS `SettingsLiveTile`). */
 @Composable
 private fun SettingsLiveTile(
-    session: CameraSession,
+    session: CameraSession?,
     modifier: Modifier = Modifier,
     expanded: Boolean,
 ) {
-    val state by session.state.collectAsState()
+    val disconnectedState = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
+    val state by (session?.state ?: disconnectedState).collectAsState()
+    val standalone = session == null
     val linked = state is CameraSessionState.Connected
     val tint = if (linked) LiveDesign.good else LiveDesign.faint
     val detail =
-        when (val current = state) {
-            is CameraSessionState.Connected -> "${current.identity.name} · PTP-IP"
-            CameraSessionState.Connecting -> "Connecting…"
-            CameraSessionState.Disconnected -> "No camera"
+        if (standalone) {
+            "No camera · local setup only"
+        } else {
+            when (val current = state) {
+                is CameraSessionState.Connected -> "${current.identity.name} · PTP-IP"
+                CameraSessionState.Connecting -> "Connecting…"
+                CameraSessionState.Disconnected -> "No camera"
+            }
         }
     Row(
         modifier.background(LiveDesign.surface, ChromeShape)
@@ -242,7 +273,7 @@ private fun SettingsLiveTile(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                if (linked) "Active Link" else "No Link",
+                if (linked) "Active Link" else if (standalone) "Local Setup" else "No Link",
                 style = chromeStyle(12f, FontWeight.SemiBold),
                 color = LiveDesign.text,
             )
@@ -296,7 +327,7 @@ private fun SettingsTabStrip(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    tab.title,
+                    tab.compactTitle,
                     style = chromeStyle(11.5f, FontWeight.SemiBold),
                     color = if (active) LiveDesign.text else LiveDesign.muted,
                     maxLines = 1,
@@ -370,60 +401,73 @@ private fun SettingsContentPane(
     tab: OperatorSettingsTab,
     settings: OperatorSettings,
     assistState: AssistState,
+    mediaCacheStore: MediaCacheStore,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
     compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    BoxWithConstraints(
         modifier
             .fillMaxSize()
             .background(LiveDesign.surface, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        // A landscape phone exposes only about 250dp of pane height once the
+        // top chrome and safe areas are accounted for. Keep the selected
+        // Storage card complete in that window rather than leaving its clear
+        // result half-hidden below a scroll edge.
+        val condensed = maxHeight < 300.dp
+        Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(if (condensed) 6.dp else 10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        tab.title,
+                        style = chromeStyle(if (condensed) 21f else 24f, FontWeight.SemiBold),
+                        color = LiveDesign.text,
+                    )
+                    if (!condensed) {
+                        Text(
+                            tab.subtitle,
+                            style = chromeStyle(12.5f, FontWeight.Normal),
+                            color = LiveDesign.muted,
+                            maxLines = 2,
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
                 Text(
-                    tab.title,
-                    style = chromeStyle(24f, FontWeight.SemiBold),
-                    color = LiveDesign.text,
-                )
-                Text(
-                    tab.subtitle,
-                    style = chromeStyle(12.5f, FontWeight.Normal),
-                    color = LiveDesign.muted,
-                    maxLines = 2,
+                    tab.pill,
+                    color = LiveDesign.accent,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp,
+                    modifier =
+                        Modifier.border(1.dp, LiveDesign.accentDim, CircleShape)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
-            Spacer(Modifier.weight(1f))
-            Text(
-                tab.pill,
-                color = LiveDesign.accent,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.6.sp,
-                modifier =
-                    Modifier.border(1.dp, LiveDesign.accentDim, CircleShape)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-            )
-        }
-        // Fresh scroll position per tab. ponytail: iOS persists per-tab
-        // offsets across panel dismissal; add if the rows ever grow that long.
-        key(tab) {
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                when (tab) {
-                    OperatorSettingsTab.ASSIST ->
-                        AssistRows(settings, assistState, onSettingToggle, onAssistToggle, onInteraction)
-                    OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
-                    OperatorSettingsTab.DISPLAY ->
-                        DisplayRows(settings, compact, onSettingToggle, onInteraction)
-                    OperatorSettingsTab.SYSTEM -> SystemRows()
+            // Fresh scroll position per tab. ponytail: iOS persists per-tab
+            // offsets across panel dismissal; add if the rows ever grow that long.
+            key(tab) {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    when (tab) {
+                        OperatorSettingsTab.ASSIST ->
+                            AssistRows(settings, assistState, onSettingToggle, onAssistToggle, onInteraction)
+                        OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
+                        OperatorSettingsTab.DISPLAY ->
+                            DisplayRows(settings, compact, onSettingToggle, onInteraction)
+                        OperatorSettingsTab.STORAGE -> StorageRows(mediaCacheStore, condensed)
+                        OperatorSettingsTab.SYSTEM -> SystemRows()
+                    }
                 }
             }
         }
@@ -823,6 +867,198 @@ private fun AssistChoice(label: String, selected: Boolean, onClick: () -> Unit) 
                 .padding(horizontal = 6.dp, vertical = 5.dp),
     )
 }
+
+/** Local progressive-media cache controls, available before a camera connects. */
+@Composable
+private fun StorageRows(mediaCacheStore: MediaCacheStore, condensed: Boolean) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val storageState = remember(mediaCacheStore) { MediaCacheSettingsState(mediaCacheStore) }
+    var snapshot by remember(mediaCacheStore) { mutableStateOf<MediaCacheStorageSnapshot?>(null) }
+    var loadFailure by remember(mediaCacheStore) { mutableStateOf<String?>(null) }
+    var showClearConfirmation by remember { mutableStateOf(false) }
+    var clearing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(storageState) {
+        try {
+            snapshot = withContext(Dispatchers.IO) { storageState.refresh() }
+            loadFailure = null
+        } catch (error: Exception) {
+            loadFailure = error.message ?: "Couldn't read the local media cache."
+        }
+    }
+
+    SettingsGroupCard(
+        title = "Local Media Cache",
+        caption =
+            if (condensed) {
+                "Completed offline cache only. Camera originals, share files, accounts, and transfers stay untouched."
+            } else {
+                "Offline camera cache only. Nothing on the camera is deleted."
+            },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(if (condensed) 4.dp else 11.dp)) {
+            if (condensed) {
+                CondensedStorageRow(title = "Cached Media", showTopDivider = false) {
+                    SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
+                }
+            } else {
+                SettingsInlineRow(title = "Cached Media", showTopDivider = false) {
+                    SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
+                }
+            }
+            snapshot?.usage?.let { usage ->
+                if (usage.incompleteEntryCount > 0) {
+                    if (condensed) {
+                        CondensedStorageRow(title = "Incomplete Transfers") {
+                            SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
+                        }
+                    } else {
+                        SettingsInlineRow(title = "Incomplete Transfers") {
+                            SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
+                        }
+                        Text(
+                            "Incomplete transfers stay in place so they can resume safely.",
+                            style = chromeStyle(10.5f, FontWeight.Normal),
+                            color = LiveDesign.muted,
+                        )
+                    }
+                }
+            }
+            if (condensed) {
+                CondensedStorageRow(title = "Clear Cache") {
+                    StorageClearAction(clearing) { showClearConfirmation = true }
+                }
+            } else {
+                SettingsInlineRow(title = "Clear Cache") {
+                    StorageClearAction(clearing) { showClearConfirmation = true }
+                }
+                Text(
+                    "Clearing removes completed offline camera files only. Share files, accounts, and camera originals stay untouched.",
+                    style = chromeStyle(10.5f, FontWeight.Normal),
+                    color = LiveDesign.muted,
+                )
+            }
+            snapshot?.clearResult?.let { result ->
+                Text(
+                    clearResultLabel(context, result),
+                    style = chromeStyle(10.5f, FontWeight.Normal),
+                    color = LiveDesign.good,
+                )
+            }
+            loadFailure?.let { message ->
+                Text(
+                    message,
+                    style = chromeStyle(10.5f, FontWeight.Normal),
+                    color = LiveDesign.accent,
+                )
+            }
+        }
+    }
+
+    if (showClearConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmation = false },
+            title = { Text("Clear local media cache?") },
+            text = {
+                Text(
+                    "Completed offline camera files will be removed from this phone. " +
+                        "Camera originals, share files, accounts, and incomplete transfers stay untouched.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearConfirmation = false
+                        clearing = true
+                        loadFailure = null
+                        scope.launch {
+                            try {
+                                snapshot = withContext(Dispatchers.IO) { storageState.clearCompleted() }
+                            } catch (error: Exception) {
+                                loadFailure =
+                                    error.message ?: "Couldn't clear the local media cache."
+                            } finally {
+                                clearing = false
+                            }
+                        }
+                    },
+                ) {
+                    Text("Clear cache")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmation = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/** Short landscape storage row that preserves a 48dp clear-cache target. */
+@Composable
+private fun CondensedStorageRow(
+    title: String,
+    showTopDivider: Boolean = true,
+    trailing: @Composable () -> Unit,
+) {
+    Column {
+        if (showTopDivider) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
+        }
+        Row(
+            Modifier.fillMaxWidth().height(44.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                title,
+                style = chromeStyle(12.5f, FontWeight.SemiBold),
+                color = LiveDesign.text,
+                maxLines = 1,
+            )
+            Spacer(Modifier.weight(1f))
+            trailing()
+        }
+    }
+}
+
+/** Accessible destructive-cache action used in regular and short layouts. */
+@Composable
+private fun StorageClearAction(clearing: Boolean, onClick: () -> Unit) {
+    if (clearing) {
+        SettingsValueText("Clearing…")
+    } else {
+        Box(
+            Modifier.size(48.dp)
+                .settingsClickable(role = Role.Button, onClick = onClick)
+                .semantics { contentDescription = "Clear local media cache" },
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Text(
+                "Clear",
+                style = chromeStyle(13f, FontWeight.SemiBold),
+                color = LiveDesign.accent,
+            )
+        }
+    }
+}
+
+private fun cacheSizeLabel(context: Context, bytes: Long?): String =
+    when {
+        bytes == null -> "Calculating…"
+        bytes == 0L -> "Empty"
+        else -> Formatter.formatFileSize(context, bytes)
+    }
+
+private fun clearResultLabel(context: Context, result: MediaCacheClearResult): String =
+    when {
+        result.removedCompleteEntryCount == 0 -> "No completed cache files to remove."
+        result.preservedIncompleteEntryCount == 0 ->
+            "Removed ${cacheSizeLabel(context, result.removedCompleteBytes)} of offline media."
+        else ->
+            "Removed ${cacheSizeLabel(context, result.removedCompleteBytes)}. " +
+                "${cacheSizeLabel(context, result.preservedIncompleteBytes)} remains resumable."
+    }
 
 /** System tab — fully real: version, support, legal links, licenses (iOS `systemRows`). */
 @Composable
