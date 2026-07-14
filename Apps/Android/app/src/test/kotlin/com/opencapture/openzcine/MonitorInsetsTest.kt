@@ -39,4 +39,21 @@ class MonitorInsetsTest {
     fun transientBarNarrowerThanTheCutoutAddsNothing() {
         assertEquals(70f, monitorLeadingInsetDp(70f, 40f))
     }
+
+    @Test
+    fun portraitBottomInsetKeepsTheSystemRailAboveTheGestureArea() {
+        // In sticky immersive mode the SM-A127F reports no bottom inset, so
+        // the adapter supplies a stable physical-edge clearance for the rail.
+        assertEquals(
+            PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP,
+            monitorBottomInsetDp(rawInsetDp = 0f, isPortrait = true),
+        )
+        assertEquals(42f, monitorBottomInsetDp(rawInsetDp = 42f, isPortrait = true))
+    }
+
+    @Test
+    fun landscapeBottomInsetRemainsThePhysicalInset() {
+        assertEquals(0f, monitorBottomInsetDp(rawInsetDp = 0f, isPortrait = false))
+        assertEquals(42f, monitorBottomInsetDp(rawInsetDp = 42f, isPortrait = false))
+    }
 }

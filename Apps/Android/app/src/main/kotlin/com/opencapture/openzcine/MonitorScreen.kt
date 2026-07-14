@@ -116,6 +116,15 @@ internal fun Modifier.zone(frame: ZoneFrame): Modifier =
 internal const val IOS_ISLAND_LANE_DP = 59f
 
 /**
+ * The bottom inset handed to the portrait zone map while Android's system bars
+ * are hidden. The SM-A127F reports a zero bottom inset in sticky immersive
+ * mode, but the physical gesture/home-indicator area is still present. This
+ * floor keeps the 83dp record control comfortably above that edge after the
+ * shared layout reclaims its 14dp system-bar lift.
+ */
+internal const val PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP = 30f
+
+/**
  * Leading inset handed to the zone map, in dp: the display cutout floored at
  * [IOS_ISLAND_LANE_DP], plus any transient system-bar lane on this edge.
  *
@@ -130,6 +139,21 @@ internal const val IOS_ISLAND_LANE_DP = 59f
  */
 internal fun monitorLeadingInsetDp(cutoutDp: Float, transientBarDp: Float): Float =
     maxOf(cutoutDp, IOS_ISLAND_LANE_DP) + maxOf(0f, transientBarDp - cutoutDp)
+
+/**
+ * Bottom inset handed to the zone map, in dp.
+ *
+ * Sticky immersive mode can report no Android navigation-bar inset even
+ * though a device still reserves its gesture area at the physical bottom.
+ * Keep a portrait-only floor so the fixed system rail and its record button
+ * never touch that edge; a real, larger system-bar/cutout inset still wins.
+ */
+internal fun monitorBottomInsetDp(rawInsetDp: Float, isPortrait: Boolean): Float =
+    if (isPortrait) {
+        maxOf(rawInsetDp, PORTRAIT_SYSTEM_RAIL_BOTTOM_INSET_DP)
+    } else {
+        rawInsetDp
+    }
 
 /** Unwraps the owning [android.app.Activity] (a ComposeView's context is a wrapper). */
 private tailrec fun android.content.Context.findActivity(): android.app.Activity? =
@@ -405,7 +429,10 @@ fun MonitorScreen(
             label = "safeTop",
         )
         val safeBottom by animateFloatAsState(
-            edgeDp(cutout.getBottom(density), barInsets.bottom),
+            monitorBottomInsetDp(
+                rawInsetDp = edgeDp(cutout.getBottom(density), barInsets.bottom),
+                isPortrait = isPortrait,
+            ),
             label = "safeBottom",
         )
         // Leading carries the synthesized iPhone island lane (see
@@ -874,43 +901,40 @@ private fun PortraitChrome(
         }
     }
 
-    // Controls zone: fit-mode live tiles, or the command hero-timecode band +
-    // grid (iOS reserves 80pt off the top of the tile region for it).
+    // Controls zone: fit-mode live tiles, or a command dashboard that keeps
+    // the system rail fixed while its primary and secondary settings scroll.
     zones.controlsGrid?.takeIf { it.height > 0 }?.let { grid ->
-        val tcBand = if (isCommand) 80f else 0f
         if (isCommand) {
-            Box(
-                Modifier.zone(ZoneFrame(grid.x, grid.y, grid.width, tcBand))
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                CommandTimecode(
-                    // See the landscape command dashboard: this is deliberately
-                    // neutral until live-view timecode is bridged from Swift.
-                    frameCount = null,
-                    frameRate = commandPresentation.frameRateValue,
-                    sizeSp = 52f,
-                )
-            }
-        }
-        CommandGrid(
-            tiles = commandPresentation.tiles,
-            controlsEnabled = commandControlsEnabled,
-            pendingControl = pendingCommandControl,
-            onOpenControl = onOpenCommandControl,
-            onMoveTileLater = onMoveCommandTileLater,
-            modifier =
-                Modifier.zone(
-                ZoneFrame(
-                    grid.x,
-                    grid.y + tcBand,
-                    grid.width,
-                    maxOf(0f, grid.height - tcBand - (if (isCommand) 0f else 8f)),
-                ),
+            PortraitCommandDashboard(
+                presentation = commandPresentation,
+                controlsEnabled = commandControlsEnabled,
+                pendingControl = pendingCommandControl,
+                onOpenControl = onOpenCommandControl,
+                onMoveTileLater = onMoveCommandTileLater,
+                modifier =
+                    Modifier.zone(grid)
+                        .alpha(if (locked) 0.4f else 1f),
             )
-                .padding(horizontal = 12.dp)
-                .alpha(if (locked) 0.4f else 1f),
-        )
+        } else {
+            CommandGrid(
+                tiles = commandPresentation.tiles,
+                controlsEnabled = commandControlsEnabled,
+                pendingControl = pendingCommandControl,
+                onOpenControl = onOpenCommandControl,
+                onMoveTileLater = onMoveCommandTileLater,
+                modifier =
+                    Modifier.zone(
+                        ZoneFrame(
+                            grid.x,
+                            grid.y,
+                            grid.width,
+                            maxOf(0f, grid.height - 8f),
+                        ),
+                    )
+                        .padding(horizontal = 12.dp)
+                        .alpha(if (locked) 0.4f else 1f),
+            )
+        }
     }
 
     // Opaque band behind the system controls through the physical bottom
