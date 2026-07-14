@@ -33,6 +33,19 @@ object DemoHarness {
      */
     fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
 
+    /** String intent extra selecting a scope: `wave|parade|histo|vector`. */
+    const val EXTRA_SCOPES = "zc.scopes"
+
+    /**
+     * The scope selected by the debug intent, or null. Activate with e.g.
+     * ```
+     * adb shell am start -n com.opencapture.openzcine/.MainActivity \
+     *   --ez zc.demo.feed true --es zc.scopes wave
+     * ```
+     */
+    fun scopeKind(intent: Intent): ScopeKind? =
+        ScopeKind.fromToken(intent.getStringExtra(EXTRA_SCOPES))
+
     /**
      * A demo session + synthetic 25 fps frame source when [intent] carries
      * [EXTRA_DEMO_FEED]; null in a normal launch. Also the debug intent entry

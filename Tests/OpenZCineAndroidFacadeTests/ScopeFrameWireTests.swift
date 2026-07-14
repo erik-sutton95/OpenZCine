@@ -1,0 +1,150 @@
+import OpenZCineCore
+import Testing
+
+@testable import OpenZCineAndroidFacade
+
+/// The scope wire must carry the core's anchored axis math value-for-value —
+/// the Compose shell draws straight off these payloads with no curve math of
+/// its own.
+struct ScopeFrameWireTests {
+    // MARK: - Anchors
+
+    @Test func anchorsCarryFixedSafeBorderLines() {
+        for ordinal in [0, 1] {
+            let anchors = ScopeFrameWire.anchors(curveOrdinal: ordinal)
+            #expect(anchors.count == 3 + 6 * 2)
+            #expect(anchors[0] == Float(ScopeDisplayScale.crushLineLevel))
+            #expect(anchors[2] == Float(ScopeDisplayScale.clipLineLevel))
+            #expect(anchors[0] < anchors[1] && anchors[1] < anchors[2])
+        }
+    }
+
+    @Test func midGrayAnchorMatchesCoreAndIgnoresISO() {
+        let anchors = ScopeFrameWire.anchors(curveOrdinal: 0)
+        // The wire's mid-grey anchor is the per-curve fixed level — the same
+        // value regardless of any ISO-driven clip shift, by construction: it
+        // derives from the curve's PUBLISHED default clip, never the live one.
+        #expect(anchors[1] == Float(ScopeDisplayScale.middleGrayLevel(curve: .redLog3G10)))
+        let shiftedISO = ExposureSignalMapping(curve: .redLog3G10, clipNative: 215)
+        #expect(
+            Float(ScopeDisplayScale.middleGrayLevel(mapping: shiftedISO)) == anchors[1])
+    }
+
+    @Test func vectorTargetsMatchCoreChromaMatrix() {
+        let anchors = ScopeFrameWire.anchors(curveOrdinal: 0)
+        // First target is 75% red: positive Cr, negative Cb, inside ±0.5.
+        let (cb, cr) = VectorscopeSampler.chroma(red: 191, green: 0, blue: 0)
+        #expect(anchors[3] == Float(cb))
+        #expect(anchors[4] == Float(cr))
+        for value in anchors[3...] {
+            #expect(value >= -0.5 && value <= 0.5)
+        }
+    }
+
+    // MARK: - Traces
+
+    /// A 2×8 buffer whose stride-2 sweep samples exactly one pixel per value
+    /// band: black, mid grey (Log3G10 18% grey code), clip warning, white.
+    private func syntheticBuffer() -> ([UInt8], Int, Int) {
+        let mid = UInt8(ExposureToneCurve.redLog3G10.middleGrayNativeCode.rounded())
+        let clip = UInt8(ExposureToneCurve.redLog3G10.defaultClipNative.rounded())
+        var rgba = [UInt8]()
+        for value in [UInt8(0), mid, clip, 255] {
+            // Two rows per band, two pixels per row — stride 2 hits row 0, col 0.
+            for _ in 0..<4 {
+                rgba.append(contentsOf: [value, value, value, 255])
+            }
+        }
+        return (rgba, 2, 8)
+    }
+
+    @Test func tracesPayloadIsWellFormed() {
+        let (rgba, width, height) = syntheticBuffer()
+        let flat = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0)
+        let count = Int(flat[0])
+        // stride-2 sweep over 4×4 → 2×2 points.
+        #expect(count == 4)
+        #expect(
+            flat.count
+                == 1 + count * ScopeFrameWire.pointStride + 4 * ScopeFrameWire.histogramBins)
+        let allFinite = flat.allSatisfy { $0.isFinite }
+        #expect(allFinite)
+    }
+
+    @Test func pointLevelsSitOnTheAnchoredAxis() {
+        let (rgba, width, height) = syntheticBuffer()
+        let flat = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0)
+        let count = Int(flat[0])
+        let anchors = ScopeFrameWire.anchors(curveOrdinal: 0)
+        var levels = [Float]()
+        for index in 0..<count {
+            levels.append(flat[1 + index * ScopeFrameWire.pointStride + 1])  // luma level
+        }
+        levels.sort()
+        // Black row (native 0) sits below the crush line; the mid-grey row sits
+        // exactly on the fixed mid-grey anchor; the clip-warning row lands on
+        // the clip line (±1 code of quantisation).
+        #expect(levels[0] < anchors[0])
+        #expect(abs(levels[1] - anchors[1]) < 0.01)
+        #expect(abs(levels[2] - anchors[2]) < 0.01)
+        #expect(levels[3] > anchors[2])
+    }
+
+    @Test func histogramsCarryEverySampledPixel() {
+        let (rgba, width, height) = syntheticBuffer()
+        let flat = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0)
+        let count = Int(flat[0])
+        let start = 1 + count * ScopeFrameWire.pointStride
+        for channel in 0..<4 {
+            let bins = flat[
+                (start + channel * ScopeFrameWire.histogramBins)..<(start + (channel + 1)
+                    * ScopeFrameWire.histogramBins)
+            ]
+            #expect(Int(bins.reduce(0, +).rounded()) == count)
+        }
+    }
+
+    @Test func invalidBufferYieldsEmptyPayload() {
+        let flat = ScopeFrameWire.traces(
+            rgba: [0, 0, 0], width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0)
+        #expect(flat[0] == 0)
+        #expect(flat.count == 1 + 4 * ScopeFrameWire.histogramBins)
+    }
+
+    // MARK: - Vectorscope
+
+    @Test func vectorPixelsArePremultipliedRGBA() {
+        // A saturated two-colour frame so the tone-mapped chroma spreads into
+        // more than one bin.
+        var rgba = [UInt8]()
+        for index in 0..<16 {
+            rgba.append(contentsOf: index % 2 == 0 ? [200, 40, 40, 255] : [40, 40, 200, 255])
+        }
+        let pixels = ScopeFrameWire.vectorPixels(
+            rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0)
+        let n = ScopeFrameWire.vectorBinCount
+        #expect(pixels.count == n * n * 4)
+        var occupied = 0
+        for offset in Swift.stride(from: 0, to: pixels.count, by: 4) {
+            let alpha = pixels[offset + 3]
+            if alpha > 0 { occupied += 1 }
+            // Premultiplied: no channel may exceed its alpha.
+            #expect(pixels[offset] <= alpha)
+            #expect(pixels[offset + 1] <= alpha)
+            #expect(pixels[offset + 2] <= alpha)
+        }
+        #expect(occupied > 0)
+    }
+
+    @Test func emptyFrameYieldsEmptyVectorImage() {
+        let pixels = ScopeFrameWire.vectorPixels(
+            rgba: [], width: 0, height: 0, bytesPerRow: 0, curveOrdinal: 0)
+        #expect(pixels.isEmpty)
+    }
+}

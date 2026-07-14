@@ -136,6 +136,7 @@ fun MonitorScreen(
     session: CameraSession,
     frameSource: LiveFrameSource?,
     glassTierOverride: String? = null,
+    scopeKind: ScopeKind? = null,
 ) {
     val sessionState by session.state.collectAsState()
     LaunchedEffect(session) { session.connect() }
@@ -309,7 +310,7 @@ fun MonitorScreen(
                         mode = dispIndex,
                         isPortrait = false,
                         aspectFill = false,
-                        scopeCount = 0,
+                        scopeCount = if (scopeKind != null) 1 else 0,
                         mirrored = false,
                         bottomBarHeight = LiveDesign.CONTROL_HEIGHT_DP,
                     ),
@@ -410,6 +411,20 @@ fun MonitorScreen(
             ) {
                 dispIndex = (dispIndex + 1) % 2
             }
+        }
+
+        // Scopes v1: one debug-selected scope (`--es zc.scopes`), mounted at the
+        // zone map's scopes zone when the core emits one; the landscape map
+        // floats scopes over the feed (like iOS), so it falls back to the
+        // iOS-parity floating frame.
+        if (scopeKind != null && frameSource != null) {
+            ScopePanel(
+                scopeKind,
+                frameSource,
+                Modifier.zone(
+                    zones.scopes ?: floatingScopeFrame(scopeKind, zones.feed, zones.infoBar),
+                ),
+            )
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).

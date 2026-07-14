@@ -42,6 +42,49 @@
         return String(cString: chars)
     }
 
+    /// Copies a `jbyteArray` into a Swift `[UInt8]`.
+    private func swiftBytes(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ value: jbyteArray?
+    ) -> [UInt8]? {
+        guard let value else { return nil }
+        let fns = table(env)
+        let length = Int(fns.GetArrayLength!(env, value))
+        guard length > 0 else { return [] }
+        var out = [UInt8](repeating: 0, count: length)
+        out.withUnsafeMutableBytes { raw in
+            fns.GetByteArrayRegion!(
+                env, value, 0, jsize(length),
+                raw.baseAddress?.assumingMemoryBound(to: jbyte.self))
+        }
+        return out
+    }
+
+    /// Copies a Swift `[Float]` into a new JVM-owned `jfloatArray`.
+    private func javaFloatArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [Float]
+    ) -> jfloatArray? {
+        let fns = table(env)
+        guard let array = fns.NewFloatArray!(env, jsize(values.count)) else { return nil }
+        values.withUnsafeBufferPointer { buffer in
+            fns.SetFloatArrayRegion!(env, array, 0, jsize(values.count), buffer.baseAddress)
+        }
+        return array
+    }
+
+    /// Copies a Swift `[UInt8]` into a new JVM-owned `jbyteArray`.
+    private func javaByteArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [UInt8]
+    ) -> jbyteArray? {
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(values.count)) else { return nil }
+        values.withUnsafeBufferPointer { buffer in
+            buffer.baseAddress?.withMemoryRebound(to: jbyte.self, capacity: values.count) {
+                fns.SetByteArrayRegion!(env, array, 0, jsize(values.count), $0)
+            }
+        }
+        return array
+    }
+
     // MARK: - Info
 
     /// `SwiftCore.coreVersion(): String` — proves the Swift core is alive in-process.
@@ -119,6 +162,49 @@
             fns.SetFloatArrayRegion!(env, array, 0, jsize(flat.count), buffer.baseAddress)
         }
         return array
+    }
+
+    // MARK: - Scopes
+
+    /// `SwiftCore.scopeAnchors(curve): FloatArray` — fixed axis anchors and
+    /// vectorscope graticule targets per `ScopeFrameWire.anchors`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeAnchors")
+    public func swiftCoreScopeAnchors(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curve: jint
+    ) -> jfloatArray? {
+        javaFloatArray(env, ScopeFrameWire.anchors(curveOrdinal: Int(curve)))
+    }
+
+    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve): FloatArray`
+    /// — one scope tick's waveform/parade/histogram payload per
+    /// `ScopeFrameWire.traces`. Blocking; Kotlin calls it off the main thread.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeTraces")
+    public func swiftCoreScopeTraces(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
+        width: jint, height: jint, bytesPerRow: jint, curve: jint
+    ) -> jfloatArray? {
+        guard let buffer = swiftBytes(env, rgba) else { return nil }
+        return javaFloatArray(
+            env,
+            ScopeFrameWire.traces(
+                rgba: buffer, width: Int(width), height: Int(height),
+                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve)))
+    }
+
+    /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve): ByteArray`
+    /// — one scope tick's 128×128 premultiplied-RGBA vectorscope density image
+    /// per `ScopeFrameWire.vectorPixels`. Empty for a frame with no samples.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeVector")
+    public func swiftCoreScopeVector(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
+        width: jint, height: jint, bytesPerRow: jint, curve: jint
+    ) -> jbyteArray? {
+        guard let buffer = swiftBytes(env, rgba) else { return nil }
+        return javaByteArray(
+            env,
+            ScopeFrameWire.vectorPixels(
+                rgba: buffer, width: Int(width), height: Int(height),
+                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve)))
     }
 
     // MARK: - Callback / streaming shape

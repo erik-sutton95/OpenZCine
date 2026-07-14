@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
                         session,
                         frameSource = demo?.second,
                         glassTierOverride = DemoHarness.glassTierOverride(intent),
+                        scopeKind = DemoHarness.scopeKind(intent),
                     )
                 } else {
                     MonitorShell(session, frameSource = demo?.second)
