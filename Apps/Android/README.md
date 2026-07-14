@@ -9,6 +9,16 @@ are fake demo values until the session facade arrives. Without the staged Swift 
 app falls back to the placeholder monitor ("No camera").
 
 - **Build:** `just android-build` from the repo root (or `just android-check` for build + tests + lint).
+- **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
+  startup flow (`ios/Runner/StartupDesign.swift`) in its design language: permissions → choose
+  path → prepare → network (→ find and pair). Two hard-separated paths: **camera-AP** (the phone
+  joins the camera's `NIKON_ZR_…` network via `WifiNetworkSpecifier` + `bindProcessToNetwork`,
+  key entered once and remembered in a Keystore-encrypted store) and **phone-hotspot** (the
+  CAMERA joins the phone's hotspot — the phone hosts, never scans or joins; NSD discovery waits
+  for the camera). A connected session hands off to the monitor. Every wizard state is
+  scriptable for screenshots: `adb shell am start -n com.opencapture.openzcine/.MainActivity
+  --es zc.demo.pairing permissions|choose|prepare|network|discover|connecting
+  --es zc.demo.pairingPath ap|hotspot` (debug builds only).
 - **Swift core:** the camera brain is the shared Swift core (`Sources/OpenZCineCore`), cross-compiled
   to `libOpenZCineAndroid.so` and bound via JNI (`bridge/SwiftCore.kt` ↔
   `Sources/OpenZCineAndroidFacade`). Run **`just android-core` before installing** — it stages the

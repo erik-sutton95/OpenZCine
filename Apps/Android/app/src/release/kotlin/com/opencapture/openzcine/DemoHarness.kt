@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import android.content.Intent
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.pairing.PairingScript
 
 /**
  * Release stub — the demo harness does not exist outside debug builds. The
@@ -16,4 +17,8 @@ object DemoHarness {
     /** Always null: release builds carry no demo frame source. */
     @Suppress("UNUSED_PARAMETER")
     fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource>? = null
+
+    /** Always null: release builds carry no scripted pairing wizard. */
+    @Suppress("UNUSED_PARAMETER")
+    fun pairingScript(intent: Intent): PairingScript? = null
 }
