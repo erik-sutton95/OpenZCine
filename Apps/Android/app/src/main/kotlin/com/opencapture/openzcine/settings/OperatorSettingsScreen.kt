@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -184,11 +185,11 @@ private fun SettingsLiveTile(session: CameraSession) {
     }
 }
 
-/** Vertical tab rail, 146dp wide on glass (iOS `settingsRail`). */
+/** Vertical tab rail, 146dp wide on full-height glass (iOS `settingsRail`). */
 @Composable
 private fun SettingsTabRail(selected: OperatorSettingsTab, onSelect: (OperatorSettingsTab) -> Unit) {
     Column(
-        Modifier.width(146.dp).glass(ChromeShape).padding(6.dp),
+        Modifier.width(146.dp).fillMaxHeight().glass(ChromeShape).padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         OperatorSettingsTab.entries.forEach { tab ->
