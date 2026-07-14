@@ -56,6 +56,8 @@ android {
 
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG gates the feed pacing logs.
+        buildConfig = true
     }
 
     compileOptions {
