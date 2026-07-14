@@ -99,10 +99,16 @@ public fun Modifier.startupInstructionCard(): Modifier =
 
 /**
  * Startup header row: the OPENZCINE wordmark over a contextual title, with a
- * live status pill on the trailing edge (iOS `StartupHeader`).
+ * live status pill on the trailing edge (iOS `StartupHeader`). When supplied,
+ * [onOpenSettings] exposes app-local setup before a camera is connected.
  */
 @Composable
-public fun StartupHeader(title: String, statusTitle: String, isBusy: Boolean) {
+public fun StartupHeader(
+    title: String,
+    statusTitle: String,
+    isBusy: Boolean,
+    onOpenSettings: (() -> Unit)? = null,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column {
             Text(
@@ -121,6 +127,14 @@ public fun StartupHeader(title: String, statusTitle: String, isBusy: Boolean) {
             )
         }
         Spacer(Modifier.weight(1f))
+        onOpenSettings?.let { openSettings ->
+            StartupOutlineButton(
+                text = "Settings",
+                onClick = openSettings,
+                modifier = Modifier.width(92.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+        }
         val statusColor = if (isBusy) StartupColors.accent else StartupColors.ready
         Row(
             verticalAlignment = Alignment.CenterVertically,

@@ -181,6 +181,80 @@ class MediaCacheStoreTest {
             assertEquals(2, cancelled.downloadedBytes)
         }
 
+    @Test
+    fun `usage accounts for cache artifacts and clear retains incomplete transfers`() =
+        withStore { root, store ->
+            val completed = store.openEntry("camera", "COMPLETE.MOV", 4)
+            completed.append(0, byteArrayOf(1, 2, 3, 4))
+            completed.complete()
+
+            val incomplete = store.openEntry("camera", "INCOMPLETE.MOV", 6)
+            incomplete.append(0, byteArrayOf(5, 6, 7))
+            val unrelated = root.resolve("not-a-media-cache-artifact")
+            Files.write(unrelated, byteArrayOf(8, 9))
+
+            assertEquals(
+                MediaCacheUsage(
+                    completeEntryCount = 1,
+                    completeBytes = 4,
+                    incompleteEntryCount = 1,
+                    incompleteBytes = 3,
+                ),
+                store.cacheUsage(),
+            )
+
+            val result = store.clearCompletedEntries()
+
+            assertEquals(1, result.removedCompleteEntryCount)
+            assertEquals(4, result.removedCompleteBytes)
+            assertEquals(1, result.preservedIncompleteEntryCount)
+            assertEquals(3, result.preservedIncompleteBytes)
+            assertFalse(Files.exists(completed.finalPath))
+            assertTrue(Files.exists(incomplete.partialPath))
+            assertTrue(Files.exists(unrelated))
+            assertEquals(
+                MediaCacheUsage(
+                    completeEntryCount = 0,
+                    completeBytes = 0,
+                    incompleteEntryCount = 1,
+                    incompleteBytes = 3,
+                ),
+                store.cacheUsage(),
+            )
+
+            val reopened = store.openEntry("camera", "COMPLETE.MOV", 4)
+            assertEquals(MediaCacheState.ACTIVE, reopened.state)
+            assertEquals(0, reopened.downloadedBytes)
+        }
+
+    @Test
+    fun `cache accounting never follows a symbolic bucket`() {
+        val root = createTempDirectory("openzcine-media-cache")
+        val outside = createTempDirectory("openzcine-outside-cache")
+        try {
+            val store = MediaCacheStore(root)
+            val bucket = root.resolve("a".repeat(64))
+            val outsideArtifact = outside.resolve("b".repeat(64) + ".media")
+            Files.write(outsideArtifact, byteArrayOf(1, 2, 3))
+            Files.createSymbolicLink(bucket, outside)
+
+            assertEquals(
+                MediaCacheUsage(
+                    completeEntryCount = 0,
+                    completeBytes = 0,
+                    incompleteEntryCount = 0,
+                    incompleteBytes = 0,
+                ),
+                store.cacheUsage(),
+            )
+            assertEquals(0, store.clearCompletedEntries().removedCompleteEntryCount)
+            assertTrue(Files.exists(outsideArtifact))
+        } finally {
+            deleteTree(root)
+            deleteTree(outside)
+        }
+    }
+
     private fun withStore(block: (Path, MediaCacheStore) -> Unit) {
         val root = createTempDirectory("openzcine-media-cache")
         try {

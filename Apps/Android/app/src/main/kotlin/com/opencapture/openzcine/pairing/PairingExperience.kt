@@ -274,12 +274,15 @@ private sealed interface PairingPhase {
  * (ios/Runner/StartupDesign.swift): a two-column landscape layout with the
  * goal/progress intro card on the left and the current step card on the
  * right. Ends by handing a connected [PairedCamera] to [onPaired].
+ * [onOpenSettings] is available before a connection is in progress so local
+ * preferences and media cache can be managed without a camera session.
  */
 @Composable
 public fun PairingExperience(
     environment: PairingEnvironment,
     script: PairingScript? = null,
     onPaired: (PairedCamera) -> Unit,
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var permissionGranted by remember { mutableStateOf(isPairingPermissionGranted(context)) }
@@ -450,6 +453,7 @@ public fun PairingExperience(
                 title = "Connection setup",
                 statusTitle = statusTitle,
                 isBusy = busy || flow.step == PairingStep.DISCOVER,
+                onOpenSettings = if (busy) null else onOpenSettings,
             )
             Spacer(Modifier.height(12.dp))
             BoxWithConstraints(Modifier.weight(1f)) {
