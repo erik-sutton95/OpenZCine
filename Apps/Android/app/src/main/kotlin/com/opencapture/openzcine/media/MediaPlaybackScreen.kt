@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,10 +66,14 @@ import java.io.IOException
 import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -157,6 +162,15 @@ fun MediaPlaybackScreen(
     var shareableEntry by remember(clip.handle) { mutableStateOf<MediaCacheEntry?>(null) }
     var shareInProgress by remember(clip.handle) { mutableStateOf(false) }
     var shareFailure by remember(clip.handle) { mutableStateOf<String?>(null) }
+    var shareJob by remember(clip.handle) { mutableStateOf<Job?>(null) }
+    val latestShareJob = rememberUpdatedState(shareJob)
+
+    val requestClose: () -> Unit = {
+        if (!closeRequested) {
+            closeRequested = true
+            shareJob?.cancel()
+        }
+    }
 
     LaunchedEffect(coordinator) {
         preparation = coordinator.prepare()
@@ -187,18 +201,21 @@ fun MediaPlaybackScreen(
 
     LaunchedEffect(closeRequested, coordinator) {
         if (!closeRequested) return@LaunchedEffect
+        shareJob?.cancelAndJoin()
         coordinator.close()
         onClose()
     }
-    BackHandler(enabled = !closeRequested) { closeRequested = true }
+    BackHandler(enabled = !closeRequested) { requestClose() }
 
     // Activity teardown can dispose the surface without the in-app back path.
     // Preserve the camera invariant by stopping on a bounded IO coroutine.
     DisposableEffect(coordinator) {
         onDispose {
+            val runningShareJob = latestShareJob.value
             val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             cleanup.launch {
                 try {
+                    runningShareJob?.cancelAndJoin()
                     coordinator.close()
                 } finally {
                     cleanup.cancel()
@@ -233,7 +250,7 @@ fun MediaPlaybackScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                PlaybackButton("‹", "Back", enabled = !closeRequested) { closeRequested = true }
+                PlaybackButton("‹", "Back", enabled = !closeRequested) { requestClose() }
                 Text(
                     clip.filename,
                     modifier = Modifier.weight(1f),
@@ -249,27 +266,41 @@ fun MediaPlaybackScreen(
                         "Share ${clip.filename}",
                         enabled = !shareInProgress && !closeRequested,
                     ) {
-                        shareScope.launch {
-                            shareFailure = null
-                            shareInProgress = true
-                            try {
-                                val staged =
-                                    withContext(Dispatchers.IO) {
-                                        MediaShareStager(shareCacheDirectory)
-                                            .stage(completedEntry, clip.filename)
+                        val job =
+                            shareScope.launch(start = CoroutineStart.LAZY) {
+                                val stageContext = coroutineContext
+                                val runningJob = stageContext[Job]
+                                try {
+                                    val staged =
+                                        withContext(Dispatchers.IO) {
+                                            MediaShareStager(shareCacheDirectory)
+                                                .stage(completedEntry, clip.filename) {
+                                                    stageContext.ensureActive()
+                                                }
+                                        }
+                                    stageContext.ensureActive()
+                                    if (closeRequested) {
+                                        throw CancellationException("Playback closed before sharing began.")
                                     }
-                                context.startActivity(
-                                    AndroidMediaShareIntent.chooserIntent(context, staged),
-                                )
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (error: Exception) {
-                                shareFailure =
-                                    error.message ?: "Couldn't prepare this clip for sharing."
-                            } finally {
-                                shareInProgress = false
+                                    context.startActivity(
+                                        AndroidMediaShareIntent.chooserIntent(context, staged),
+                                    )
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    shareFailure =
+                                        error.message ?: "Couldn't prepare this clip for sharing."
+                                } finally {
+                                    if (shareJob === runningJob) {
+                                        shareJob = null
+                                        shareInProgress = false
+                                    }
+                                }
                             }
-                        }
+                        shareJob = job
+                        shareFailure = null
+                        shareInProgress = true
+                        job.start()
                     }
                 }
             }

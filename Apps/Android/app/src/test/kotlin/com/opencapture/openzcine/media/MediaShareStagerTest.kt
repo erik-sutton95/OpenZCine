@@ -2,12 +2,14 @@ package com.opencapture.openzcine.media
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CancellationException
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /** Host-side coverage for the complete-cache-only native-share boundary. */
@@ -76,6 +78,102 @@ class MediaShareStagerTest {
         }
 
     @Test
+    fun `stage does not reuse a same length artifact after source content changes`() =
+        withRoot { root ->
+            val entry = completedEntry(root, "C0004A.MP4", byteArrayOf(3, 1, 4, 1, 5))
+            val stager = MediaShareStager(root.resolve("cache"))
+
+            val first = stager.stage(entry, "C0004A.MP4")
+            val replacement = byteArrayOf(2, 7, 1, 8, 2)
+            Files.write(entry.finalPath, replacement)
+            val second = stager.stage(entry, "C0004A.MP4")
+
+            assertNotEquals(first.file, second.file)
+            assertContentEquals(replacement, Files.readAllBytes(second.file))
+            assertContentEquals(byteArrayOf(3, 1, 4, 1, 5), Files.readAllBytes(first.file))
+            Files.list(root.resolve("cache/share/ready")).use { files -> assertEquals(2, files.count()) }
+        }
+
+    @Test
+    fun `stage copies from the opened source handle when the path is replaced mid copy`() =
+        withRoot { root ->
+            val original = byteArrayOf(1, 3, 3, 7)
+            val replacement = root.resolve("replacement.mov")
+            Files.write(replacement, byteArrayOf(9, 9, 9, 9))
+            val entry = completedEntry(root, "C0004B.MOV", original)
+            var cancellationChecks = 0
+
+            val staged =
+                MediaShareStager(root.resolve("cache")).stage(entry, "C0004B.MOV") {
+                    cancellationChecks += 1
+                    if (cancellationChecks == 2) {
+                        val heldSource = root.resolve("held-source.mov")
+                        Files.move(entry.finalPath, heldSource)
+                        Files.createSymbolicLink(entry.finalPath, replacement)
+                    }
+                }
+
+            assertContentEquals(original, Files.readAllBytes(staged.file))
+            assertTrue(Files.isSymbolicLink(entry.finalPath))
+        }
+
+    @Test
+    fun `stage cancellation removes a partial staging file without publishing a share artifact`() =
+        withRoot { root ->
+            val bytes = ByteArray(3 * 64 * 1024) { index -> (index % 251).toByte() }
+            val entry = completedEntry(root, "C0004C.MOV", bytes)
+            var cancellationChecks = 0
+
+            assertFailsWith<CancellationException> {
+                MediaShareStager(root.resolve("cache")).stage(entry, "C0004C.MOV") {
+                    cancellationChecks += 1
+                    if (cancellationChecks >= 5) {
+                        throw CancellationException("Playback closed.")
+                    }
+                }
+            }
+
+            assertTrue(cancellationChecks >= 5)
+            Files.list(root.resolve("cache/share/ready")).use { files -> assertEquals(0, files.count()) }
+            Files.list(root.resolve("cache/share/staging")).use { files -> assertEquals(0, files.count()) }
+        }
+
+    @Test
+    fun `stage preserves a recent share artifact instead of revoking a possible URI grant`() =
+        withRoot { root ->
+            var now = 10_000L
+            val stager = constrainedStager(root) { now }
+            val firstEntry = completedEntry(root, "C0004D.MOV", byteArrayOf(1, 2, 3, 4))
+            val secondEntry = completedEntry(root, "C0004E.MOV", byteArrayOf(5, 6, 7, 8))
+            val first = stager.stage(firstEntry, "C0004D.MOV")
+
+            assertFailsWith<MediaShareCacheLimitException> {
+                stager.stage(secondEntry, "C0004E.MOV")
+            }
+
+            assertTrue(Files.exists(first.file))
+            Files.list(root.resolve("cache/share/ready")).use { files -> assertEquals(1, files.count()) }
+            Files.list(root.resolve("cache/share/staging")).use { files -> assertEquals(0, files.count()) }
+        }
+
+    @Test
+    fun `stage deterministically evicts an expired artifact before publishing a new share`() =
+        withRoot { root ->
+            var now = 10_000L
+            val stager = constrainedStager(root) { now }
+            val firstEntry = completedEntry(root, "C0004F.MOV", byteArrayOf(1, 2, 3, 4))
+            val secondEntry = completedEntry(root, "C0004G.MOV", byteArrayOf(5, 6, 7, 8))
+            val first = stager.stage(firstEntry, "C0004F.MOV")
+
+            now += 101L
+            val second = stager.stage(secondEntry, "C0004G.MOV")
+
+            assertFalse(Files.exists(first.file))
+            assertTrue(Files.exists(second.file))
+            Files.list(root.resolve("cache/share/ready")).use { files -> assertEquals(1, files.count()) }
+        }
+
+    @Test
     fun `share intent policy carries a typed stream URI and read grant`() =
         withRoot { root ->
             val entry = completedEntry(root, "C0005.M4V", byteArrayOf(4, 2))
@@ -125,6 +223,15 @@ class MediaShareStagerTest {
         entry.complete()
         return entry
     }
+
+    private fun constrainedStager(root: Path, clock: () -> Long): MediaShareStager =
+        MediaShareStager(
+            cacheDirectory = root.resolve("cache"),
+            clock = clock,
+            maximumReadyBytes = 6,
+            maximumReadyArtifacts = 1,
+            grantRetentionMillis = 100,
+        )
 
     private fun withRoot(block: (Path) -> Unit) {
         val root = createTempDirectory("openzcine-media-share")

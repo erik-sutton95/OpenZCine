@@ -1,10 +1,14 @@
 package com.opencapture.openzcine.media
 
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.FileTime
 import java.security.MessageDigest
 import java.util.Locale
 
@@ -28,6 +32,9 @@ class UnsupportedMediaShareFormatException(filename: String) :
 
 /** The published cache file was missing, mutable, or did not match the camera byte count. */
 class InvalidMediaShareSourceException(message: String) : MediaShareException(message)
+
+/** The temporary share cache cannot safely make room for another completed clip. */
+class MediaShareCacheLimitException(message: String) : MediaShareException(message)
 
 /**
  * A fully copied share artifact held below app-owned `cacheDir/share/ready`.
@@ -85,15 +92,64 @@ internal data class MediaShareIntentSpec(
  * files live exclusively below `cacheDir/share/ready`, while transient copy
  * files remain in the sibling, provider-inaccessible `share/staging` folder.
  *
+ * A ready artifact is retained for at least 24 hours after each successful
+ * staging request. This grace interval protects the asynchronous temporary
+ * URI grant made when Android opens the chooser: recipients must copy the
+ * content while that grant is active, rather than treating this cache URI as
+ * durable storage. Production retains at most eight artifacts and one GiB;
+ * if it cannot make room without violating the grace interval, staging fails
+ * instead of deleting a possibly granted artifact.
+ *
  * @param cacheDirectory The app's scoped `Context.cacheDir` path.
  */
-class MediaShareStager(cacheDirectory: Path) {
+class MediaShareStager private constructor(
+    cacheDirectory: Path,
+    policy: ReadyCachePolicy,
+) {
+    /** Creates a stager with the production temporary-share retention policy. */
+    constructor(cacheDirectory: Path) :
+        this(
+            cacheDirectory = cacheDirectory,
+            policy =
+                ReadyCachePolicy(
+                    clock = System::currentTimeMillis,
+                    maximumReadyBytes = DEFAULT_MAXIMUM_READY_BYTES,
+                    maximumReadyArtifacts = DEFAULT_MAXIMUM_READY_ARTIFACTS,
+                    grantRetentionMillis = URI_GRANT_RETENTION_MILLIS,
+                ),
+        )
+
+    internal constructor(
+        cacheDirectory: Path,
+        clock: () -> Long,
+        maximumReadyBytes: Long,
+        maximumReadyArtifacts: Int,
+        grantRetentionMillis: Long,
+    ) :
+        this(
+            cacheDirectory = cacheDirectory,
+            policy =
+                ReadyCachePolicy(
+                    clock = clock,
+                    maximumReadyBytes = maximumReadyBytes,
+                    maximumReadyArtifacts = maximumReadyArtifacts,
+                    grantRetentionMillis = grantRetentionMillis,
+                ),
+        )
+
+    private val clock: () -> Long = policy.clock
+    private val maximumReadyBytes: Long = policy.maximumReadyBytes
+    private val maximumReadyArtifacts: Int = policy.maximumReadyArtifacts
+    private val grantRetentionMillis: Long = policy.grantRetentionMillis
     private val cacheDirectory: Path = cacheDirectory.toAbsolutePath().normalize()
     private val shareDirectory: Path = containedDirectory(this.cacheDirectory, "share")
     private val readyDirectory: Path = containedDirectory(shareDirectory, "ready")
     private val stagingDirectory: Path = containedDirectory(shareDirectory, "staging")
 
     init {
+        require(maximumReadyBytes > 0) { "maximumReadyBytes must be positive." }
+        require(maximumReadyArtifacts > 0) { "maximumReadyArtifacts must be positive." }
+        require(grantRetentionMillis >= 0) { "grantRetentionMillis must not be negative." }
         ensureDirectory(this.cacheDirectory)
         ensureDirectory(shareDirectory)
         ensureDirectory(readyDirectory)
@@ -105,49 +161,80 @@ class MediaShareStager(cacheDirectory: Path) {
      * share directory and returns its safe metadata.
      *
      * A partial, failed, or cancelled entry is rejected before its `.part`
-     * file can be observed. Repeated calls reuse the same verified ready copy
-     * instead of expanding the app cache for one immutable camera object.
+     * file can be observed. [cancellationCheck] is called between bounded I/O
+     * chunks, so a closing playback screen can cancel a large copy and leave
+     * no partial artifact under either share directory. Ready artifacts are
+     * content-addressed; equal lengths alone never reuse a prior clip.
      *
+     * @param cancellationCheck Invoked between bounded I/O operations so callers
+     * can stop staging before any share intent is launched.
      * @throws IncompleteMediaShareException when the progressive transfer is incomplete.
-     * @throws MediaShareException when the filename, MIME type, or final cache artifact is unsafe.
+     * @throws MediaShareException when the filename, MIME type, cache capacity,
+     * or final cache artifact is unsafe.
      */
-    fun stage(entry: MediaCacheEntry, filename: String): StagedMediaShare {
+    fun stage(
+        entry: MediaCacheEntry,
+        filename: String,
+        cancellationCheck: () -> Unit = {},
+    ): StagedMediaShare {
         val mimeType = mimeTypeFor(filename)
         ensureComplete(entry)
+        cancellationCheck()
 
         val source = entry.finalPath.toAbsolutePath().normalize()
-        validatePublishedSource(entry, source)
+        validatePublishedSourcePath(entry, source)
 
         val extension = filename.substringAfterLast('.').lowercase(Locale.ROOT)
-        val target = targetPath(source, extension)
-        if (isUsableReadyCopy(target, entry.expectedLength)) {
-            return StagedMediaShare(target, filename, mimeType)
-        }
-        Files.deleteIfExists(target)
-
         val temporary = Files.createTempFile(stagingDirectory, "share-", ".tmp")
+        var movedTarget: Path? = null
+        var targetWasPublished = false
         try {
-            Files.copy(source, temporary, StandardCopyOption.REPLACE_EXISTING)
-            val copiedLength = Files.size(temporary)
-            if (copiedLength != entry.expectedLength) {
-                throw InvalidMediaShareSourceException(
-                    "Cached clip changed while preparing the share copy " +
-                        "(expected ${entry.expectedLength} bytes, found $copiedLength).",
+            val copied = copySourceToTemporary(entry, source, temporary, cancellationCheck)
+            val target = targetPath(copied.contentDigest, extension)
+
+            synchronized(readyCacheLock) {
+                cancellationCheck()
+                val now = clock()
+                if (isUsableReadyCopy(target, copied, cancellationCheck)) {
+                    markReadyForGrant(target, now)
+                    reclaimReadyCache(
+                        protectedPath = target,
+                        incomingBytes = 0,
+                        incomingArtifacts = 0,
+                        now = now,
+                        cancellationCheck = cancellationCheck,
+                    )
+                    return StagedMediaShare(target, filename, mimeType)
+                }
+
+                Files.deleteIfExists(target)
+                reclaimReadyCache(
+                    protectedPath = target,
+                    incomingBytes = copied.byteCount,
+                    incomingArtifacts = 1,
+                    now = now,
+                    cancellationCheck = cancellationCheck,
                 )
+                cancellationCheck()
+                // `ready` is FileProvider-visible, so only an atomically published,
+                // complete file may enter it. Both directories are below cacheDir.
+                Files.move(
+                    temporary,
+                    target,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+                movedTarget = target
+                markReadyForGrant(target, now)
+                targetWasPublished = true
+                return StagedMediaShare(target, filename, mimeType)
             }
-            // `ready` is FileProvider-visible, so only an atomically published,
-            // complete file may enter it. Both directories are below cacheDir.
-            Files.move(
-                temporary,
-                target,
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (error: IOException) {
-            runCatching { Files.deleteIfExists(temporary) }
-            throw error
+        } finally {
+            if (!targetWasPublished) {
+                runCatching { Files.deleteIfExists(temporary) }
+                movedTarget?.let { target -> runCatching { Files.deleteIfExists(target) } }
+            }
         }
-        return StagedMediaShare(target, filename, mimeType)
     }
 
     private fun ensureComplete(entry: MediaCacheEntry) {
@@ -156,7 +243,7 @@ class MediaShareStager(cacheDirectory: Path) {
         }
     }
 
-    private fun validatePublishedSource(entry: MediaCacheEntry, source: Path) {
+    private fun validatePublishedSourcePath(entry: MediaCacheEntry, source: Path) {
         val partial = entry.partialPath.toAbsolutePath().normalize()
         if (source == partial || source.fileName.toString().endsWith(".part")) {
             throw InvalidMediaShareSourceException("A progressive .part file cannot be shared.")
@@ -173,11 +260,178 @@ class MediaShareStager(cacheDirectory: Path) {
         }
     }
 
-    private fun isUsableReadyCopy(path: Path, expectedLength: Long): Boolean =
-        Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && Files.size(path) == expectedLength
+    /**
+     * Opens the source once with `NOFOLLOW_LINKS` and copies from that handle.
+     *
+     * The preflight path validation above is intentionally not trusted for the
+     * copy: a replacement after validation cannot redirect this already-open
+     * file descriptor to a symlink or a different path entry.
+     */
+    private fun copySourceToTemporary(
+        entry: MediaCacheEntry,
+        source: Path,
+        temporary: Path,
+        cancellationCheck: () -> Unit,
+    ): CopiedMediaSource =
+        FileChannel.open(source, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { sourceChannel ->
+            cancellationCheck()
+            val openedLength = sourceChannel.size()
+            if (openedLength != entry.expectedLength) {
+                throw InvalidMediaShareSourceException(
+                    "Completed camera cache length changed after opening " +
+                        "(expected ${entry.expectedLength} bytes, found $openedLength).",
+                )
+            }
 
-    private fun targetPath(source: Path, extension: String): Path =
-        readyDirectory.resolve("${sha256Hex(source.toString())}.$extension").normalize().also { path ->
+            FileChannel.open(temporary, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING).use {
+                targetChannel ->
+                val digest = MessageDigest.getInstance("SHA-256")
+                val buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES)
+                var copiedBytes = 0L
+                while (copiedBytes < entry.expectedLength) {
+                    cancellationCheck()
+                    buffer.clear()
+                    buffer.limit(
+                        minOf(
+                            buffer.capacity().toLong(),
+                            entry.expectedLength - copiedBytes,
+                        ).toInt(),
+                    )
+                    val read = sourceChannel.read(buffer)
+                    if (read < 0) {
+                        throw InvalidMediaShareSourceException(
+                            "Completed camera cache ended before ${entry.expectedLength} bytes were copied.",
+                        )
+                    }
+                    if (read == 0) continue
+
+                    buffer.flip()
+                    digest.update(buffer.asReadOnlyBuffer())
+                    while (buffer.hasRemaining()) {
+                        cancellationCheck()
+                        targetChannel.write(buffer)
+                    }
+                    copiedBytes += read.toLong()
+                }
+
+                cancellationCheck()
+                if (sourceChannel.size() != entry.expectedLength || Files.size(temporary) != entry.expectedLength) {
+                    throw InvalidMediaShareSourceException(
+                        "Cached clip changed while preparing the share copy " +
+                            "(expected ${entry.expectedLength} bytes).",
+                    )
+                }
+                CopiedMediaSource(byteCount = copiedBytes, contentDigest = hex(digest.digest()))
+            }
+        }
+
+    private fun isUsableReadyCopy(
+        path: Path,
+        copied: CopiedMediaSource,
+        cancellationCheck: () -> Unit,
+    ): Boolean {
+        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return false
+        return try {
+            FileChannel.open(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
+                if (channel.size() != copied.byteCount) return@use false
+                val digest = MessageDigest.getInstance("SHA-256")
+                val buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES)
+                while (true) {
+                    cancellationCheck()
+                    buffer.clear()
+                    val read = channel.read(buffer)
+                    if (read < 0) break
+                    if (read == 0) continue
+                    buffer.flip()
+                    digest.update(buffer)
+                }
+                hex(digest.digest()) == copied.contentDigest
+            }
+        } catch (_: IOException) {
+            false
+        }
+    }
+
+    /** Reclaims only artifacts that have outlived the documented URI-grant grace period. */
+    private fun reclaimReadyCache(
+        protectedPath: Path,
+        incomingBytes: Long,
+        incomingArtifacts: Int,
+        now: Long,
+        cancellationCheck: () -> Unit,
+    ) {
+        var retainedBytes = 0L
+        var retainedArtifacts = 0
+        val artifacts = readyArtifacts()
+        artifacts.forEach { artifact ->
+            retainedBytes = saturatingAdd(retainedBytes, artifact.byteCount)
+            retainedArtifacts += 1
+        }
+
+        val evictionCandidates =
+            artifacts
+                .asSequence()
+                .filter { artifact -> artifact.path != protectedPath && artifact.isExpired(now) }
+                .sortedWith(compareBy<ReadyArtifact>({ it.lastGrantedAtMillis }, { it.path.fileName.toString() }))
+                .iterator()
+
+        while (exceedsReadyCapacity(retainedBytes, retainedArtifacts, incomingBytes, incomingArtifacts) &&
+            evictionCandidates.hasNext()
+        ) {
+            cancellationCheck()
+            val artifact = evictionCandidates.next()
+            if (Files.deleteIfExists(artifact.path)) {
+                retainedBytes = (retainedBytes - artifact.byteCount).coerceAtLeast(0)
+                retainedArtifacts -= 1
+            }
+        }
+
+        if (incomingArtifacts > 0 &&
+            exceedsReadyCapacity(retainedBytes, retainedArtifacts, incomingBytes, incomingArtifacts)
+        ) {
+            throw MediaShareCacheLimitException(
+                "The temporary share cache is full; existing URI grants are still within their retention window.",
+            )
+        }
+    }
+
+    private fun readyArtifacts(): List<ReadyArtifact> =
+        Files.list(readyDirectory).use { paths ->
+            val artifacts = mutableListOf<ReadyArtifact>()
+            val iterator = paths.iterator()
+            while (iterator.hasNext()) {
+                val path = iterator.next()
+                if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                    artifacts +=
+                        ReadyArtifact(
+                            path = path,
+                            byteCount = Files.size(path),
+                            lastGrantedAtMillis =
+                                Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toMillis(),
+                        )
+                }
+            }
+            artifacts
+        }
+
+    private fun ReadyArtifact.isExpired(now: Long): Boolean =
+        lastGrantedAtMillis <= now - grantRetentionMillis
+
+    private fun exceedsReadyCapacity(
+        retainedBytes: Long,
+        retainedArtifacts: Int,
+        incomingBytes: Long,
+        incomingArtifacts: Int,
+    ): Boolean =
+        saturatingAdd(retainedBytes, incomingBytes) > maximumReadyBytes ||
+            retainedArtifacts > maximumReadyArtifacts - incomingArtifacts
+
+    private fun markReadyForGrant(path: Path, now: Long) {
+        Files.setLastModifiedTime(path, FileTime.fromMillis(now))
+    }
+
+    private fun targetPath(contentDigest: String, extension: String): Path =
+        readyDirectory.resolve("$contentDigest.$extension").normalize().also { path ->
             if (path.parent != readyDirectory) {
                 throw InvalidMediaShareSourceException("Share artifact escaped the ready directory.")
             }
@@ -219,11 +473,13 @@ class MediaShareStager(cacheDirectory: Path) {
         }
     }
 
-    private fun sha256Hex(value: String): String {
+    private fun saturatingAdd(first: Long, second: Long): Long =
+        if (first > Long.MAX_VALUE - second) Long.MAX_VALUE else first + second
+
+    private fun hex(bytes: ByteArray): String {
         val hex = "0123456789abcdef"
-        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
-        return buildString(digest.size * 2) {
-            digest.forEach { byte ->
+        return buildString(bytes.size * 2) {
+            bytes.forEach { byte ->
                 val unsigned = byte.toInt() and 0xFF
                 append(hex[unsigned ushr 4])
                 append(hex[unsigned and 0x0F])
@@ -231,7 +487,33 @@ class MediaShareStager(cacheDirectory: Path) {
         }
     }
 
+    private data class CopiedMediaSource(
+        val byteCount: Long,
+        val contentDigest: String,
+    )
+
+    private data class ReadyArtifact(
+        val path: Path,
+        val byteCount: Long,
+        val lastGrantedAtMillis: Long,
+    )
+
+    private data class ReadyCachePolicy(
+        val clock: () -> Long,
+        val maximumReadyBytes: Long,
+        val maximumReadyArtifacts: Int,
+        val grantRetentionMillis: Long,
+    )
+
     private companion object {
+        const val COPY_BUFFER_BYTES: Int = 64 * 1024
+        const val DEFAULT_MAXIMUM_READY_BYTES: Long = 1_073_741_824L
+        const val DEFAULT_MAXIMUM_READY_ARTIFACTS: Int = 8
+        const val URI_GRANT_RETENTION_MILLIS: Long = 24L * 60L * 60L * 1000L
+
+        /** Serializes ready-cache publication and eviction across stager instances in this process. */
+        val readyCacheLock: Any = Any()
+
         val MIME_TYPES: Map<String, String> =
             mapOf(
                 "mov" to "video/quicktime",
