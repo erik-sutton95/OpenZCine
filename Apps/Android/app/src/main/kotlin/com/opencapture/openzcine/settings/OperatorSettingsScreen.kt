@@ -4,6 +4,9 @@ import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,6 +41,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -414,7 +419,7 @@ private fun SettingsContentPane(
             ) {
                 when (tab) {
                     OperatorSettingsTab.ASSIST ->
-                        AssistRows(assistState, onAssistToggle, onInteraction)
+                        AssistRows(settings, assistState, onSettingToggle, onAssistToggle, onInteraction)
                     OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
                     OperatorSettingsTab.DISPLAY ->
                         DisplayRows(settings, compact, onSettingToggle, onInteraction)
@@ -426,13 +431,16 @@ private fun SettingsContentPane(
 }
 
 /**
- * View Assist tab. These switches are alternate controls for the monitor's
- * shared [AssistState], so changes immediately reach effects and scopes.
+ * View Assist tab. Effect switches are alternate controls for the monitor's
+ * shared [AssistState]; local framing controls use [OperatorSettings] and
+ * therefore persist independently from every camera-owned setting.
  */
 @Composable
 private fun AssistRows(
+    settings: OperatorSettings,
     assistState: AssistState,
-    onToggle: (AssistTool) -> Unit,
+    onSettingToggle: (OperatorSettings.Toggle) -> Unit,
+    onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
 ) {
     SettingsRowCard {
@@ -441,7 +449,7 @@ private fun AssistRows(
                 tool.settingsTitle,
                 isOn = assistState.isOn(tool),
                 showTopDivider = index != 0,
-            ) { onToggle(tool) }
+            ) { onAssistToggle(tool) }
         }
     }
     SettingsGroupCard(
@@ -474,6 +482,150 @@ private fun AssistRows(
                 }
             }
         }
+    }
+    SettingsGroupCard(
+        title = "Local Framing",
+        caption = "OpenZCine draws these monitor-only overlays. They never change the camera's Grid Display setting.",
+    ) {
+        FramingAssistSwitchRow(
+            title = "Rule-of-Thirds Grid",
+            isOn = settings.ruleOfThirdsEnabled.value,
+            showTopDivider = false,
+        ) {
+            onSettingToggle(settings.ruleOfThirdsEnabled)
+        }
+        FramingAssistSwitchRow(
+            title = "Centre Crosshair",
+            isOn = settings.centerCrosshairEnabled.value,
+        ) {
+            onSettingToggle(settings.centerCrosshairEnabled)
+        }
+        Text(
+            "Frame Guide",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        FramingGuideChoices(
+            selected = settings.framingGuide,
+            onSelect = { guide ->
+                settings.framingGuide = guide
+                onInteraction()
+            },
+        )
+        Text(
+            "Desqueeze Presentation",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        DesqueezePresentationChoices(
+            selected = settings.desqueezePresentation,
+            onSelect = { presentation ->
+                settings.desqueezePresentation = presentation
+                onInteraction()
+            },
+        )
+        Text(
+            "Camera Grid Display remains camera-owned and unchanged.",
+            style = chromeStyle(10.5f, FontWeight.Normal),
+            color = LiveDesign.muted,
+        )
+    }
+}
+
+/** A 48dp local-framing switch with native checked semantics. */
+@Composable
+private fun FramingAssistSwitchRow(
+    title: String,
+    isOn: Boolean,
+    showTopDivider: Boolean = true,
+    onToggle: () -> Unit,
+) {
+    SettingsInlineRow(title = title, showTopDivider = showTopDivider) {
+        Box(
+            Modifier.size(48.dp).toggleable(
+                value = isOn,
+                role = Role.Switch,
+                onValueChange = { onToggle() },
+            ).semantics { contentDescription = title },
+            contentAlignment = Alignment.Center,
+        ) {
+            SettingsSwitchGraphic(isOn)
+        }
+    }
+}
+
+/** Radio-choice row for the supported local delivery-frame ratios. */
+@Composable
+private fun FramingGuideChoices(
+    selected: LocalFramingGuide,
+    onSelect: (LocalFramingGuide) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalFramingGuide.entries.forEach { guide ->
+            FramingAssistChoice(
+                label = guide.label,
+                selected = guide == selected,
+                modifier = Modifier.weight(1f),
+            ) { onSelect(guide) }
+        }
+    }
+}
+
+/** Two compact radio rows for every supported local de-squeeze factor. */
+@Composable
+private fun DesqueezePresentationChoices(
+    selected: LocalDesqueezePresentation,
+    onSelect: (LocalDesqueezePresentation) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().selectableGroup(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalDesqueezePresentation.entries.chunked(3).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                row.forEach { presentation ->
+                    FramingAssistChoice(
+                        label = presentation.label,
+                        selected = presentation == selected,
+                        modifier = Modifier.weight(1f),
+                    ) { onSelect(presentation) }
+                }
+            }
+        }
+    }
+}
+
+/** Accessible 48dp radio choice shared by the local-framing configuration. */
+@Composable
+private fun FramingAssistChoice(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier
+            .height(48.dp)
+            .background(
+                if (selected) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
+                ChromeShape,
+            )
+            .border(1.dp, if (selected) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
+            color = if (selected) LiveDesign.accent else LiveDesign.muted,
+            maxLines = 1,
+        )
     }
 }
 

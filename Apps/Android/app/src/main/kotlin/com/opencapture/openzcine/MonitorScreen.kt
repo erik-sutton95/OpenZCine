@@ -38,7 +38,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -401,6 +403,10 @@ fun MonitorScreen(
             }
         val isClean = dispIndex == 1
         val isCommand = dispIndex == 2
+        // Local framing is deliberately read from the operator store rather
+        // than the camera session: grid/crosshair/guides are composited over
+        // the existing feed zone and never alter the Nikon Grid Display.
+        val localFraming = operatorSettings.localFramingAssistConfiguration
 
         // An explicit demo source wins; otherwise a connected Swift-core
         // session streams its own live view. Media ownership gates collection,
@@ -443,11 +449,16 @@ fun MonitorScreen(
         // it. Command (DISP 3) unmounts the feed behind the dashboard, iOS
         // semantics.
         if (!isCommand) {
-            Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.zone(zones.feed).clipToBounds(),
+                contentAlignment = Alignment.Center,
+            ) {
                 if (activeFrameSource != null) {
                     LiveFeedView(
                         activeFrameSource,
-                        Modifier.fillMaxSize(),
+                        Modifier.fillMaxSize().graphicsLayer {
+                            scaleX = localFraming.desqueezePresentation.horizontalPresentationScale
+                        },
                         onFrame = glass::submit,
                     )
                 } else {
@@ -462,6 +473,10 @@ fun MonitorScreen(
                         color = LiveDesign.muted,
                     )
                 }
+                LocalFramingAssistOverlay(
+                    configuration = localFraming,
+                    cleanMode = isClean,
+                )
             }
         }
 

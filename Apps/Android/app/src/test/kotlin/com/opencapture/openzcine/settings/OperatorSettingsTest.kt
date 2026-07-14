@@ -23,6 +23,10 @@ class OperatorSettingsTest {
         assertTrue(settings.recordConfirmationEnabled.value)
         assertTrue(settings.hapticsEnabled.value)
         assertTrue(settings.keepScreenAwake.value)
+        assertFalse(settings.ruleOfThirdsEnabled.value)
+        assertFalse(settings.centerCrosshairEnabled.value)
+        assertEquals(LocalFramingGuide.OFF, settings.framingGuide)
+        assertEquals(LocalDesqueezePresentation.OFF, settings.desqueezePresentation)
     }
 
     @Test
@@ -94,6 +98,35 @@ class OperatorSettingsTest {
 
         assertEquals(AssistTool.entries.toList(), settings.assistToolbarOrder)
         assertEquals(AssistTool.entries.toList(), settings.visibleAssistToolbarTools)
+    }
+
+    @Test
+    fun `local framing selection persists and remains separate from camera grid state`() {
+        OperatorSettings(store).apply {
+            ruleOfThirdsEnabled.value = true
+            centerCrosshairEnabled.value = true
+            framingGuide = LocalFramingGuide.CINEMA_239
+            desqueezePresentation = LocalDesqueezePresentation.X165
+        }
+
+        val restored = OperatorSettings(store)
+        assertTrue(restored.ruleOfThirdsEnabled.value)
+        assertTrue(restored.centerCrosshairEnabled.value)
+        assertEquals(LocalFramingGuide.CINEMA_239, restored.framingGuide)
+        assertEquals(LocalDesqueezePresentation.X165, restored.desqueezePresentation)
+        assertTrue(restored.localFramingAssistConfiguration.accessibilitySummary.contains("unchanged"))
+    }
+
+    @Test
+    fun `malformed local framing selections safely fall back to off`() {
+        store.edit()
+            .putString("assist.local.framingGuide.v1", "NOT_A_GUIDE")
+            .putString("assist.local.desqueezePresentation.v1", "NOT_A_PRESENTATION")
+            .apply()
+
+        val restored = OperatorSettings(store)
+        assertEquals(LocalFramingGuide.OFF, restored.framingGuide)
+        assertEquals(LocalDesqueezePresentation.OFF, restored.desqueezePresentation)
     }
 
     @Test
