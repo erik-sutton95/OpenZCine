@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the warm near-black field behind the iOS application mark. -->
+    <color name="launcher_icon_background">#272219</color>
+</resources>
