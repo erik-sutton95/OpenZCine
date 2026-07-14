@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import android.content.pm.ApplicationInfo
+import android.net.nsd.NsdManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +20,8 @@ import androidx.compose.ui.Modifier
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.FakeCameraSession
+import com.opencapture.openzcine.transport.AndroidNsdBrowser
+import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 
 /**
  * App entry point: a full-screen placeholder monitor shell fed by the
@@ -25,19 +29,31 @@ import com.opencapture.openzcine.core.FakeCameraSession
  * this only proves the shell-to-core boundary end to end.
  */
 class MainActivity : ComponentActivity() {
-    // ponytail: fake backend held by the activity until a real core lands
-    // behind the seam; DI arrives with the first second implementation.
-    private val session: CameraSession = FakeCameraSession()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // ponytail: fake backend by default until the real core lands behind
+        // the seam; DI arrives with the first production implementation.
+        val session: CameraSession =
+            if (isNsdTransportRequested()) nsdTransportSession() else FakeCameraSession()
         setContent {
             OpenZCineTheme {
                 MonitorShell(session)
             }
         }
     }
+
+    /**
+     * Debug-only hook to exercise the real NSD discovery + socket transport:
+     * `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez openzcine.nsdTransport true`
+     */
+    private fun isNsdTransportRequested(): Boolean =
+        (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+            intent.getBooleanExtra("openzcine.nsdTransport", false)
+
+    private fun nsdTransportSession(): CameraSession =
+        NsdCameraSessionFactory(AndroidNsdBrowser(getSystemService(NsdManager::class.java)))
+            .create()
 }
 
 /**

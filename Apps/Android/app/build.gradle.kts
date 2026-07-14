@@ -46,4 +46,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.kotlin.test.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }
