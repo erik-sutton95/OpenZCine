@@ -26,6 +26,9 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   scriptable for screenshots: `adb shell am start -n com.opencapture.openzcine/.MainActivity
   --es zc.demo.pairing permissions|choose|prepare|network|discover|connecting
   --es zc.demo.pairingPath ap|hotspot` (debug builds only).
+  Android has its own stable PTP-IP initiator identity, so a camera previously paired only with
+  iOS asks for a one-time Android pairing confirmation; later Android reconnects retain that
+  profile without replacing the iOS pairing.
 - **Swift core:** the camera brain is the shared Swift core (`Sources/OpenZCineCore`), cross-compiled
   to `libOpenZCineAndroid.so` and bound via JNI (`bridge/SwiftCore.kt` ↔
   `Sources/OpenZCineAndroidFacade`). Every Gradle debug/release build stages the optimized core and

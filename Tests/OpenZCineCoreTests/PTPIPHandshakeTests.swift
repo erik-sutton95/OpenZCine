@@ -25,6 +25,14 @@ import Testing
     #expect(PTPIPInitiator.friendlyName == "WTU-iPhone")
 }
 
+@Test func androidInitiatorIdentityIsStableAndDistinctFromIOS() {
+    #expect(Array(PTPIPInitiator.androidAppGUID) == Array("OpenZCineAndroid".utf8))
+    #expect(PTPIPInitiator.androidAppGUID.count == 16)
+    #expect(PTPIPInitiator.androidAppGUID != PTPIPInitiator.appGUID)
+    #expect(PTPIPInitiator.androidFriendlyName == "OpenZCine Android")
+    #expect(PTPIPInitiator.androidFriendlyName != PTPIPInitiator.friendlyName)
+}
+
 @Test func pairingChallengeExtractsAsciiPinAndRawHex() {
     let challenge = PTPIPPairingChallenge(
         data: Data([0x5A, 0x52, 0x20, 0x31, 0x32, 0x33, 0x34]),

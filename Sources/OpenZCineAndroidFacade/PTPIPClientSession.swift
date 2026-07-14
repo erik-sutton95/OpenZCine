@@ -150,8 +150,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
     public static func connect(
         host: String,
         port: UInt16 = UInt16(ptpIPPort),
-        guid: Data = PTPIPInitiator.appGUID,
-        friendlyName: String = PTPIPInitiator.friendlyName,
+        guid: Data = PTPIPInitiator.androidAppGUID,
+        friendlyName: String = PTPIPInitiator.androidFriendlyName,
         timeoutMilliseconds: Int32 = 10_000,
         onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
     ) throws -> PTPIPClientSession {
