@@ -23,7 +23,7 @@ enum StartupPermissionKind: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .camera: "Scan the Wi‑Fi details off the camera screen."
-        case .localNetwork: "Find and stream from the ZR over Wi‑Fi."
+        case .localNetwork: "Find and stream from your camera over Wi‑Fi."
         }
     }
 

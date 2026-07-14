@@ -56,7 +56,7 @@ enum NativeCameraSessionError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noHost:
-            return "Enter the camera IP address, or connect to the Nikon ZR Wi-Fi network first."
+            return "Enter the camera IP address, or connect to the camera's Wi-Fi network first."
         case .connectionFailed(let message):
             return message
         case .connectionClosed:
@@ -368,7 +368,7 @@ final class NativeCameraSession: @unchecked Sendable {
             establishmentSummary: "",
             identity: NativeCameraIdentity(
                 host: host,
-                cameraName: cameraName ?? "Nikon ZR",
+                cameraName: cameraName ?? "Nikon camera",
                 manufacturer: "",
                 model: "",
                 deviceVersion: "",
