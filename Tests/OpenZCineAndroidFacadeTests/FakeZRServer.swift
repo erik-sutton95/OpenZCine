@@ -22,6 +22,13 @@ struct FakeZRRequest: Equatable {
     let parameters: [UInt32]
 }
 
+/// One property-write data phase received by the scripted camera.
+struct FakeZRPropertyWrite: Equatable {
+    let operation: PTPOperationCode
+    let property: UInt32
+    let data: Data
+}
+
 /// A scripted fake ZR listening on an ephemeral localhost port.
 // SAFETY: `@unchecked Sendable` — mutable state is guarded by `lock`; each
 // accepted connection runs on its own thread.
@@ -63,6 +70,9 @@ final class FakeZRServer: @unchecked Sendable {
         /// Response sent for Nikon `EndMovieRec`. The default accepts the
         /// command; tests can supply a real PTP rejection code.
         var stopRecordingResponseCode: UInt16 = 0x2001
+        /// Response sent for either standard or extended property writes.
+        /// Tests use a real PTP rejection code to verify command propagation.
+        var propertyWriteResponseCode: UInt16 = 0x2001
     }
 
     let port: UInt16
@@ -74,6 +84,7 @@ final class FakeZRServer: @unchecked Sendable {
     private let eventSendLock = NSLock()
     private var operationLog: [PTPOperationCode] = []
     private var requestLog: [FakeZRRequest] = []
+    private var propertyWriteLog: [FakeZRPropertyWrite] = []
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
     private var stopped = false
@@ -142,6 +153,13 @@ final class FakeZRServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return requestLog
+    }
+
+    /// Property writes received with their actual host-to-camera data payloads.
+    func receivedPropertyWrites() -> [FakeZRPropertyWrite] {
+        lock.lock()
+        defer { lock.unlock() }
+        return propertyWriteLog
     }
 
     /// Transaction IDs in arrival order (parallel to `receivedOperations`).
@@ -253,14 +271,33 @@ final class FakeZRServer: @unchecked Sendable {
                 isEventConnection = true
                 send(connection, PTPIPPacket(type: .initEventAck, payload: Data()))
             case .operationRequest:
-                respond(connection, requestPayload: Array(packet.payload))
+                let requestPayload = Array(packet.payload)
+                let dataPhase =
+                    requestPayload.count >= 4
+                    ? ByteCoding.readUInt32LE(requestPayload, at: 0)
+                    : 0
+                let transactionID =
+                    requestPayload.count >= 10
+                    ? ByteCoding.readUInt32LE(requestPayload, at: 6)
+                    : 0
+                let dataOut: Data?
+                if dataPhase == PTPDataPhase.dataOut.rawValue {
+                    guard
+                        let received = try? receiveDataOut(
+                            connection, transactionID: transactionID)
+                    else { return }
+                    dataOut = received
+                } else {
+                    dataOut = nil
+                }
+                respond(connection, requestPayload: requestPayload, dataOut: dataOut)
             default:
                 return
             }
         }
     }
 
-    private func respond(_ connection: Int32, requestPayload bytes: [UInt8]) {
+    private func respond(_ connection: Int32, requestPayload bytes: [UInt8], dataOut: Data?) {
         guard bytes.count >= 10 else { return }
         let rawOperation = ByteCoding.readUInt16LE(bytes, at: 4)
         let transactionID = ByteCoding.readUInt32LE(bytes, at: 6)
@@ -441,9 +478,50 @@ final class FakeZRServer: @unchecked Sendable {
             default:
                 sendResponse(connection, code: 0x2002, transactionID: transactionID)
             }
+        case .setDevicePropValue, .setDevicePropValueEx:
+            guard let property = parameters.first, let dataOut else {
+                sendResponse(connection, code: 0x2005, transactionID: transactionID)
+                return
+            }
+            lock.lock()
+            propertyWriteLog.append(
+                FakeZRPropertyWrite(operation: operation, property: property, data: dataOut))
+            let responseCode = options.propertyWriteResponseCode
+            lock.unlock()
+            sendResponse(connection, code: responseCode, transactionID: transactionID)
         default:
             sendResponse(connection, code: 0x2005, transactionID: transactionID)
         }
+    }
+
+    /// Drains the PTP-IP host-to-camera data phase that follows a `dataOut`
+    /// operation request. The production client sends `Start_Data` followed by
+    /// `End_Data` for small property writes, while this fake also accepts
+    /// intermediate `Data` packets so its framing stays protocol-shaped.
+    private func receiveDataOut(_ connection: Int32, transactionID: UInt32) throws -> Data {
+        let start = try readPacket(connection)
+        guard start.type == .startData else { throw FakeZRServerError.badFrame }
+        let startPayload = Array(start.payload)
+        guard startPayload.count >= 12,
+            ByteCoding.readUInt32LE(startPayload, at: 0) == transactionID
+        else { throw FakeZRServerError.badFrame }
+        let expectedLength = ByteCoding.readUInt64LE(startPayload, at: 4)
+
+        var data = Data()
+        while true {
+            let packet = try readPacket(connection)
+            guard packet.type == .data || packet.type == .endData else {
+                throw FakeZRServerError.badFrame
+            }
+            let payload = Array(packet.payload)
+            guard payload.count >= 4,
+                ByteCoding.readUInt32LE(payload, at: 0) == transactionID
+            else { throw FakeZRServerError.badFrame }
+            data.append(contentsOf: payload.dropFirst(4))
+            if packet.type == .endData { break }
+        }
+        guard UInt64(data.count) == expectedLength else { throw FakeZRServerError.badFrame }
+        return data
     }
 
     // MARK: - Datasets

@@ -40,6 +40,7 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case pairingChallengeUnavailable
     case appControlUnavailable
     case unsupportedProperty(UInt32)
+    case unsupportedControl(PTPCameraControl, String)
     case liveViewAlreadyActive
     case mediaModeActive
     case mediaModeRequired
@@ -68,6 +69,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "The camera did not open app-control mode after pairing."
         case .unsupportedProperty(let code):
             return "Property 0x\(PTPIPClientSession.hexString(code)) is not known to the core."
+        case .unsupportedControl(let control, let label):
+            return "\(String(describing: control)) does not support the selection \"\(label)\"."
         case .liveViewAlreadyActive:
             return "Live view is already streaming on this session."
         case .mediaModeActive:
@@ -111,6 +114,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private let command: PosixTCPSocket
     private let event: PosixTCPSocket
     private let transactionLock = NSLock()
+    /// Serializes high-level camera-changing command sequences with recording,
+    /// media ownership transitions, and teardown. Individual wire transactions
+    /// still use `transactionLock`, so live-view frame reads stay safe between
+    /// a multi-write control sequence's individual PTP transactions.
+    private let commandLifecycleLock = NSLock()
     private var nextTransactionID: UInt32 = 1
     private var isClosed = false
 
@@ -355,10 +363,59 @@ public final class PTPIPClientSession: @unchecked Sendable {
     }
 
     private func performRecordingCommand(_ operation: PTPOperationCode) throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
         guard !isMediaModeActive else {
             throw PTPIPClientSessionError.mediaModeActive
         }
         try transactExpectingOK(operation)
+    }
+
+    // MARK: - Camera controls
+
+    /// Applies one human-readable Android camera-control selection through the
+    /// shared core's Nikon write model.
+    ///
+    /// Kotlin supplies only a semantic selector and a label; the JNI wire mapper
+    /// resolves that selector to ``PTPCameraControl``. This layer validates the
+    /// label through `PTPCameraPropertyWrite`, keeps Kelvin white balance as the
+    /// required mode-then-temperature sequence, and sends each write through the
+    /// same serialized command channel as record control and live view. Codec /
+    /// resolution labels intentionally remain unsupported because only
+    /// camera-advertised raw descriptor values are safe for those controls.
+    public func applyControl(_ control: PTPCameraControl, label: String) throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+
+        let writes = PTPCameraPropertyWrite.requests(
+            control: control,
+            label: label,
+            snapshot: PTPCameraPropertySnapshot())
+        guard !writes.isEmpty else {
+            throw PTPIPClientSessionError.unsupportedControl(control, label)
+        }
+        for write in writes {
+            try writeCameraProperty(write)
+        }
+    }
+
+    /// Writes one shared-core-encoded camera property using the operation the
+    /// Nikon body expects for that property width. Standard 16-bit `0xDxxx`
+    /// properties must use `SetDevicePropValue` (0x1016); only 32-bit extended
+    /// `0x0001_Dxxx` properties use Nikon's `SetDevicePropValueEx` (0x943C).
+    private func writeCameraProperty(_ write: PTPCameraPropertyWrite) throws {
+        let operation: PTPOperationCode =
+            write.property.rawValue <= UInt32(UInt16.max)
+            ? .setDevicePropValue
+            : .setDevicePropValueEx
+        try transactExpectingOK(
+            operation,
+            parameters: [write.property.rawValue],
+            dataPhase: .dataOut,
+            dataOut: write.data)
     }
 
     // MARK: - Event channel
@@ -488,15 +545,24 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// live-view start from racing the transition; the existing pump is then
     /// stopped and joined before this method returns.
     public func enterMediaMode() {
+        commandLifecycleLock.lock()
         liveViewCondition.lock()
         mediaModeActive = true
         liveViewCondition.unlock()
+        commandLifecycleLock.unlock()
         stopLiveView()
     }
 
     /// Releases media ownership so monitor live view may start again.
     public func exitMediaMode() {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
         stopMediaTransfer()
+        releaseMediaMode()
+    }
+
+    /// Clears the media-ownership flag while `commandLifecycleLock` is held.
+    private func releaseMediaMode() {
         liveViewCondition.lock()
         mediaModeActive = false
         liveViewCondition.broadcast()
@@ -800,8 +866,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// A running live-view pump is stopped (and joined) first, so the wire
     /// order on teardown is always `EndLiveView` → `CloseSession`.
     public func disconnect() {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
         stopEventDrain()
-        exitMediaMode()
+        stopMediaTransfer()
+        releaseMediaMode()
         stopLiveView()
         transactionLock.lock()
         let alreadyClosed = isClosed
@@ -823,10 +892,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     func transactExpectingOK(
         _ operationCode: PTPOperationCode,
         parameters: [UInt32] = [],
-        dataPhase: PTPDataPhase = .noDataOrDataIn
+        dataPhase: PTPDataPhase = .noDataOrDataIn,
+        dataOut: Data? = nil
     ) throws -> PTPIPTransactionResult {
         let result = try executeTransaction(
-            operationCode, parameters: parameters, dataPhase: dataPhase)
+            operationCode,
+            parameters: parameters,
+            dataPhase: dataPhase,
+            dataOut: dataOut)
         guard result.operationResponse.responseCode == .ok else {
             throw PTPIPClientSessionError.operationRejected(
                 operationCode, result.operationResponse.responseCode)
@@ -834,15 +907,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return result
     }
 
-    /// Executes one full PTP transaction on the command channel: request out,
-    /// then packets in until `Operation_Response`, collected by the core.
-    // ponytail: read-only slice — the host→camera data-out phase arrives with
-    // property writes; nothing in connect/read/disconnect needs it.
+    /// Executes one full PTP transaction on the command channel: operation
+    /// request, optional host-to-camera data phase, then packets in until
+    /// `Operation_Response`, collected by the core.
     func executeTransaction(
         _ operationCode: PTPOperationCode,
         transactionID explicitTransactionID: UInt32? = nil,
         parameters: [UInt32] = [],
-        dataPhase: PTPDataPhase = .noDataOrDataIn
+        dataPhase: PTPDataPhase = .noDataOrDataIn,
+        dataOut: Data? = nil
     ) throws -> PTPIPTransactionResult {
         transactionLock.lock()
         defer { transactionLock.unlock() }
@@ -858,6 +931,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
             parameters: parameters)
         try command.send(
             PTPIPPacket(type: .operationRequest, payload: Data(request.payloadBytes)))
+        if let dataOut {
+            try command.send(
+                PTPIPPacket(
+                    type: .startData,
+                    payload: Data(
+                        PTPDataPayloads.startData(
+                            transactionID: transactionID,
+                            totalLength: UInt64(dataOut.count)))))
+            try command.send(
+                PTPIPPacket(
+                    type: .endData,
+                    payload: Data(
+                        PTPDataPayloads.endData(transactionID: transactionID, data: dataOut))))
+        }
 
         var packets: [PTPIPPacket] = []
         while true {

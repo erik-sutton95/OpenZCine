@@ -46,6 +46,56 @@ public enum class CameraRecordingState {
 }
 
 /**
+ * A human-readable movie-control selection that the Android shell may ask a
+ * connected camera to apply.
+ *
+ * The selection label is supplied separately to
+ * [CameraSession.applyControl]. Kotlin never encodes PTP property identifiers
+ * or raw values: the shared Swift core validates the label and builds the
+ * Nikon write sequence.
+ */
+public enum class CameraControl {
+    /** Movie ISO sensitivity, such as `"800"`. */
+    ISO,
+
+    /** Movie shutter speed or angle, such as `"1/50"` or `"180.0°"`. */
+    SHUTTER,
+
+    /** Lens aperture, such as `"f/2.8"`. */
+    IRIS,
+
+    /** White-balance preset or Kelvin selection, such as `"5600K"`. */
+    WHITE_BALANCE,
+
+    /** Movie autofocus mode, such as `"AF-C"`. */
+    FOCUS_MODE,
+
+    /** Movie autofocus area, such as `"Subject"`. */
+    FOCUS_AREA,
+
+    /** Movie autofocus subject-detection mode, such as `"People"`. */
+    FOCUS_SUBJECT,
+
+    /** Exposure-program selection, such as `"M"`. */
+    EXPOSURE_MODE,
+
+    /** Audio input sensitivity, such as `"Auto"` or `"12"`. */
+    AUDIO_SENSITIVITY,
+
+    /** Audio input source, such as `"Mic"` or `"Line"`. */
+    AUDIO_INPUT,
+
+    /** Wind-noise filter selection, `"ON"` or `"OFF"`. */
+    WIND_FILTER,
+
+    /** Input attenuator selection, `"ON"` or `"OFF"`. */
+    ATTENUATOR,
+
+    /** 32-bit float audio recording selection, `"ON"` or `"OFF"`. */
+    AUDIO_32_BIT_FLOAT,
+}
+
+/**
  * One camera-pushed PTP event observed on a connected session's event socket.
  *
  * PTP event codes and parameters are unsigned wire values. Kotlin represents
@@ -137,6 +187,33 @@ public sealed class CameraRecordingException(message: String) : Exception(messag
         CameraRecordingException("The camera connection failed while changing recording.")
 }
 
+/** Typed failures from [CameraSession.applyControl]. */
+public sealed class CameraControlException(message: String) : Exception(message) {
+    /** A camera-control write needs a connected camera session. */
+    public data object NotConnected :
+        CameraControlException("Connect to a camera before changing a camera control.")
+
+    /** The Swift protocol library was not bundled into the installed APK. */
+    public data object CoreUnavailable :
+        CameraControlException("The shared camera core is unavailable in this app build.")
+
+    /** Camera media owns the serialized command channel. */
+    public data object MediaBusy :
+        CameraControlException("Close camera media before changing a camera control.")
+
+    /** The selection is not supported by the camera-control protocol surface. */
+    public data object UnsupportedSelection :
+        CameraControlException("This camera control or value is not supported.")
+
+    /** The camera received and rejected the property write. */
+    public data object CommandRejected :
+        CameraControlException("The camera rejected the control change.")
+
+    /** The command channel failed before the camera confirmed the write. */
+    public data object TransportFailed :
+        CameraControlException("The camera connection failed while changing a control.")
+}
+
 /**
  * A control session with one camera — the seam the Android shell talks to.
  *
@@ -180,6 +257,20 @@ public interface CameraSession {
      */
     @Throws(CameraRecordingException::class)
     public suspend fun setRecording(recording: Boolean)
+
+    /**
+     * Applies one human-readable [label] for a typed [control] on the connected
+     * camera.
+     *
+     * Implementations must keep protocol encoding in their camera core and
+     * serialize the write with recording, live-view, and teardown work. The
+     * default is intentionally unsupported for transport-only implementations
+     * that never opened a PTP control session.
+     */
+    @Throws(CameraControlException::class)
+    public suspend fun applyControl(control: CameraControl, label: String) {
+        throw CameraControlException.UnsupportedSelection
+    }
 
     /** Tears down the session and returns [state] to [CameraSessionState.Disconnected]. */
     public suspend fun disconnect()
