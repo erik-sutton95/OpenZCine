@@ -10,10 +10,13 @@ import kotlinx.coroutines.flow.Flow
  *
  * @property timestampNanos Monotonic capture timestamp of the frame.
  * @property jpegData JPEG-encoded frame payload as delivered by the camera.
+ * @property isRecording Whether the camera reported card recording in this
+ *   frame's live-view header.
  */
 public class LiveFrame(
     public val timestampNanos: Long,
     public val jpegData: ByteArray,
+    public val isRecording: Boolean = false,
 )
 
 /**

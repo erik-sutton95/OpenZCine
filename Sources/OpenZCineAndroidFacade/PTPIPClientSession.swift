@@ -327,6 +327,30 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return "0x\(Self.hexString(value))"
     }
 
+    // MARK: - Recording
+
+    /// Starts movie recording to the camera card with Nikon's
+    /// `StartMovieRecInCard` operation.
+    ///
+    /// The transaction executor serializes this with live-view frame reads,
+    /// so the command runs at a safe protocol boundary rather than racing a
+    /// `GetLiveViewImageEx` read on the shared command socket.
+    public func startRecording() throws {
+        try performRecordingCommand(.startMovieRecInCard)
+    }
+
+    /// Stops movie recording with Nikon's `EndMovieRec` operation.
+    public func stopRecording() throws {
+        try performRecordingCommand(.endMovieRec)
+    }
+
+    private func performRecordingCommand(_ operation: PTPOperationCode) throws {
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+        try transactExpectingOK(operation)
+    }
+
     // MARK: - Media ownership and transfer
 
     /// Gives media browsing/playback exclusive ownership of the camera's

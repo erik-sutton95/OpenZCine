@@ -57,6 +57,12 @@ final class FakeZRServer: @unchecked Sendable {
         var model = "ZR"
         var deviceVersion = "01.00"
         var serialNumber = "6001234"
+        /// Response sent for Nikon `StartMovieRecInCard`. The default accepts
+        /// the command; tests can supply a real PTP rejection code.
+        var startRecordingResponseCode: UInt16 = 0x2001
+        /// Response sent for Nikon `EndMovieRec`. The default accepts the
+        /// command; tests can supply a real PTP rejection code.
+        var stopRecordingResponseCode: UInt16 = 0x2001
     }
 
     let port: UInt16
@@ -71,6 +77,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var stopped = false
     private var liveViewActive = false
     private var liveViewEpoch = Date()
+    private var recording = false
 
     init(options: Options = Options()) throws {
         self.options = options
@@ -147,6 +154,13 @@ final class FakeZRServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return liveViewActive
+    }
+
+    /// Whether the fake body is currently recording to its card.
+    func isRecording() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return recording
     }
 
     /// Reconstructs the served frame counter from a delivered frame's header
@@ -246,10 +260,23 @@ final class FakeZRServer: @unchecked Sendable {
             liveViewActive = false
             lock.unlock()
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
+        case .startMovieRecInCard:
+            lock.lock()
+            let responseCode = options.startRecordingResponseCode
+            if responseCode == 0x2001 { recording = true }
+            lock.unlock()
+            sendResponse(connection, code: responseCode, transactionID: transactionID)
+        case .endMovieRec:
+            lock.lock()
+            let responseCode = options.stopRecordingResponseCode
+            if responseCode == 0x2001 { recording = false }
+            lock.unlock()
+            sendResponse(connection, code: responseCode, transactionID: transactionID)
         case .getLiveViewImageEx:
             lock.lock()
             let active = liveViewActive
             let elapsedNanos = UInt64(max(0, -liveViewEpoch.timeIntervalSinceNow) * 1e9)
+            let isRecording = recording
             lock.unlock()
             guard active else {
                 sendResponse(connection, code: 0x2019, transactionID: transactionID)  // busy
@@ -257,7 +284,7 @@ final class FakeZRServer: @unchecked Sendable {
             }
             let frameIndex = elapsedNanos / options.liveViewFrameIntervalNanoseconds
             sendDataIn(
-                connection, data: liveViewObject(frameIndex: frameIndex),
+                connection, data: liveViewObject(frameIndex: frameIndex, isRecording: isRecording),
                 transactionID: transactionID)
         case .getVendorStorageIDs, .getStorageIDs:
             // One valid volume (both ops report the same card, like a
@@ -387,7 +414,7 @@ final class FakeZRServer: @unchecked Sendable {
     /// encoded base-256 across the hour/minute/second/frame bytes as a
     /// test-only frame counter (see `frameCounter(of:)`). The JPEG variant
     /// alternates every 25 frames so a watching human sees the stream move.
-    private func liveViewObject(frameIndex: UInt64) -> Data {
+    private func liveViewObject(frameIndex: UInt64, isRecording: Bool) -> Data {
         let jpeg =
             (frameIndex / 25).isMultiple(of: 2)
             ? FakeZRLiveViewFrames.colorBarsJPEG
@@ -399,6 +426,7 @@ final class FakeZRServer: @unchecked Sendable {
         header[833] = UInt8((frameIndex >> 16) & 0xFF)
         header[834] = UInt8((frameIndex >> 8) & 0xFF)
         header[835] = UInt8(frameIndex & 0xFF)
+        header[828] = isRecording ? 1 : 0
         return Data(header + jpeg)
     }
 

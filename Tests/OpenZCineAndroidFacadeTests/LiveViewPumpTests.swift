@@ -125,6 +125,27 @@ struct LiveViewPumpTests {
         }
     }
 
+    @Test func liveViewFramesReflectTheCameraRecordingState() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let collector = FrameCollector()
+        try session.startLiveView(
+            onFrame: { frame, timestamp in collector.record(frame, at: timestamp) },
+            onEnded: { collector.markEnded() })
+        try collector.waitForFrames(atLeast: 2)
+        #expect(!collector.snapshot().contains { $0.frame.isRecording })
+
+        try session.startRecording()
+        try collector.waitForRecordingState(true)
+
+        try session.stopRecording()
+        try collector.waitForRecordingState(false, afterRecording: true)
+        session.stopLiveView()
+    }
+
     @Test func mediaOwnershipStopsAndExcludesLiveViewUntilReleased() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
@@ -214,6 +235,26 @@ private final class FrameCollector: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if frameCount >= count { return }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        throw TimedOut()
+    }
+
+    func waitForRecordingState(
+        _ recording: Bool,
+        afterRecording: Bool = false,
+        timeoutSeconds: TimeInterval = 5
+    ) throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            let observed = snapshot().map(\.frame.isRecording)
+            let matched =
+                if afterRecording {
+                    observed.contains(true) && observed.last == recording
+                } else {
+                    observed.contains(recording)
+                }
+            if matched { return }
             Thread.sleep(forTimeInterval: 0.02)
         }
         throw TimedOut()

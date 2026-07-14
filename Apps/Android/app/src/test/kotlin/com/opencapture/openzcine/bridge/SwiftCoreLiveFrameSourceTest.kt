@@ -32,14 +32,16 @@ class SwiftCoreLiveFrameSourceTest {
     @Test
     fun `bridges callbacks into frames and completes when the pump ends`() = runTest {
         val jpeg = byteArrayOf(1, 2, 3)
+        var recordingState: Boolean? = null
         val source =
             SwiftCoreLiveFrameSource(
                 available = { true },
                 start = { listener ->
-                    listener.onFrame(jpeg, 7L)
+                    listener.onFrame(jpeg, 7L, true)
                     listener.onEnded()
                 },
                 stop = {},
+                onRecordingState = { recordingState = it },
             )
 
         val frames = source.frames.toList()
@@ -47,6 +49,8 @@ class SwiftCoreLiveFrameSourceTest {
         assertEquals(1, frames.size)
         assertContentEquals(jpeg, frames.single().jpegData)
         assertEquals(7L, frames.single().timestampNanos)
+        assertTrue(frames.single().isRecording)
+        assertEquals(true, recordingState)
     }
 
     @Test
@@ -55,7 +59,7 @@ class SwiftCoreLiveFrameSourceTest {
         val source =
             SwiftCoreLiveFrameSource(
                 available = { true },
-                start = { listener -> listener.onFrame(byteArrayOf(1), 1L) },
+                start = { listener -> listener.onFrame(byteArrayOf(1), 1L, false) },
                 stop = { stopped.set(true) },
             )
 

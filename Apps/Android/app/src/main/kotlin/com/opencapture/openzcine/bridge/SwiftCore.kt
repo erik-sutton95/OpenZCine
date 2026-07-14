@@ -173,6 +173,21 @@ object SwiftCore {
     /** Nikon MovieRecProhibitionCondition (0xD0A4) — 0 means recording is allowed. */
     const val PROP_MOVIE_REC_PROHIBITION: Int = 0xD0A4
 
+    /** `sessionSetRecording` completed and the camera accepted the command. */
+    const val RECORDING_COMMAND_ACCEPTED: Int = 0
+
+    /** No active facade session existed when `sessionSetRecording` ran. */
+    const val RECORDING_COMMAND_NO_SESSION: Int = 1
+
+    /** Camera media owns the command channel, so recording cannot change. */
+    const val RECORDING_COMMAND_MEDIA_BUSY: Int = 2
+
+    /** The camera sent a non-OK response to the Nikon recording operation. */
+    const val RECORDING_COMMAND_REJECTED: Int = 3
+
+    /** The command channel failed before the recording operation completed. */
+    const val RECORDING_COMMAND_TRANSPORT_FAILED: Int = 4
+
     /**
      * Connects to the camera at [host] (numeric IPv4, port 15740): PTP-IP Init
      * handshake on both channels, then the Nikon open/pair/identify sequence,
@@ -190,6 +205,18 @@ object SwiftCore {
     external fun sessionReadProperty(code: Int): String?
 
     /**
+     * Starts (`true`) or stops (`false`) movie recording on the active camera
+     * session. The Swift facade sends Nikon `StartMovieRecInCard` / `EndMovieRec`
+     * through its transaction serializer, so a live-view frame read cannot race
+     * the command. Blocking — call from a background dispatcher.
+     *
+     * Returns one of [RECORDING_COMMAND_ACCEPTED],
+     * [RECORDING_COMMAND_NO_SESSION], [RECORDING_COMMAND_MEDIA_BUSY],
+     * [RECORDING_COMMAND_REJECTED], or [RECORDING_COMMAND_TRANSPORT_FAILED].
+     */
+    external fun sessionSetRecording(recording: Boolean): Int
+
+    /**
      * Gracefully tears down the active session: best-effort `CloseSession` so
      * the camera frees its connection slot, then both sockets. Blocking
      * (bounded ~2 s) — call from a background dispatcher. A running live-view
@@ -203,9 +230,10 @@ object SwiftCore {
         /**
          * One live-view JPEG, freshly pulled from the camera. [timestampNanos]
          * is `CLOCK_MONOTONIC` at delivery — the same clock as
-         * `System.nanoTime()`.
+         * `System.nanoTime()`. [isRecording] is the camera-authoritative
+         * record flag decoded from the same live-view header.
          */
-        fun onFrame(jpeg: ByteArray, timestampNanos: Long)
+        fun onFrame(jpeg: ByteArray, timestampNanos: Long, isRecording: Boolean)
 
         /**
          * The stream ended — stop, disconnect, a transport error, or an

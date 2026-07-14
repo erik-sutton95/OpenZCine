@@ -24,6 +24,7 @@ class SwiftCoreLiveFrameSource(
     private val available: () -> Boolean = { SwiftCore.isAvailable },
     private val start: (SwiftCore.LiveFrameListener) -> Unit = SwiftCore::sessionStartLiveView,
     private val stop: () -> Unit = SwiftCore::sessionStopLiveView,
+    private val onRecordingState: (Boolean) -> Unit = {},
 ) : LiveFrameSource {
     override val frames: Flow<LiveFrame> =
         callbackFlow {
@@ -35,8 +36,13 @@ class SwiftCoreLiveFrameSource(
                 }
                 start(
                     object : SwiftCore.LiveFrameListener {
-                        override fun onFrame(jpeg: ByteArray, timestampNanos: Long) {
-                            trySend(LiveFrame(timestampNanos, jpeg))
+                        override fun onFrame(
+                            jpeg: ByteArray,
+                            timestampNanos: Long,
+                            isRecording: Boolean,
+                        ) {
+                            onRecordingState(isRecording)
+                            trySend(LiveFrame(timestampNanos, jpeg, isRecording))
                         }
 
                         override fun onEnded() {

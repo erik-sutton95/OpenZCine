@@ -19,8 +19,11 @@ public class FakeCameraSession(
     private val discoverable: CameraIdentity? = null,
 ) : CameraSession {
     private val mutableState = MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
+    private val mutableRecordingState = MutableStateFlow(CameraRecordingState.STANDBY)
 
     override val state: StateFlow<CameraSessionState> = mutableState.asStateFlow()
+    override val recordingState: StateFlow<CameraRecordingState> =
+        mutableRecordingState.asStateFlow()
 
     override suspend fun connect() {
         mutableState.value = CameraSessionState.Connecting
@@ -29,7 +32,18 @@ public class FakeCameraSession(
                 ?: CameraSessionState.Disconnected
     }
 
+    override suspend fun setRecording(recording: Boolean) {
+        if (mutableState.value !is CameraSessionState.Connected) {
+            throw CameraRecordingException.NotConnected
+        }
+        mutableRecordingState.value =
+            if (recording) CameraRecordingState.STARTING else CameraRecordingState.STOPPING
+        mutableRecordingState.value =
+            if (recording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
+    }
+
     override suspend fun disconnect() {
         mutableState.value = CameraSessionState.Disconnected
+        mutableRecordingState.value = CameraRecordingState.STANDBY
     }
 }
