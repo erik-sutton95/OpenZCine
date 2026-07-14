@@ -192,6 +192,15 @@ object SwiftCore {
     /** Nikon MovieRecProhibitionCondition (0xD0A4) — 0 means recording is allowed. */
     const val PROP_MOVIE_REC_PROHIBITION: Int = 0xD0A4
 
+    /** Bounded first readback burst after a camera session connects. */
+    const val PROPERTY_REFRESH_BOOTSTRAP: Int = 0
+
+    /** One low-rate round-robin property read. */
+    const val PROPERTY_REFRESH_NEXT: Int = 1
+
+    /** One debounced read requested by a camera `DevicePropChanged` event. */
+    const val PROPERTY_REFRESH_EVENT: Int = 2
+
     /** `sessionSetRecording` completed and the camera accepted the command. */
     const val RECORDING_COMMAND_ACCEPTED: Int = 0
 
@@ -248,6 +257,24 @@ object SwiftCore {
      * a background dispatcher.
      */
     external fun sessionReadProperty(code: Int): String?
+
+    /**
+     * Refreshes semantic Android camera state through the Swift core and
+     * returns a flat semantic record consumed by `SwiftCoreCameraSession`. [request]
+     * must be one of [PROPERTY_REFRESH_BOOTSTRAP], [PROPERTY_REFRESH_NEXT],
+     * or [PROPERTY_REFRESH_EVENT]. [recording] informs the core's shared
+     * low-rate poll policy. [propertyCode] is only a raw value forwarded from
+     * an existing `DevicePropChanged` event; Kotlin never creates or decodes a
+     * Nikon property identifier. Null is reserved for an unavailable native
+     * bridge; non-null results always include a typed semantic status.
+     *
+     * Blocking — call from a background dispatcher.
+     */
+    external fun sessionRefreshPropertySnapshot(
+        request: Int,
+        recording: Boolean,
+        propertyCode: Long,
+    ): String?
 
     /**
      * Starts (`true`) or stops (`false`) movie recording on the active camera

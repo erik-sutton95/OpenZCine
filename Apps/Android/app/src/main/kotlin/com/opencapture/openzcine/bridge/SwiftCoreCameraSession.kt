@@ -3,6 +3,9 @@ package com.opencapture.openzcine.bridge
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
+import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
+import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
@@ -10,9 +13,14 @@ import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -20,6 +28,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,6 +43,8 @@ internal interface SwiftCoreSessionBridge {
     fun startEventStream(listener: SwiftCore.SessionEventListener)
 
     fun readProperty(code: Int): String?
+
+    fun refreshPropertySnapshot(request: Int, recording: Boolean, propertyCode: Long): String?
 
     fun setRecording(recording: Boolean): Int
 
@@ -53,6 +65,12 @@ internal interface SwiftCoreSessionBridge {
         }
 
         override fun readProperty(code: Int): String? = SwiftCore.sessionReadProperty(code)
+
+        override fun refreshPropertySnapshot(
+            request: Int,
+            recording: Boolean,
+            propertyCode: Long,
+        ): String? = SwiftCore.sessionRefreshPropertySnapshot(request, recording, propertyCode)
 
         override fun setRecording(recording: Boolean): Int =
             SwiftCore.sessionSetRecording(recording)
@@ -101,6 +119,12 @@ class SwiftCoreCameraSession internal constructor(
     private val host: String,
     private val phaseLogger: (String, String) -> Unit,
     private val core: SwiftCoreSessionBridge,
+    private val propertyRefreshScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val propertyRefreshDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val propertyPollIntervalMillis: Long = PROPERTY_POLL_INTERVAL_MILLIS,
+    private val propertyEventDebounceMillis: Long = PROPERTY_EVENT_DEBOUNCE_MILLIS,
+    private val automaticallyRefreshProperties: Boolean = true,
 ) : CameraSession {
     /** Production session binding the Kotlin shell to the shared Swift facade. */
     public constructor(
@@ -116,6 +140,23 @@ class SwiftCoreCameraSession internal constructor(
 
     private val _recordingState = MutableStateFlow(CameraRecordingState.STANDBY)
     override val recordingState: StateFlow<CameraRecordingState> = _recordingState.asStateFlow()
+
+    private val _cameraProperties = MutableStateFlow(CameraPropertySnapshot())
+    override val cameraProperties: StateFlow<CameraPropertySnapshot> = _cameraProperties.asStateFlow()
+
+    private val _propertyRefreshStatus =
+        MutableStateFlow<CameraPropertyRefreshStatus>(CameraPropertyRefreshStatus.Idle)
+    override val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
+        _propertyRefreshStatus.asStateFlow()
+
+    /** Serializes poll, manual, and event-triggered refresh work into one JNI call at a time. */
+    private val propertyRefreshMutex = Mutex()
+
+    /** Guards refresh job replacement and the coalesced event property queue. */
+    private val propertyRefreshJobLock = Any()
+    private var propertyPollingJob: Job? = null
+    private var eventPropertyRefreshJob: Job? = null
+    private val pendingEventPropertyCodes = LinkedHashSet<Long>()
 
     private val _events =
         MutableSharedFlow<CameraSessionEvent>(
@@ -180,7 +221,12 @@ class SwiftCoreCameraSession internal constructor(
                             ignoreLiveRecordingStateUntilNanos = 0L
                             cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
+                            _cameraProperties.value = CameraPropertySnapshot()
+                            _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
                             startEventStream(attempt)
+                            if (automaticallyRefreshProperties) {
+                                startPropertyRefresh(attempt)
+                            }
                         }
                     }
 
@@ -189,6 +235,7 @@ class SwiftCoreCameraSession internal constructor(
                             ignoreLiveRecordingStateUntilNanos = 0L
                             cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
+                            stopPropertyRefresh(clearSnapshot = true)
                             phaseLogger("failed", message)
                         }
                     }
@@ -215,6 +262,25 @@ class SwiftCoreCameraSession internal constructor(
         } else {
             null
         }
+
+    /**
+     * Requests a bounded immediate semantic camera-property refresh. Existing
+     * values survive a body-specific unsupported field; inspect
+     * [propertyRefreshStatus] for that non-terminal result.
+     */
+    override suspend fun refreshProperties() {
+        val attempt = connectedAttempt()
+        if (attempt == null) {
+            _propertyRefreshStatus.value =
+                CameraPropertyRefreshStatus.Degraded(CameraPropertyRefreshFailure.NOT_CONNECTED)
+            return
+        }
+        refreshCameraProperties(
+            attempt = attempt,
+            request = SwiftCore.PROPERTY_REFRESH_BOOTSTRAP,
+            propertyCode = 0L,
+        )
+    }
 
     /**
      * Sends the Nikon movie-record operation through Swift and updates the
@@ -312,15 +378,26 @@ class SwiftCoreCameraSession internal constructor(
     }
 
     override suspend fun disconnect() {
-        cameraCommandMutex.withLock {
-            invalidateAttempt()
-            if (core.isAvailable) {
-                withContext(Dispatchers.IO + NonCancellable) { core.disconnect() }
+        // A manual refresh is not owned by either cancellable refresh job, so
+        // clear state only after this mutex waits for any such JNI call. That
+        // prevents its final readback from repopulating a disconnected session.
+        stopPropertyRefresh(clearSnapshot = false)
+        withContext(NonCancellable) {
+            cameraCommandMutex.withLock {
+                invalidateAttempt()
+                try {
+                    if (core.isAvailable) {
+                        withContext(Dispatchers.IO) { core.disconnect() }
+                    }
+                } finally {
+                    ignoreLiveRecordingStateUntilNanos = 0L
+                    cameraRecordingEventVersion = 0L
+                    _recordingState.value = CameraRecordingState.STANDBY
+                    _cameraProperties.value = CameraPropertySnapshot()
+                    _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
+                    _state.value = CameraSessionState.Disconnected
+                }
             }
-            ignoreLiveRecordingStateUntilNanos = 0L
-            cameraRecordingEventVersion = 0L
-            _recordingState.value = CameraRecordingState.STANDBY
-            _state.value = CameraSessionState.Disconnected
         }
     }
 
@@ -374,6 +451,7 @@ class SwiftCoreCameraSession internal constructor(
         ignoreLiveRecordingStateUntilNanos = 0L
         cameraRecordingEventVersion = 0L
         _recordingState.value = CameraRecordingState.STANDBY
+        stopPropertyRefresh(clearSnapshot = true)
         phaseLogger("eventChannelEnded", message)
     }
 
@@ -437,10 +515,169 @@ class SwiftCoreCameraSession internal constructor(
                 cameraRecordingEventVersion += 1
                 applyCameraRecordingState(recording = false, force = true)
             }
-            is CameraSessionEvent.PropertyChanged -> Unit
+            is CameraSessionEvent.PropertyChanged -> {
+                scheduleEventPropertyRefresh(attempt, event.propertyCode)
+            }
             is CameraSessionEvent.Unknown -> Unit
         }
     }
+
+    /** Starts one initial property burst followed by conservative round-robin reads. */
+    private fun startPropertyRefresh(attempt: Long) {
+        stopPropertyRefresh(clearSnapshot = false)
+        _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Refreshing
+        val job =
+            propertyRefreshScope.launch {
+                refreshCameraProperties(
+                    attempt = attempt,
+                    request = SwiftCore.PROPERTY_REFRESH_BOOTSTRAP,
+                    propertyCode = 0L,
+                )
+                while (isActive && ownsConnectedAttempt(attempt)) {
+                    delay(propertyPollIntervalMillis.coerceAtLeast(1L))
+                    if (!isActive || !ownsConnectedAttempt(attempt)) break
+                    refreshCameraProperties(
+                        attempt = attempt,
+                        request = SwiftCore.PROPERTY_REFRESH_NEXT,
+                        propertyCode = 0L,
+                    )
+                }
+            }
+        synchronized(propertyRefreshJobLock) {
+            if (ownsConnectedAttempt(attempt)) {
+                propertyPollingJob = job
+            } else {
+                job.cancel()
+            }
+        }
+    }
+
+    /** Cancels polling and pending event work before connection teardown/retry. */
+    private fun stopPropertyRefresh(clearSnapshot: Boolean) {
+        synchronized(propertyRefreshJobLock) {
+            propertyPollingJob?.cancel()
+            propertyPollingJob = null
+            eventPropertyRefreshJob?.cancel()
+            eventPropertyRefreshJob = null
+            pendingEventPropertyCodes.clear()
+        }
+        if (clearSnapshot) {
+            _cameraProperties.value = CameraPropertySnapshot()
+        }
+        _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
+    }
+
+    /** Coalesces a burst of camera property events into a bounded delayed refresh. */
+    private fun scheduleEventPropertyRefresh(attempt: Long, propertyCode: Long?) {
+        val rawPropertyCode = guardPropertyCode(propertyCode) ?: return
+        if (!ownsConnectedAttempt(attempt)) return
+        synchronized(propertyRefreshJobLock) {
+            if (!ownsConnectedAttempt(attempt)) return
+            pendingEventPropertyCodes += rawPropertyCode
+            eventPropertyRefreshJob?.cancel()
+            eventPropertyRefreshJob =
+                propertyRefreshScope.launch {
+                    delay(propertyEventDebounceMillis.coerceAtLeast(1L))
+                    val propertyCodes =
+                        synchronized(propertyRefreshJobLock) {
+                            if (!ownsConnectedAttempt(attempt)) {
+                                pendingEventPropertyCodes.clear()
+                                emptyList()
+                            } else {
+                                pendingEventPropertyCodes
+                                    .take(MAX_EVENT_PROPERTY_REFRESHES)
+                                    .also { pendingEventPropertyCodes.clear() }
+                            }
+                        }
+                    for (rawCode in propertyCodes) {
+                        if (!isActive || !ownsConnectedAttempt(attempt)) break
+                        refreshCameraProperties(
+                            attempt = attempt,
+                            request = SwiftCore.PROPERTY_REFRESH_EVENT,
+                            propertyCode = rawCode,
+                        )
+                    }
+                }
+        }
+    }
+
+    /** Rejects invalid raw-event values without inventing a property identifier. */
+    private fun guardPropertyCode(propertyCode: Long?): Long? =
+        propertyCode?.takeIf { it >= 0L && it <= UINT32_MASK }
+
+    /**
+     * Runs one native semantic readback at a time and never lets a failed
+     * noncritical read overwrite last-known values or connection state.
+     */
+    private suspend fun refreshCameraProperties(
+        attempt: Long,
+        request: Int,
+        propertyCode: Long,
+    ) {
+        propertyRefreshMutex.withLock {
+            if (!ownsConnectedAttempt(attempt)) return
+            if (!core.isAvailable) {
+                _propertyRefreshStatus.value =
+                    CameraPropertyRefreshStatus.Degraded(
+                        CameraPropertyRefreshFailure.CORE_UNAVAILABLE,
+                    )
+                return
+            }
+            _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Refreshing
+            cameraCommandMutex.withLock {
+                if (!ownsConnectedAttempt(attempt)) return
+                val readback = readNativePropertySnapshot(request, propertyCode)
+                if (!ownsConnectedAttempt(attempt)) return
+                if (
+                    readback.isValid &&
+                        readback.result != NativePropertyRefreshResult.NO_SESSION
+                ) {
+                    _cameraProperties.value = readback.snapshot
+                }
+                _propertyRefreshStatus.value = readback.result.toRefreshStatus()
+            }
+        }
+    }
+
+    /** Performs one blocking semantic readback and maps bridge failures to a typed result. */
+    private suspend fun readNativePropertySnapshot(
+        request: Int,
+        propertyCode: Long,
+    ): CameraPropertyRefreshWireResult {
+        val payload =
+            try {
+                withContext(propertyRefreshDispatcher) {
+                    core.refreshPropertySnapshot(
+                        request = request,
+                        recording = _recordingState.value == CameraRecordingState.RECORDING,
+                        propertyCode = propertyCode,
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                null
+            }
+        return CameraPropertySnapshotWire.decode(payload)
+    }
+
+    /** Resolves a native non-terminal result to the public Android state model. */
+    private fun NativePropertyRefreshResult.toRefreshStatus(): CameraPropertyRefreshStatus =
+        when (this) {
+            NativePropertyRefreshResult.ACCEPTED -> CameraPropertyRefreshStatus.Ready
+            NativePropertyRefreshResult.NO_SESSION ->
+                CameraPropertyRefreshStatus.Degraded(CameraPropertyRefreshFailure.NOT_CONNECTED)
+            NativePropertyRefreshResult.MEDIA_BUSY ->
+                CameraPropertyRefreshStatus.Degraded(CameraPropertyRefreshFailure.MEDIA_BUSY)
+            NativePropertyRefreshResult.UNSUPPORTED ->
+                CameraPropertyRefreshStatus.Degraded(
+                    CameraPropertyRefreshFailure.UNSUPPORTED_PROPERTY,
+                )
+            NativePropertyRefreshResult.TRANSPORT_FAILED ->
+                CameraPropertyRefreshStatus.Degraded(
+                    CameraPropertyRefreshFailure.TRANSPORT_FAILED,
+                )
+        }
 
     private fun Int.throwIfRecordingCommandFailed() {
         when (this) {
@@ -469,6 +706,9 @@ class SwiftCoreCameraSession internal constructor(
 
     private companion object {
         const val RECORDING_READBACK_GRACE_NANOS: Long = 1_500_000_000L
+        const val PROPERTY_POLL_INTERVAL_MILLIS: Long = 1_500L
+        const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
+        const val MAX_EVENT_PROPERTY_REFRESHES: Int = 4
         const val EVENT_BUFFER_CAPACITY: Int = 64
         const val EVENT_CODE_MASK: Int = 0xFFFF
         const val UINT32_MASK: Long = 0xFFFF_FFFFL
@@ -478,17 +718,33 @@ class SwiftCoreCameraSession internal constructor(
         const val MOVIE_RECORD_STARTED: Int = 0xC10A
     }
 
-    private fun beginAttempt(): Long? =
-        synchronized(attemptLock) {
-            if (_state.value !is CameraSessionState.Disconnected) return@synchronized null
-            nextAttempt += 1
-            activeAttempt = nextAttempt
-            _state.value = CameraSessionState.Connecting
-            nextAttempt
+    private fun beginAttempt(): Long? {
+        val attempt =
+            synchronized(attemptLock) {
+                if (_state.value !is CameraSessionState.Disconnected) return@synchronized null
+                nextAttempt += 1
+                activeAttempt = nextAttempt
+                _state.value = CameraSessionState.Connecting
+                nextAttempt
+            }
+        if (attempt != null) {
+            stopPropertyRefresh(clearSnapshot = true)
         }
+        return attempt
+    }
 
     private fun isCurrentAttempt(attempt: Long): Boolean =
         synchronized(attemptLock) { activeAttempt == attempt }
+
+    private fun connectedAttempt(): Long? =
+        synchronized(attemptLock) {
+            activeAttempt?.takeIf { _state.value is CameraSessionState.Connected }
+        }
+
+    private fun ownsConnectedAttempt(attempt: Long): Boolean =
+        synchronized(attemptLock) {
+            activeAttempt == attempt && _state.value is CameraSessionState.Connected
+        }
 
     private fun updateAttempt(attempt: Long, state: CameraSessionState): Boolean =
         synchronized(attemptLock) {
@@ -524,8 +780,15 @@ class SwiftCoreCameraSession internal constructor(
                 _state.value = CameraSessionState.Disconnected
                 true
             }
+        if (ownsAttempt) {
+            stopPropertyRefresh(clearSnapshot = true)
+        }
         if (ownsAttempt && core.isAvailable) {
-            withContext(NonCancellable + Dispatchers.IO) { core.disconnect() }
+            withContext(NonCancellable) {
+                cameraCommandMutex.withLock {
+                    withContext(Dispatchers.IO) { core.disconnect() }
+                }
+            }
         }
     }
 }

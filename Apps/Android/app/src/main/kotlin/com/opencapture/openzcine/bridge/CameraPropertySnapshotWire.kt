@@ -1,0 +1,145 @@
+package com.opencapture.openzcine.bridge
+
+import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraShutterMode
+import com.opencapture.openzcine.core.CameraStorageStatus
+import com.opencapture.openzcine.core.CameraTemperatureStatus
+
+/** Stable semantic outcomes emitted by the Swift property-readback wire. */
+internal enum class NativePropertyRefreshResult {
+    ACCEPTED,
+    NO_SESSION,
+    MEDIA_BUSY,
+    UNSUPPORTED,
+    TRANSPORT_FAILED,
+}
+
+/** One decoded semantic property-refresh wire result. */
+internal data class CameraPropertyRefreshWireResult(
+    val result: NativePropertyRefreshResult,
+    val snapshot: CameraPropertySnapshot,
+    /** True only when the native payload had a parseable semantic result field. */
+    val isValid: Boolean,
+)
+
+/**
+ * Kotlin mirror of `AndroidCameraPropertyReadbackWire`.
+ *
+ * This parses only semantic names and already decoded values. It deliberately
+ * contains no Nikon property identifiers, packet formats, or byte decoding.
+ */
+internal object CameraPropertySnapshotWire {
+    fun decode(payload: String?): CameraPropertyRefreshWireResult {
+        val fields = payload?.let(::fields)
+        val result = fields?.let { result(it.optionalString("result")) }
+        if (fields == null || result == null) {
+            return CameraPropertyRefreshWireResult(
+                NativePropertyRefreshResult.TRANSPORT_FAILED,
+                CameraPropertySnapshot(),
+                isValid = false,
+            )
+        }
+        return CameraPropertyRefreshWireResult(
+            result = result,
+            snapshot = snapshot(fields),
+            isValid = true,
+        )
+    }
+
+    private fun result(value: String?): NativePropertyRefreshResult? =
+        when (value) {
+            "accepted" -> NativePropertyRefreshResult.ACCEPTED
+            "noSession" -> NativePropertyRefreshResult.NO_SESSION
+            "mediaBusy" -> NativePropertyRefreshResult.MEDIA_BUSY
+            "unsupported" -> NativePropertyRefreshResult.UNSUPPORTED
+            "transportFailed" -> NativePropertyRefreshResult.TRANSPORT_FAILED
+            else -> null
+        }
+
+    private fun snapshot(value: Map<String, String>): CameraPropertySnapshot {
+        val storageTotal = value.optionalLong("storageTotalCapacityBytes")
+        val storageFree = value.optionalLong("storageFreeSpaceBytes")
+        val storage =
+            if (storageTotal != null && storageFree != null) {
+                CameraStorageStatus(totalCapacityBytes = storageTotal, freeSpaceBytes = storageFree)
+            } else {
+                null
+            }
+        return CameraPropertySnapshot(
+            iso = value.optionalLong("iso"),
+            baseIso = value.optionalString("baseIso"),
+            exposureMode = value.optionalString("exposureMode"),
+            shutterMode = shutterMode(value.optionalString("shutterMode")),
+            shutterLocked = value.optionalBoolean("shutterLocked"),
+            shutterSpeed = value.optionalString("shutterSpeed"),
+            shutterAngle = value.optionalString("shutterAngle"),
+            iris = value.optionalString("iris"),
+            whiteBalanceMode = value.optionalString("whiteBalanceMode"),
+            whiteBalanceKelvin = value.optionalInt("whiteBalanceKelvin"),
+            resolution = value.optionalString("resolution"),
+            frameRate = value.optionalInt("frameRate"),
+            codec = value.optionalString("codec"),
+            batteryPercent = value.optionalInt("batteryPercent"),
+            externalPower = value.optionalBoolean("externalPower"),
+            warningRaw = value.optionalInt("warningRaw"),
+            temperatureStatus = temperatureStatus(value.optionalString("temperatureStatus")),
+            storage = storage,
+            lens = value.optionalString("lens"),
+            focalLength = value.optionalString("focalLength"),
+            focusMode = value.optionalString("focusMode"),
+            focusArea = value.optionalString("focusArea"),
+            focusSubject = value.optionalString("focusSubject"),
+            microphoneSensitivity = value.optionalString("microphoneSensitivity"),
+            microphoneLevel = value.optionalString("microphoneLevel"),
+            windFilter = value.optionalString("windFilter"),
+            inputAttenuator = value.optionalString("inputAttenuator"),
+            audioInput = value.optionalString("audioInput"),
+            audioSensitivity = value.optionalString("audioSensitivity"),
+            audio32BitFloat = value.optionalString("audio32BitFloat"),
+            vibrationReduction = value.optionalString("vibrationReduction"),
+            electronicVr = value.optionalString("electronicVr"),
+            cameraGrid = value.optionalString("cameraGrid"),
+        )
+    }
+
+    private fun shutterMode(value: String?): CameraShutterMode? =
+        when (value) {
+            "speed" -> CameraShutterMode.SPEED
+            "angle" -> CameraShutterMode.ANGLE
+            else -> null
+        }
+
+    private fun temperatureStatus(value: String?): CameraTemperatureStatus? =
+        when (value) {
+            "OK" -> CameraTemperatureStatus.NORMAL
+            "CHECK" -> CameraTemperatureStatus.WARNING
+            "HOT" -> CameraTemperatureStatus.HOT
+            else -> null
+        }
+
+    private fun fields(payload: String): Map<String, String>? {
+        val fields = linkedMapOf<String, String>()
+        for (line in payload.lineSequence()) {
+            val separator = line.indexOf('\t')
+            if (separator <= 0) return null
+            val key = line.substring(0, separator)
+            val value = line.substring(separator + 1)
+            if (fields.put(key, value) != null) return null
+        }
+        return fields.takeIf { "result" in it }
+    }
+
+    private fun Map<String, String>.optionalString(key: String): String? = get(key)
+
+    private fun Map<String, String>.optionalLong(key: String): Long? = get(key)?.toLongOrNull()
+
+    private fun Map<String, String>.optionalInt(key: String): Int? =
+        optionalLong(key)?.takeIf { it in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong() }?.toInt()
+
+    private fun Map<String, String>.optionalBoolean(key: String): Boolean? =
+        when (get(key)) {
+            "true" -> true
+            "false" -> false
+            else -> null
+        }
+}

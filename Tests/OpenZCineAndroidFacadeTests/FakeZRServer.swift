@@ -60,6 +60,12 @@ final class FakeZRServer: @unchecked Sendable {
         var cameraName = "ZR_6001234"
         var pairingPIN = "1234"
         var batteryPercent: UInt8 = 80
+        /// Properties the fake rejects as unsupported for readback tests.
+        var unsupportedPropertyCodes: Set<UInt32> = []
+        /// Active-card capacity exposed by `GetStorageInfo` for monitor state tests.
+        var storageTotalCapacityBytes: UInt64 = 1_000_000_000_000
+        /// Active-card free capacity exposed by `GetStorageInfo` for monitor state tests.
+        var storageFreeSpaceBytes: UInt64 = 500_000_000_000
         var manufacturer = "Nikon Corporation"
         var model = "ZR"
         var deviceVersion = "01.00"
@@ -389,6 +395,17 @@ final class FakeZRServer: @unchecked Sendable {
             // single-card body).
             let payload = ByteCoding.uint32LE(1) + ByteCoding.uint32LE(FakeZRMediaCard.storageID)
             sendDataIn(connection, data: Data(payload), transactionID: transactionID)
+        case .getStorageInfo:
+            let storageID = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            guard storageID == FakeZRMediaCard.storageID else {
+                // Invalid_StorageID.
+                sendResponse(connection, code: 0x2008, transactionID: transactionID)
+                return
+            }
+            sendDataIn(
+                connection,
+                data: storageInfoDataset(),
+                transactionID: transactionID)
         case .getObjectHandles:
             let storageID = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
             guard storageID == FakeZRMediaCard.storageID else {
@@ -466,18 +483,14 @@ final class FakeZRServer: @unchecked Sendable {
                 ])
         case .getDevicePropValueEx:
             let propertyCode = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
-            switch PTPPropertyCode(rawValue: propertyCode) {
-            case .batteryLevel:
-                sendDataIn(
-                    connection, data: Data([options.batteryPercent]),
-                    transactionID: transactionID)
-            case .movieRecProhibitionCondition:
-                // 0 = nothing prohibits recording.
-                sendDataIn(
-                    connection, data: Data(ByteCoding.uint32LE(0)), transactionID: transactionID)
-            default:
+            guard !options.unsupportedPropertyCodes.contains(propertyCode),
+                let property = PTPPropertyCode(rawValue: propertyCode),
+                let data = cameraPropertyData(for: property)
+            else {
                 sendResponse(connection, code: 0x2002, transactionID: transactionID)
+                return
             }
+            sendDataIn(connection, data: data, transactionID: transactionID)
         case .setDevicePropValue, .setDevicePropValueEx:
             guard let property = parameters.first, let dataOut else {
                 sendResponse(connection, code: 0x2005, transactionID: transactionID)
@@ -541,6 +554,93 @@ final class FakeZRServer: @unchecked Sendable {
         bytes += ptpString(options.model)
         bytes += ptpString(options.deviceVersion)
         bytes += ptpString(options.serialNumber)
+        return Data(bytes)
+    }
+
+    /// Camera property bytes used by the facade's semantic readback tests.
+    ///
+    /// Values deliberately exercise every decoder used by the Android monitor
+    /// snapshot. They remain camera-side PTP data: Kotlin never sees them.
+    private func cameraPropertyData(for property: PTPPropertyCode) -> Data? {
+        switch property {
+        case .movieRecProhibitionCondition:
+            // 0 = nothing prohibits recording.
+            return Data(ByteCoding.uint32LE(0))
+        case .movieISOSensitivity:
+            return Data(ByteCoding.uint32LE(800))
+        case .movieBaseISO:
+            return Data([2])  // High
+        case .exposureProgramMode:
+            return Data(ByteCoding.uint16LE(1))  // M
+        case .movieShutterMode:
+            return Data([2])  // angle
+        case .movieTVLockSetting:
+            return Data([0])
+        case .movieShutterAngle:
+            return Data(ByteCoding.uint32LE(18_000))  // 180°
+        case .movieShutterSpeed:
+            return Data(ByteCoding.uint32LE(0x0001_0032))  // 1/50
+        case .movieFNumber:
+            return Data(ByteCoding.uint16LE(280))  // f/2.8
+        case .movieWhiteBalance:
+            return Data(ByteCoding.uint16LE(0x8012))  // Color temp
+        case .movieWBColorTemp:
+            return Data(ByteCoding.uint16LE(5_600))
+        case .movieRecordScreenSize:
+            return Data(ByteCoding.uint64LE(0x1770_0D08_1900_0000))
+        case .movieFileType:
+            return Data(ByteCoding.uint32LE(0x0031_0A03))
+        case .batteryLevel:
+            return Data([options.batteryPercent])
+        case .acPower:
+            return Data([1])
+        case .warningStatus:
+            return Data([0])
+        case .focalLength:
+            return Data(ByteCoding.uint32LE(2_400))
+        case .lensFocalMin:
+            return Data(ByteCoding.uint32LE(2_400))
+        case .lensFocalMax:
+            return Data(ByteCoding.uint32LE(7_000))
+        case .lensApertureMin:
+            return Data(ByteCoding.uint16LE(280))
+        case .movieFocusMode:
+            return Data([1])  // AF-C
+        case .movieFocusMeteringMode:
+            return Data(ByteCoding.uint16LE(0x8033))  // Subject
+        case .movieAFSubjectDetection:
+            return Data([2])  // People
+        case .movMicrophone:
+            return Data([0])  // Auto
+        case .movRecordMicrophoneLevelValue:
+            return Data([12])
+        case .movWindNoiseReduction:
+            return Data([1])
+        case .movieAttenuator:
+            return Data([0])
+        case .audioInputSelection:
+            return Data([2])  // Line
+        case .movieAudioInputSensitivity:
+            return Data([0xFF])  // Auto
+        case .movie32BitFloatAudioRecording:
+            return Data([1])
+        case .gridDisplay:
+            return Data([1])
+        case .movieVibrationReduction:
+            return Data([2])  // SPORT
+        case .electronicVR:
+            return Data([1])
+        default:
+            return nil
+        }
+    }
+
+    /// Minimal PIMA `StorageInfo` record: three UINT16 headers followed by
+    /// total/free UINT64 values. The parser needs only the first 22 bytes.
+    private func storageInfoDataset() -> Data {
+        var bytes = [UInt8](repeating: 0, count: 6)
+        bytes += ByteCoding.uint64LE(options.storageTotalCapacityBytes)
+        bytes += ByteCoding.uint64LE(options.storageFreeSpaceBytes)
         return Data(bytes)
     }
 

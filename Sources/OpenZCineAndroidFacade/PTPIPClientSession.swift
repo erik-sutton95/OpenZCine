@@ -119,6 +119,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// still use `transactionLock`, so live-view frame reads stay safe between
     /// a multi-write control sequence's individual PTP transactions.
     private let commandLifecycleLock = NSLock()
+    /// Accumulated Android monitor state. Access only while
+    /// `commandLifecycleLock` is held so a refresh cannot race control writes,
+    /// media ownership, or teardown.
+    private var androidPropertySnapshot = PTPCameraPropertySnapshot()
+    private var androidStorageInfo: PTPStorageInfo?
+    private var androidPropertyPollIndex = 0
+    private var androidLastStorageRefreshAt: Date?
     private var nextTransactionID: UInt32 = 1
     private var isClosed = false
 
@@ -344,6 +351,150 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
         return "0x\(Self.hexString(value))"
     }
+
+    /// Refreshes the semantic Android monitor readback without exposing a PTP
+    /// property ID or encoded bytes to Kotlin.
+    ///
+    /// The bootstrap is deliberately bounded to the high-value header and
+    /// safety fields. Subsequent calls read one property in the shared core's
+    /// conservative round-robin order, so polling does not monopolize the
+    /// command channel or starve live-view frame fetches. A `DevicePropChanged`
+    /// request is accepted only for a property already supported by that core
+    /// order. Any unsupported body/mode read preserves accumulated values and
+    /// returns a non-terminal result; it never disconnects the session.
+    public func refreshAndroidPropertySnapshot(
+        _ request: AndroidCameraPropertyRefreshRequest
+    ) -> AndroidCameraPropertyReadback {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            return androidPropertyReadback(result: .mediaBusy)
+        }
+
+        switch request {
+        case .bootstrap:
+            var result: AndroidCameraPropertyRefreshResult = .accepted
+            for property in Self.androidBootstrapPropertyOrder {
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidProperty(property))
+                if result == .transportFailed { break }
+            }
+            if result != .transportFailed {
+                result = mergedAndroidPropertyRefreshResult(result, refreshAndroidStorage())
+            }
+            return androidPropertyReadback(result: result)
+        case .next(let isRecording):
+            let pollOrder = PTPPropertyCode.monitorPollOrder(isRecording: isRecording)
+            guard !pollOrder.isEmpty else {
+                return androidPropertyReadback(result: .accepted)
+            }
+            let property = pollOrder[androidPropertyPollIndex % pollOrder.count]
+            androidPropertyPollIndex = (androidPropertyPollIndex + 1) % pollOrder.count
+            var result = refreshAndroidProperty(property)
+            if result != .transportFailed,
+                CameraMonitorPollPolicy.isDue(
+                    lastRefreshAt: androidLastStorageRefreshAt,
+                    now: Date(),
+                    interval: CameraMonitorPollPolicy.storageRefreshInterval)
+            {
+                result = mergedAndroidPropertyRefreshResult(result, refreshAndroidStorage())
+            }
+            return androidPropertyReadback(result: result)
+        case .propertyChanged(let rawCode):
+            guard let property = PTPPropertyCode(rawValue: rawCode),
+                PTPPropertyCode.liveMonitorPollOrder.contains(property)
+            else {
+                // The event stream preserves unknown properties for callers,
+                // but a raw event alone is not evidence that this readback
+                // model knows how to decode one.
+                return androidPropertyReadback(result: .accepted)
+            }
+            return androidPropertyReadback(result: refreshAndroidProperty(property))
+        }
+    }
+
+    /// Performs one shared-core property read and updates only that decoded
+    /// field in the accumulated Android snapshot.
+    private func refreshAndroidProperty(
+        _ property: PTPPropertyCode
+    ) -> AndroidCameraPropertyRefreshResult {
+        do {
+            let data = try readProperty(property)
+            androidPropertySnapshot = androidPropertySnapshot.applying(
+                property: property, data: data)
+            return .accepted
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return .mediaBusy
+            case .operationRejected, .unsupportedProperty:
+                return .unsupported
+            default:
+                return .transportFailed
+            }
+        } catch {
+            return .transportFailed
+        }
+    }
+
+    /// Refreshes active-card capacity at the shared core's slow storage cadence.
+    private func refreshAndroidStorage() -> AndroidCameraPropertyRefreshResult {
+        do {
+            guard let storage = try readStorageInfo() else { return .unsupported }
+            androidStorageInfo = storage
+            androidLastStorageRefreshAt = Date()
+            return .accepted
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return .mediaBusy
+            case .operationRejected:
+                return .unsupported
+            default:
+                return .transportFailed
+            }
+        } catch {
+            return .transportFailed
+        }
+    }
+
+    /// Packages the accumulated snapshot without allowing a transient failed
+    /// read to erase useful last-known camera state.
+    private func androidPropertyReadback(
+        result: AndroidCameraPropertyRefreshResult
+    ) -> AndroidCameraPropertyReadback {
+        AndroidCameraPropertyReadback(
+            result: result, properties: androidPropertySnapshot, storage: androidStorageInfo)
+    }
+
+    /// Preserves the most useful non-terminal reason while a bootstrap carries
+    /// on to other supported fields. A transport failure stops that burst.
+    private func mergedAndroidPropertyRefreshResult(
+        _ lhs: AndroidCameraPropertyRefreshResult,
+        _ rhs: AndroidCameraPropertyRefreshResult
+    ) -> AndroidCameraPropertyRefreshResult {
+        if lhs == .transportFailed || rhs == .transportFailed { return .transportFailed }
+        if lhs == .mediaBusy || rhs == .mediaBusy { return .mediaBusy }
+        if lhs == .unsupported || rhs == .unsupported { return .unsupported }
+        return .accepted
+    }
+
+    /// Bounded first-refresh set: the values the operator needs before the
+    /// full low-rate round-robin fills in lens, audio, focus, and display
+    /// details. Each read remains a separate serialized PTP transaction.
+    private static let androidBootstrapPropertyOrder: [PTPPropertyCode] = [
+        .movieISOSensitivity,
+        .movieShutterMode,
+        .movieShutterAngle,
+        .movieShutterSpeed,
+        .movieFNumber,
+        .movieWhiteBalance,
+        .movieWBColorTemp,
+        .movieRecordScreenSize,
+        .movieFileType,
+        .batteryLevel,
+        .warningStatus,
+    ]
 
     // MARK: - Recording
 

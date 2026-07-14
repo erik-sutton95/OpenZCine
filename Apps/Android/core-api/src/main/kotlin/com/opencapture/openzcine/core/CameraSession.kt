@@ -1,11 +1,18 @@
 package com.opencapture.openzcine.core
 
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
 private val noCameraSessionEvents: SharedFlow<CameraSessionEvent> =
     MutableSharedFlow<CameraSessionEvent>()
+
+private val noCameraProperties: StateFlow<CameraPropertySnapshot> =
+    MutableStateFlow(CameraPropertySnapshot())
+
+private val noCameraPropertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
+    MutableStateFlow(CameraPropertyRefreshStatus.Idle)
 
 /**
  * Connection lifecycle of a [CameraSession].
@@ -93,6 +100,145 @@ public enum class CameraControl {
 
     /** 32-bit float audio recording selection, `"ON"` or `"OFF"`. */
     AUDIO_32_BIT_FLOAT,
+}
+
+/** The camera's active movie-shutter display convention. */
+public enum class CameraShutterMode {
+    /** The camera displays a reciprocal exposure time, such as `1/50`. */
+    SPEED,
+
+    /** The camera displays a shutter angle, such as `180°`. */
+    ANGLE,
+}
+
+/** Camera-derived temperature/warning state, never a fabricated temperature reading. */
+public enum class CameraTemperatureStatus {
+    /** The camera reported a clear warning aggregate. */
+    NORMAL,
+
+    /** The camera reported a warning whose specific bit is not yet hardware-verified. */
+    WARNING,
+
+    /** The camera reported its hardware-verified overheating state. */
+    HOT,
+}
+
+/** Capacity and free space for the connected camera's active recording card. */
+public data class CameraStorageStatus(
+    /** Total capacity in bytes, or zero only when the camera explicitly reports it as unknown. */
+    val totalCapacityBytes: Long,
+    /** Currently free capacity in bytes. */
+    val freeSpaceBytes: Long,
+)
+
+/**
+ * Real, progressively populated camera-property readback for the Android shell.
+ *
+ * Every value originates in the shared Swift core's `PTPCameraPropertySnapshot`.
+ * A `null` field means the body has not reported that property or does not support
+ * it in its current mode; it never means a UI/demo fallback value.
+ */
+public data class CameraPropertySnapshot(
+    /** Movie ISO sensitivity. */
+    val iso: Long? = null,
+    /** Dual-base ISO circuit label when the camera exposes one. */
+    val baseIso: String? = null,
+    /** Exposure-program label, such as `M`. */
+    val exposureMode: String? = null,
+    /** The camera's active shutter display convention. */
+    val shutterMode: CameraShutterMode? = null,
+    /** Whether the camera reports its movie shutter control as locked. */
+    val shutterLocked: Boolean? = null,
+    /** Reciprocal shutter-speed label, such as `1/50`. */
+    val shutterSpeed: String? = null,
+    /** Shutter-angle label, such as `180°`. */
+    val shutterAngle: String? = null,
+    /** Current aperture label. */
+    val iris: String? = null,
+    /** White-balance mode label. */
+    val whiteBalanceMode: String? = null,
+    /** White-balance colour temperature in Kelvin when the body reports one. */
+    val whiteBalanceKelvin: Int? = null,
+    /** Recording resolution label. */
+    val resolution: String? = null,
+    /** Recording frame rate. */
+    val frameRate: Int? = null,
+    /** Camera-reported recording codec label. */
+    val codec: String? = null,
+    /** Battery percentage. */
+    val batteryPercent: Int? = null,
+    /** Whether the body reports external or USB power. */
+    val externalPower: Boolean? = null,
+    /** Raw camera warning aggregate, retained without speculative bit decoding. */
+    val warningRaw: Int? = null,
+    /** Semantic temperature/warning state derived only after [warningRaw] is read. */
+    val temperatureStatus: CameraTemperatureStatus? = null,
+    /** Current recording-card capacity/free-space readback. */
+    val storage: CameraStorageStatus? = null,
+    /** Derived mounted-lens description when sufficient lens properties are available. */
+    val lens: String? = null,
+    /** Current focal-length label. */
+    val focalLength: String? = null,
+    /** Movie focus-mode label. */
+    val focusMode: String? = null,
+    /** Movie focus-area label. */
+    val focusArea: String? = null,
+    /** Movie focus subject-detection label. */
+    val focusSubject: String? = null,
+    /** Microphone sensitivity label. */
+    val microphoneSensitivity: String? = null,
+    /** Microphone level label. */
+    val microphoneLevel: String? = null,
+    /** Wind-noise-reduction label. */
+    val windFilter: String? = null,
+    /** Input-attenuator label. */
+    val inputAttenuator: String? = null,
+    /** Audio input source label. */
+    val audioInput: String? = null,
+    /** Audio input sensitivity label. */
+    val audioSensitivity: String? = null,
+    /** 32-bit-float audio-recording label. */
+    val audio32BitFloat: String? = null,
+    /** Movie vibration-reduction label. */
+    val vibrationReduction: String? = null,
+    /** Electronic vibration-reduction label. */
+    val electronicVr: String? = null,
+    /** Camera framing-grid label. */
+    val cameraGrid: String? = null,
+)
+
+/** The non-terminal reason an Android property refresh could not update the snapshot. */
+public enum class CameraPropertyRefreshFailure {
+    /** No camera control session is connected. */
+    NOT_CONNECTED,
+
+    /** The shared Swift protocol library is not bundled into this APK. */
+    CORE_UNAVAILABLE,
+
+    /** Camera media owns the command channel until the media screen closes. */
+    MEDIA_BUSY,
+
+    /** The requested property is unsupported or unavailable in the current camera mode. */
+    UNSUPPORTED_PROPERTY,
+
+    /** A transient command-channel failure prevented this readback. */
+    TRANSPORT_FAILED,
+}
+
+/** Current readback activity for [CameraSession.cameraProperties]. */
+public sealed interface CameraPropertyRefreshStatus {
+    /** No connected-session refresh is currently scheduled. */
+    public data object Idle : CameraPropertyRefreshStatus
+
+    /** A bounded bootstrap, periodic, or event-triggered read is in flight. */
+    public data object Refreshing : CameraPropertyRefreshStatus
+
+    /** The latest read completed and [CameraSession.cameraProperties] is current as far as supported. */
+    public data object Ready : CameraPropertyRefreshStatus
+
+    /** The latest read was skipped or failed without changing camera connection state. */
+    public data class Degraded(val failure: CameraPropertyRefreshFailure) :
+        CameraPropertyRefreshStatus
 }
 
 /**
@@ -230,6 +376,23 @@ public interface CameraSession {
     public val recordingState: StateFlow<CameraRecordingState>
 
     /**
+     * The latest real camera-property readback.
+     *
+     * Production sessions populate this after connection, then update it with
+     * low-rate polling and debounced `DevicePropChanged` events. Transport-only
+     * implementations expose an all-null snapshot.
+     */
+    public val cameraProperties: StateFlow<CameraPropertySnapshot>
+        get() = noCameraProperties
+
+    /**
+     * Activity/failure state for [cameraProperties]. A degraded readback does
+     * not imply that [state] has disconnected.
+     */
+    public val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus>
+        get() = noCameraPropertyRefreshStatus
+
+    /**
      * Camera-pushed PTP events from the active event channel.
      *
      * Production sessions use a bounded, non-blocking stream so slow UI
@@ -271,6 +434,15 @@ public interface CameraSession {
     public suspend fun applyControl(control: CameraControl, label: String) {
         throw CameraControlException.UnsupportedSelection
     }
+
+    /**
+     * Requests one immediate, coalesced property refresh.
+     *
+     * Production implementations preserve any last-known values when a body
+     * rejects a mode-dependent property; observe [propertyRefreshStatus] for
+     * that non-terminal outcome. Transport-only implementations do no I/O.
+     */
+    public suspend fun refreshProperties(): Unit = Unit
 
     /** Tears down the session and returns [state] to [CameraSessionState.Disconnected]. */
     public suspend fun disconnect()
