@@ -1,6 +1,7 @@
 package com.opencapture.openzcine
 
 import android.content.Intent
+import com.opencapture.openzcine.bridge.SwiftCoreSessionProbe
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.FakeCameraSession
@@ -23,9 +24,13 @@ object DemoHarness {
 
     /**
      * A demo session + synthetic 25 fps frame source when [intent] carries
-     * [EXTRA_DEMO_FEED]; null in a normal launch.
+     * [EXTRA_DEMO_FEED]; null in a normal launch. Also the debug intent entry
+     * point for the Swift-core session probe (`zc.session.host` — see
+     * [SwiftCoreSessionProbe]), which runs as a logcat side effect without
+     * replacing the shell's session.
      */
     fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource>? {
+        SwiftCoreSessionProbe.maybeStart(intent)
         if (!intent.getBooleanExtra(EXTRA_DEMO_FEED, false)) return null
         val session =
             FakeCameraSession(
