@@ -363,6 +363,72 @@ func portraitFillNeverProducesAssistStripRegardlessOfToolbarHeight(mode: DispMod
     #expect(map.systemSlots == expected)
 }
 
+// MARK: - Width-constrained (4:3 iPad) landscape corner layout (OPE-2)
+
+/// iPad Pro 11" landscape points with the runtime chrome insets (window-control clearance top).
+private enum PadViewport {
+    static let width = 1210.0
+    static let height = 834.0
+    static let safeArea = MonitorEdgeInsets(top: 24, leading: 0, bottom: 20, trailing: 0)
+    static let chromeInsets = MonitorEdgeInsets(top: 40, leading: 16, bottom: 12, trailing: 18)
+
+    static func map(bottomBarHeight: Double = 58) -> MonitorZoneMap {
+        MonitorZoneLayout.map(
+            viewportWidth: width,
+            viewportHeight: height,
+            safeArea: safeArea,
+            chromeInsets: chromeInsets,
+            mode: .live,
+            isPortrait: false,
+            aspect: .fill,
+            scopeCount: 0,
+            horizontalDirection: .standard,
+            bottomBarHeight: bottomBarHeight
+        )
+    }
+}
+
+@Test func widthConstrainedDiscriminatorSelects4x3PadsNotPhones() {
+    // iPad Pro 11" landscape: 16:9 at full height (1482.7pt) overflows the 1210pt width.
+    #expect(
+        MonitorFeedLayout.isWidthConstrained(viewportWidth: 1210, viewportHeight: 834))
+    // iPhone 17 Pro landscape is wider than 16:9.
+    #expect(
+        !MonitorFeedLayout.isWidthConstrained(viewportWidth: 874, viewportHeight: 402))
+    // Portrait never constrains (its feed box is handed in as exact 16:9).
+    #expect(
+        !MonitorFeedLayout.isWidthConstrained(viewportWidth: 834, viewportHeight: 1210))
+}
+
+@Test func padLandscapeBatteryClusterIsInlineBesideLock() throws {
+    let map = PadViewport.map()
+    let lock = map.systemSlots.lock
+
+    #expect(map.batteryCluster?.style == .batteryInline)
+    let battery = try #require(map.batteryCluster?.frame)
+    // Right of the lock button, in the same top chrome band.
+    #expect(battery.x == lock.x + lock.width + MonitorBatteryRailLayout.inlineLeadingGap)
+    #expect(battery.midY == lock.midY)
+    #expect(battery.height == MonitorLiveViewModuleLayout.lockButtonSize)
+}
+
+@Test func phoneLandscapeBatteryClusterStaysALeadingRail() {
+    let map = MonitorZoneLayout.map(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 59, bottom: 0, trailing: 0),
+        mode: .live,
+        isPortrait: false,
+        aspect: .fill,
+        scopeCount: 0,
+        horizontalDirection: .standard,
+        bottomBarHeight: 58
+    )
+
+    #expect(map.batteryCluster?.style == .batteryRail)
+    #expect(map.batteryCluster?.frame.width == MonitorBatteryRailLayout.indicatorWidth)
+}
+
 @Test func landscapeSystemSlotsCenterOnLegacyRailCenters() {
     let viewportWidth = 874.0
     let viewportHeight = 402.0

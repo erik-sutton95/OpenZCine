@@ -948,9 +948,17 @@ struct MonitorShell: View {
                 if chrome.sideRailsVisible {
                     canvasLayer {
                         if let battery = map.batteryCluster {
-                            BatteryRailModule()
-                                .environment(model)
-                                .monitorModuleFrame(battery.frame)
+                            if battery.style == .batteryInline {
+                                // Width-constrained (iPad): inline row beside the lock button.
+                                // The frame is a nominal band; content hugs its leading edge.
+                                BatteryInlineCluster()
+                                    .environment(model)
+                                    .monitorModuleFrame(battery.frame, alignment: .leading)
+                            } else {
+                                BatteryRailModule()
+                                    .environment(model)
+                                    .monitorModuleFrame(battery.frame)
+                            }
                         }
                         MonitorSystemCluster(slots: map.systemSlots, axis: .axisVertical)
                             .environment(model)
@@ -1040,7 +1048,13 @@ struct MonitorShell: View {
             {
                 let rail = battery.frame
                 let size: CGFloat = 40
-                let x = CGFloat(rail.x + rail.width) + 24
+                // Inline battery (iPad) sits in the top band, so its frame no longer marks the
+                // bottom-left lane; fall back to the assist bar's leading edge plus the same
+                // clearance the rail layout produced (indicator width 38 + 24).
+                let x =
+                    battery.style == .batteryInline
+                    ? CGFloat(assist.frame.x) + 62
+                    : CGFloat(rail.x + rail.width) + 24
                 let y = model.focusResetButtonClearY(
                     centerX: x, baseY: CGFloat(assist.frame.y) - 30, size: size)
                 Button {

@@ -179,6 +179,12 @@ public enum MonitorZoneLayout {
         bottomBarHeight: Double
     ) -> MonitorZoneMap {
         let chromeInsets = chromeInsets ?? MonitorChromeLayout.insets(feedSafeArea: safeArea)
+        // Width-constrained (4:3-ish iPad) landscape moves the side-rail chrome into the corners;
+        // the battery cluster renders as an inline row beside the lock button (`.batteryInline`).
+        let constrained = MonitorFeedLayout.isWidthConstrained(
+            viewportWidth: viewportWidth,
+            viewportHeight: viewportHeight
+        )
         let legacy = MonitorLiveViewModuleLayout.fit(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
@@ -214,7 +220,7 @@ public enum MonitorZoneLayout {
             systemSlots: landscapeSlots(legacy: legacy, rail: rail),
             batteryCluster: MonitorZone(
                 frame: legacy.batteryRail,
-                style: .batteryRail,
+                style: constrained ? .batteryInline : .batteryRail,
                 collapsible: false
             ),
             scopes: nil,
