@@ -1,0 +1,95 @@
+name: Play Internal
+
+# Uploads a signed .aab to the Google Play internal testing track. Deliberate
+# releases only: manual dispatch or an `android-v*` tag — never plain merges.
+# Prerequisites (Play console app, `play` environment secrets, and the first
+# MANUAL .aab upload Google requires) are in docs/android-distribution.md.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "android-v*"
+
+permissions:
+  contents: read
+
+# Never cancel an in-progress upload; queue instead (mirrors testflight.yml).
+concurrency:
+  group: play-internal-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  # versionCode = offset + run number, monotonic across uploads. Raise the offset
+  # if it ever falls behind the highest versionCode in the Play console.
+  ANDROID_VERSION_CODE_OFFSET: "100"
+
+jobs:
+  play-internal:
+    name: Build & upload
+    if: github.repository == 'erik-sutton95/openzcine'
+    runs-on: ubuntu-latest
+    environment: play
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Run Android checks
+        working-directory: Apps/Android
+        run: ./gradlew test lint
+
+      - name: Compute version code
+        id: version
+        run: |
+          echo "version_code=$(( ANDROID_VERSION_CODE_OFFSET + GITHUB_RUN_NUMBER ))" >> "$GITHUB_OUTPUT"
+
+      - name: Decode upload keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set — add it to the 'play' environment (docs/android-distribution.md)."
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+
+      - name: Build signed release bundle
+        working-directory: Apps/Android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: ./gradlew bundleRelease "-PversionCode=$VERSION_CODE"
+
+      # r0adkll/upload-google-play over alternatives: Google publishes no official
+      # GitHub Action for Play uploads (its official paths are Gradle Play Publisher
+      # or the raw Publishing API), and this action is the de-facto standard — most
+      # widely used, actively maintained, and a minimal wrapper over the Publishing
+      # API, matching how testflight.yml keeps the upload step thin.
+      - name: Upload to Play internal track
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.opencapture.openzcine
+          releaseFiles: Apps/Android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
+      - name: Summary
+        run: |
+          {
+            echo "### Play internal upload"
+            echo ""
+            echo "- **Version code:** ${{ steps.version.outputs.version_code }}"
+            echo "- **Commit:** \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
