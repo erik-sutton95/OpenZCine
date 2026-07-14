@@ -20,6 +20,11 @@ Agent access is via the Kaneo MCP tools (device-auth flow; the cached token live
 config — **never commit it**). Everything on the board, including task descriptions, is publicly
 visible through the read-only view: write descriptions accordingly.
 
+## Assignment
+
+Until project maintainers are added, every Kaneo task in project `OPE` must be assigned to Erik
+Sutton. Agents must assign Erik when creating a task and must not leave existing tasks unassigned.
+
 ## Statuses
 
 Valid task statuses: `to-do`, `in-progress`, `in-review`, `done`, `planned`, `archived`.
