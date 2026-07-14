@@ -74,6 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      android: ${{ steps.filter.outputs.android }}
     steps:
       # `dorny/paths-filter` fetches the base ref to diff on push events, which needs the checkout's
       # git credentials — so this job keeps them (unlike the others). It runs no repository code, so
@@ -92,6 +93,8 @@ jobs:
               - 'scripts/add-*.rb'
               - 'scripts/ios-*.sh'
               - 'justfile'
+            android:
+              - 'Apps/Android/**'
 
   native:
     name: Native Swift/iOS
@@ -111,3 +114,23 @@ jobs:
         run: brew install just swift-format || true
       - name: Run native checks
         run: just native-check
+
+  android:
+    name: Android
+    needs: changes
+    # Skip the Gradle build when nothing under Apps/Android changed.
+    if: ${{ needs.changes.outputs.android == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+      - name: Build, unit-test, and lint
+        working-directory: Apps/Android
+        run: ./gradlew assembleDebug test lint
