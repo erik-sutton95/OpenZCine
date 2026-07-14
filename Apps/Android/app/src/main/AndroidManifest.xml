@@ -25,6 +25,18 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <!-- Shares only ready copies in cacheDir/share/ready. The progressive
+          no-backup cache and the transient share/staging directory never have
+          a provider path, so external apps cannot receive a growing .part. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.media-share"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/media_share_paths" />
+        </provider>
         <!-- Sensor-based portrait + landscape (iOS allows Portrait + LandscapeRight;
           "user" is the closest platform posture: it follows the rotation lock).
           configChanges keeps the activity (camera session, live feed, glass

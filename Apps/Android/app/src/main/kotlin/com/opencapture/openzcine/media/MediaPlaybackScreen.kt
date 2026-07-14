@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +64,7 @@ import com.opencapture.openzcine.glass
 import java.io.IOException
 import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -133,6 +135,8 @@ fun MediaPlaybackScreen(
         remember(context) {
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
         }
+    val shareCacheDirectory = remember(context) { context.cacheDir.toPath() }
+    val shareScope = rememberCoroutineScope()
     val coordinator =
         remember(cacheStore, cameraID, clip) {
             MediaTransferCoordinator(
@@ -150,9 +154,35 @@ fun MediaPlaybackScreen(
         mutableStateOf<PlaybackPreparation>(PlaybackPreparation.Loading)
     }
     var closeRequested by remember { mutableStateOf(false) }
+    var shareableEntry by remember(clip.handle) { mutableStateOf<MediaCacheEntry?>(null) }
+    var shareInProgress by remember(clip.handle) { mutableStateOf(false) }
+    var shareFailure by remember(clip.handle) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(coordinator) {
         preparation = coordinator.prepare()
+    }
+
+    // A progressive entry is playable before it is deliverable. Poll only this
+    // lightweight state until finalization so no partial `.part` can expose a
+    // Share affordance; MediaCacheEntry owns the synchronized state read.
+    LaunchedEffect(preparation) {
+        shareableEntry = null
+        shareFailure = null
+        val entry = (preparation as? PlaybackPreparation.Ready)?.entry ?: return@LaunchedEffect
+        while (isActive) {
+            when (entry.state) {
+                MediaCacheState.COMPLETE -> {
+                    if (entry.downloadedBytes == entry.expectedLength) {
+                        shareableEntry = entry
+                    }
+                    return@LaunchedEffect
+                }
+                MediaCacheState.ACTIVE -> delay(200)
+                MediaCacheState.FAILED,
+                MediaCacheState.CANCELLED,
+                -> return@LaunchedEffect
+            }
+        }
     }
 
     LaunchedEffect(closeRequested, coordinator) {
@@ -189,7 +219,7 @@ fun MediaPlaybackScreen(
             PlaybackPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
         }
 
-        Row(
+        Column(
             Modifier.fillMaxWidth()
                 .windowInsetsPadding(
                     WindowInsets.displayCutout.only(
@@ -197,17 +227,62 @@ fun MediaPlaybackScreen(
                     ),
                 )
                 .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            PlaybackButton("‹", "Back", enabled = !closeRequested) { closeRequested = true }
-            Text(
-                clip.filename,
-                style = chromeStyle(14f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                PlaybackButton("‹", "Back", enabled = !closeRequested) { closeRequested = true }
+                Text(
+                    clip.filename,
+                    modifier = Modifier.weight(1f),
+                    style = chromeStyle(14f, FontWeight.SemiBold),
+                    color = LiveDesign.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val completedEntry = shareableEntry
+                if (completedEntry != null) {
+                    PlaybackButton(
+                        if (shareInProgress) "…" else "SHARE",
+                        "Share ${clip.filename}",
+                        enabled = !shareInProgress && !closeRequested,
+                    ) {
+                        shareScope.launch {
+                            shareFailure = null
+                            shareInProgress = true
+                            try {
+                                val staged =
+                                    withContext(Dispatchers.IO) {
+                                        MediaShareStager(shareCacheDirectory)
+                                            .stage(completedEntry, clip.filename)
+                                    }
+                                context.startActivity(
+                                    AndroidMediaShareIntent.chooserIntent(context, staged),
+                                )
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                shareFailure =
+                                    error.message ?: "Couldn't prepare this clip for sharing."
+                            } finally {
+                                shareInProgress = false
+                            }
+                        }
+                    }
+                }
+            }
+            shareFailure?.let { message ->
+                Text(
+                    "Share unavailable: $message",
+                    modifier = Modifier.padding(start = 54.dp, top = 5.dp, end = 8.dp),
+                    style = chromeStyle(11f, FontWeight.Medium),
+                    color = LiveDesign.accent,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

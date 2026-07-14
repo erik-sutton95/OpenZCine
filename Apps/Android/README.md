@@ -112,7 +112,10 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   path and pumps ordered 4 MiB chunks over JNI. Kotlin persists them below `noBackupFilesDir` in a
   resumable `.part` cache while Media3 reads the growing file; completion publishes the final file
   atomically. Opening Media stops and excludes live view until the browser closes, so both pumps
-  never contend for the serialized camera command channel. The Nikon large-object operations still
+  never contend for the serialized camera command channel. A complete cache entry can be copied into app-scoped
+  `cacheDir/share/ready` and opened in the native Android share chooser through a narrowly scoped
+  `FileProvider`; the no-backup camera cache and growing `.part` files remain provider-invisible.
+  Frame.io/OAuth delivery remains a later, separate Android integration. The Nikon large-object operations still
   require real-ZR verification. For an on-device fake-ZR playback run, set
   `ZC_FAKE_ZR_MEDIA=/absolute/path/to/a/playable.mp4` alongside `ZC_FAKE_ZR_PORT=15740` when running
   `swift test --filter servesFakeZRForMediaBrowse`, then `adb reverse tcp:15740 tcp:15740`, launch

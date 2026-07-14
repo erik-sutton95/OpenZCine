@@ -158,6 +158,7 @@ dependencies {
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.core.ktx)
     implementation(libs.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.exoplayer)
