@@ -32,8 +32,9 @@ app falls back to the placeholder monitor ("No camera").
   feasibility doc's "Where sockets go"). Live view is a Swift-side frame pump
   (`sessionStartLiveView` / `sessionStopLiveView`, latest-wins backpressure, absolute-schedule
   poll pacing) bridged into the `LiveFrameSource` seam by `bridge/SwiftCoreLiveFrameSource`;
-  `MonitorScreen` streams a connected Swift-core session's frames automatically, and ending
-  collection always sends `EndLiveView` (the heat-audit rule). Drive the real shell against a
+  `MonitorScreen` streams a connected Swift-core session's frames automatically (gated on a
+  STARTED lifecycle), and ending collection — disconnect or backgrounding — always sends
+  `EndLiveView` (the heat-audit rule). Drive the real shell against a
   camera or fake server:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.session.host <ipv4>`
   (connect phases: logcat tag `SwiftCoreCameraSession`; frame pacing: tag `ZCLiveFeed`). For a

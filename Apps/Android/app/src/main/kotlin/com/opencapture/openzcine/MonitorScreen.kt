@@ -48,6 +48,9 @@ import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
 import kotlinx.coroutines.delay
 
@@ -293,12 +296,19 @@ fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
         // Feed at the zone map's feed frame; LiveFeedView aspect-fits within
         // it. An explicit frameSource (demo harness) wins; otherwise a
         // connected Swift-core session streams its own live view — collecting
-        // starts the camera's stream, leaving composition ends it.
+        // starts the camera's stream, leaving composition ends it. Gated on a
+        // STARTED lifecycle so backgrounding the app sends EndLiveView instead
+        // of leaving the body streaming to nobody — sensor readout + JPEG
+        // encode is the dominant camera-heat source (the iOS heat-audit rule).
+        val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
         val activeFrameSource =
             frameSource
                 ?: (session as? SwiftCoreCameraSession)
                     ?.liveFrames
-                    ?.takeIf { sessionState is CameraSessionState.Connected }
+                    ?.takeIf {
+                        sessionState is CameraSessionState.Connected &&
+                            lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+                    }
         Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
             if (activeFrameSource != null) {
                 LiveFeedView(activeFrameSource, Modifier.fillMaxSize())
