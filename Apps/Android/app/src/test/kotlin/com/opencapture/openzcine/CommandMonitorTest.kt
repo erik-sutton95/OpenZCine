@@ -145,6 +145,83 @@ class CommandMonitorTest {
     }
 
     @Test
+    fun `shutter writes require a known unlocked active circuit`() {
+        fun presentation(snapshot: CameraPropertySnapshot) =
+            commandDashboardPresentation(
+                snapshot = snapshot,
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        val unknownLock =
+            presentation(
+                CameraPropertySnapshot(
+                    shutterMode = CameraShutterMode.ANGLE,
+                    shutterAngle = "180°",
+                ),
+            ).tiles.first { it.kind == CommandTileKind.SHUTTER }
+        assertEquals(null, unknownLock.request)
+        assertContains(unknownLock.unavailableReason.orEmpty(), "lock state")
+
+        val angle =
+            assertNotNull(
+                presentation(
+                    CameraPropertySnapshot(
+                        shutterMode = CameraShutterMode.ANGLE,
+                        shutterAngle = "180°",
+                        shutterLocked = false,
+                    ),
+                ).tiles.first { it.kind == CommandTileKind.SHUTTER }.request,
+            )
+        assertContains(angle.options, "180°")
+        assertFalse(angle.options.contains("1/50"))
+
+        val speed =
+            assertNotNull(
+                presentation(
+                    CameraPropertySnapshot(
+                        shutterMode = CameraShutterMode.SPEED,
+                        shutterSpeed = "1/50",
+                        shutterLocked = false,
+                    ),
+                ).tiles.first { it.kind == CommandTileKind.SHUTTER }.request,
+            )
+        assertContains(speed.options, "1/50")
+        assertFalse(speed.options.contains("180°"))
+    }
+
+    @Test
+    fun `white balance mode outranks retained Kelvin readback`() {
+        val snapshot =
+            CameraPropertySnapshot(
+                whiteBalanceMode = "Sunny",
+                whiteBalanceKelvin = 5600,
+            )
+        val presentation =
+            commandDashboardPresentation(
+                snapshot = snapshot,
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        val whiteBalance = presentation.tiles.first { it.kind == CommandTileKind.WHITE_BALANCE }
+        assertEquals("Sunny", whiteBalance.value)
+        assertEquals("Sunny", assertNotNull(whiteBalance.request).currentValue)
+        assertFalse(
+            cameraPropertyConfirmsSelection(snapshot, CameraControl.WHITE_BALANCE, "5600K"),
+        )
+        assertTrue(cameraPropertyConfirmsSelection(snapshot, CameraControl.WHITE_BALANCE, "Sunny"))
+    }
+
+    @Test
     fun `R3D recording keeps the current ISO visible but blocks its write`() {
         val presentation =
             commandDashboardPresentation(
@@ -162,6 +239,28 @@ class CommandMonitorTest {
         assertEquals("800", iso.value)
         assertEquals(null, iso.request)
         assertContains(iso.unavailableReason.orEmpty(), "R3D NE")
+    }
+
+    @Test
+    fun `recording locks ISO until codec readback proves a non R3D format`() {
+        fun presentation(codec: String?) =
+            commandDashboardPresentation(
+                snapshot = CameraPropertySnapshot(iso = 800, codec = codec),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+                recording = true,
+            )
+
+        val unknownCodec = presentation(null).tiles.first { it.kind == CommandTileKind.ISO }
+        assertEquals(null, unknownCodec.request)
+        assertContains(unknownCodec.unavailableReason.orEmpty(), "codec readback")
+
+        val nonR3d = presentation("H.265").tiles.first { it.kind == CommandTileKind.ISO }
+        assertEquals(CameraControl.ISO, assertNotNull(nonR3d.request).control)
     }
 
     @Test

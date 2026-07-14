@@ -189,7 +189,11 @@ internal fun commandDashboardPresentation(
             null -> snapshot.shutterAngle ?: snapshot.shutterSpeed
         }
     val whiteBalance =
-        snapshot.whiteBalanceKelvin?.let { "${it}K" } ?: snapshot.whiteBalanceMode
+        if (snapshot.whiteBalanceMode == COLOR_TEMPERATURE_MODE) {
+            snapshot.whiteBalanceKelvin?.let { "${it}K" } ?: snapshot.whiteBalanceMode
+        } else {
+            snapshot.whiteBalanceMode ?: snapshot.whiteBalanceKelvin?.let { "${it}K" }
+        }
     val resolution =
         listOfNotNull(snapshot.resolution, snapshot.frameRate?.let { "${it}p" })
             .joinToString(separator = " · ")
@@ -199,8 +203,33 @@ internal fun commandDashboardPresentation(
             .distinct()
             .joinToString(separator = " / ")
             .ifBlank { null }
-    val isoLockedDuringR3dRecording =
-        recording && snapshot.codec?.contains("R3D NE", ignoreCase = true) == true
+    // A take must never gain an ISO write through a missing or stale codec
+    // readback. Only an explicitly non-R3D codec unlocks ISO mid-recording.
+    val isoLockedDuringRecording =
+        recording && snapshot.codec?.contains("R3D", ignoreCase = true) != false
+    val isoLockReason =
+        if (snapshot.codec == null) {
+            "ISO is unavailable during recording until codec readback completes."
+        } else {
+            "ISO is locked while recording in R3D NE."
+        }
+    // A shutter write addresses either the angle or speed property; changing
+    // circuits requires a separate MovieShutterMode write that Android does
+    // not expose yet. Never offer the inactive circuit as a selectable value.
+    val shutterOptions =
+        when (snapshot.shutterMode) {
+            CameraShutterMode.ANGLE -> SHUTTER_ANGLE_OPTIONS
+            CameraShutterMode.SPEED -> SHUTTER_SPEED_OPTIONS
+            null -> emptyList()
+        }
+    val shutterWritable = snapshot.shutterLocked == false && shutterOptions.isNotEmpty()
+    val shutterLockReason =
+        when {
+            snapshot.shutterLocked == true -> "Shutter is locked on the camera."
+            snapshot.shutterLocked == null -> "Waiting for the camera shutter lock state."
+            snapshot.shutterMode == null -> "Waiting for the active shutter mode."
+            else -> "Shutter changes are unavailable."
+        }
 
     fun editable(
         kind: CommandTileKind?,
@@ -254,8 +283,8 @@ internal fun commandDashboardPresentation(
                     snapshot.iso?.toString(),
                     CameraControl.ISO,
                     ISO_OPTIONS,
-                    writable = !isoLockedDuringR3dRecording,
-                    blockedReason = "ISO is locked while recording in R3D NE.",
+                    writable = !isoLockedDuringRecording,
+                    blockedReason = isoLockReason,
                 ),
             CommandTileKind.SHUTTER to
                 editable(
@@ -263,9 +292,9 @@ internal fun commandDashboardPresentation(
                     "Shutter",
                     shutter,
                     CameraControl.SHUTTER,
-                    SHUTTER_OPTIONS,
-                    writable = snapshot.shutterLocked != true,
-                    blockedReason = "Shutter is locked on the camera.",
+                    shutterOptions,
+                    writable = shutterWritable,
+                    blockedReason = shutterLockReason,
                 ),
             CommandTileKind.IRIS to
                 editable(
@@ -469,7 +498,42 @@ private fun commandStorage(snapshot: CameraPropertySnapshot): String {
     return "${freeGb} GB · ${percent}%"
 }
 
+/** True only when a completed property refresh reflects the accepted control write. */
+internal fun cameraPropertyConfirmsSelection(
+    snapshot: CameraPropertySnapshot,
+    control: CameraControl,
+    label: String,
+): Boolean =
+    when (control) {
+        CameraControl.ISO -> snapshot.iso?.toString() == label
+        CameraControl.SHUTTER ->
+            when (snapshot.shutterMode) {
+                CameraShutterMode.ANGLE -> snapshot.shutterAngle == label
+                CameraShutterMode.SPEED -> snapshot.shutterSpeed == label
+                null -> false
+            }
+        CameraControl.IRIS -> snapshot.iris == label
+        CameraControl.WHITE_BALANCE ->
+            if (label.endsWith("K")) {
+                snapshot.whiteBalanceMode == COLOR_TEMPERATURE_MODE &&
+                    snapshot.whiteBalanceKelvin?.let { "${it}K" } == label
+            } else {
+                snapshot.whiteBalanceMode == label
+            }
+        CameraControl.FOCUS_MODE -> snapshot.focusMode == label
+        CameraControl.FOCUS_AREA -> snapshot.focusArea == label
+        CameraControl.FOCUS_SUBJECT -> snapshot.focusSubject == label
+        CameraControl.EXPOSURE_MODE -> snapshot.exposureMode == label
+        CameraControl.AUDIO_SENSITIVITY -> snapshot.audioSensitivity == label
+        CameraControl.AUDIO_INPUT -> snapshot.audioInput == label
+        CameraControl.WIND_FILTER -> snapshot.windFilter == label
+        CameraControl.ATTENUATOR -> snapshot.inputAttenuator == label
+        CameraControl.AUDIO_32_BIT_FLOAT -> snapshot.audio32BitFloat == label
+    }
+
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
+private const val COLOR_TEMPERATURE_MODE = "Color temp"
+
 private val ISO_OPTIONS =
     listOf(
         "200", "250", "320", "400", "500", "640", "800", "1000", "1250", "1600",
@@ -477,10 +541,15 @@ private val ISO_OPTIONS =
         "16000", "20000", "25600",
     )
 
-private val SHUTTER_OPTIONS =
+private val SHUTTER_ANGLE_OPTIONS =
     listOf(
         "5.6°", "11.2°", "22.5°", "45°", "72°", "90°", "108°", "144°", "172°",
-        "180°", "216°", "288°", "346°", "360°", "1/25", "1/30", "1/40", "1/50",
+        "180°", "216°", "288°", "346°", "360°",
+    )
+
+private val SHUTTER_SPEED_OPTIONS =
+    listOf(
+        "1/25", "1/30", "1/40", "1/50",
         "1/60", "1/80", "1/100", "1/125", "1/160", "1/200", "1/250", "1/320",
         "1/400", "1/500", "1/640", "1/800", "1/1000", "1/1250", "1/1600",
         "1/2000", "1/2500", "1/3200", "1/4000", "1/5000", "1/6400", "1/8000",
@@ -666,7 +735,7 @@ internal fun CommandGrid(
     }
 }
 
-/** One safe control tile. Long-press moves a supported tile one slot later. */
+/** One camera value tile. Long-press moves any primary tile one slot later. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CommandTile(
@@ -680,7 +749,11 @@ private fun CommandTile(
     val request = tile.request
     val pending = pendingControl != null
     val applyingThisControl = request?.control == pendingControl
-    val enabled = request != null && controlsEnabled && !pending
+    val controlEnabled = request != null && controlsEnabled && !pending
+    // Dashboard layout is app-local, so even read-only camera values remain
+    // reorderable without implying that their Nikon property can be changed.
+    val canMove = tile.kind != null
+    val interactive = controlEnabled || canMove
     val description =
         buildString {
             append(tile.title)
@@ -689,8 +762,8 @@ private fun CommandTile(
             when {
                 applyingThisControl -> append(". Applying change.")
                 pending -> append(". Another control is being applied.")
-                request == null -> append(". ${tile.unavailableReason ?: "Read-only."}")
-                !controlsEnabled -> append(". Controls are locked.")
+                request == null -> append(". ${tile.unavailableReason ?: "Read-only."} Long press to move later in the dashboard.")
+                !controlsEnabled -> append(". Controls are locked. Long press to move later in the dashboard.")
                 else -> append(". Double tap to change; long press to move later in the dashboard.")
             }
         }
@@ -700,14 +773,14 @@ private fun CommandTile(
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .semantics(mergeDescendants = true) {
                 contentDescription = description
-                if (!enabled) disabled()
+                if (!interactive) disabled()
             }
             .combinedClickable(
-                enabled = enabled,
-                onClickLabel = "Change ${tile.title}",
+                enabled = interactive,
+                onClickLabel = if (controlEnabled) "Change ${tile.title}" else null,
                 onLongClickLabel = "Move ${tile.title} later in dashboard",
-                onLongClick = onMoveLater,
-                onClick = { request?.let(onOpenControl) },
+                onLongClick = if (canMove) onMoveLater else null,
+                onClick = { request?.takeIf { controlEnabled }?.let(onOpenControl) },
             )
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.SpaceBetween,
@@ -721,7 +794,7 @@ private fun CommandTile(
         Text(
             tile.value,
             style = chromeStyle(24f, FontWeight.Medium, mono = true),
-            color = if (enabled) LiveDesign.text else LiveDesign.muted,
+            color = if (controlEnabled) LiveDesign.text else LiveDesign.muted,
             maxLines = 1,
             overflow = TextOverflow.Clip,
         )

@@ -60,6 +60,8 @@ import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
+import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
@@ -236,7 +238,11 @@ fun MonitorScreen(
                 recording = recording,
             )
         }
-    val commandControlsEnabled = sessionState is CameraSessionState.Connected && !locked
+    val commandControlsEnabled =
+        sessionState is CameraSessionState.Connected &&
+            !locked &&
+            (propertyRefreshStatus as? CameraPropertyRefreshStatus.Degraded)?.failure !=
+                CameraPropertyRefreshFailure.MEDIA_BUSY
     val moveCommandTileLater: (CommandTileKind) -> Unit = { kind ->
         val current = commandTileOrder
         val index = current.indexOf(kind)
@@ -254,9 +260,17 @@ fun MonitorScreen(
             try {
                 session.applyControl(request.control, label)
                 session.refreshProperties()
-                activeCommandControl = request.copy(currentValue = label)
-                commandControlFeedback =
-                    CommandControlFeedback("${request.title} set to $label.", isError = false)
+                if (cameraPropertyConfirmsSelection(session.cameraProperties.value, request.control, label)) {
+                    activeCommandControl = request.copy(currentValue = label)
+                    commandControlFeedback =
+                        CommandControlFeedback("${request.title} set to $label.", isError = false)
+                } else {
+                    commandControlFeedback =
+                        CommandControlFeedback(
+                            "${request.title} request accepted; awaiting camera readback.",
+                            isError = false,
+                        )
+                }
             } catch (error: CameraControlException) {
                 commandControlFeedback =
                     CommandControlFeedback(
