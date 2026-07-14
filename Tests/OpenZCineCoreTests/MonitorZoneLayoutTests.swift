@@ -412,6 +412,21 @@ private enum PadViewport {
     #expect(battery.height == MonitorLiveViewModuleLayout.lockButtonSize)
 }
 
+@Test func padLandscapeSettingsAndMediaFormATopTrailingRowAlignedWithTheInfoBar() {
+    let map = PadViewport.map()
+    let settings = map.systemSlots.settings
+    let media = map.systemSlots.media
+    let chromeTrailing = PadViewport.width - PadViewport.chromeInsets.trailing
+    let gap = MonitorLiveViewModuleLayout.bottomModuleSpacing
+
+    // Settings hugs the top-trailing chrome corner; media sits inline on its left.
+    #expect(settings.x + settings.width == chromeTrailing)
+    #expect(media.x + media.width == settings.x - gap)
+    // Both are vertically centered on the top info bar band.
+    #expect(settings.midY == map.infoBar.frame.midY)
+    #expect(media.midY == map.infoBar.frame.midY)
+}
+
 @Test func phoneLandscapeBatteryClusterStaysALeadingRail() {
     let map = MonitorZoneLayout.map(
         viewportWidth: 874,
