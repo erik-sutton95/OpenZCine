@@ -11,6 +11,10 @@ pickers/panels, the portrait fill aspect, command tile interaction. Readouts are
 values until the session facade arrives. Without the staged Swift core the app falls back
 to the placeholder monitor ("No camera").
 
+The installed app uses an adaptive launcher icon with the same monitor, exposure-graph, and camera
+language as the iOS app icon. Its foreground stays inside Android's adaptive safe zone, so circular,
+squircle, and themed launcher masks retain the mark rather than cropping it.
+
 - **Build:** `just android-build` from the repo root (or `just android-check` for build + tests + lint).
 - **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
   startup flow (`ios/Runner/StartupDesign.swift`) in its design language: permissions → choose
