@@ -4689,6 +4689,8 @@ final class NativeAppModel {
     func setFocusPoint(at point: CGPoint, feedSize: CGSize) {
         guard !interfaceLocked, !focusPointLocked else { return }
         guard feedSize.width > 0, feedSize.height > 0 else { return }
+        // Light tap confirming the AF point moved; after the guards so locked taps stay silent.
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let normalizedX = min(max(point.x / feedSize.width, 0), 1)
         let normalizedY = min(max(point.y / feedSize.height, 0), 1)
         // Coordinate space from the latest live-view header; fall back to a 16:9 default before the
