@@ -106,15 +106,23 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), run
   `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForDevice` at the repo root, forward the
   port with `adb reverse tcp:15740 tcp:15740`, and use host `127.0.0.1`.
-- **Media browse + progressive playback:** the monitor's media button opens
+- **Media browse + playback + stills:** the monitor's media button opens
   `media/MediaBrowseScreen`, an iOS-look dark clip grid (thumbnails, size/codec badges,
   listing/empty/error states) listed through the facade's bounded
   `sessionListMedia`/`sessionThumbnail` (`GetObjectHandles`/`GetObjectInfo`/`GetThumb`). MOV/MP4/M4V
-  proxies open `MediaPlaybackScreen`; stills and R3D masters are explicitly view-only. The Swift
-  core selects standard `GetPartialObject` or Nikon's 64-bit `GetObjectSize`/`GetPartialObjectEx`
-  path and pumps ordered 4 MiB chunks over JNI. Kotlin persists them below `noBackupFilesDir` in a
+  proxies open `MediaPlaybackScreen`; JPEG/PNG stills open `MediaStillViewer`, which shows the
+  camera thumbnail first, progressively refreshes a decoded cache preview, and supports 1×–4×
+  pinch zoom/pan. HEIF/TIFF is attempted only after its complete cache publishes; unsupported
+  HEIF decoders and Nikon RAW (`NEF`/`NRW`/`DNG`) remain an explicitly labelled camera-thumbnail
+  fallback rather than a false full-preview claim. R3D masters remain non-previewable. The shared
+  Swift core authoritatively classifies every browser action and still preview strategy before it
+  crosses the facade wire, then selects standard `GetPartialObject` or Nikon's 64-bit
+  `GetObjectSize`/`GetPartialObjectEx` path and pumps ordered 4 MiB chunks over JNI. Kotlin
+  persists them below `noBackupFilesDir` in a
   resumable `.part` cache while Media3 reads the growing file; completion publishes the final file
-  atomically. Opening Media stops and excludes live view until the browser closes, so both pumps
+  atomically. The still viewer uses the same generic cache and transfer seam; closing it invalidates
+  late decode results and joins the active transfer before returning to the browser. Opening Media
+  stops and excludes live view until the browser closes, so both pumps
   never contend for the serialized camera command channel. A complete cache entry can be copied into app-scoped
   `cacheDir/share/ready` and opened in the native Android share chooser through a narrowly scoped
   `FileProvider`; the no-backup camera cache and growing `.part` files remain provider-invisible.

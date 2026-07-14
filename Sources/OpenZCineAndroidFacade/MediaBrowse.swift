@@ -26,8 +26,36 @@ public struct FacadeMediaClip: Equatable, Sendable {
     public let pixelHeight: UInt32
     /// Sanitized on-card filename (`MediaClipFilename.safeCameraBasename`).
     public let filename: String
+    /// Shared-core browser action and still-preview policy for this object.
+    public let contentClassification: MediaContentClassification
     /// True only for the proxy formats Android can stream (MOV/MP4/M4V).
     public let isPlayableProxy: Bool
+
+    /// Creates a facade record with the shared-core media classification.
+    ///
+    /// The facade never lets an Android caller supply a local filename policy:
+    /// the portable core derives both this record's action and its still-preview
+    /// strategy from the sanitized camera filename.
+    public init(
+        handle: UInt32,
+        storageID: UInt32,
+        sizeBytes: UInt64,
+        captureDate: String,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32,
+        filename: String
+    ) {
+        let contentClassification = MediaClipFilename.mediaClassification(for: filename)
+        self.handle = handle
+        self.storageID = storageID
+        self.sizeBytes = sizeBytes
+        self.captureDate = captureDate
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.filename = filename
+        self.contentClassification = contentClassification
+        isPlayableProxy = contentClassification.kind == .playableProxy
+    }
 }
 
 extension PTPIPClientSession {
@@ -89,8 +117,7 @@ extension PTPIPClientSession {
                         captureDate: info.captureDate,
                         pixelWidth: info.imagePixWidth,
                         pixelHeight: info.imagePixHeight,
-                        filename: filename,
-                        isPlayableProxy: MediaClipFilename.isPlayableProxy(filename)))
+                        filename: filename))
             }
         }
         let proxyStems = MediaClipFilename.playableProxyStems(in: clips.map(\.filename))
@@ -149,7 +176,7 @@ extension PTPIPClientSession {
 /// Flat wire format for the media listing crossing the JNI seam — one clip
 /// per line, tab-separated fields with the (sanitized, tab/newline-free)
 /// filename last:
-/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t playable \t filename`.
+/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t playable \t kind \t strategy \t formatLabel \t filename`.
 /// The Kotlin mirror lives in
 /// `Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/media/MediaClips.kt`.
 public enum MediaListWire {
@@ -158,7 +185,11 @@ public enum MediaListWire {
             [
                 String(clip.handle), String(clip.storageID), String(clip.sizeBytes),
                 clip.captureDate, String(clip.pixelWidth), String(clip.pixelHeight),
-                clip.isPlayableProxy ? "1" : "0", clip.filename,
+                clip.isPlayableProxy ? "1" : "0",
+                clip.contentClassification.kind.rawValue,
+                clip.contentClassification.stillPreview?.strategy.rawValue ?? "",
+                clip.contentClassification.stillPreview?.formatLabel ?? "",
+                clip.filename,
             ].joined(separator: "\t")
         }.joined(separator: "\n")
     }

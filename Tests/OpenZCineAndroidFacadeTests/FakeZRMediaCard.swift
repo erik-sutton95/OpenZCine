@@ -2,7 +2,9 @@
 // with tiny synthesized 160×90 thumbnail JPEGs (distinct hues, generated with
 // CoreGraphics/ImageIO at quality 0.3 and embedded as byte literals: the repo
 // ships no binary assets, and the bytes must decode in Android's
-// `BitmapFactory` for the on-device end-to-end).
+// `BitmapFactory` for the on-device end-to-end). The scripted JPEG still also
+// uses its decodable thumbnail bytes as a compact transfer payload so the
+// Android full-screen still-viewer path can be verified without raw media.
 //
 // The card is shaped to exercise the browse policies end to end:
 // - `A001_C003_0713RC.R3D` has an MP4 proxy sibling, so the R3D-hide pairing
@@ -72,7 +74,8 @@ enum FakeZRMediaCard {
         FakeZRMediaObject(
             handle: 0x1008, filename: "DSC_0007.JPG", objectFormat: 0x3801,
             sizeBytes: 8_400_000, captureDate: "20260714T102030",
-            pixelWidth: 8256, pixelHeight: 5504, thumbnail: thumb7),
+            pixelWidth: 8256, pixelHeight: 5504, thumbnail: thumb7,
+            payload: Data(thumb7)),
         FakeZRMediaObject(
             handle: 0x1009, filename: "C0008.MOV", objectFormat: 0x300D,
             sizeBytes: 2_000_000_000, captureDate: "20260714T110000",

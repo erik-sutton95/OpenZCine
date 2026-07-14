@@ -62,7 +62,6 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
-import java.io.IOException
 import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -77,52 +76,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-
-internal sealed interface PlaybackPreparation {
-    data object Loading : PlaybackPreparation
-
-    data class Ready(val entry: MediaCacheEntry) : PlaybackPreparation
-
-    data class Failed(val message: String) : PlaybackPreparation
-
-    data object Cancelled : PlaybackPreparation
-}
-
-/**
- * Serializes one media-transfer preparation and teardown sequence.
- *
- * Native preparation may start the transfer before it returns. Holding the
- * mutex across that setup makes a close wait for it, so teardown cannot race
- * ahead and leave a hidden transfer running.
- */
-internal class MediaTransferCoordinator(
-    private val prepareTransfer: suspend () -> PlaybackPreparation,
-    private val stopTransfer: suspend () -> Unit,
-) {
-    private val mutex = Mutex()
-    private var closed = false
-
-    suspend fun prepare(): PlaybackPreparation {
-        mutex.lock()
-        return try {
-            if (closed) PlaybackPreparation.Cancelled else prepareTransfer()
-        } finally {
-            mutex.unlock()
-        }
-    }
-
-    suspend fun close() {
-        mutex.lock()
-        try {
-            if (closed) return
-            closed = true
-            stopTransfer()
-        } finally {
-            mutex.unlock()
-        }
-    }
-}
 
 /**
  * Full-screen progressive proxy player. Camera bytes stream into a persistent
@@ -147,7 +100,12 @@ fun MediaPlaybackScreen(
             MediaTransferCoordinator(
                 prepareTransfer = {
                     withContext(Dispatchers.IO) {
-                        preparePlayback(cacheStore, cameraID, clip)
+                        prepareMediaObjectTransfer(
+                            cacheStore = cacheStore,
+                            cameraID = cameraID,
+                            clip = clip,
+                            objectLabel = "clip",
+                        )
                     }
                 },
                 stopTransfer = {
@@ -156,7 +114,7 @@ fun MediaPlaybackScreen(
             )
         }
     var preparation by remember(clip.handle) {
-        mutableStateOf<PlaybackPreparation>(PlaybackPreparation.Loading)
+        mutableStateOf<MediaTransferPreparation>(MediaTransferPreparation.Loading)
     }
     var closeRequested by remember { mutableStateOf(false) }
     var shareableEntry by remember(clip.handle) { mutableStateOf<MediaCacheEntry?>(null) }
@@ -182,7 +140,7 @@ fun MediaPlaybackScreen(
     LaunchedEffect(preparation) {
         shareableEntry = null
         shareFailure = null
-        val entry = (preparation as? PlaybackPreparation.Ready)?.entry ?: return@LaunchedEffect
+        val entry = (preparation as? MediaTransferPreparation.Ready)?.entry ?: return@LaunchedEffect
         while (isActive) {
             when (entry.state) {
                 MediaCacheState.COMPLETE -> {
@@ -230,10 +188,10 @@ fun MediaPlaybackScreen(
             .pointerInput(Unit) { detectTapGestures {} },
     ) {
         when (val current = preparation) {
-            PlaybackPreparation.Loading -> PlaybackLoading("Preparing camera media…")
-            is PlaybackPreparation.Failed -> PlaybackFailure(current.message)
-            is PlaybackPreparation.Ready -> ProgressivePlayer(current.entry)
-            PlaybackPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
+            MediaTransferPreparation.Loading -> PlaybackLoading("Preparing camera media…")
+            is MediaTransferPreparation.Failed -> PlaybackFailure(current.message)
+            is MediaTransferPreparation.Ready -> ProgressivePlayer(current.entry)
+            MediaTransferPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
         }
 
         Column(
@@ -317,81 +275,6 @@ fun MediaPlaybackScreen(
         }
     }
 }
-
-private fun preparePlayback(
-    cacheStore: MediaCacheStore,
-    cameraID: String,
-    clip: MediaClipRecord,
-): PlaybackPreparation {
-    if (!SwiftCore.isAvailable) {
-        return PlaybackPreparation.Failed("Camera core is not bundled in this build.")
-    }
-    return try {
-        val totalBytes =
-            SwiftCore.sessionResolveMediaSize(clip.handle.toInt(), clip.sizeBytes)
-        if (totalBytes < 0) throw IOException("Camera did not provide the clip size.")
-        val entry = cacheStore.openEntry(cameraID, MediaCacheObjectIdentity(clip), totalBytes)
-        when (entry.state) {
-            MediaCacheState.FAILED,
-            MediaCacheState.CANCELLED,
-            -> entry.resume()
-            MediaCacheState.ACTIVE,
-            MediaCacheState.COMPLETE,
-            -> Unit
-        }
-        if (entry.state != MediaCacheState.COMPLETE) {
-            SwiftCore.sessionStartMediaTransfer(
-                handle = clip.handle.toInt(),
-                reportedSize = totalBytes,
-                resumeOffset = entry.downloadedBytes,
-                listener = entry.transferListener(),
-            )
-        }
-        PlaybackPreparation.Ready(entry)
-    } catch (error: Exception) {
-        PlaybackPreparation.Failed(error.message ?: "Camera media could not be opened.")
-    }
-}
-
-private fun MediaCacheEntry.transferListener(): SwiftCore.MediaTransferListener =
-    object : SwiftCore.MediaTransferListener {
-        override fun onStarted(totalBytes: Long) {
-            if (totalBytes != expectedLength) {
-                fail(MediaCacheLengthException(expectedLength, totalBytes))
-            }
-        }
-
-        override fun onChunk(offset: Long, bytes: ByteArray): Boolean =
-            try {
-                append(offset, bytes)
-                true
-            } catch (error: Exception) {
-                fail(error.asIOException())
-                false
-            }
-
-        override fun onCompleted(totalBytes: Long) {
-            try {
-                if (totalBytes != expectedLength) {
-                    throw MediaCacheLengthException(expectedLength, totalBytes)
-                }
-                complete()
-            } catch (error: Exception) {
-                fail(error.asIOException())
-            }
-        }
-
-        override fun onStopped(cachedBytes: Long) {
-            cancel()
-        }
-
-        override fun onFailed(message: String) {
-            fail(IOException(message))
-        }
-    }
-
-private fun Exception.asIOException(): IOException =
-    this as? IOException ?: IOException(message ?: "Media cache write failed.", this)
 
 @Composable
 private fun ProgressivePlayer(entry: MediaCacheEntry) {
