@@ -3,34 +3,27 @@ package com.opencapture.openzcine.settings
 import android.content.SharedPreferences
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class OperatorSettingsTest {
     private val store = FakePreferences()
 
     @Test
-    fun `readouts default visible, assist tools default off`() {
+    fun `readouts default visible`() {
         val settings = OperatorSettings(store)
         assertTrue(settings.recReadoutVisible.value)
         assertTrue(settings.codecReadoutVisible.value)
         assertTrue(settings.mediaReadoutVisible.value)
         assertTrue(settings.fpsReadoutVisible.value)
-        assertFalse(settings.falseColorEnabled.value)
-        assertFalse(settings.zebraEnabled.value)
-        assertFalse(settings.peakingEnabled.value)
-        assertFalse(settings.waveformEnabled.value)
     }
 
     @Test
     fun `toggle writes through and survives a reload`() {
         OperatorSettings(store).apply {
-            falseColorEnabled.toggle()
             fpsReadoutVisible.toggle()
         }
         val reloaded = OperatorSettings(store)
-        assertTrue(reloaded.falseColorEnabled.value)
-        assertFalse(reloaded.fpsReadoutVisible.value)
+        assertEquals(false, reloaded.fpsReadoutVisible.value)
     }
 
     @Test

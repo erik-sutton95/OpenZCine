@@ -46,14 +46,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val mediaReadoutVisible: Toggle = Toggle("display.mediaReadout", default = true)
     public val fpsReadoutVisible: Toggle = Toggle("display.fpsReadout", default = true)
 
-    // View Assist — tool enables (iOS `AssistConfiguration` tool toggles).
-    // AWAITING WIRING: the feed-effects engine (PR #119) reads these when it
-    // lands on this stack; until then the switches only record intent.
-    public val falseColorEnabled: Toggle = Toggle("assist.falseColor", default = false)
-    public val zebraEnabled: Toggle = Toggle("assist.zebra", default = false)
-    public val peakingEnabled: Toggle = Toggle("assist.peaking", default = false)
-    public val waveformEnabled: Toggle = Toggle("assist.waveform", default = false)
-
     /** Every persisted switch, for reset-to-defaults and key-collision checks. */
     public val all: List<Toggle> =
         listOf(
@@ -61,10 +53,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             codecReadoutVisible,
             mediaReadoutVisible,
             fpsReadoutVisible,
-            falseColorEnabled,
-            zebraEnabled,
-            peakingEnabled,
-            waveformEnabled,
         )
 
     private companion object {

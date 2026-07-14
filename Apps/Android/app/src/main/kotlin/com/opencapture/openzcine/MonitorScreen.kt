@@ -35,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
@@ -138,27 +137,21 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * device's [resolveTier] ceiling; [glassTierOverride] (`zc.glass.tier`
  * debug intent extra) forces a lower tier for testing.
  *
- * [scopeKind] (`zc.scopes` debug intent) seeds the assist state; the assist
- * toolbar owns it from there.
+ * [assist] is shared with Operator Settings so toolbar and settings changes
+ * immediately drive the same feed-effects and scope state.
  */
 @Composable
 fun MonitorScreen(
     session: CameraSession,
     frameSource: LiveFrameSource?,
+    assist: AssistState,
     liveViewEnabled: Boolean = true,
     glassTierOverride: String? = null,
-    scopeKind: ScopeKind? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
 ) {
     val sessionState by session.state.collectAsState()
     LaunchedEffect(session) { session.connect() }
-
-    // Assist toggles: seeded from the debug intent when present (exact,
-    // deterministic test state), else the persisted toolbar toggles; every
-    // change feeds the effects engine + scope mount and persists.
-    val appContext = LocalContext.current.applicationContext
-    val assist = remember { AssistState.restore(appContext, FeedEffectsState.current, scopeKind) }
 
     // Shared glass state: the active tier plus the one blurred backdrop
     // texture every glass pill samples. The frame-clock loop is the perf
@@ -435,6 +428,8 @@ fun MonitorScreen(
                     onLock = { locked = !locked },
                     onRecord = { recording = !recording },
                     onDisp = { dispIndex = (dispIndex + 1) % 3 },
+                    onOpenMedia = onOpenMedia,
+                    onOpenSettings = onOpenSettings,
                 )
             } else {
                 if (isCommand) {
@@ -597,6 +592,8 @@ private fun PortraitChrome(
     onLock: () -> Unit,
     onRecord: () -> Unit,
     onDisp: () -> Unit,
+    onOpenMedia: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
 
@@ -672,11 +669,11 @@ private fun PortraitChrome(
         Spacer(Modifier.weight(1f))
         RecordButton(recording, Modifier.size(83.dp), onClick = onRecord)
         Spacer(Modifier.weight(1f))
-        AuxCircleButton(Modifier.size(63.dp)) { glyphModifier, tint ->
+        AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
             MediaStackGlyph(tint, glyphModifier)
         }
         Spacer(Modifier.weight(1f))
-        AuxCircleButton(Modifier.size(63.dp)) { glyphModifier, tint ->
+        AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->
             GearGlyph(tint, glyphModifier)
         }
         Spacer(Modifier.weight(1f))

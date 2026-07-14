@@ -6,6 +6,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -130,7 +132,13 @@ fun MediaBrowseScreen(
     val trailingPad = edge(cutout.getRight(density, direction), 6f, 20f)
     val bottomPad = edge(cutout.getBottom(density), 4f, 14f)
 
-    Box(Modifier.fillMaxSize().background(LiveDesign.background)) {
+    Box(
+        Modifier.fillMaxSize()
+            .background(LiveDesign.background)
+            // This overlay owns every empty pixel; gestures must never fall
+            // through to the paused monitor below it.
+            .pointerInput(Unit) { detectTapGestures {} },
+    ) {
         Column(
             Modifier.fillMaxSize()
                 .padding(

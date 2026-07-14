@@ -9,6 +9,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -32,6 +33,52 @@ class MediaCacheStoreTest {
                         store.openEntry("camera", filename, 1)
                     }
                 }
+        }
+
+    @Test
+    fun `same-named clips on different objects never share cached footage`() =
+        withStore { _, store ->
+            val first =
+                store.openEntry(
+                    "camera",
+                    MediaCacheObjectIdentity(
+                        storageId = 0x0001_0001L,
+                        handle = 42L,
+                        captureDate = "20260714T120000",
+                        filename = "C0001.MOV",
+                    ),
+                    3,
+                )
+            val otherStorage =
+                store.openEntry(
+                    "camera",
+                    MediaCacheObjectIdentity(
+                        storageId = 0x0002_0001L,
+                        handle = 42L,
+                        captureDate = "20260714T120000",
+                        filename = "C0001.MOV",
+                    ),
+                    3,
+                )
+            val reusedName =
+                store.openEntry(
+                    "camera",
+                    MediaCacheObjectIdentity(
+                        storageId = 0x0001_0001L,
+                        handle = 99L,
+                        captureDate = "20260715T120000",
+                        filename = "C0001.MOV",
+                    ),
+                    3,
+                )
+
+            first.append(0, byteArrayOf(1, 2, 3))
+            first.complete()
+
+            assertNotEquals(first.finalPath, otherStorage.finalPath)
+            assertNotEquals(first.finalPath, reusedName.finalPath)
+            assertEquals(0, otherStorage.downloadedBytes)
+            assertEquals(MediaCacheState.ACTIVE, reusedName.state)
         }
 
     @Test

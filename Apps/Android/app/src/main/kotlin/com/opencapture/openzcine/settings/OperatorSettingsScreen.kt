@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -37,9 +39,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.BuildConfig
+import com.opencapture.openzcine.AssistState
+import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
@@ -66,19 +71,22 @@ public enum class OperatorSettingsTab(
 
 /**
  * The full-screen Operator Settings surface — a 1:1 structural port of the
- * iOS `OperatorSettingsPanel` (ios/Runner/MonitorPanels.swift) landscape
- * branch: floating close button, eyebrow/title header with the live tile,
- * vertical tab rail, and a rounded content pane per tab. The activity is
- * landscape-locked, so the iOS portrait tab-strip branch has no Android
- * counterpart.
+ * iOS `OperatorSettingsPanel` (ios/Runner/MonitorPanels.swift): floating close
+ * button, eyebrow/title header with the live tile, vertical tab rail, and a
+ * rounded content pane per tab. [assistState] is the monitor toolbar's state,
+ * so view-assist changes apply immediately and persist through one seam.
  */
 @Composable
-public fun OperatorSettingsScreen(session: CameraSession, onClose: () -> Unit) {
+public fun OperatorSettingsScreen(
+    session: CameraSession,
+    assistState: AssistState,
+    onClose: () -> Unit,
+) {
     val context = LocalContext.current
     val settings = remember { OperatorSettings(context) }
     var selectedTab by rememberSaveable { mutableStateOf(OperatorSettingsTab.ASSIST) }
 
-    Box(
+    BoxWithConstraints(
         Modifier.fillMaxSize()
             .background(LiveDesign.background)
             // A hit-testable node at the root keeps every pointer event on
@@ -89,6 +97,7 @@ public fun OperatorSettingsScreen(session: CameraSession, onClose: () -> Unit) {
             .pointerInput(Unit) { detectTapGestures {} }
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
+        val compact = maxWidth < 600.dp
         Column(
             Modifier.fillMaxSize()
                 .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
@@ -97,13 +106,30 @@ public fun OperatorSettingsScreen(session: CameraSession, onClose: () -> Unit) {
             // The floating PanelCloseButton overlays this row's leading corner
             // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
             // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
-            SettingsHeader(session, Modifier.padding(start = 45.dp))
-            Row(
-                Modifier.fillMaxWidth().weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
-                SettingsContentPane(selectedTab, settings, Modifier.weight(1f))
+            SettingsHeader(session, compact)
+            if (compact) {
+                SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
+                SettingsContentPane(
+                    selectedTab,
+                    settings,
+                    assistState,
+                    compact = true,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
+                    SettingsContentPane(
+                        selectedTab,
+                        settings,
+                        assistState,
+                        compact = false,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
         // Floats in the very top-left corner, outside the layout flow, at the
@@ -114,30 +140,52 @@ public fun OperatorSettingsScreen(session: CameraSession, onClose: () -> Unit) {
 
 /** Eyebrow + title with the live tile pinned trailing (iOS `settingsTop`). */
 @Composable
-private fun SettingsHeader(session: CameraSession, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                "OPENZCINE",
-                color = LiveDesign.accent,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp,
-            )
-            Text(
-                "Operator Setup",
-                style = chromeStyle(24f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-            )
+private fun SettingsHeader(session: CameraSession, compact: Boolean) {
+    if (compact) {
+        Column(
+            Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SettingsTitle(Modifier.padding(start = 45.dp))
+            SettingsLiveTile(session, Modifier.fillMaxWidth(), expanded = true)
         }
-        Spacer(Modifier.weight(1f))
-        SettingsLiveTile(session)
+    } else {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 45.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            SettingsTitle()
+            Spacer(Modifier.weight(1f))
+            SettingsLiveTile(session, expanded = false)
+        }
+    }
+}
+
+@Composable
+private fun SettingsTitle(modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            "OPENZCINE",
+            color = LiveDesign.accent,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.8.sp,
+        )
+        Text(
+            "Operator Setup",
+            style = chromeStyle(24f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
     }
 }
 
 /** Link-state tile: status dot, title/detail, meter bars (iOS `SettingsLiveTile`). */
 @Composable
-private fun SettingsLiveTile(session: CameraSession) {
+private fun SettingsLiveTile(
+    session: CameraSession,
+    modifier: Modifier = Modifier,
+    expanded: Boolean,
+) {
     val state by session.state.collectAsState()
     val linked = state is CameraSessionState.Connected
     val tint = if (linked) LiveDesign.good else LiveDesign.faint
@@ -148,14 +196,17 @@ private fun SettingsLiveTile(session: CameraSession) {
             CameraSessionState.Disconnected -> "No camera"
         }
     Row(
-        Modifier.background(LiveDesign.surface, ChromeShape)
+        modifier.background(LiveDesign.surface, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(8.dp).background(tint, CircleShape))
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(
+            if (expanded) Modifier.weight(1f) else Modifier.widthIn(max = 180.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
             Text(
                 if (linked) "Active Link" else "No Link",
                 style = chromeStyle(12f, FontWeight.SemiBold),
@@ -166,6 +217,7 @@ private fun SettingsLiveTile(session: CameraSession) {
                 style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
                 color = LiveDesign.muted,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         // ponytail: bars are binary (4 or 0) until Android grows the iOS
@@ -177,6 +229,50 @@ private fun SettingsLiveTile(session: CameraSession) {
                         .background(
                             if (linked) tint.copy(alpha = 0.52f + index * 0.12f)
                             else LiveDesign.hairline,
+                            CircleShape,
+                        )
+                )
+            }
+        }
+    }
+}
+
+/** Horizontal tab selector used when the landscape rail cannot fit. */
+@Composable
+private fun SettingsTabStrip(
+    selected: OperatorSettingsTab,
+    onSelect: (OperatorSettingsTab) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().glass(ChromeShape).padding(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        OperatorSettingsTab.entries.forEach { tab ->
+            val active = tab == selected
+            Column(
+                Modifier.weight(1f)
+                    .height(43.dp)
+                    .background(
+                        if (active) LiveDesign.surface else LiveDesign.surface.copy(alpha = 0f),
+                        ChromeShape,
+                    )
+                    .settingsClickable(role = Role.Tab) { onSelect(tab) }
+                    .padding(horizontal = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    tab.title,
+                    style = chromeStyle(11.5f, FontWeight.SemiBold),
+                    color = if (active) LiveDesign.text else LiveDesign.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box(
+                    Modifier.padding(top = 3.dp)
+                        .size(width = 18.dp, height = 3.dp)
+                        .background(
+                            if (active) LiveDesign.accent else LiveDesign.accent.copy(alpha = 0f),
                             CircleShape,
                         )
                 )
@@ -239,6 +335,8 @@ private fun SettingsTabButton(tab: OperatorSettingsTab, active: Boolean, onClick
 private fun SettingsContentPane(
     tab: OperatorSettingsTab,
     settings: OperatorSettings,
+    assistState: AssistState,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -283,8 +381,8 @@ private fun SettingsContentPane(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 when (tab) {
-                    OperatorSettingsTab.ASSIST -> AssistRows(settings)
-                    OperatorSettingsTab.DISPLAY -> DisplayRows(settings)
+                    OperatorSettingsTab.ASSIST -> AssistRows(assistState)
+                    OperatorSettingsTab.DISPLAY -> DisplayRows(settings, compact)
                     OperatorSettingsTab.SYSTEM -> SystemRows()
                 }
             }
@@ -293,26 +391,25 @@ private fun SettingsContentPane(
 }
 
 /**
- * View Assist tab. The switches persist operator intent but are NOT yet read
- * by the feed pipeline — the effects engine (PR #119) wires them when it
- * lands on this stack (see the AWAITING WIRING note in [OperatorSettings]).
+ * View Assist tab. These switches are alternate controls for the monitor's
+ * shared [AssistState], so changes immediately reach effects and scopes.
  */
 @Composable
-private fun AssistRows(settings: OperatorSettings) {
+private fun AssistRows(assistState: AssistState) {
     SettingsRowCard {
         SettingsSwitchRow(
             "False Color",
-            isOn = settings.falseColorEnabled.value,
+            isOn = assistState.isOn(AssistTool.FALSE),
             showTopDivider = false,
-        ) { settings.falseColorEnabled.toggle() }
-        SettingsSwitchRow("Zebra", isOn = settings.zebraEnabled.value) {
-            settings.zebraEnabled.toggle()
+        ) { assistState.toggle(AssistTool.FALSE) }
+        SettingsSwitchRow("Zebra", isOn = assistState.isOn(AssistTool.ZEBRA)) {
+            assistState.toggle(AssistTool.ZEBRA)
         }
-        SettingsSwitchRow("Focus Peaking", isOn = settings.peakingEnabled.value) {
-            settings.peakingEnabled.toggle()
+        SettingsSwitchRow("Focus Peaking", isOn = assistState.isOn(AssistTool.PEAK)) {
+            assistState.toggle(AssistTool.PEAK)
         }
-        SettingsSwitchRow("Waveform", isOn = settings.waveformEnabled.value) {
-            settings.waveformEnabled.toggle()
+        SettingsSwitchRow("Waveform", isOn = assistState.isOn(AssistTool.WAVE)) {
+            assistState.toggle(AssistTool.WAVE)
         }
     }
 }
@@ -323,32 +420,61 @@ private fun AssistRows(settings: OperatorSettings) {
  * files are deliberately out of scope here; see [OperatorSettings]).
  */
 @Composable
-private fun DisplayRows(settings: OperatorSettings) {
+private fun DisplayRows(settings: OperatorSettings, compact: Boolean) {
     SettingsGroupCard(
         title = "Live Status Readouts",
         caption = "Hide readouts you do not ride during a take.",
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            DisplayToggleItem(
-                "REC",
-                isOn = settings.recReadoutVisible.value,
-                modifier = Modifier.weight(1f),
-            ) { settings.recReadoutVisible.toggle() }
-            DisplayToggleItem(
-                "CODEC",
-                isOn = settings.codecReadoutVisible.value,
-                modifier = Modifier.weight(1f),
-            ) { settings.codecReadoutVisible.toggle() }
-            DisplayToggleItem(
-                "MEDIA",
-                isOn = settings.mediaReadoutVisible.value,
-                modifier = Modifier.weight(1f),
-            ) { settings.mediaReadoutVisible.toggle() }
-            DisplayToggleItem(
-                "FPS",
-                isOn = settings.fpsReadoutVisible.value,
-                modifier = Modifier.weight(1f),
-            ) { settings.fpsReadoutVisible.toggle() }
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    DisplayToggleItem(
+                        "REC",
+                        isOn = settings.recReadoutVisible.value,
+                        modifier = Modifier.weight(1f),
+                    ) { settings.recReadoutVisible.toggle() }
+                    DisplayToggleItem(
+                        "CODEC",
+                        isOn = settings.codecReadoutVisible.value,
+                        modifier = Modifier.weight(1f),
+                    ) { settings.codecReadoutVisible.toggle() }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    DisplayToggleItem(
+                        "MEDIA",
+                        isOn = settings.mediaReadoutVisible.value,
+                        modifier = Modifier.weight(1f),
+                    ) { settings.mediaReadoutVisible.toggle() }
+                    DisplayToggleItem(
+                        "FPS",
+                        isOn = settings.fpsReadoutVisible.value,
+                        modifier = Modifier.weight(1f),
+                    ) { settings.fpsReadoutVisible.toggle() }
+                }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                DisplayToggleItem(
+                    "REC",
+                    isOn = settings.recReadoutVisible.value,
+                    modifier = Modifier.weight(1f),
+                ) { settings.recReadoutVisible.toggle() }
+                DisplayToggleItem(
+                    "CODEC",
+                    isOn = settings.codecReadoutVisible.value,
+                    modifier = Modifier.weight(1f),
+                ) { settings.codecReadoutVisible.toggle() }
+                DisplayToggleItem(
+                    "MEDIA",
+                    isOn = settings.mediaReadoutVisible.value,
+                    modifier = Modifier.weight(1f),
+                ) { settings.mediaReadoutVisible.toggle() }
+                DisplayToggleItem(
+                    "FPS",
+                    isOn = settings.fpsReadoutVisible.value,
+                    modifier = Modifier.weight(1f),
+                ) { settings.fpsReadoutVisible.toggle() }
+            }
         }
     }
 }
@@ -380,7 +506,7 @@ private fun SystemRows() {
             }
         }
         SettingsInlineRow("Open-Source Licenses") {
-            SettingsValueText("See THIRD-PARTY-NOTICES")
+            SettingsValueText("Third-Party Notices")
         }
     }
 }

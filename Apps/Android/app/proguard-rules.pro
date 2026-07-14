@@ -5,3 +5,8 @@
 # Kotlin port later); shrinking or renaming its surface would break the seam
 # contract, and reflection/JNI lookups against it must keep working.
 -keep class com.opencapture.openzcine.core.** { *; }
+
+# Swift calls these bridge callback methods with JNI GetMethodID. Keep the
+# bridge package intact so R8 cannot rename or remove listener methods or their
+# anonymous implementations in release builds.
+-keep class com.opencapture.openzcine.bridge.** { *; }

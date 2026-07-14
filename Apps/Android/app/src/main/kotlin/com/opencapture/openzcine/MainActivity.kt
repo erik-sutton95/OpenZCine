@@ -39,6 +39,15 @@ import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
+
+private enum class MonitorOverlay {
+    NONE,
+    SETTINGS,
+    MEDIA,
+}
 
 /**
  * App entry point: the pairing wizard first (camera-AP and phone-hotspot
@@ -70,6 +79,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             OpenZCineTheme {
                 var monitorSession by remember { mutableStateOf(debugSession) }
+                // Keep the process-wide camera-AP binding alive while its
+                // handed-off session is active, then release it alongside the
+                // PTP slot when this activity or session leaves composition.
+                // Creating this once also prevents recomposition from
+                // orphaning a CameraApJoiner callback.
+                val pairingEnvironment =
+                    remember(pairingScript) {
+                        pairingScript?.environment
+                            ?: realPairingEnvironment(applicationContext)
+                    }
                 // The monitor is immersive; the pairing screens keep the
                 // (transparent, dark-styled) system bars, like the iOS
                 // startup screens keep the status bar.
@@ -78,67 +97,88 @@ class MainActivity : ComponentActivity() {
                 val active = monitorSession
                 if (active == null) {
                     PairingExperience(
-                        environment = pairingScript?.environment
-                            ?: realPairingEnvironment(this@MainActivity),
+                        environment = pairingEnvironment,
                         script = pairingScript,
                         onPaired = { monitorSession = it },
                     )
-                } else if (SwiftCore.isAvailable) {
-                    // The real shell needs the shared core's zone map. An APK
-                    // built without `just android-core` (plain CI android-check)
-                    // has no native library, so it keeps the placeholder.
-                    // Settings and Media render as mutually-exclusive,
-                    // full-screen surfaces over the monitor so the shell keeps
-                    // its state while either surface owns interaction.
-                    var settingsOpen by rememberSaveable { mutableStateOf(false) }
-                    var mediaOpen by rememberSaveable {
-                        mutableStateOf(DemoHarness.opensMedia(intent))
-                    }
-                    val currentSessionState by active.state.collectAsState()
-                    val cameraID =
-                        (currentSessionState as? CameraSessionState.Connected)
-                            ?.identity
-                            ?.let { identity ->
-                                identity.serialNumber.ifBlank {
-                                    "${identity.model}:${identity.name}"
-                                }
-                            }
-                            ?: "camera"
-                    Box {
-                        MonitorScreen(
-                            active,
-                            frameSource = demo?.second,
-                            liveViewEnabled = !mediaOpen,
-                            glassTierOverride = DemoHarness.glassTierOverride(intent),
-                            scopeKind = DemoHarness.scopeKind(intent),
-                            onOpenSettings = {
-                                mediaOpen = false
-                                settingsOpen = true
-                            },
-                            onOpenMedia = {
-                                settingsOpen = false
-                                mediaOpen = true
-                            },
-                        )
-                        if (settingsOpen) {
-                            OperatorSettingsScreen(
-                                session = active,
-                                onClose = { settingsOpen = false },
-                            )
-                        }
-                        if (mediaOpen) {
-                            MediaBrowseScreen(
-                                cameraID = cameraID,
-                                cameraConnected =
-                                    currentSessionState is CameraSessionState.Connected,
-                                autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
-                                onClose = { mediaOpen = false },
-                            )
-                        }
-                    }
-                    BackHandler(enabled = settingsOpen) { settingsOpen = false }
                 } else {
-                    MonitorShell(active, frameSource = demo?.second)
+                    LaunchedEffect(active, pairingEnvironment) {
+                        try {
+                            awaitCancellation()
+                        } finally {
+                            withContext(NonCancellable) {
+                                active.disconnect()
+                                pairingEnvironment.releaseCameraAp()
+                            }
+                        }
+                    }
+                    if (SwiftCore.isAvailable) {
+                        // The real shell needs the shared core's zone map. An APK
+                        // built without `just android-core` (plain CI android-check)
+                        // has no native library, so it keeps the placeholder.
+                        // Settings and Media render as mutually-exclusive,
+                        // full-screen surfaces over the monitor so the shell keeps
+                        // its state while either surface owns interaction.
+                        var overlay by rememberSaveable {
+                            mutableStateOf(
+                                if (DemoHarness.opensMedia(intent)) {
+                                    MonitorOverlay.MEDIA
+                                } else {
+                                    MonitorOverlay.NONE
+                                },
+                            )
+                        }
+                        val assist = remember(active) {
+                            AssistState.restore(
+                                applicationContext,
+                                FeedEffectsState.current,
+                                DemoHarness.scopeKind(intent),
+                            )
+                        }
+                        val currentSessionState by active.state.collectAsState()
+                        val cameraID =
+                            (currentSessionState as? CameraSessionState.Connected)
+                                ?.identity
+                                ?.let { identity ->
+                                    identity.serialNumber.ifBlank {
+                                        "${identity.model}:${identity.name}"
+                                    }
+                                }
+                                ?: "camera"
+                        Box {
+                            MonitorScreen(
+                                active,
+                                frameSource = demo?.second,
+                                assist = assist,
+                                liveViewEnabled = overlay != MonitorOverlay.MEDIA,
+                                glassTierOverride = DemoHarness.glassTierOverride(intent),
+                                onOpenSettings = { overlay = MonitorOverlay.SETTINGS },
+                                onOpenMedia = { overlay = MonitorOverlay.MEDIA },
+                            )
+                            when (overlay) {
+                                MonitorOverlay.NONE -> Unit
+                                MonitorOverlay.SETTINGS ->
+                                    OperatorSettingsScreen(
+                                        session = active,
+                                        assistState = assist,
+                                        onClose = { overlay = MonitorOverlay.NONE },
+                                    )
+                                MonitorOverlay.MEDIA ->
+                                    MediaBrowseScreen(
+                                        cameraID = cameraID,
+                                        cameraConnected =
+                                            currentSessionState is CameraSessionState.Connected,
+                                        autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
+                                        onClose = { overlay = MonitorOverlay.NONE },
+                                    )
+                            }
+                        }
+                        BackHandler(enabled = overlay == MonitorOverlay.SETTINGS) {
+                            overlay = MonitorOverlay.NONE
+                        }
+                    } else {
+                        MonitorShell(active, frameSource = demo?.second)
+                    }
                 }
             }
         }

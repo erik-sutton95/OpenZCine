@@ -5,15 +5,21 @@ package com.opencapture.openzcine.media
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -63,13 +70,51 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 
-private sealed interface PlaybackPreparation {
+internal sealed interface PlaybackPreparation {
     data object Loading : PlaybackPreparation
 
     data class Ready(val entry: MediaCacheEntry) : PlaybackPreparation
 
     data class Failed(val message: String) : PlaybackPreparation
+
+    data object Cancelled : PlaybackPreparation
+}
+
+/**
+ * Serializes one media-transfer preparation and teardown sequence.
+ *
+ * Native preparation may start the transfer before it returns. Holding the
+ * mutex across that setup makes a close wait for it, so teardown cannot race
+ * ahead and leave a hidden transfer running.
+ */
+internal class MediaTransferCoordinator(
+    private val prepareTransfer: suspend () -> PlaybackPreparation,
+    private val stopTransfer: suspend () -> Unit,
+) {
+    private val mutex = Mutex()
+    private var closed = false
+
+    suspend fun prepare(): PlaybackPreparation {
+        mutex.lock()
+        return try {
+            if (closed) PlaybackPreparation.Cancelled else prepareTransfer()
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    suspend fun close() {
+        mutex.lock()
+        try {
+            if (closed) return
+            closed = true
+            stopTransfer()
+        } finally {
+            mutex.unlock()
+        }
+    }
 }
 
 /**
@@ -88,50 +133,70 @@ fun MediaPlaybackScreen(
         remember(context) {
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
         }
+    val coordinator =
+        remember(cacheStore, cameraID, clip) {
+            MediaTransferCoordinator(
+                prepareTransfer = {
+                    withContext(Dispatchers.IO) {
+                        preparePlayback(cacheStore, cameraID, clip)
+                    }
+                },
+                stopTransfer = {
+                    withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+                },
+            )
+        }
     var preparation by remember(clip.handle) {
         mutableStateOf<PlaybackPreparation>(PlaybackPreparation.Loading)
     }
     var closeRequested by remember { mutableStateOf(false) }
-    var stopFinished by remember { mutableStateOf(false) }
 
-    LaunchedEffect(clip.handle) {
-        preparation =
-            withContext(Dispatchers.IO) {
-                preparePlayback(cacheStore, cameraID, clip)
-            }
+    LaunchedEffect(coordinator) {
+        preparation = coordinator.prepare()
     }
 
-    LaunchedEffect(closeRequested) {
+    LaunchedEffect(closeRequested, coordinator) {
         if (!closeRequested) return@LaunchedEffect
-        withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
-        stopFinished = true
+        coordinator.close()
         onClose()
     }
-    BackHandler { closeRequested = true }
+    BackHandler(enabled = !closeRequested) { closeRequested = true }
 
     // Activity teardown can dispose the surface without the in-app back path.
     // Preserve the camera invariant by stopping on a bounded IO coroutine.
-    DisposableEffect(Unit) {
+    DisposableEffect(coordinator) {
         onDispose {
-            if (!stopFinished) {
-                val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-                cleanup.launch {
-                    SwiftCore.sessionStopMediaTransfer()
+            val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            cleanup.launch {
+                try {
+                    coordinator.close()
+                } finally {
                     cleanup.cancel()
                 }
             }
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) { detectTapGestures {} },
+    ) {
         when (val current = preparation) {
             PlaybackPreparation.Loading -> PlaybackLoading("Preparing camera media…")
             is PlaybackPreparation.Failed -> PlaybackFailure(current.message)
             is PlaybackPreparation.Ready -> ProgressivePlayer(current.entry)
+            PlaybackPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
         }
 
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            Modifier.fillMaxWidth()
+                .windowInsetsPadding(
+                    WindowInsets.displayCutout.only(
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
+                    ),
+                )
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -159,7 +224,7 @@ private fun preparePlayback(
         val totalBytes =
             SwiftCore.sessionResolveMediaSize(clip.handle.toInt(), clip.sizeBytes)
         if (totalBytes < 0) throw IOException("Camera did not provide the clip size.")
-        val entry = cacheStore.openEntry(cameraID, clip.filename, totalBytes)
+        val entry = cacheStore.openEntry(cameraID, MediaCacheObjectIdentity(clip), totalBytes)
         when (entry.state) {
             MediaCacheState.FAILED,
             MediaCacheState.CANCELLED,
@@ -276,6 +341,11 @@ private fun ProgressivePlayer(entry: MediaCacheEntry) {
         Column(
             Modifier.align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .windowInsetsPadding(
+                    WindowInsets.displayCutout.only(
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                    ),
+                )
                 .padding(horizontal = 16.dp, vertical = 14.dp)
                 .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
                 .padding(horizontal = 12.dp, vertical = 9.dp),

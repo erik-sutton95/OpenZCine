@@ -64,9 +64,12 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Saved camera-AP credential surface the wizard needs (real: [CameraWifiCredentialStore]). */
 public interface PairingCredentials {
@@ -299,14 +302,22 @@ public fun PairingExperience(
         work =
             scope.launch {
                 val session = environment.createSession(host)
-                session.connect()
-                if (session.state.value is CameraSessionState.Connected) {
-                    onPaired(session)
-                } else {
-                    phase =
-                        PairingPhase.Error(
-                            "Couldn't reach the camera. Check Wi‑Fi and try again."
-                        )
+                try {
+                    session.connect()
+                    if (session.state.value is CameraSessionState.Connected) {
+                        onPaired(session)
+                    } else {
+                        phase =
+                            PairingPhase.Error(
+                                "Couldn't reach the camera. Check Wi‑Fi and try again."
+                            )
+                    }
+                } catch (error: CancellationException) {
+                    // `sessionConnect` begins native work asynchronously. A
+                    // cancelled wizard must tear that work down before a retry
+                    // can claim the process-wide PTP slot.
+                    withContext(NonCancellable) { session.disconnect() }
+                    throw error
                 }
             }
     }
@@ -345,6 +356,18 @@ public fun PairingExperience(
             permissionGranted = granted
             permissionDenied = !granted
         }
+    fun requestPairingPermission() {
+        if (permissionDenied) {
+            context.startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", context.packageName, null),
+                )
+            )
+        } else {
+            permissionLauncher.launch(requiredPairingPermission())
+        }
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -390,9 +413,11 @@ public fun PairingExperience(
             )
             Spacer(Modifier.height(12.dp))
             BoxWithConstraints(Modifier.weight(1f)) {
-                val twoColumn = maxWidth >= 640.dp
-                val introWidth = maxOf(236.dp, maxWidth * 0.28f)
+                val viewportWidth = maxWidth
+                val twoColumn = viewportWidth >= 640.dp
+                val introWidth = maxOf(236.dp, viewportWidth * 0.28f)
                 if (twoColumn) {
+                    val compactStep = viewportWidth - introWidth - 16.dp < 400.dp
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         IntroCard(
                             flow = flow,
@@ -409,18 +434,7 @@ public fun PairingExperience(
                             onKeyChange = { keyField = it },
                             keyWasRemembered = keyWasRemembered,
                             cameras = cameras,
-                            onRequestPermission = {
-                                if (permissionDenied) {
-                                    context.startActivity(
-                                        Intent(
-                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                            Uri.fromParts("package", context.packageName, null),
-                                        )
-                                    )
-                                } else {
-                                    permissionLauncher.launch(requiredPairingPermission())
-                                }
-                            },
+                            onRequestPermission = ::requestPairingPermission,
                             onChoose = { flow = flow.choose(it) },
                             onAdvance = { flow = flow.advance() },
                             onRetreat = {
@@ -430,12 +444,11 @@ public fun PairingExperience(
                             onJoin = ::joinCameraAp,
                             onConnectCamera = { connect(it.host) },
                             onCancel = ::cancelWork,
+                            compact = compactStep,
                             modifier = Modifier.weight(1f).fillMaxSize(),
                         )
                     }
                 } else {
-                    // ponytail: the app is landscape-locked; the stacked layout
-                    // is a narrow-viewport fallback, not a designed portrait mode.
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         StartupWizardProgress(
                             currentStep = flow.displayStepNumber,
@@ -452,9 +465,7 @@ public fun PairingExperience(
                             onKeyChange = { keyField = it },
                             keyWasRemembered = keyWasRemembered,
                             cameras = cameras,
-                            onRequestPermission = {
-                                permissionLauncher.launch(requiredPairingPermission())
-                            },
+                            onRequestPermission = ::requestPairingPermission,
                             onChoose = { flow = flow.choose(it) },
                             onAdvance = { flow = flow.advance() },
                             onRetreat = {
@@ -464,6 +475,7 @@ public fun PairingExperience(
                             onJoin = ::joinCameraAp,
                             onConnectCamera = { connect(it.host) },
                             onCancel = ::cancelWork,
+                            compact = viewportWidth < 480.dp,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
                     }
@@ -535,6 +547,7 @@ private fun StepCard(
     onJoin: () -> Unit,
     onConnectCamera: (DiscoveredCamera) -> Unit,
     onCancel: () -> Unit,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.startupCard().padding(20.dp)) {
@@ -562,7 +575,7 @@ private fun StepCard(
                 when (flow.step) {
                     PairingStep.PERMISSIONS ->
                         PermissionsBody(permissionGranted, permissionDenied, onRequestPermission)
-                    PairingStep.CHOOSE_PATH -> ChoosePathBody(onChoose)
+                    PairingStep.CHOOSE_PATH -> ChoosePathBody(onChoose, compact)
                     PairingStep.PREPARE -> NumberedCards(PairingCopy.prepareSteps(flow.path))
                     PairingStep.NETWORK ->
                         NetworkBody(
@@ -589,14 +602,19 @@ private fun StepCard(
 
         // Footer nav — mirrors iOS: none on the choose step (tapping a card
         // advances); Cancel while busy; Back + primary elsewhere.
-        Spacer(Modifier.height(12.dp))
+        if (busy || flow.step != PairingStep.CHOOSE_PATH) {
+            Spacer(Modifier.height(12.dp))
+        }
         if (busy) {
             Row {
                 Spacer(Modifier.weight(1f))
                 StartupOutlineButton("Cancel", onClick = onCancel, modifier = Modifier.width(116.dp))
             }
         } else if (flow.step != PairingStep.CHOOSE_PATH) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 if (flow.canRetreat) {
                     StartupOutlineButton(
                         "Back",
@@ -604,7 +622,7 @@ private fun StepCard(
                         modifier = Modifier.width(116.dp),
                     )
                 }
-                Spacer(Modifier.weight(1f))
+                if (!compact) Spacer(Modifier.weight(1f))
                 when {
                     flow.step == PairingStep.NETWORK &&
                         flow.path == PairingPath.CAMERA_ACCESS_POINT ->
@@ -612,14 +630,16 @@ private fun StepCard(
                             "Join camera Wi‑Fi",
                             enabled = ssidField.isNotBlank(),
                             onClick = onJoin,
-                            modifier = Modifier.width(220.dp),
+                            modifier =
+                                if (compact) Modifier.weight(1f) else Modifier.width(220.dp),
                         )
                     !flow.isFinalStep ->
                         StartupFilledButton(
                             "Continue",
                             enabled = flow.step != PairingStep.PERMISSIONS || permissionGranted,
                             onClick = onAdvance,
-                            modifier = Modifier.width(220.dp),
+                            modifier =
+                                if (compact) Modifier.weight(1f) else Modifier.width(220.dp),
                         )
                     // DISCOVER advances by tapping a found camera — no primary.
                     else -> {}
@@ -725,42 +745,60 @@ private fun StatusPill(text: String, color: androidx.compose.ui.graphics.Color) 
 }
 
 @Composable
-private fun ChoosePathBody(onChoose: (PairingPath) -> Unit) {
+private fun ChoosePathBody(onChoose: (PairingPath) -> Unit, compact: Boolean) {
     // Tight vertical budget: both cards must clear the card fold without
-    // scrolling on the ~180dp step body of a 720px-tall landscape panel.
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        for (path in PairingPath.entries) {
-            Column(
-                Modifier.weight(1f)
-                    .startupTile()
-                    .clickable { onChoose(path) }
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    PairingCopy.pathTitle(path),
-                    color = StartupColors.ink,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    PairingCopy.pathBadge(path),
-                    color = StartupColors.accent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier =
-                        Modifier.clip(CircleShape)
-                            .background(StartupColors.accent.copy(alpha = 0.15f))
-                            .padding(horizontal = 9.dp, vertical = 3.dp),
-                )
-                Spacer(Modifier.height(7.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    for (pro in PairingCopy.pathPros(path)) {
-                        TradeoffRow("+", StartupColors.ready, pro)
-                    }
-                    TradeoffRow("−", StartupColors.dim, PairingCopy.pathCon(path))
-                }
+    // scrolling on the ~180dp step body of a 720px-tall landscape panel. On a
+    // narrow portrait viewport they stack inside the body's existing scroll.
+    if (compact) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (path in PairingPath.entries) {
+                PathChoiceCard(path, onChoose, Modifier.fillMaxWidth())
             }
+        }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            for (path in PairingPath.entries) {
+                PathChoiceCard(path, onChoose, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PathChoiceCard(
+    path: PairingPath,
+    onChoose: (PairingPath) -> Unit,
+    modifier: Modifier,
+) {
+    Column(
+        modifier
+            .startupTile()
+            .clickable { onChoose(path) }
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(
+            PairingCopy.pathTitle(path),
+            color = StartupColors.ink,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            PairingCopy.pathBadge(path),
+            color = StartupColors.accent,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier =
+                Modifier.clip(CircleShape)
+                    .background(StartupColors.accent.copy(alpha = 0.15f))
+                    .padding(horizontal = 9.dp, vertical = 3.dp),
+        )
+        Spacer(Modifier.height(7.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            for (pro in PairingCopy.pathPros(path)) {
+                TradeoffRow("+", StartupColors.ready, pro)
+            }
+            TradeoffRow("−", StartupColors.dim, PairingCopy.pathCon(path))
         }
     }
 }

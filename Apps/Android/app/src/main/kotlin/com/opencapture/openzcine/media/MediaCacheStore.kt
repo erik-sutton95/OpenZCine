@@ -28,6 +28,37 @@ enum class MediaCacheState {
     CANCELLED,
 }
 
+/**
+ * Stable identity for one PTP object in a camera cache bucket.
+ *
+ * Nikon camera filenames are not globally unique: a card can be swapped,
+ * another storage volume can contain the same basename, and handles can be
+ * reused after deletion. Every field therefore contributes to the cache key;
+ * [filename] is retained for validation and diagnostics, not used directly as
+ * the on-disk artifact name.
+ */
+data class MediaCacheObjectIdentity(
+    /** PTP storage volume containing the object. */
+    val storageId: Long,
+    /** PTP object handle within that storage volume. */
+    val handle: Long,
+    /** Camera capture timestamp, when supplied by ObjectInfo. */
+    val captureDate: String,
+    /** Safe camera basename, e.g. `C0001.MOV`. */
+    val filename: String,
+) {
+    /** Builds the identity directly from the Android media-list wire record. */
+    public constructor(clip: MediaClipRecord) : this(
+        storageId = clip.storageId,
+        handle = clip.handle,
+        captureDate = clip.captureDate,
+        filename = clip.filename,
+    )
+
+    internal fun cacheKeyMaterial(): String =
+        "$storageId\u0000$handle\u0000$captureDate\u0000$filename"
+}
+
 /** Base class for deterministic media-cache validation errors. */
 sealed class MediaCacheException(message: String, cause: Throwable? = null) :
     IOException(message, cause)
@@ -79,7 +110,8 @@ class MediaCacheStore(rootDirectory: Path) {
     }
 
     /**
-     * Opens or creates the stable cache entry for one camera object.
+     * Opens or creates the stable cache entry for one uniquely identified
+     * camera object.
      *
      * An existing `.part` file is resumed at its current length. An existing
      * final file is accepted only when its length exactly matches
@@ -87,18 +119,23 @@ class MediaCacheStore(rootDirectory: Path) {
      * readers and the transfer writer share wake-up state.
      */
     @Synchronized
-    fun openEntry(cameraID: String, filename: String, expectedLength: Long): MediaCacheEntry {
+    fun openEntry(
+        cameraID: String,
+        identity: MediaCacheObjectIdentity,
+        expectedLength: Long,
+    ): MediaCacheEntry {
         require(cameraID.isNotBlank()) { "cameraID must not be blank." }
         require(expectedLength >= 0) { "expectedLength must not be negative." }
-        validateFilename(filename)
+        validateFilename(identity.filename)
 
         val bucket = bucketPath(cameraID)
         Files.createDirectories(bucket)
         check(!Files.isSymbolicLink(bucket)) { "Media cache bucket must not be a symbolic link." }
 
-        val finalPath = containedPath(bucket, filename)
-        val partialPath = containedPath(bucket, "$filename.part")
-        val key = CacheKey(bucket.fileName.toString(), filename)
+        val artifactName = sha256Hex(identity.cacheKeyMaterial())
+        val finalPath = containedPath(bucket, "$artifactName.media")
+        val partialPath = containedPath(bucket, "$artifactName.part")
+        val key = CacheKey(bucket.fileName.toString(), artifactName)
         entries[key]?.let { existing ->
             if (existing.expectedLength != expectedLength) {
                 throw MediaCacheLengthException(expectedLength, existing.expectedLength)
