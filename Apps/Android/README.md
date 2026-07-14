@@ -48,4 +48,14 @@ app falls back to the placeholder monitor ("No camera").
   JPEG (1/2ⁿ decode to ≤160 px wide) and draws (`ScopeView.kt`). Debug toggle until the scope
   picker chrome lands:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true --es zc.scopes wave|parade|histo|vector`.
+- **Feed effects (view assists):** `FeedEffectsRenderer` bakes LUT preview, false colour,
+  focus peaking, and zebras into the live feed in one AGSL pass. All colour math is baked in
+  the shared Swift core (`Sources/OpenZCineAndroidFacade/FeedEffectsWire.swift` — cubes from
+  `MonitorLUT`/`FalseColorMap`, thresholds from `ExposureSignalMapping`); Kotlin only uploads
+  textures/uniforms and interpolates. Requires **API 33 (AGSL)** and the staged Swift core —
+  below that the plain feed still renders (minSdk 29) and a warning is logged. Debug-only
+  activation until the assist toolbar lands:
+  `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
+  --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
+  with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).

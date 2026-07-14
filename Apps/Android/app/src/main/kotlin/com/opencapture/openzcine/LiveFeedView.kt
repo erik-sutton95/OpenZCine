@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaCodecList
+import android.os.Build
 import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
@@ -11,7 +12,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.opencapture.openzcine.core.LiveFrameSource
@@ -80,14 +83,31 @@ class JpegFrameDecoder {
  * [onFrame] observes each presented frame on the decode thread — the glass
  * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
+ *
+ * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra,
+ * see [FeedEffectsRenderer]) into the drawn frame. The default preserves the
+ * plain feed unless the debug harness switched effects on; devices below
+ * API 33 (AGSL) or builds without the staged Swift core always render plain.
  */
 @Composable
 fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
+    effects: FeedEffects = FeedEffectsState.current,
 ) {
     val frame = remember { mutableStateOf<ImageBitmap?>(null) }
+    val renderer =
+        remember(effects) {
+            when {
+                effects.isIdentity -> null
+                Build.VERSION.SDK_INT >= 33 -> FeedEffectsRenderer.create(effects)
+                else -> {
+                    Log.w(TAG, "feed effects need Android 13+ (AGSL); rendering the plain feed")
+                    null
+                }
+            }
+        }
 
     LaunchedEffect(source) {
         if (BuildConfig.DEBUG) {
@@ -119,7 +139,18 @@ fun LiveFeedView(
                 ((size.width - dstSize.width) / 2f).roundToInt(),
                 ((size.height - dstSize.height) / 2f).roundToInt(),
             )
-        drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
+        if (Build.VERSION.SDK_INT >= 33 && renderer != null) {
+            renderer.draw(
+                canvas = drawContext.canvas.nativeCanvas,
+                frame = image.asAndroidBitmap(),
+                dstLeft = dstOffset.x.toFloat(),
+                dstTop = dstOffset.y.toFloat(),
+                dstWidth = dstSize.width.toFloat(),
+                dstHeight = dstSize.height.toFloat(),
+            )
+        } else {
+            drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
+        }
     }
 }
 
