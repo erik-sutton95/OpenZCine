@@ -3203,6 +3203,15 @@ struct OperatorSettingsPanel: View {
         )
     }
 
+    /// Marketing version + build number from the bundle, e.g. "0.2.0 (9)", matching what
+    /// TestFlight shows for the installed build (CI stamps CFBundleVersion per upload).
+    static var appVersionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
+    }
+
     @ViewBuilder private var systemRows: some View {
         SettingsRowCard {
             SettingsInlineRow(
@@ -3223,7 +3232,7 @@ struct OperatorSettingsPanel: View {
                 title: "App Version",
                 help: "Current OpenZCine build from the native project metadata."
             ) {
-                SettingsValueText(value: "0.0.1+1")
+                SettingsValueText(value: Self.appVersionText)
             }
             SettingsInlineRow(
                 title: "Support",
