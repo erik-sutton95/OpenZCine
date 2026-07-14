@@ -459,7 +459,15 @@ fun MonitorScreen(
         // semantics.
         if (!isCommand) {
             Box(
-                Modifier.zone(zones.feed).clipToBounds(),
+                Modifier.zone(zones.feed)
+                    .clipToBounds()
+                    // Canvas content is not exposed as an accessibility node
+                    // by every Android view bridge. The feed container is the
+                    // stable, descriptive region for TalkBack and UI tests.
+                    .semantics {
+                        contentDescription =
+                            if (activeFrameSource == null) "Live view unavailable" else "Live view active"
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 if (activeFrameSource != null) {

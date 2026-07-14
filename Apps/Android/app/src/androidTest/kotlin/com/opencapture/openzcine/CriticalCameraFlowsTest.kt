@@ -45,14 +45,14 @@ class CriticalCameraFlowsTest {
         relaunch(launchMainActivity().putExtra(EXTRA_PAIRING_STEP, PAIRING_CONNECTING))
 
         device.waitForText("Connecting to your camera…", CONNECTING_TIMEOUT_MILLIS)
-        device.waitForText("Nikon ZR", CONNECTION_TIMEOUT_MILLIS)
+        device.waitForContentDescription(CAMERA_CONNECTED, CONNECTION_TIMEOUT_MILLIS)
     }
 
     @Test
-    fun fakeCameraPresentsLiveViewFrames() {
+    fun fakeCameraActivatesLiveView() {
         relaunch(launchMainActivity().putExtra(EXTRA_DEMO_FEED, true))
 
-        device.waitForContentDescription(LIVE_VIEW_ACTIVE, LIVE_VIEW_TIMEOUT_MILLIS)
+        device.waitForContentDescription(LIVE_VIEW, LIVE_VIEW_TIMEOUT_MILLIS)
     }
 
     private fun launchMainActivity(): Intent =
@@ -78,7 +78,8 @@ class CriticalCameraFlowsTest {
         const val EXTRA_DEMO_FEED = "zc.demo.feed"
         const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
         const val PAIRING_CONNECTING = "connecting"
-        const val LIVE_VIEW_ACTIVE = "Live view active"
+        const val LIVE_VIEW = "Live view active"
+        const val CAMERA_CONNECTED = "Camera connected"
         const val LIVE_VIEW_TIMEOUT_MILLIS = 10_000L
         const val CONNECTING_TIMEOUT_MILLIS = 5_000L
         const val CONNECTION_TIMEOUT_MILLIS = 15_000L
