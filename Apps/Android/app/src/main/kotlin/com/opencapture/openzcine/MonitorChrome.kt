@@ -40,6 +40,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
 // MonitorControls.swift + MonitorExperience.swift). Layout frames come from the
@@ -151,21 +155,56 @@ fun FpsChip(signalBars: Int, fps: String) {
     }
 }
 
-/** One exposure readout: small label over a large mono value (iOS `CaptureSettingButton`). */
+/**
+ * One exposure readout: small label over a large mono value (iOS
+ * `CaptureSettingButton`). [widestValue] reserves the cell's width so the bar
+ * never shifts when a value changes — the iOS `widestValue` hidden-overlay trick.
+ */
 @Composable
-fun CaptureSettingCell(label: String, value: String) {
+fun CaptureSettingCell(label: String, value: String, widestValue: String = value) {
     Column(
         modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Text(label, style = chromeStyle(9f, FontWeight.SemiBold), color = LiveDesign.faint)
-        Text(
-            value,
-            style = chromeStyle(19f, FontWeight.Medium, mono = true),
-            color = LiveDesign.text,
-            maxLines = 1,
-        )
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                widestValue,
+                style = chromeStyle(19f, FontWeight.Medium, mono = true),
+                color = Color.Transparent,
+                maxLines = 1,
+            )
+            Text(
+                value,
+                style = chromeStyle(19f, FontWeight.Medium, mono = true),
+                color = LiveDesign.text,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * Measures its single child unbounded and scales it down (top-start anchored)
+ * to fit [maxWidth] — the shell-level analog of iOS `minimumScaleFactor`, so
+ * chrome pills compress instead of wrapping when a band runs tight.
+ */
+@Composable
+fun FitScale(maxWidth: Dp, content: @Composable () -> Unit) {
+    Layout(content) { measurables, _ ->
+        val placeable = measurables.first().measure(Constraints())
+        val maxPx = maxWidth.roundToPx()
+        val scale = if (placeable.width > maxPx) maxPx / placeable.width.toFloat() else 1f
+        val width = (placeable.width * scale).toInt()
+        val height = (placeable.height * scale).toInt()
+        layout(width, height) {
+            placeable.placeWithLayer(0, 0) {
+                scaleX = scale
+                scaleY = scale
+                transformOrigin = TransformOrigin(0f, 0f)
+            }
+        }
     }
 }
 
@@ -191,7 +230,7 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
                 .chromeClickable(onClick),
         contentAlignment = Alignment.Center,
     ) {
-        PadlockGlyph(tint = tint, filled = locked, modifier = Modifier.size(16.dp))
+        PadlockGlyph(tint = tint, filled = locked, modifier = Modifier.size(13.dp, 17.dp))
     }
 }
 
@@ -514,35 +553,29 @@ fun SdCardGlyph(tint: Color, modifier: Modifier = Modifier.size(9.dp, 12.dp)) {
 @Composable
 fun PadlockGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifier) {
     Canvas(modifier) {
-        val stroke = 1.4.dp.toPx()
-        val bodyTop = size.height * 0.44f
-        val shackleWidth = size.width * 0.52f
+        val stroke = 1.6.dp.toPx()
+        // SF proportions: near-square body on the lower ~55%, a tall narrow
+        // shackle on top.
+        val bodyTop = size.height * 0.45f
+        val bodyInset = size.width * 0.08f
+        val shackleWidth = size.width * 0.48f
         drawArc(
             tint,
             startAngle = 180f,
             sweepAngle = 180f,
             useCenter = false,
-            topLeft = Offset((size.width - shackleWidth) / 2, size.height * 0.06f),
-            size = Size(shackleWidth, bodyTop * 1.6f),
+            topLeft = Offset((size.width - shackleWidth) / 2, stroke / 2),
+            size = Size(shackleWidth, (bodyTop - stroke / 2) * 2f),
             style = Stroke(stroke),
         )
-        val bodyRect = Rect(0f, bodyTop, size.width, size.height)
-        if (filled) {
-            drawRoundRect(
-                tint,
-                topLeft = bodyRect.topLeft,
-                size = bodyRect.size,
-                cornerRadius = CornerRadius(size.width * 0.18f),
-            )
-        } else {
-            drawRoundRect(
-                tint,
-                topLeft = bodyRect.topLeft,
-                size = bodyRect.size,
-                cornerRadius = CornerRadius(size.width * 0.18f),
-                style = Stroke(stroke),
-            )
-        }
+        val bodyRect = Rect(bodyInset, bodyTop, size.width - bodyInset, size.height)
+        drawRoundRect(
+            tint,
+            topLeft = bodyRect.topLeft,
+            size = bodyRect.size,
+            cornerRadius = CornerRadius(size.width * 0.16f),
+            style = if (filled) androidx.compose.ui.graphics.drawscope.Fill else Stroke(stroke),
+        )
     }
 }
 
@@ -550,53 +583,64 @@ fun PadlockGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifier) {
 @Composable
 fun GearGlyph(tint: Color, modifier: Modifier = Modifier) {
     Canvas(modifier) {
-        val stroke = 1.4.dp.toPx()
+        val stroke = 2.dp.toPx()
         val center = Offset(size.width / 2, size.height / 2)
-        val outer = size.minDimension / 2 - stroke
-        val ring = outer * 0.72f
+        val outer = size.minDimension / 2 - stroke / 2
+        val ring = outer * 0.68f
         drawCircle(tint, radius = ring, center = center, style = Stroke(stroke))
-        drawCircle(tint, radius = ring * 0.42f, center = center, style = Stroke(stroke))
+        drawCircle(tint, radius = ring * 0.4f, center = center, style = Stroke(stroke * 0.85f))
         repeat(8) { index ->
-            val angle = Math.toRadians(index * 45.0)
+            val angle = Math.toRadians(index * 45.0 + 22.5)
             val dir = Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat())
             drawLine(
                 tint,
-                start = center + dir * ring,
+                start = center + dir * (ring - stroke / 2),
                 end = center + dir * outer,
-                strokeWidth = stroke * 1.4f,
+                strokeWidth = stroke * 1.6f,
                 cap = StrokeCap.Round,
             )
         }
     }
 }
 
-/** iOS `IconMedia` (rectangle.stack) stand-in. */
+/** iOS `IconMedia` (film-frame) stand-in: rounded frame + sprocket columns. */
 @Composable
 fun MediaStackGlyph(tint: Color, modifier: Modifier = Modifier) {
     Canvas(modifier) {
-        val stroke = 1.4.dp.toPx()
-        val cardHeight = size.height * 0.58f
-        val inset = size.width * 0.12f
+        val stroke = 1.8.dp.toPx()
         drawRoundRect(
             tint,
-            topLeft = Offset(inset, 0f),
-            size = Size(size.width - 2 * inset, size.height * 0.16f),
-            cornerRadius = CornerRadius(2.dp.toPx()),
-            style = Stroke(stroke * 0.9f),
-        )
-        drawRoundRect(
-            tint,
-            topLeft = Offset(inset / 2, size.height * 0.24f),
-            size = Size(size.width - inset, size.height * 0.14f),
-            cornerRadius = CornerRadius(2.dp.toPx()),
-            style = Stroke(stroke * 0.9f),
-        )
-        drawRoundRect(
-            tint,
-            topLeft = Offset(0f, size.height - cardHeight),
-            size = Size(size.width, cardHeight),
-            cornerRadius = CornerRadius(3.dp.toPx()),
+            topLeft = Offset(stroke / 2, stroke / 2),
+            size = Size(size.width - stroke, size.height - stroke),
+            cornerRadius = CornerRadius(size.height * 0.2f),
             style = Stroke(stroke),
+        )
+        // Sprocket columns: two filled holes down each side.
+        val holeW = size.width * 0.12f
+        val holeH = size.height * 0.16f
+        for (side in listOf(size.width * 0.16f, size.width * 0.84f - holeW)) {
+            for (row in listOf(size.height * 0.24f, size.height * 0.6f)) {
+                drawRoundRect(
+                    tint,
+                    topLeft = Offset(side, row),
+                    size = Size(holeW, holeH),
+                    cornerRadius = CornerRadius(holeW * 0.4f),
+                )
+            }
+        }
+        // Center pane divider lines framing the picture area.
+        val paneInset = size.width * 0.34f
+        drawLine(
+            tint,
+            Offset(paneInset, stroke),
+            Offset(paneInset, size.height - stroke),
+            stroke * 0.8f,
+        )
+        drawLine(
+            tint,
+            Offset(size.width - paneInset, stroke),
+            Offset(size.width - paneInset, size.height - stroke),
+            stroke * 0.8f,
         )
     }
 }
