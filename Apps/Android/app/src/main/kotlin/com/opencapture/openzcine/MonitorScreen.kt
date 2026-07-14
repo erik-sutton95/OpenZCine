@@ -45,6 +45,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -164,6 +166,12 @@ fun MonitorScreen(
 ) {
     val appContext = LocalContext.current.applicationContext
     val sessionState by session.state.collectAsState()
+    val monitorAccessibilityState =
+        when (sessionState) {
+            is CameraSessionState.Connected -> "Camera connected"
+            CameraSessionState.Connecting -> "Camera connecting"
+            CameraSessionState.Disconnected -> "Camera disconnected"
+        }
     LaunchedEffect(session) { session.connect() }
 
     // Shared glass state: the active tier plus the one blurred backdrop
@@ -275,6 +283,7 @@ fun MonitorScreen(
     BoxWithConstraints(
         Modifier.fillMaxSize()
             .background(Color.Black)
+            .semantics { contentDescription = monitorAccessibilityState }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(pass = PointerEventPass.Initial)

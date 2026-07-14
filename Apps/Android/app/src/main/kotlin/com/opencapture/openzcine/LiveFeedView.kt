@@ -15,6 +15,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.opencapture.openzcine.core.LiveFrameSource
@@ -97,6 +99,10 @@ fun LiveFeedView(
     effects: FeedEffects = FeedEffectsState.current,
 ) {
     val frame = remember { mutableStateOf<ImageBitmap?>(null) }
+    // This changes only once, after the first valid JPEG renders. It exposes
+    // a useful TalkBack state and lets UI tests distinguish a mounted feed
+    // from a camera stream that is genuinely presenting frames.
+    val hasPresentedFrame = remember(source) { mutableStateOf(false) }
     val renderer =
         remember(effects) {
             when {
@@ -124,13 +130,19 @@ fun LiveFeedView(
                 decode = decoder::decode,
                 present = {
                     frame.value = it.asImageBitmap()
+                    hasPresentedFrame.value = true
                     onFrame?.invoke(it)
                 },
             )
         }
     }
 
-    Canvas(modifier) {
+    Canvas(
+        modifier.semantics {
+            contentDescription =
+                if (hasPresentedFrame.value) "Live view active" else "Live view starting"
+        },
+    ) {
         val image = frame.value ?: return@Canvas
         val scale = min(size.width / image.width, size.height / image.height)
         val dstSize = IntSize((image.width * scale).roundToInt(), (image.height * scale).roundToInt())
