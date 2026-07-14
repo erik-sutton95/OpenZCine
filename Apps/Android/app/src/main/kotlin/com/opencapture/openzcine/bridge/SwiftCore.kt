@@ -73,6 +73,81 @@ object SwiftCore {
      */
     external fun startConnectionDemo(listener: ConnectionPhaseListener)
 
+    // ── Scopes (anchored axis math + sampling in the Swift core) ──
+
+    /**
+     * Fixed scope-axis anchors and vectorscope graticule targets for a tone
+     * curve ([curve]: 0 = RED Log3G10, 1 = Nikon N-Log):
+     * `[crushLine, midGrayLevel, clipLine, (cb, cr) × 6 targets]` — see
+     * [ScopeAnchors.parse] and the Swift mirror `ScopeFrameWire.anchors`.
+     * Static per curve; call once.
+     */
+    external fun scopeAnchors(curve: Int): FloatArray
+
+    /**
+     * Samples one downsampled RGBA frame for the waveform / parade /
+     * histogram scopes: `[N, (x, luma, r, g, b) × N, 4 × 256 display bins]`
+     * with all levels already on the core's 3-anchor display axis — see
+     * [ScopeTraces.parse] and the Swift mirror `ScopeFrameWire.traces`.
+     * Blocking (one CPU sampling pass); call from a background dispatcher.
+     */
+    external fun scopeTraces(
+        rgba: ByteArray,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        curve: Int,
+    ): FloatArray
+
+    /**
+     * Samples one downsampled RGBA frame for the vectorscope: a 128×128
+     * premultiplied-RGBA density image of the BT.709 chroma plane, computed
+     * from the clean points pushed through the core's built-in display tone
+     * map (`ScopeFrameWire.vectorPixels`). Empty when the frame yields no
+     * samples. Blocking; call from a background dispatcher.
+     */
+    external fun scopeVector(
+        rgba: ByteArray,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        curve: Int,
+    ): ByteArray
+
+    // ── Feed effects (colour math baked in the core, uploaded by Kotlin) ──
+
+    /**
+     * A built-in monitor look baked by the core into a packed-2D RGBA8 grid
+     * (`size³ × 4` bytes) for a `width = size²`, `height = size` texture:
+     * pixel `(x = b·size + r, y = g)` — slice tiles along x, so a shader
+     * trilinearly samples with two bilinear taps. Null for an unknown
+     * [lookOrdinal] (`FeedLut.wireOrdinal`) or size outside 2–64. Bake once
+     * per selection (the cube generation is ~10⁵ transcendental calls), never
+     * per frame.
+     */
+    external fun bakeLut(lookOrdinal: Int, size: Int): ByteArray?
+
+    /**
+     * The core's false-colour cube (64³) in the same packed-2D RGBA8 grid.
+     * [scaleOrdinal] is `FeedFalseColorScale.wireOrdinal`; [curveOrdinal]
+     * selects the signal curve (0 = Log3G10, 1 = N-Log). Null for unknown
+     * ordinals.
+     */
+    external fun bakeFalseColorCube(scaleOrdinal: Int, curveOrdinal: Int): ByteArray?
+
+    /**
+     * Assist thresholds on the normalized 0–1 code axis:
+     * `[deLogBlack, deLogClip, zebraHighlight, zebraMidtoneCentre]` — the
+     * peaking de-log anchors and zebra comparison codes, computed by the
+     * core's `ExposureSignalMapping` for [curveOrdinal] and the given
+     * monitor-percent thresholds. Null for an unknown curve ordinal.
+     */
+    external fun feedEffectsScalars(
+        curveOrdinal: Int,
+        zebraHighlightIre: Float,
+        zebraMidtoneIre: Float,
+    ): FloatArray?
+
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 
     /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */

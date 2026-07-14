@@ -23,10 +23,17 @@
         android:label="OpenZCine"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <!-- Sensor-based portrait + landscape (iOS allows Portrait + LandscapeRight;
+          "user" is the closest platform posture: it follows the rotation lock).
+          configChanges keeps the activity (camera session, live feed, glass
+          pipeline) alive across rotation; the zone map recomputes in compose.
+          ponytail: reverse-landscape also rotates here (Android convention);
+          pinning to one landscape would need a manual OrientationEventListener. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="landscape">
+            android:screenOrientation="user"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

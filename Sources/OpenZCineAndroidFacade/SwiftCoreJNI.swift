@@ -42,6 +42,49 @@
         return String(cString: chars)
     }
 
+    /// Copies a `jbyteArray` into a Swift `[UInt8]`.
+    private func swiftBytes(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ value: jbyteArray?
+    ) -> [UInt8]? {
+        guard let value else { return nil }
+        let fns = table(env)
+        let length = Int(fns.GetArrayLength!(env, value))
+        guard length > 0 else { return [] }
+        var out = [UInt8](repeating: 0, count: length)
+        out.withUnsafeMutableBytes { raw in
+            fns.GetByteArrayRegion!(
+                env, value, 0, jsize(length),
+                raw.baseAddress?.assumingMemoryBound(to: jbyte.self))
+        }
+        return out
+    }
+
+    /// Copies a Swift byte buffer into a new JVM `byte[]` local reference.
+    private func javaByteArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ bytes: [UInt8]
+    ) -> jbyteArray? {
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(bytes.count)) else { return nil }
+        bytes.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(bytes.count), base.assumingMemoryBound(to: jbyte.self))
+        }
+        return array
+    }
+
+    /// Copies a Swift float buffer into a new JVM `float[]` local reference.
+    private func javaFloatArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [Float]
+    ) -> jfloatArray? {
+        let fns = table(env)
+        guard let array = fns.NewFloatArray!(env, jsize(values.count)) else { return nil }
+        values.withUnsafeBufferPointer { buffer in
+            fns.SetFloatArrayRegion!(env, array, 0, jsize(values.count), buffer.baseAddress)
+        }
+        return array
+    }
+
     // MARK: - Info
 
     /// `SwiftCore.coreVersion(): String` — proves the Swift core is alive in-process.
@@ -119,6 +162,96 @@
             fns.SetFloatArrayRegion!(env, array, 0, jsize(flat.count), buffer.baseAddress)
         }
         return array
+    }
+
+    // MARK: - Scopes
+
+    /// `SwiftCore.scopeAnchors(curve): FloatArray` — fixed axis anchors and
+    /// vectorscope graticule targets per `ScopeFrameWire.anchors`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeAnchors")
+    public func swiftCoreScopeAnchors(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curve: jint
+    ) -> jfloatArray? {
+        javaFloatArray(env, ScopeFrameWire.anchors(curveOrdinal: Int(curve)))
+    }
+
+    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve): FloatArray`
+    /// — one scope tick's waveform/parade/histogram payload per
+    /// `ScopeFrameWire.traces`. Blocking; Kotlin calls it off the main thread.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeTraces")
+    public func swiftCoreScopeTraces(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
+        width: jint, height: jint, bytesPerRow: jint, curve: jint
+    ) -> jfloatArray? {
+        guard let buffer = swiftBytes(env, rgba) else { return nil }
+        return javaFloatArray(
+            env,
+            ScopeFrameWire.traces(
+                rgba: buffer, width: Int(width), height: Int(height),
+                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve)))
+    }
+
+    /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve): ByteArray`
+    /// — one scope tick's 128×128 premultiplied-RGBA vectorscope density image
+    /// per `ScopeFrameWire.vectorPixels`. Empty for a frame with no samples.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeVector")
+    public func swiftCoreScopeVector(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
+        width: jint, height: jint, bytesPerRow: jint, curve: jint
+    ) -> jbyteArray? {
+        guard let buffer = swiftBytes(env, rgba) else { return nil }
+        return javaByteArray(
+            env,
+            ScopeFrameWire.vectorPixels(
+                rgba: buffer, width: Int(width), height: Int(height),
+                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve)))
+    }
+
+    // MARK: - Feed effects (baked in the core, uploaded by Kotlin)
+
+    /// `SwiftCore.bakeLut(lookOrdinal, size): ByteArray?` — a built-in monitor
+    /// look baked by the core into the packed-2D RGBA8 grid described in
+    /// `FeedEffectsWire`. Null for unknown ordinals/sizes.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeLut")
+    public func swiftCoreBakeLut(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, lookOrdinal: jint, size: jint
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedLUT(
+                lookOrdinal: Int(lookOrdinal), size: Int(size))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.bakeFalseColorCube(scaleOrdinal, curveOrdinal): ByteArray?` —
+    /// the core's false-colour cube (64³) in the same packed-2D RGBA8 grid.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorCube")
+    public func swiftCoreBakeFalseColorCube(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
+        curveOrdinal: jint
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedFalseColor(
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.feedEffectsScalars(curveOrdinal, zebraHighlightIre, zebraMidtoneIre):
+    /// FloatArray?` — `[deLogBlack, deLogClip, zebraHighlight, zebraMidtoneCentre]`
+    /// on the normalized 0–1 code axis (see `FeedEffectsWire.scalars`).
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_feedEffectsScalars")
+    public func swiftCoreFeedEffectsScalars(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint,
+        zebraHighlightIre: jfloat, zebraMidtoneIre: jfloat
+    ) -> jfloatArray? {
+        guard
+            let values = FeedEffectsWire.scalars(
+                curveOrdinal: Int(curveOrdinal),
+                zebraHighlightIRE: Double(zebraHighlightIre),
+                zebraMidtoneIRE: Double(zebraMidtoneIre))
+        else { return nil }
+        return javaFloatArray(env, values)
     }
 
     // MARK: - Callback / streaming shape

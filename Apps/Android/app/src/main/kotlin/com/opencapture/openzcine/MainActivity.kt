@@ -94,6 +94,8 @@ class MainActivity : ComponentActivity() {
                         MonitorScreen(
                             active,
                             frameSource = demo?.second,
+                            glassTierOverride = DemoHarness.glassTierOverride(intent),
+                            scopeKind = DemoHarness.scopeKind(intent),
                             onOpenSettings = { settingsOpen = true },
                         )
                         if (settingsOpen) {
