@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -34,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
@@ -57,7 +59,7 @@ import kotlinx.coroutines.delay
  * (`CameraDisplayState.preview`) so side-by-side screenshots match. Real
  * values arrive with the session facade later.
  */
-private object DemoMonitorState {
+internal object DemoMonitorState {
     const val RESOLUTION = "6K·25p"
     const val CODEC = "R3D NE"
     const val MEDIA = "521 GB·47%"
@@ -79,7 +81,7 @@ private object DemoMonitorState {
 }
 
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
-private fun Modifier.zone(frame: ZoneFrame): Modifier =
+internal fun Modifier.zone(frame: ZoneFrame): Modifier =
     offset(frame.x.dp, frame.y.dp).size(frame.width.dp, frame.height.dp)
 
 /**
@@ -118,18 +120,22 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
     }
 
 /**
- * The landscape monitor shell — a 1:1 port of the iOS `MonitorShell`
- * (ios/Runner/MonitorUnified.swift) landscape branch, laid out by the SAME
- * shared-core zone map via [SwiftCore.monitorZoneMap].
+ * The monitor shell — a 1:1 port of the iOS `MonitorShell`
+ * (ios/Runner/MonitorUnified.swift), laid out by the SAME shared-core zone
+ * map via [SwiftCore.monitorZoneMap] in both orientations.
  *
- * v1 scope: feed, top info pill, lock/battery band, capture strip, record /
- * DISP / media / settings rail, DISP 1↔2 cycling. Deferred: the assist
- * toolbar zone (skipped — its capture-strip sibling renders at its own zone),
- * scopes, pickers/panels, portrait.
+ * Scope: feed, top info deck (landscape pill / portrait bar), lock/battery
+ * band, capture strip, assist toolbar (wired to the feed-effects engine and
+ * the scope panels), record / DISP / media / settings controls, DISP 1→2→3
+ * cycling incl. the command dashboard, and the portrait fit layout. Deferred:
+ * pickers/panels, portrait fill aspect, command tile interaction.
  *
  * Chrome glass runs the tiered GPU treatment (GlassChrome.kt) at this
  * device's [resolveTier] ceiling; [glassTierOverride] (`zc.glass.tier`
  * debug intent extra) forces a lower tier for testing.
+ *
+ * [scopeKind] (`zc.scopes` debug intent) seeds the assist state; the assist
+ * toolbar owns it from there.
  */
 @Composable
 fun MonitorScreen(
@@ -140,6 +146,12 @@ fun MonitorScreen(
 ) {
     val sessionState by session.state.collectAsState()
     LaunchedEffect(session) { session.connect() }
+
+    // Assist toggles: seeded from the debug intent when present (exact,
+    // deterministic test state), else the persisted toolbar toggles; every
+    // change feeds the effects engine + scope mount and persists.
+    val appContext = LocalContext.current.applicationContext
+    val assist = remember { AssistState.restore(appContext, FeedEffectsState.current, scopeKind) }
 
     // Shared glass state: the active tier plus the one blurred backdrop
     // texture every glass pill samples. The frame-clock loop is the perf
@@ -159,8 +171,9 @@ fun MonitorScreen(
         }
     }
 
-    // Shell state, iOS-model-equivalent: DISP index (0 live, 1 clean), the
-    // interface lock, the record toggle, and the fake-clock timecode tick.
+    // Shell state, iOS-model-equivalent: DISP index (0 live, 1 clean,
+    // 2 command), the interface lock, the record toggle, and the fake-clock
+    // timecode tick.
     var dispIndex by remember { mutableIntStateOf(0) }
     var locked by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
@@ -246,6 +259,7 @@ fun MonitorScreen(
     ) {
         val density = LocalDensity.current
         val direction = LocalLayoutDirection.current
+        val isPortrait = maxHeight > maxWidth
         // Live safe area: the punch-hole cutout plus the applied system-bar
         // lanes published by the cycle above. Each edge animates so the
         // chrome glides off the bars and back instead of jumping. The top
@@ -269,25 +283,38 @@ fun MonitorScreen(
             label = "safeBottom",
         )
         // Leading carries the synthesized iPhone island lane (see
-        // monitorLeadingInsetDp); trailing gets NO floor — in the landscape
-        // zone map the trailing inset only feeds the which-side-is-the-cutout
-        // comparison and moves no frame (iOS's 44pt trailing is < the 59pt
-        // leading, same branch), the rail centering in the letterbox lane on
-        // both platforms.
+        // monitorLeadingInsetDp) in LANDSCAPE only; the floor exists to move
+        // the feed off the side chrome lane, which portrait doesn't have —
+        // there the raw cutout flows through. Trailing gets NO floor — in the
+        // landscape zone map the trailing inset only feeds the
+        // which-side-is-the-cutout comparison and moves no frame (iOS's 44pt
+        // trailing is < the 59pt leading, same branch), the rail centering in
+        // the letterbox lane on both platforms.
         val safeLeading by animateFloatAsState(
             with(density) {
-                monitorLeadingInsetDp(
-                    cutoutDp = cutout.getLeft(this, direction).toDp().value,
-                    transientBarDp = barInsets.left.toDp().value,
-                )
+                val cutoutDp = cutout.getLeft(this, direction).toDp().value
+                if (isPortrait) {
+                    cutoutDp
+                } else {
+                    monitorLeadingInsetDp(
+                        cutoutDp = cutoutDp,
+                        transientBarDp = barInsets.left.toDp().value,
+                    )
+                }
             },
             label = "safeLeading",
         )
         val safeTrailing =
             with(density) { cutout.getRight(this, direction).toDp().value }
+        // Landscape-only right-hand nav-bar lane (portrait bars are top/bottom
+        // and already flow through safeTop/safeBottom).
         val navLane by animateFloatAsState(
-            with(density) {
-                maxOf(0, barInsets.right - cutout.getRight(this, direction)).toDp().value
+            if (isPortrait) {
+                0f
+            } else {
+                with(density) {
+                    maxOf(0, barInsets.right - cutout.getRight(this, direction)).toDp().value
+                }
             },
             label = "navLane",
         )
@@ -295,10 +322,15 @@ fun MonitorScreen(
         val viewportHeight = maxHeight.value
 
         // Same core call the iOS shell makes once per layout pass. The
-        // landscape map is mode-invariant (iOS gates chrome shell-side), so
-        // the map is keyed on geometry only.
+        // landscape map is mode-invariant (iOS gates chrome shell-side), but
+        // the portrait map encodes per-mode zones, so mode/scope key the map
+        // alongside geometry.
+        val scopeCount = if (assist.scope != null) 1 else 0
         val zones =
-            remember(viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing) {
+            remember(
+                viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
+                isPortrait, dispIndex, scopeCount,
+            ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
                         viewportWidth = viewportWidth,
@@ -308,15 +340,16 @@ fun MonitorScreen(
                         safeBottom = safeBottom,
                         safeTrailing = safeTrailing,
                         mode = dispIndex,
-                        isPortrait = false,
+                        isPortrait = isPortrait,
                         aspectFill = false,
-                        scopeCount = if (scopeKind != null) 1 else 0,
+                        scopeCount = scopeCount,
                         mirrored = false,
                         bottomBarHeight = LiveDesign.CONTROL_HEIGHT_DP,
                     ),
                 )
             }
         val isClean = dispIndex == 1
+        val isCommand = dispIndex == 2
 
         // Backdrop geometry for the glass pipeline: the viewport and the feed
         // zone in root px. The blurred texture covers the whole viewport
@@ -337,94 +370,144 @@ fun MonitorScreen(
             )
         }
 
-        // Feed at the zone map's feed frame; LiveFeedView aspect-fits within it.
-        Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
-            if (frameSource != null) {
-                LiveFeedView(frameSource, Modifier.fillMaxSize(), onFrame = glass::submit)
-            } else {
-                Text(
-                    text =
-                        when (val current = sessionState) {
-                            is CameraSessionState.Connected -> current.identity.name
-                            CameraSessionState.Connecting -> "Connecting…"
-                            CameraSessionState.Disconnected -> "No camera"
-                        },
-                    style = chromeStyle(15f, FontWeight.Medium),
-                    color = LiveDesign.muted,
-                )
+        // Feed at the zone map's feed frame; LiveFeedView aspect-fits within
+        // it. Command (DISP 3) unmounts the feed behind the dashboard, iOS
+        // semantics.
+        if (!isCommand) {
+            Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
+                if (frameSource != null) {
+                    LiveFeedView(frameSource, Modifier.fillMaxSize(), onFrame = glass::submit)
+                } else {
+                    Text(
+                        text =
+                            when (val current = sessionState) {
+                                is CameraSessionState.Connected -> current.identity.name
+                                CameraSessionState.Connecting -> "Connecting…"
+                                CameraSessionState.Disconnected -> "No camera"
+                            },
+                        style = chromeStyle(15f, FontWeight.Medium),
+                        color = LiveDesign.muted,
+                    )
+                }
             }
         }
 
         CompositionLocalProvider(LocalMonitorGlass provides glass) {
-            // Top info pill, centered in the deck band; compact in clean mode.
-            // The deck is feed-anchored and the synthesized island lane (see
-            // monitorLeadingInsetDp) starts the feed right of the lock, so the
-            // band always clears it — same as iPhone geometry.
-            Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
-                FitScale(zones.infoBar.width.dp) {
-                    InfoPill(compact = isClean, recording = recording, frameCount = frameCount)
-                }
-            }
+            if (isPortrait) {
+                PortraitChrome(
+                    zones = zones,
+                    viewportHeight = viewportHeight,
+                    isCommand = isCommand,
+                    locked = locked,
+                    recording = recording,
+                    frameCount = frameCount,
+                    assist = assist,
+                    dispIndex = dispIndex,
+                    onLock = { locked = !locked },
+                    onRecord = { recording = !recording },
+                    onDisp = { dispIndex = (dispIndex + 1) % 3 },
+                )
+            } else {
+                if (isCommand) {
+                    // The DISP 3 dashboard fills the deck span between the
+                    // rails on the warm command background (iOS CommandMonitor).
+                    Box(Modifier.fillMaxSize().background(LiveDesign.background))
+                    val top = maxOf(14f, safeTop)
+                    CommandDashboard(
+                        recording = recording,
+                        frameCount = frameCount,
+                        modifier =
+                            Modifier.zone(
+                                ZoneFrame(
+                                    zones.infoBar.x,
+                                    top,
+                                    zones.infoBar.width,
+                                    maxOf(0f, viewportHeight - top - safeBottom - 16f),
+                                ),
+                            ).alpha(if (locked) 0.4f else 1f),
+                    )
+                } else {
+                    // Top info pill, centered in the deck band; compact in clean
+                    // mode. The deck is feed-anchored and the synthesized island
+                    // lane (see monitorLeadingInsetDp) starts the feed right of
+                    // the lock, so the band always clears it — same as iPhone
+                    // geometry.
+                    Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
+                        FitScale(zones.infoBar.width.dp) {
+                            InfoPill(compact = isClean, recording = recording, frameCount = frameCount)
+                        }
+                    }
 
-            // Bottom capture strip — live mode only, dimmed while locked; the
-            // glass hugs its readouts against the band's trailing edge like the
-            // iOS content-hugging strip. The assist toolbar zone to its left is
-            // deferred (v1 skips assists).
-            if (!isClean) {
-                zones.captureStrip?.let { strip ->
-                    Box(
-                        Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
-                        contentAlignment = Alignment.CenterEnd,
-                    ) {
-                        FitScale(strip.width.dp) { CaptureStrip() }
+                    // Bottom bars — live mode only, dimmed while locked: the
+                    // assist toolbar at its zone, and the capture strip whose
+                    // glass hugs its readouts against the band's trailing edge
+                    // like the iOS content-hugging strip.
+                    if (!isClean) {
+                        zones.assistStrip?.let { strip ->
+                            AssistToolbar(
+                                assist,
+                                Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
+                            )
+                        }
+                        zones.captureStrip?.let { strip ->
+                            Box(
+                                Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
+                                contentAlignment = Alignment.CenterEnd,
+                            ) {
+                                FitScale(strip.width.dp) { CaptureStrip() }
+                            }
+                        }
                     }
                 }
-            }
 
-            // Side rails: lock + battery indicators + record / DISP / media / settings.
-            LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
-            zones.batteryPhone?.let {
-                BatteryIndicatorColumn(
-                    percent = DemoMonitorState.PHONE_BATTERY,
-                    isCamera = false,
-                    modifier = Modifier.zone(it),
-                )
-            }
-            zones.batteryCamera?.let {
-                BatteryIndicatorColumn(
-                    percent = DemoMonitorState.CAMERA_BATTERY,
-                    isCamera = true,
-                    modifier = Modifier.zone(it),
-                )
-            }
-            AuxCircleButton(Modifier.zone(zones.settings)) { glyphModifier, tint ->
-                GearGlyph(tint, glyphModifier)
-            }
-            AuxCircleButton(Modifier.zone(zones.media)) { glyphModifier, tint ->
-                MediaStackGlyph(tint, glyphModifier)
-            }
-            RecordButton(recording, Modifier.zone(zones.record)) { recording = !recording }
-            DispButton(
-                activeIndex = dispIndex,
-                modeCount = 3, // Live / Clean / Command dashes, matching iOS; Command lands later.
-                modifier = Modifier.zone(zones.disp),
-            ) {
-                dispIndex = (dispIndex + 1) % 2
+                // Side rails: lock + battery indicators + record / DISP /
+                // media / settings — mounted in every mode, like iOS.
+                LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
+                zones.batteryPhone?.let {
+                    BatteryIndicatorColumn(
+                        percent = DemoMonitorState.PHONE_BATTERY,
+                        isCamera = false,
+                        modifier = Modifier.zone(it),
+                    )
+                }
+                zones.batteryCamera?.let {
+                    BatteryIndicatorColumn(
+                        percent = DemoMonitorState.CAMERA_BATTERY,
+                        isCamera = true,
+                        modifier = Modifier.zone(it),
+                    )
+                }
+                AuxCircleButton(Modifier.zone(zones.settings)) { glyphModifier, tint ->
+                    GearGlyph(tint, glyphModifier)
+                }
+                AuxCircleButton(Modifier.zone(zones.media)) { glyphModifier, tint ->
+                    MediaStackGlyph(tint, glyphModifier)
+                }
+                RecordButton(recording, Modifier.zone(zones.record)) { recording = !recording }
+                DispButton(
+                    activeIndex = dispIndex,
+                    modeCount = 3, // Live / Clean / Command, matching iOS.
+                    modifier = Modifier.zone(zones.disp),
+                ) {
+                    dispIndex = (dispIndex + 1) % 3
+                }
             }
         }
 
-        // Scopes v1: one debug-selected scope (`--es zc.scopes`), mounted at the
-        // zone map's scopes zone when the core emits one; the landscape map
-        // floats scopes over the feed (like iOS), so it falls back to the
-        // iOS-parity floating frame.
-        if (scopeKind != null && frameSource != null) {
-            ScopePanel(
-                scopeKind,
-                frameSource,
-                Modifier.zone(
-                    zones.scopes ?: floatingScopeFrame(scopeKind, zones.feed, zones.infoBar),
-                ),
-            )
+        // Scope panel: toolbar-toggled (seeded by `--es zc.scopes`). Landscape
+        // floats it over the feed (the map carries no scopes zone there);
+        // portrait mounts the stacked zone the map emits (fit + live only).
+        val activeScope = assist.scope
+        if (!isCommand && activeScope != null && frameSource != null) {
+            val scopeFrame =
+                if (isPortrait) {
+                    zones.scopes?.let {
+                        ZoneFrame(it.x + 12f, it.y, it.width - 24f, it.height)
+                    }
+                } else {
+                    zones.scopes ?: floatingScopeFrame(activeScope, zones.feed, zones.infoBar)
+                }
+            scopeFrame?.let { ScopePanel(activeScope, frameSource, Modifier.zone(it)) }
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).
@@ -457,6 +540,154 @@ private fun InfoPill(compact: Boolean, recording: Boolean, frameCount: Long) {
             ReadoutPill(DemoMonitorState.MEDIA) { SdCardGlyph(LiveDesign.muted) }
         }
         FpsChip(DemoMonitorState.SIGNAL_BARS, DemoMonitorState.FPS)
+    }
+}
+
+/**
+ * The portrait chrome tree, every region at its zone-map frame (iOS
+ * `portraitShell`): full-width top bar, fit-mode assist toolbar + tile grid
+ * (or the command timecode band + grid), stacked scopes (mounted by the
+ * caller), and the bottom system band. The fill aspect (capture strip over
+ * the feed + vertical assist rail) is deferred with the aspect toggle.
+ */
+@Composable
+private fun PortraitChrome(
+    zones: MonitorZones,
+    viewportHeight: Float,
+    isCommand: Boolean,
+    locked: Boolean,
+    recording: Boolean,
+    frameCount: Long,
+    assist: AssistState,
+    dispIndex: Int,
+    onLock: () -> Unit,
+    onRecord: () -> Unit,
+    onDisp: () -> Unit,
+) {
+    PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
+
+    // Fit-mode horizontal assist toolbar between the scopes zone and the tile
+    // grid (live only — the map emits the zone). 12/4dp insets float the
+    // glass pill off the screen edges, like iOS.
+    if (!isCommand) {
+        zones.assistStrip?.let { strip ->
+            AssistToolbar(
+                assist,
+                Modifier.zone(
+                    ZoneFrame(strip.x + 12f, strip.y + 4f, strip.width - 24f, strip.height - 8f),
+                ).alpha(if (locked) 0.4f else 1f),
+            )
+        }
+    }
+
+    // Controls zone: fit-mode live tiles, or the command hero-timecode band +
+    // grid (iOS reserves 80pt off the top of the tile region for it).
+    zones.controlsGrid?.takeIf { it.height > 0 }?.let { grid ->
+        val tcBand = if (isCommand) 80f else 0f
+        if (isCommand) {
+            Box(
+                Modifier.zone(ZoneFrame(grid.x, grid.y, grid.width, tcBand))
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CommandTimecode(frameCount, sizeSp = 52f)
+            }
+        }
+        CommandGrid(
+            Modifier.zone(
+                ZoneFrame(
+                    grid.x,
+                    grid.y + tcBand,
+                    grid.width,
+                    maxOf(0f, grid.height - tcBand - (if (isCommand) 0f else 8f)),
+                ),
+            )
+                .padding(horizontal = 12.dp)
+                .alpha(if (locked) 0.4f else 1f),
+        )
+    }
+
+    // Opaque band behind the system controls through the physical bottom
+    // edge, so the record button never floats on bare black (iOS R4).
+    Box(
+        Modifier.zone(
+            ZoneFrame(
+                zones.systemCluster.x,
+                zones.systemCluster.y,
+                zones.systemCluster.width,
+                maxOf(0f, viewportHeight - zones.systemCluster.y),
+            ),
+        ).background(LiveDesign.glass),
+    )
+
+    // Bottom system band: equal gaps around natural control sizes (iOS
+    // `PortraitSystemBar` uses equal spacers, not equal columns).
+    Row(
+        Modifier.zone(zones.systemCluster),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.weight(1f))
+        LockButton(locked, Modifier.size(40.dp), onClick = onLock)
+        Spacer(Modifier.weight(1f))
+        DispButton(
+            activeIndex = dispIndex,
+            modeCount = 3,
+            modifier = Modifier.size(width = 74.dp, height = 44.dp),
+            onClick = onDisp,
+        )
+        Spacer(Modifier.weight(1f))
+        RecordButton(recording, Modifier.size(83.dp), onClick = onRecord)
+        Spacer(Modifier.weight(1f))
+        AuxCircleButton(Modifier.size(63.dp)) { glyphModifier, tint ->
+            MediaStackGlyph(tint, glyphModifier)
+        }
+        Spacer(Modifier.weight(1f))
+        AuxCircleButton(Modifier.size(63.dp)) { glyphModifier, tint ->
+            GearGlyph(tint, glyphModifier)
+        }
+        Spacer(Modifier.weight(1f))
+    }
+}
+
+/**
+ * The portrait top bar (iOS `MonitorInfoBar` `.infoBar`): accent-frames
+ * timecode leading, storage centered on the screen width, camera battery
+ * inline trailing, on the plain glass band.
+ */
+@Composable
+private fun PortraitInfoBar(frameCount: Long, modifier: Modifier = Modifier) {
+    Box(modifier.background(LiveDesign.glass).padding(horizontal = 16.dp)) {
+        Text(
+            DemoMonitorState.MEDIA,
+            style = chromeStyle(13f, FontWeight.Medium),
+            color = LiveDesign.muted,
+            maxLines = 1,
+            modifier = Modifier.align(Alignment.Center),
+        )
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                timecodeAnnotated(frameCount, DemoMonitorState.FRAME_RATE),
+                style = chromeStyle(15f, FontWeight.Normal, mono = true),
+                maxLines = 1,
+            )
+            Spacer(Modifier.weight(1f))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BatteryGlyph(
+                    DemoMonitorState.CAMERA_BATTERY,
+                    LiveDesign.accent,
+                    Modifier.size(22.dp, 11.dp),
+                )
+                Text(
+                    "${DemoMonitorState.CAMERA_BATTERY}%",
+                    style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
+                    color = LiveDesign.text.copy(alpha = 0.72f),
+                )
+                CameraGlyph(LiveDesign.muted, Modifier.size(15.dp, 12.dp))
+            }
+        }
     }
 }
 
