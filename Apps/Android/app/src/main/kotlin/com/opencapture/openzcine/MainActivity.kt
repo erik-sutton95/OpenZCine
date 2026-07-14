@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.FakeCameraSession
+import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 
@@ -33,12 +34,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // ponytail: fake backend by default until the real core lands behind
-        // the seam; DI arrives with the first production implementation.
+        // the seam; DI arrives with the first production implementation. Two
+        // debug-only overrides: the demo harness (synthetic feed) wins, then
+        // the NSD discovery + socket transport path.
+        val demo = DemoHarness.demoLiveFeed(intent)
         val session: CameraSession =
-            if (isNsdTransportRequested()) nsdTransportSession() else FakeCameraSession()
+            demo?.first
+                ?: if (isNsdTransportRequested()) nsdTransportSession() else FakeCameraSession()
         setContent {
             OpenZCineTheme {
-                MonitorShell(session)
+                MonitorShell(session, frameSource = demo?.second)
             }
         }
     }
@@ -58,10 +63,12 @@ class MainActivity : ComponentActivity() {
 
 /**
  * Placeholder monitor: a black feed area showing connection status from
- * [session]. The "No camera" state is the only state the fake reaches.
+ * [session]. While connected with an active [frameSource], the feed area
+ * renders the live frame stream (aspect-fit, black letterbox); otherwise it
+ * falls back to the status text ("No camera" when disconnected).
  */
 @Composable
-fun MonitorShell(session: CameraSession) {
+fun MonitorShell(session: CameraSession, frameSource: LiveFrameSource? = null) {
     val state by session.state.collectAsState()
 
     LaunchedEffect(session) { session.connect() }
@@ -72,11 +79,15 @@ fun MonitorShell(session: CameraSession) {
     ) {
         when (val current = state) {
             is CameraSessionState.Connected ->
-                Text(
-                    text = current.identity.name,
-                    color = BrandColors.accent,
-                    style = MaterialTheme.typography.titleMedium,
-                )
+                if (frameSource != null) {
+                    LiveFeedView(frameSource, modifier = Modifier.fillMaxSize())
+                } else {
+                    Text(
+                        text = current.identity.name,
+                        color = BrandColors.accent,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
 
             CameraSessionState.Connecting ->
                 Text(
