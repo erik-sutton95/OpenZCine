@@ -363,6 +363,191 @@ func portraitFillNeverProducesAssistStripRegardlessOfToolbarHeight(mode: DispMod
     #expect(map.systemSlots == expected)
 }
 
+// MARK: - Width-constrained (4:3 iPad) landscape corner layout (OPE-2)
+
+/// iPad Pro 11" landscape points with the runtime chrome insets (window-control clearance top).
+private enum PadViewport {
+    static let width = 1210.0
+    static let height = 834.0
+    static let safeArea = MonitorEdgeInsets(top: 24, leading: 0, bottom: 20, trailing: 0)
+    static let chromeInsets = MonitorEdgeInsets(top: 40, leading: 16, bottom: 12, trailing: 18)
+
+    static func map(bottomBarHeight: Double = 58) -> MonitorZoneMap {
+        MonitorZoneLayout.map(
+            viewportWidth: width,
+            viewportHeight: height,
+            safeArea: safeArea,
+            chromeInsets: chromeInsets,
+            mode: .live,
+            isPortrait: false,
+            aspect: .fill,
+            scopeCount: 0,
+            horizontalDirection: .standard,
+            bottomBarHeight: bottomBarHeight
+        )
+    }
+}
+
+@Test func widthConstrainedDiscriminatorSelects4x3PadsNotPhones() {
+    // iPad Pro 11" landscape: 16:9 at full height (1482.7pt) overflows the 1210pt width.
+    #expect(
+        MonitorFeedLayout.isWidthConstrained(viewportWidth: 1210, viewportHeight: 834))
+    // iPhone 17 Pro landscape is wider than 16:9.
+    #expect(
+        !MonitorFeedLayout.isWidthConstrained(viewportWidth: 874, viewportHeight: 402))
+    // Portrait never constrains (its feed box is handed in as exact 16:9).
+    #expect(
+        !MonitorFeedLayout.isWidthConstrained(viewportWidth: 834, viewportHeight: 1210))
+}
+
+@Test func padLandscapeBatteryClusterIsInlineBesideLock() throws {
+    let map = PadViewport.map()
+    let lock = map.systemSlots.lock
+
+    #expect(map.batteryCluster?.style == .batteryInline)
+    let battery = try #require(map.batteryCluster?.frame)
+    // Right of the lock button, in the same top chrome band.
+    #expect(battery.x == lock.x + lock.width + MonitorBatteryRailLayout.inlineLeadingGap)
+    #expect(battery.midY == lock.midY)
+    #expect(battery.height == MonitorLiveViewModuleLayout.lockButtonSize)
+}
+
+@Test func padLandscapeSettingsAndMediaFormATopTrailingRowAlignedWithTheInfoBar() {
+    let map = PadViewport.map()
+    let settings = map.systemSlots.settings
+    let media = map.systemSlots.media
+    let chromeTrailing = PadViewport.width - PadViewport.chromeInsets.trailing
+    let gap = MonitorLiveViewModuleLayout.bottomModuleSpacing
+
+    // Settings hugs the top-trailing chrome corner; media sits inline on its left.
+    #expect(settings.x + settings.width == chromeTrailing)
+    #expect(media.x + media.width == settings.x - gap)
+    // Both are vertically centered on the top info bar band.
+    #expect(settings.midY == map.infoBar.frame.midY)
+    #expect(media.midY == map.infoBar.frame.midY)
+}
+
+@Test func padLandscapeRecordAndDispFormABottomTrailingRowAndTheBarsShorten() throws {
+    let map = PadViewport.map()
+    let record = map.systemSlots.record
+    let disp = map.systemSlots.disp
+    let chromeTrailing = PadViewport.width - PadViewport.chromeInsets.trailing
+    let gap = MonitorLiveViewModuleLayout.bottomModuleSpacing
+    let barBottom = PadViewport.height - MonitorLiveViewModuleLayout.bottomBarBottomInset
+
+    // Record hugs the bottom-trailing chrome corner, bottom-aligned with the bars.
+    #expect(record.x + record.width == chromeTrailing)
+    #expect(record.y + record.height == barBottom)
+    // DISP sits inline on the record button's left, centered on it.
+    #expect(disp.x + disp.width == record.x - gap)
+    #expect(disp.midY == record.midY)
+
+    // The bottom bars shorten so they end clear of the DISP + record cluster.
+    let capture = try #require(map.captureStrip?.frame)
+    #expect(capture.x + capture.width <= disp.x - gap + 0.0001)
+    // And they still start at the chrome leading edge.
+    let assist = try #require(map.assistStrip?.frame)
+    #expect(assist.x == PadViewport.chromeInsets.leading)
+}
+
+/// iPad mini (A17 Pro) landscape points: 1133×744 ≈ 1.52:1 — still narrower than 16:9, so the
+/// constrained corner layout fires, but with far shallower letterbox bands than the Pro 11"
+/// (~53pt vs ~77pt), making it the tightest shipping viewport for the corner clusters.
+private enum PadMiniViewport {
+    static let width = 1133.0
+    static let height = 744.0
+    static let safeArea = MonitorEdgeInsets(top: 24, leading: 0, bottom: 20, trailing: 0)
+    static let chromeInsets = MonitorEdgeInsets(top: 40, leading: 16, bottom: 12, trailing: 18)
+
+    static func map(
+        bottomBarHeight: Double = 58,
+        direction: MonitorHorizontalLayoutDirection = .standard
+    ) -> MonitorZoneMap {
+        MonitorZoneLayout.map(
+            viewportWidth: width,
+            viewportHeight: height,
+            safeArea: safeArea,
+            chromeInsets: chromeInsets,
+            mode: .live,
+            isPortrait: false,
+            aspect: .fill,
+            scopeCount: 0,
+            horizontalDirection: direction,
+            bottomBarHeight: bottomBarHeight
+        )
+    }
+}
+
+@Test func padMiniLandscapeCornerClustersStayCollisionFreeInShallowLetterbox() throws {
+    #expect(
+        MonitorFeedLayout.isWidthConstrained(
+            viewportWidth: PadMiniViewport.width, viewportHeight: PadMiniViewport.height))
+
+    let map = PadMiniViewport.map()
+    let slots = map.systemSlots
+    let gap = MonitorLiveViewModuleLayout.bottomModuleSpacing
+
+    // Feed spans the full width, vertically centered.
+    #expect(map.feed.x == 0)
+    #expect(map.feed.width == PadMiniViewport.width)
+    #expect(abs(map.feed.y - (PadMiniViewport.height - map.feed.height) / 2) < 0.0001)
+
+    // Battery cluster sits inline beside the lock, clear of the settings/media corner row.
+    #expect(map.batteryCluster?.style == .batteryInline)
+    let battery = try #require(map.batteryCluster?.frame)
+    #expect(
+        battery.x == slots.lock.x + slots.lock.width + MonitorBatteryRailLayout.inlineLeadingGap)
+    #expect(battery.x + battery.width <= slots.media.x)
+
+    // The info bar narrows to the free band between the corner clusters, one gap clear of each,
+    // so the centered pill can never run under the battery icons or the settings/media row.
+    let infoBar = map.infoBar.frame
+    #expect(infoBar.x == battery.x + battery.width + gap)
+    #expect(infoBar.x + infoBar.width == slots.media.x - gap)
+    #expect(infoBar.midY == slots.lock.midY)
+
+    // Shortened bottom bars end clear of the DISP + record corner cluster.
+    let capture = try #require(map.captureStrip?.frame)
+    #expect(capture.x + capture.width <= slots.disp.x - gap + 0.0001)
+    #expect(slots.disp.x + slots.disp.width <= slots.record.x - gap + 0.0001)
+
+    // Record keeps the bars' 14pt bottom clearance and every corner control stays on-screen.
+    let barBottom = PadMiniViewport.height - MonitorLiveViewModuleLayout.bottomBarBottomInset
+    #expect(slots.record.y + slots.record.height == barBottom)
+    for frame in [slots.lock, slots.disp, slots.record, slots.media, slots.settings, battery] {
+        #expect(frame.x >= 0)
+        #expect(frame.y >= 0)
+        #expect(frame.x + frame.width <= PadMiniViewport.width)
+        #expect(frame.y + frame.height <= PadMiniViewport.height)
+    }
+}
+
+@Test func padMiniMirroredInfoBarBandMirrorsWithTheCornerClusters() {
+    let standard = PadMiniViewport.map()
+    let mirrored = PadMiniViewport.map(direction: .mirrored)
+
+    #expect(
+        mirrored.infoBar.frame
+            == standard.infoBar.frame.mirroredHorizontally(in: PadMiniViewport.width))
+}
+
+@Test func phoneLandscapeBatteryClusterStaysALeadingRail() {
+    let map = MonitorZoneLayout.map(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        safeArea: MonitorEdgeInsets(top: 0, leading: 59, bottom: 0, trailing: 0),
+        mode: .live,
+        isPortrait: false,
+        aspect: .fill,
+        scopeCount: 0,
+        horizontalDirection: .standard,
+        bottomBarHeight: 58
+    )
+
+    #expect(map.batteryCluster?.style == .batteryRail)
+    #expect(map.batteryCluster?.frame.width == MonitorBatteryRailLayout.indicatorWidth)
+}
+
 @Test func landscapeSystemSlotsCenterOnLegacyRailCenters() {
     let viewportWidth = 874.0
     let viewportHeight = 402.0

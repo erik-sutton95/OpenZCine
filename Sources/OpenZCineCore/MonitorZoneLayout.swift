@@ -179,6 +179,12 @@ public enum MonitorZoneLayout {
         bottomBarHeight: Double
     ) -> MonitorZoneMap {
         let chromeInsets = chromeInsets ?? MonitorChromeLayout.insets(feedSafeArea: safeArea)
+        // Width-constrained (4:3-ish iPad) landscape moves the side-rail chrome into the corners;
+        // the battery cluster renders as an inline row beside the lock button (`.batteryInline`).
+        let constrained = MonitorFeedLayout.isWidthConstrained(
+            viewportWidth: viewportWidth,
+            viewportHeight: viewportHeight
+        )
         let legacy = MonitorLiveViewModuleLayout.fit(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
@@ -192,10 +198,28 @@ public enum MonitorZoneLayout {
             railHeight: legacy.rightRailControls.height,
             bottomBarHeight: bottomBarHeight
         )
+        let slots =
+            constrained
+            ? constrainedLandscapeSlots(
+                legacy: legacy,
+                viewportWidth: viewportWidth,
+                viewportHeight: viewportHeight,
+                chromeInsets: chromeInsets,
+                horizontalDirection: horizontalDirection
+            )
+            : landscapeSlots(legacy: legacy, rail: rail)
+        // Constrained layouts fill the top band's corners with chrome (battery inline leading,
+        // settings/media trailing), so the info bar narrows to the band between those clusters.
+        // The legacy feed-anchored span let the centered pill run under the battery cluster on
+        // shallow-letterbox viewports (iPad mini: pill left edge crossed the camera battery icon).
+        let infoBarFrame =
+            constrained
+            ? constrainedInfoBarFrame(legacy: legacy, slots: slots)
+            : legacy.topInfoDeck
 
         return MonitorZoneMap(
             feed: legacy.feed,
-            infoBar: MonitorZone(frame: legacy.topInfoDeck, style: .infoPill, collapsible: false),
+            infoBar: MonitorZone(frame: infoBarFrame, style: .infoPill, collapsible: false),
             captureStrip: MonitorZone(
                 frame: legacy.bottomCaptureSettings,
                 style: .axisHorizontal,
@@ -211,10 +235,10 @@ public enum MonitorZoneLayout {
                 style: .axisVertical,
                 collapsible: false
             ),
-            systemSlots: landscapeSlots(legacy: legacy, rail: rail),
+            systemSlots: slots,
             batteryCluster: MonitorZone(
                 frame: legacy.batteryRail,
-                style: .batteryRail,
+                style: constrained ? .batteryInline : .batteryRail,
                 collapsible: false
             ),
             scopes: nil,
@@ -262,6 +286,94 @@ public enum MonitorZoneLayout {
                 width: aux,
                 height: aux
             )
+        )
+    }
+
+    /// Corner slot frames for width-constrained (4:3 iPad) landscape: settings and media form a
+    /// horizontal row tucked into the top-trailing chrome corner, vertically centered on the top
+    /// info bar band so they read as one line with it (settings outermost, media on its left);
+    /// record hugs the bottom-trailing corner (bottom-aligned with the shortened bottom bars)
+    /// with DISP inline on its left, vertically centered on the record button. The lock keeps
+    /// its legacy top-leading frame. Frames are built in standard orientation and mirrored as a
+    /// final step, matching `MonitorLiveViewModuleLayout.mirroredChromeHorizontally`.
+    private static func constrainedLandscapeSlots(
+        legacy: MonitorLiveViewModuleLayout,
+        viewportWidth: Double,
+        viewportHeight: Double,
+        chromeInsets: MonitorEdgeInsets,
+        horizontalDirection: MonitorHorizontalLayoutDirection
+    ) -> MonitorSystemSlotFrames {
+        let chrome =
+            MonitorLayoutRegion
+            .viewport(width: viewportWidth, height: viewportHeight)
+            .inset(chromeInsets)
+        let aux = MonitorSideRailControlLayout.auxiliaryButtonSize
+        let gap = MonitorLiveViewModuleLayout.bottomModuleSpacing
+        let bandCenterY = chrome.y + MonitorLiveViewModuleLayout.topInfoDeckHeight / 2
+        let settings = MonitorModuleFrame(
+            x: chrome.maxX - aux,
+            y: bandCenterY - aux / 2,
+            width: aux,
+            height: aux
+        )
+        let media = MonitorModuleFrame(
+            x: settings.x - gap - aux,
+            y: bandCenterY - aux / 2,
+            width: aux,
+            height: aux
+        )
+        // Bottom-aligned with the bottom bars' shared bottom edge (screen bottom minus the bar
+        // inset), keeping home-indicator clearance identical to the bars'.
+        let rec = MonitorSideRailControlLayout.recordButtonSize
+        let dispWidth = MonitorSideRailControlLayout.displayButtonWidth
+        let dispHeight = MonitorSideRailControlLayout.displayButtonHeight
+        let recordBottom = viewportHeight - MonitorLiveViewModuleLayout.bottomBarBottomInset
+        let record = MonitorModuleFrame(
+            x: chrome.maxX - rec,
+            y: recordBottom - rec,
+            width: rec,
+            height: rec
+        )
+        let disp = MonitorModuleFrame(
+            x: record.x - gap - dispWidth,
+            y: record.midY - dispHeight / 2,
+            width: dispWidth,
+            height: dispHeight
+        )
+        let mirrored = horizontalDirection == .mirrored
+
+        return MonitorSystemSlotFrames(
+            // The lock frame off `legacy` is already mirrored when the layout is.
+            lock: legacy.lockButton,
+            disp: mirrored ? disp.mirroredHorizontally(in: viewportWidth) : disp,
+            record: mirrored ? record.mirroredHorizontally(in: viewportWidth) : record,
+            media: mirrored ? media.mirroredHorizontally(in: viewportWidth) : media,
+            settings: mirrored ? settings.mirroredHorizontally(in: viewportWidth) : settings
+        )
+    }
+
+    /// Info-bar band for width-constrained (4:3-ish iPad) landscape: the free span between the
+    /// inline battery cluster and the settings/media corner row, one module gap clear of each, at
+    /// the legacy deck's vertical band. Works in final (possibly mirrored) coordinates — the
+    /// battery sits leading and the row trailing in standard orientation, swapped when mirrored —
+    /// so the band never needs its own mirror pass.
+    private static func constrainedInfoBarFrame(
+        legacy: MonitorLiveViewModuleLayout,
+        slots: MonitorSystemSlotFrames
+    ) -> MonitorModuleFrame {
+        let gap = MonitorLiveViewModuleLayout.bottomModuleSpacing
+        let battery = legacy.batteryRail
+        let rowLeading = Swift.min(slots.media.x, slots.settings.x)
+        let rowTrailing = Swift.max(
+            slots.media.x + slots.media.width, slots.settings.x + slots.settings.width)
+        let left = battery.x < rowLeading ? battery.x + battery.width : rowTrailing
+        let right = battery.x < rowLeading ? rowLeading : battery.x
+
+        return MonitorModuleFrame(
+            x: left + gap,
+            y: legacy.topInfoDeck.y,
+            width: Swift.max(0, right - left - 2 * gap),
+            height: legacy.topInfoDeck.height
         )
     }
 

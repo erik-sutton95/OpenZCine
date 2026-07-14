@@ -760,6 +760,32 @@ struct BatteryRailModule: View {
     }
 }
 
+/// Inline phone + camera battery row for width-constrained (4:3-ish iPad) landscape layouts,
+/// mounted beside the lock button at the zone map's `.batteryInline` cluster frame. Reuses the
+/// portrait top bar's single-row `BatteryIndicator` presentation.
+struct BatteryInlineCluster: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 14) {
+            BatteryIndicator(
+                percent: model.cameraState.phoneBatteryPercent,
+                deviceSystemName: "iphone",
+                isCamera: false,
+                isCharging: model.phoneBatteryCharging,
+                layout: .inline
+            )
+            BatteryIndicator(
+                percent: model.cameraState.cameraBatteryPercent,
+                deviceSystemName: "camera",
+                isCamera: true,
+                isCharging: model.cameraBatteryCharging,
+                layout: .inline
+            )
+        }
+    }
+}
+
 /// A single tappable exposure readout (label + value) that opens its picker above the capture bar.
 /// While that picker is open it lights up gold so the operator can see which setting is being edited.
 struct CaptureSettingButton: View {
