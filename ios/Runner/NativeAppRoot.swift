@@ -6236,7 +6236,7 @@ struct NativeAppRoot: View {
                         leading: islandOnLeading ? Double(insets.leading) : 0,
                         bottom: Double(insets.bottom),
                         trailing: islandOnLeading ? 0 : Double(insets.trailing)
-                    )
+                    ).clearingWindowControls
                 )
                 .environment(model)
                 .environment(deliveryCoordinator)
@@ -6265,7 +6265,7 @@ struct NativeAppRoot: View {
                         leading: islandOnLeading ? Double(insets.leading) : 0,
                         bottom: Double(insets.bottom),
                         trailing: islandOnLeading ? 0 : Double(insets.trailing)
-                    )
+                    ).clearingWindowControls
                 )
                 .environment(model)
             }

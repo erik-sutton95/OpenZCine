@@ -103,12 +103,15 @@ struct LiveViewLayoutContext {
     /// horizontally). Passing the safe-area height double-counts the insets: ~96pt dead band.
     let viewportHeight: Double
 
+    @MainActor
     init(proxy: GeometryProxy, deviceOrientation: MonitorDeviceOrientation, screenWidth: Double?) {
         feedSafeArea = proxy.monitorEdgeInsets
         isPortrait = proxy.size.height > proxy.size.width
         viewportHeight =
             Double(proxy.size.height) + max(0, feedSafeArea.top) + max(0, feedSafeArea.bottom)
-        chromeInsets = MonitorChromeLayout.insets(feedSafeArea: feedSafeArea)
+        chromeInsets =
+            MonitorChromeLayout.insets(feedSafeArea: feedSafeArea)
+            .clearingWindowControls
         horizontalDirection = MonitorHorizontalLayoutDirection.resolve(
             deviceOrientation: deviceOrientation,
             safeArea: feedSafeArea
