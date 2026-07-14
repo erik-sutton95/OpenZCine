@@ -128,10 +128,15 @@ public enum MonitorZoneLayout {
     /// `mode`, `aspect`, and `scopeCount` only affect the portrait branch; landscape results are
     /// stable across modes. `bottomBarHeight` and `horizontalDirection` only affect the landscape
     /// branch.
+    ///
+    /// `chromeInsets` lets the shell pass margins that carry platform exclusions the safe area
+    /// does not (the iPadOS 26 window-control pill); `nil` derives them from `safeArea` via
+    /// `MonitorChromeLayout.insets`, as before.
     public static func map(
         viewportWidth: Double,
         viewportHeight: Double,
         safeArea: MonitorEdgeInsets,
+        chromeInsets: MonitorEdgeInsets? = nil,
         mode: DispMode,
         isPortrait: Bool,
         aspect: PortraitFeedAspect,
@@ -154,6 +159,7 @@ public enum MonitorZoneLayout {
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
             safeArea: safeArea,
+            chromeInsets: chromeInsets,
             horizontalDirection: horizontalDirection,
             bottomBarHeight: bottomBarHeight
         )
@@ -168,10 +174,11 @@ public enum MonitorZoneLayout {
         viewportWidth: Double,
         viewportHeight: Double,
         safeArea: MonitorEdgeInsets,
+        chromeInsets: MonitorEdgeInsets? = nil,
         horizontalDirection: MonitorHorizontalLayoutDirection,
         bottomBarHeight: Double
     ) -> MonitorZoneMap {
-        let chromeInsets = MonitorChromeLayout.insets(feedSafeArea: safeArea)
+        let chromeInsets = chromeInsets ?? MonitorChromeLayout.insets(feedSafeArea: safeArea)
         let legacy = MonitorLiveViewModuleLayout.fit(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,

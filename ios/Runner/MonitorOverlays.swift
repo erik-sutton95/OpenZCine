@@ -32,7 +32,7 @@ struct FeedAssistOverlayModule: View {
             // `landscapeBottomBarHeight` in MonitorUnified.swift).
             let chromeClearance = EdgeInsets(
                 top: CGFloat(
-                    MonitorChromeLayout.insets(feedSafeArea: safeArea).top
+                    MonitorChromeLayout.insets(feedSafeArea: safeArea).clearingWindowControls.top
                         + MonitorLiveViewModuleLayout.topInfoDeckHeight),
                 leading: 0,
                 bottom: CGFloat(MonitorLiveViewModuleLayout.bottomBarBottomInset)

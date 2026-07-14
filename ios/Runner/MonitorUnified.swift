@@ -893,6 +893,9 @@ struct MonitorShell: View {
             viewportWidth: context.viewportWidth,
             viewportHeight: fullHeight,
             safeArea: context.feedSafeArea,
+            // Carries the iPadOS 26 window-control clearance the safe area lacks (see
+            // `clearingWindowControls`), so the lock button and top deck render below the pill.
+            chromeInsets: context.chromeInsets,
             mode: model.displayMode,
             isPortrait: false,
             aspect: model.preferences.portraitFeedAspect,
@@ -1445,12 +1448,13 @@ struct MonitorFullScreenPanelOverlay: View {
     /// surface hugs that bezel while clearing the Dynamic Island on the side it sits. Portrait
     /// passes the safe area straight through.
     private var fullScreenPanelSafeArea: MonitorEdgeInsets {
-        guard !context.isPortrait else { return context.feedSafeArea }
+        guard !context.isPortrait else { return context.feedSafeArea.clearingWindowControls }
         let islandOnLeading = context.horizontalDirection != .mirrored
         return MonitorEdgeInsets(
             top: context.feedSafeArea.top,
             leading: islandOnLeading ? context.feedSafeArea.leading : 0,
             bottom: context.feedSafeArea.bottom,
-            trailing: islandOnLeading ? 0 : context.feedSafeArea.trailing)
+            trailing: islandOnLeading ? 0 : context.feedSafeArea.trailing
+        ).clearingWindowControls
     }
 }

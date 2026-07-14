@@ -170,6 +170,45 @@ extension GeometryProxy {
     }
 }
 
+extension MonitorEdgeInsets {
+    /// Floors the top inset so top-leading chrome clears the iPadOS 26 window-control pill.
+    ///
+    /// In iPadOS 26's default "Windowed Apps" mode the system floats a close/minimize capsule
+    /// over every scene's top-leading corner — including this app's, which opts out of window
+    /// resizing (`UIRequiresFullScreen` + fixed orientations) and therefore runs as a scaled
+    /// full-screen canvas. In that compatibility mode the pill is composited by the system and
+    /// is invisible to the process: safe areas, the iOS 26 corner-adapted layout regions
+    /// (`UIView.LayoutRegion`), and `UIWindowScene.effectiveGeometry` all report plain
+    /// full-screen values (verified on the iPadOS 26.2 simulator — top inset 0, corner
+    /// adaptation 9.5pt display-corner only, scene == screen bounds). The system's own
+    /// compatibility placement parks the pill in the status-bar band, but this app hides the
+    /// status bar, so the band must be reserved manually.
+    ///
+    /// Apply this ONLY to chrome-placement insets — never to `feedSafeArea`/viewport math,
+    /// which must restore physical-screen geometry from real insets.
+    @MainActor var clearingWindowControls: MonitorEdgeInsets {
+        let clearance = MonitorWindowControlsClearance.top
+        guard clearance > top else { return self }
+        return MonitorEdgeInsets(
+            top: clearance, leading: leading, bottom: bottom, trailing: trailing)
+    }
+}
+
+/// Top band reserved for the iPadOS 26 window-control pill (see `clearingWindowControls`).
+@MainActor
+enum MonitorWindowControlsClearance {
+    /// 40pt clears the ~26pt-tall (screen points) pill across the canvas scales the system
+    /// actually uses for this app's window (~0.65–1.0, measured). The scale is not observable
+    /// in-process, so a user-shrunk tiny window can still graze the pill — the same ceiling
+    /// Apple's own 32pt status-bar-band placement has.
+    static let top: Double = {
+        guard #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .pad else {
+            return 0
+        }
+        return 40
+    }()
+}
+
 extension OperatorPreferences.StreamPreset {
     var next: OperatorPreferences.StreamPreset {
         switch self {
