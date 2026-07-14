@@ -19,6 +19,8 @@ data class MediaClipRecord(
     /** Full-image pixel size (0 when the camera omits it). */
     val pixelWidth: Int,
     val pixelHeight: Int,
+    /** True when the shared core classifies this as a playable proxy. */
+    val isPlayableProxy: Boolean,
     /** Sanitized on-card filename, e.g. `C0001.MOV`. */
     val filename: String,
 ) {
@@ -47,7 +49,7 @@ data class MediaClipRecord(
 object MediaClips {
     /**
      * Parses the facade's wire format — one record per line, tab-separated
-     * `handle, storageID, sizeBytes, captureDate, width, height, filename`
+     * `handle, storageID, sizeBytes, captureDate, width, height, playable, filename`
      * (filename last; it is sanitized tab/newline-free by the facade).
      * Malformed lines are skipped, never fatal: the listing is network input.
      */
@@ -55,7 +57,7 @@ object MediaClips {
         wire.lineSequence()
             .mapNotNull { line ->
                 val fields = line.split('\t')
-                if (fields.size != 7) return@mapNotNull null
+                if (fields.size != 8) return@mapNotNull null
                 MediaClipRecord(
                     handle = fields[0].toLongOrNull() ?: return@mapNotNull null,
                     storageId = fields[1].toLongOrNull() ?: return@mapNotNull null,
@@ -63,7 +65,13 @@ object MediaClips {
                     captureDate = fields[3],
                     pixelWidth = fields[4].toIntOrNull() ?: return@mapNotNull null,
                     pixelHeight = fields[5].toIntOrNull() ?: return@mapNotNull null,
-                    filename = fields[6].ifEmpty { return@mapNotNull null },
+                    isPlayableProxy =
+                        when (fields[6]) {
+                            "1" -> true
+                            "0" -> false
+                            else -> return@mapNotNull null
+                        },
+                    filename = fields[7].ifEmpty { return@mapNotNull null },
                 )
             }
             .toList()

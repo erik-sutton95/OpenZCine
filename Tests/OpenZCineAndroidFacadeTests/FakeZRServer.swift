@@ -17,6 +17,11 @@ import OpenZCineCore
     import Darwin
 #endif
 
+struct FakeZRRequest: Equatable {
+    let operation: PTPOperationCode
+    let parameters: [UInt32]
+}
+
 /// A scripted fake ZR listening on an ephemeral localhost port.
 // SAFETY: `@unchecked Sendable` — mutable state is guarded by `lock`; each
 // accepted connection runs on its own thread.
@@ -39,6 +44,12 @@ final class FakeZRServer: @unchecked Sendable {
         /// Scripted card contents served by the storage/object operations
         /// (`FakeZRMediaCard.objects` by default; empty = an empty card).
         var mediaObjects: [FakeZRMediaObject] = FakeZRMediaCard.objects
+        /// Optional ignored/local movie file served as the payload for
+        /// `mediaPayloadHandle` during the physical-device playback demo.
+        var mediaPayloadFileURL: URL?
+        var mediaPayloadHandle: UInt32 = 0x1009
+        /// Prints operation names/parameters for opt-in device-demo diagnosis.
+        var traceOperations = ProcessInfo.processInfo.environment["ZC_FAKE_ZR_TRACE"] == "1"
         var cameraName = "ZR_6001234"
         var pairingPIN = "1234"
         var batteryPercent: UInt8 = 80
@@ -54,6 +65,7 @@ final class FakeZRServer: @unchecked Sendable {
     private let listenDescriptor: Int32
     private let lock = NSLock()
     private var operationLog: [PTPOperationCode] = []
+    private var requestLog: [FakeZRRequest] = []
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
     private var stopped = false
@@ -113,6 +125,13 @@ final class FakeZRServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return operationLog
+    }
+
+    /// Full operation/parameter records for transfer-range assertions.
+    func receivedRequests() -> [FakeZRRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestLog
     }
 
     /// Transaction IDs in arrival order (parallel to `receivedOperations`).
@@ -180,10 +199,20 @@ final class FakeZRServer: @unchecked Sendable {
             sendResponse(connection, code: 0x2005, transactionID: transactionID)
             return
         }
+        var parameters: [UInt32] = []
+        var parameterOffset = 10
+        while parameterOffset + 4 <= bytes.count {
+            parameters.append(ByteCoding.readUInt32LE(bytes, at: parameterOffset))
+            parameterOffset += 4
+        }
         lock.lock()
         operationLog.append(operation)
+        requestLog.append(FakeZRRequest(operation: operation, parameters: parameters))
         transactionIDLog.append(transactionID)
         lock.unlock()
+        if options.traceOperations {
+            print("fake ZR \(operation) \(parameters)")
+        }
 
         switch operation {
         case .openSession, .closeSession:
@@ -265,6 +294,51 @@ final class FakeZRServer: @unchecked Sendable {
                 return
             }
             sendDataIn(connection, data: Data(object.thumbnail), transactionID: transactionID)
+        case .getObjectSize:
+            let handle = parameters.first ?? 0
+            guard let object = options.mediaObjects.first(where: { $0.handle == handle }),
+                let size = mediaObjectSize(object)
+            else {
+                sendResponse(connection, code: 0x2009, transactionID: transactionID)
+                return
+            }
+            sendDataIn(
+                connection, data: Data(ByteCoding.uint64LE(size)),
+                transactionID: transactionID)
+        case .getPartialObject:
+            guard parameters.count >= 3,
+                let object = options.mediaObjects.first(where: { $0.handle == parameters[0] }),
+                let payload = mediaPayload(
+                    object, offset: UInt64(parameters[1]), byteCount: UInt64(parameters[2]))
+            else {
+                sendResponse(connection, code: 0x2009, transactionID: transactionID)
+                return
+            }
+            sendDataIn(
+                connection, data: payload, transactionID: transactionID,
+                responseParameters: [UInt32(payload.count)])
+        case .getPartialObjectEx:
+            guard parameters.count >= 5,
+                let object = options.mediaObjects.first(where: { $0.handle == parameters[0] })
+            else {
+                sendResponse(connection, code: 0x2009, transactionID: transactionID)
+                return
+            }
+            let offset = UInt64(parameters[1]) | UInt64(parameters[2]) << 32
+            let maximumBytes = UInt64(parameters[3]) | UInt64(parameters[4]) << 32
+            guard
+                let payload = mediaPayload(
+                    object, offset: offset, byteCount: maximumBytes)
+            else {
+                sendResponse(connection, code: 0x2009, transactionID: transactionID)
+                return
+            }
+            let count = UInt64(payload.count)
+            sendDataIn(
+                connection, data: payload, transactionID: transactionID,
+                responseParameters: [
+                    UInt32(truncatingIfNeeded: count), UInt32(truncatingIfNeeded: count >> 32),
+                ])
         case .getDevicePropValueEx:
             let propertyCode = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
             switch PTPPropertyCode(rawValue: propertyCode) {
@@ -336,7 +410,9 @@ final class FakeZRServer: @unchecked Sendable {
         bytes += ByteCoding.uint32LE(FakeZRMediaCard.storageID)  // @0  StorageID
         bytes += ByteCoding.uint16LE(object.objectFormat)  // @4  ObjectFormat
         bytes += ByteCoding.uint16LE(0)  // @6  ProtectionStatus
-        bytes += ByteCoding.uint32LE(object.sizeBytes)  // @8  ObjectCompressedSize
+        let size = mediaObjectSize(object) ?? object.resolvedSizeBytes
+        let reportedSize = size >= UInt64(UInt32.max) ? UInt32.max : UInt32(size)
+        bytes += ByteCoding.uint32LE(reportedSize)  // @8  ObjectCompressedSize
         bytes += ByteCoding.uint16LE(0x3801)  // @12 ThumbFormat (EXIF JPEG)
         bytes += ByteCoding.uint32LE(UInt32(object.thumbnail.count))  // @14 ThumbCompressedSize
         bytes += ByteCoding.uint32LE(160)  // @18 ThumbPixWidth
@@ -366,15 +442,63 @@ final class FakeZRServer: @unchecked Sendable {
         return [UInt8(units.count / 2)] + units
     }
 
+    private func mediaObjectSize(_ object: FakeZRMediaObject) -> UInt64? {
+        guard object.handle == options.mediaPayloadHandle,
+            let url = options.mediaPayloadFileURL
+        else { return object.resolvedSizeBytes }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+            let fileSize = attributes[.size] as? NSNumber
+        else { return nil }
+        return fileSize.uint64Value
+    }
+
+    /// Reads only the requested range. Synthetic large objects generate their
+    /// bytes on demand, so a >=4 GiB protocol test never allocates the object.
+    private func mediaPayload(
+        _ object: FakeZRMediaObject, offset: UInt64, byteCount: UInt64
+    ) -> Data? {
+        guard let totalBytes = mediaObjectSize(object), offset <= totalBytes else { return nil }
+        let count = min(byteCount, totalBytes - offset)
+        guard count <= UInt64(Int.max) else { return nil }
+
+        if object.handle == options.mediaPayloadHandle,
+            let url = options.mediaPayloadFileURL,
+            let file = try? FileHandle(forReadingFrom: url)
+        {
+            defer { try? file.close() }
+            do {
+                try file.seek(toOffset: offset)
+                return try file.read(upToCount: Int(count)) ?? Data()
+            } catch {
+                return nil
+            }
+        }
+        if let payload = object.payload {
+            guard offset <= UInt64(payload.count) else { return nil }
+            let start = Int(offset)
+            let end = min(payload.count, start + Int(count))
+            return payload.subdata(in: start..<end)
+        }
+        return Data(
+            (0..<Int(count)).map { index in
+                UInt8(truncatingIfNeeded: offset + UInt64(index) + UInt64(object.handle))
+            })
+    }
+
     // MARK: - Framing
 
-    private func sendResponse(_ connection: Int32, code: UInt16, transactionID: UInt32) {
-        let payload = ByteCoding.uint16LE(code) + ByteCoding.uint32LE(transactionID)
+    private func sendResponse(
+        _ connection: Int32, code: UInt16, transactionID: UInt32,
+        parameters: [UInt32] = []
+    ) {
+        var payload = ByteCoding.uint16LE(code) + ByteCoding.uint32LE(transactionID)
+        for parameter in parameters { payload += ByteCoding.uint32LE(parameter) }
         send(connection, PTPIPPacket(type: .operationResponse, payload: Data(payload)))
     }
 
     private func sendDataIn(
-        _ connection: Int32, data: Data, transactionID: UInt32, code: UInt16 = 0x2001
+        _ connection: Int32, data: Data, transactionID: UInt32, code: UInt16 = 0x2001,
+        responseParameters: [UInt32] = []
     ) {
         send(
             connection,
@@ -388,7 +512,9 @@ final class FakeZRServer: @unchecked Sendable {
             PTPIPPacket(
                 type: .endData,
                 payload: Data(PTPDataPayloads.endData(transactionID: transactionID, data: data))))
-        sendResponse(connection, code: code, transactionID: transactionID)
+        sendResponse(
+            connection, code: code, transactionID: transactionID,
+            parameters: responseParameters)
     }
 
     private func send(_ connection: Int32, _ packet: PTPIPPacket) {

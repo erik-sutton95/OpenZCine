@@ -133,6 +133,7 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
 fun MonitorScreen(
     session: CameraSession,
     frameSource: LiveFrameSource?,
+    liveViewEnabled: Boolean = true,
     onOpenMedia: () -> Unit = {},
 ) {
     val sessionState by session.state.collectAsState()
@@ -306,13 +307,17 @@ fun MonitorScreen(
         // encode is the dominant camera-heat source (the iOS heat-audit rule).
         val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
         val activeFrameSource =
-            frameSource
-                ?: (session as? SwiftCoreCameraSession)
-                    ?.liveFrames
-                    ?.takeIf {
-                        sessionState is CameraSessionState.Connected &&
-                            lifecycleState.isAtLeast(Lifecycle.State.STARTED)
-                    }
+            if (!liveViewEnabled) {
+                null
+            } else {
+                frameSource
+                    ?: (session as? SwiftCoreCameraSession)
+                        ?.liveFrames
+                        ?.takeIf {
+                            sessionState is CameraSessionState.Connected &&
+                                lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+                        }
+            }
         Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
             if (activeFrameSource != null) {
                 LiveFeedView(activeFrameSource, Modifier.fillMaxSize())

@@ -36,6 +36,14 @@ object DemoHarness {
     /** String intent extra carrying the camera host for a real Swift-core session. */
     const val EXTRA_SESSION_HOST = "zc.session.host"
 
+    /** `browse` opens Media; `play` also opens its first playable proxy. */
+    const val EXTRA_MEDIA = "zc.media"
+
+    fun opensMedia(intent: Intent): Boolean =
+        intent.getStringExtra(EXTRA_MEDIA) in setOf("browse", "play")
+
+    fun autoPlaysMedia(intent: Intent): Boolean = intent.getStringExtra(EXTRA_MEDIA) == "play"
+
     /**
      * The debug session/feed override for [intent], or null in a normal
      * launch: `zc.session.host` makes the shell session a real

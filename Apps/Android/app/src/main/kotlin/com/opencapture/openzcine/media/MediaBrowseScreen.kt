@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.media
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -72,20 +73,36 @@ private sealed interface BrowseState {
 }
 
 /**
- * Full-screen media browse — the v1 (browse-only) Android port of the iOS
+ * Full-screen media browse — the Android port of the iOS
  * `MediaBrowserView` main column (ios/Runner/MediaBrowser.swift): the
  * MULTIMEDIA header, the adaptive dark clip grid with size/codec badges, and
- * the listing/empty states. Sidebar tabs, filters, selection, and playback
- * land with later slices. Renders over the monitor; [onClose] returns to it.
+ * the listing/empty states. Playable proxy cells open the progressive player;
+ * stills and R3D masters remain explicitly view-only. Renders over the monitor;
+ * [onClose] releases media ownership and returns to live view.
  */
 @Composable
-fun MediaBrowseScreen(onClose: () -> Unit) {
+fun MediaBrowseScreen(
+    cameraID: String,
+    cameraConnected: Boolean,
+    autoPlayFirstProxy: Boolean = false,
+    onClose: () -> Unit,
+) {
     var state by remember { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var reloadKey by remember { mutableIntStateOf(0) }
+    var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
+    var closeRequested by remember { mutableStateOf(false) }
 
-    LaunchedEffect(reloadKey) {
+    LaunchedEffect(closeRequested) {
+        if (!closeRequested) return@LaunchedEffect
+        withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode() }
+        onClose()
+    }
+    BackHandler(enabled = playingClip == null) { closeRequested = true }
+
+    LaunchedEffect(reloadKey, cameraConnected) {
         state = BrowseState.Loading
-        state =
+        if (!cameraConnected) return@LaunchedEffect
+        val loadedState =
             withContext(Dispatchers.IO) {
                 if (!SwiftCore.isAvailable) {
                     BrowseState.Failed("Camera core is not bundled in this build.")
@@ -95,6 +112,10 @@ fun MediaBrowseScreen(onClose: () -> Unit) {
                         ?: BrowseState.Failed("Not connected to a camera.")
                 }
             }
+        state = loadedState
+        if (autoPlayFirstProxy && loadedState is BrowseState.Loaded && playingClip == null) {
+            playingClip = loadedState.clips.firstOrNull { it.isPlayableProxy }
+        }
     }
 
     // iOS browser edge treatment: cutout-aware padding with landscape floors
@@ -126,15 +147,27 @@ fun MediaBrowseScreen(onClose: () -> Unit) {
                 is BrowseState.Failed ->
                     FailedState(current.message, onRetry = { reloadKey++ })
                 is BrowseState.Loaded ->
-                    if (current.clips.isEmpty()) EmptyState() else ClipGrid(current.clips)
+                    if (current.clips.isEmpty()) {
+                        EmptyState()
+                    } else {
+                        ClipGrid(current.clips, onPlay = { playingClip = it })
+                    }
             }
         }
 
         // Floating close button (iOS `CloseButton`), over the corner.
         CloseCircleButton(
             Modifier.padding(start = 16.dp, top = maxOf(topPad, 22f).dp),
-            onClick = onClose,
+            onClick = { closeRequested = true },
         )
+
+        playingClip?.let { clip ->
+            MediaPlaybackScreen(
+                clip = clip,
+                cameraID = cameraID,
+                onClose = { playingClip = null },
+            )
+        }
     }
 }
 
@@ -173,7 +206,7 @@ private fun BrowseHeader(state: BrowseState) {
 
 /** The adaptive dark clip grid (iOS `gridCells`, medium thumbnail preset). */
 @Composable
-private fun ClipGrid(clips: List<MediaClipRecord>) {
+private fun ClipGrid(clips: List<MediaClipRecord>, onPlay: (MediaClipRecord) -> Unit) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 210.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -181,13 +214,13 @@ private fun ClipGrid(clips: List<MediaClipRecord>) {
         // iOS parity: the grid scrolls its last row clear of the fold.
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
-        items(clips, key = { it.handle }) { clip -> ClipCell(clip) }
+        items(clips, key = { it.handle }) { clip -> ClipCell(clip, onPlay) }
     }
 }
 
 /** One clip cell: 16:9 thumbnail, badge bottom-right, filename below. */
 @Composable
-private fun ClipCell(clip: MediaClipRecord) {
+private fun ClipCell(clip: MediaClipRecord, onPlay: (MediaClipRecord) -> Unit) {
     var thumbnail by remember(clip.handle) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(clip.handle) {
         if (thumbnail != null) return@LaunchedEffect
@@ -205,6 +238,13 @@ private fun ClipCell(clip: MediaClipRecord) {
                 .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
                 .background(LiveDesign.surface)
+                .then(
+                    if (clip.isPlayableProxy) {
+                        Modifier.chromeClickable { onPlay(clip) }
+                    } else {
+                        Modifier
+                    },
+                )
                 .border(
                     1.dp,
                     LiveDesign.hairline,
@@ -229,6 +269,16 @@ private fun ClipCell(clip: MediaClipRecord) {
                 color = LiveDesign.text,
                 modifier =
                     Modifier.align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+            Text(
+                if (clip.isPlayableProxy) "PLAY" else "VIEW ONLY",
+                style = chromeStyle(9f, FontWeight.Bold, mono = true),
+                color = if (clip.isPlayableProxy) LiveDesign.accent else LiveDesign.faint,
+                modifier =
+                    Modifier.align(Alignment.TopStart)
                         .padding(8.dp)
                         .background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(4.dp))
                         .padding(horizontal = 6.dp, vertical = 3.dp),

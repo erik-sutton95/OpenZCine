@@ -41,6 +41,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case appControlUnavailable
     case unsupportedProperty(UInt32)
     case liveViewAlreadyActive
+    case mediaModeActive
+    case mediaModeRequired
 
     public var errorDescription: String? {
         switch self {
@@ -67,6 +69,10 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "Property 0x\(PTPIPClientSession.hexString(code)) is not known to the core."
         case .liveViewAlreadyActive:
             return "Live view is already streaming on this session."
+        case .mediaModeActive:
+            return "Live view is unavailable while camera media is open."
+        case .mediaModeRequired:
+            return "Open camera media before starting an object transfer."
         }
     }
 }
@@ -111,6 +117,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private let liveViewCondition = NSCondition()
     private var liveViewPumpActive = false
     private var liveViewStopRequested = false
+    private var mediaModeActive = false
+
+    /// Media payload pump state. Like live view, this is independent of the
+    /// transaction lock so stop/join can proceed while one camera read is in
+    /// flight.
+    private let mediaTransferCondition = NSCondition()
+    private var mediaTransferActive = false
+    private var mediaTransferStopRequested = false
 
     /// Camera identity resolved during `connect`. Written once by
     /// `identify()` during establishment, before the session escapes to
@@ -313,6 +327,162 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return "0x\(Self.hexString(value))"
     }
 
+    // MARK: - Media ownership and transfer
+
+    /// Gives media browsing/playback exclusive ownership of the camera's
+    /// serialized command channel. Claiming media mode first prevents a new
+    /// live-view start from racing the transition; the existing pump is then
+    /// stopped and joined before this method returns.
+    public func enterMediaMode() {
+        liveViewCondition.lock()
+        mediaModeActive = true
+        liveViewCondition.unlock()
+        stopLiveView()
+    }
+
+    /// Releases media ownership so monitor live view may start again.
+    public func exitMediaMode() {
+        stopMediaTransfer()
+        liveViewCondition.lock()
+        mediaModeActive = false
+        liveViewCondition.broadcast()
+        liveViewCondition.unlock()
+    }
+
+    /// Whether the media surface currently owns the shared command channel.
+    var isMediaModeActive: Bool {
+        liveViewCondition.lock()
+        defer { liveViewCondition.unlock() }
+        return mediaModeActive
+    }
+
+    /// Resolves the true object size. Normal PTP metadata is sufficient below
+    /// 4 GiB; its UINT32 sentinel routes large objects through Nikon's 64-bit
+    /// `GetObjectSize` operation.
+    public func resolvedObjectSize(handle: UInt32, reportedSize: UInt64) throws -> UInt64 {
+        guard reportedSize == UInt64(UInt32.max) else { return reportedSize }
+        let result = try transactExpectingOK(
+            .getObjectSize, parameters: [handle], dataPhase: .dataIn)
+        return try PTPObjectSize(data: result.data).bytes
+    }
+
+    /// Starts a progressive object transfer on one facade-owned thread.
+    ///
+    /// Protocol policy stays in the shared core: the cursor selects standard
+    /// `GetPartialObject` or Nikon `GetPartialObjectEx`, owns the 4 MiB chunk
+    /// size, validates every advance, and maintains the 64-bit offset. All
+    /// callbacks are serialized on the pump thread, with exactly one terminal
+    /// callback after the final chunk.
+    public func startMediaTransfer(
+        handle: UInt32,
+        reportedSize: UInt64,
+        resumeOffset: UInt64 = 0,
+        onStarted: @escaping @Sendable (UInt64) -> Void,
+        onChunk: @escaping @Sendable (UInt64, Data) -> Bool,
+        onCompleted: @escaping @Sendable (UInt64) -> Void,
+        onStopped: @escaping @Sendable (UInt64) -> Void,
+        onFailed: @escaping @Sendable (String) -> Void
+    ) throws {
+        guard isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeRequired
+        }
+        let totalBytes = try resolvedObjectSize(handle: handle, reportedSize: reportedSize)
+        let cursor = try PTPObjectTransferCursor(
+            objectHandle: handle,
+            totalBytes: totalBytes,
+            resumeOffset: resumeOffset,
+            supportsExtendedReads: true)
+
+        mediaTransferCondition.lock()
+        guard !mediaTransferActive else {
+            mediaTransferCondition.unlock()
+            throw PTPIPClientSessionError.connectionFailed(
+                "A camera-media transfer is already active.")
+        }
+        mediaTransferActive = true
+        mediaTransferStopRequested = false
+        mediaTransferCondition.unlock()
+
+        Thread.detachNewThread { [self] in
+            runMediaTransfer(
+                cursor: cursor,
+                onStarted: onStarted,
+                onChunk: onChunk,
+                onCompleted: onCompleted,
+                onStopped: onStopped,
+                onFailed: onFailed)
+        }
+    }
+
+    /// Stops and joins the active object transfer. The in-flight camera read
+    /// remains bounded by the command socket timeout. Safe when idle.
+    public func stopMediaTransfer() {
+        mediaTransferCondition.lock()
+        defer { mediaTransferCondition.unlock() }
+        guard mediaTransferActive else { return }
+        mediaTransferStopRequested = true
+        let deadline = Date().addingTimeInterval(
+            Double(command.timeoutMilliseconds) / 1_000 + 2)
+        while mediaTransferActive {
+            guard mediaTransferCondition.wait(until: deadline) else { return }
+        }
+    }
+
+    private func runMediaTransfer(
+        cursor initialCursor: PTPObjectTransferCursor,
+        onStarted: (UInt64) -> Void,
+        onChunk: (UInt64, Data) -> Bool,
+        onCompleted: (UInt64) -> Void,
+        onStopped: (UInt64) -> Void,
+        onFailed: (String) -> Void
+    ) {
+        var cursor = initialCursor
+        onStarted(cursor.totalBytes)
+        var failure: String?
+
+        while !mediaTransferStopIsRequested(), !cursor.isComplete {
+            do {
+                guard let request = try cursor.nextRequest() else { break }
+                let result = try transactExpectingOK(
+                    request.operationCode,
+                    parameters: request.parameters,
+                    dataPhase: .dataIn)
+                let offset = cursor.offset
+                guard onChunk(offset, result.data) else {
+                    throw PTPIPClientSessionError.connectionFailed(
+                        "The progressive media cache rejected a camera chunk.")
+                }
+                // The JNI upcall is synchronous: Kotlin has persisted this
+                // range before returning, so only now may the core cursor
+                // advance its durable resume point.
+                try cursor.advance(by: UInt64(result.data.count))
+            } catch {
+                failure = error.localizedDescription
+                break
+            }
+        }
+
+        if let failure {
+            onFailed(failure)
+        } else if mediaTransferStopIsRequested() {
+            onStopped(cursor.offset)
+        } else {
+            onCompleted(cursor.totalBytes)
+        }
+
+        mediaTransferCondition.lock()
+        mediaTransferActive = false
+        mediaTransferStopRequested = false
+        mediaTransferCondition.broadcast()
+        mediaTransferCondition.unlock()
+    }
+
+    private func mediaTransferStopIsRequested() -> Bool {
+        mediaTransferCondition.lock()
+        defer { mediaTransferCondition.unlock() }
+        return mediaTransferStopRequested
+    }
+
     // MARK: - Live view
 
     /// Poll ceiling for the live-view pump (~30 fps). The camera itself paces
@@ -341,6 +511,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onEnded: @escaping @Sendable () -> Void
     ) throws {
         liveViewCondition.lock()
+        guard !mediaModeActive else {
+            liveViewCondition.unlock()
+            throw PTPIPClientSessionError.mediaModeActive
+        }
         guard !liveViewPumpActive else {
             liveViewCondition.unlock()
             throw PTPIPClientSessionError.liveViewAlreadyActive
@@ -472,6 +646,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// A running live-view pump is stopped (and joined) first, so the wire
     /// order on teardown is always `EndLiveView` → `CloseSession`.
     public func disconnect() {
+        exitMediaMode()
         stopLiveView()
         transactionLock.lock()
         let alreadyClosed = isClosed

@@ -17,9 +17,8 @@ import OpenZCineCore
 public struct FacadeMediaClip: Equatable, Sendable {
     public let handle: UInt32
     public let storageID: UInt32
-    /// On-card size in bytes (PTP `ObjectCompressedSize`, 32-bit — see
-    /// `PTPObjectInfo.compressedSize` for the ≥ 4 GiB caveat).
-    public let sizeBytes: UInt32
+    /// Resolved on-card size in bytes, including Nikon's 64-bit size path.
+    public let sizeBytes: UInt64
     /// PTP date-time string (`YYYYMMDDThhmmss`); empty when the camera omits it.
     public let captureDate: String
     /// Full-image pixel size (0 when the camera omits it).
@@ -27,6 +26,8 @@ public struct FacadeMediaClip: Equatable, Sendable {
     public let pixelHeight: UInt32
     /// Sanitized on-card filename (`MediaClipFilename.safeCameraBasename`).
     public let filename: String
+    /// True only for the proxy formats Android can stream (MOV/MP4/M4V).
+    public let isPlayableProxy: Bool
 }
 
 extension PTPIPClientSession {
@@ -55,15 +56,20 @@ extension PTPIPClientSession {
                     info.isMediaLibraryObject,
                     let filename = MediaClipFilename.safeCameraBasename(info.filename)
                 else { continue }
+                let resolvedSize =
+                    (try? resolvedObjectSize(
+                        handle: handle, reportedSize: UInt64(info.compressedSize)))
+                    ?? UInt64(info.compressedSize)
                 clips.append(
                     FacadeMediaClip(
                         handle: handle,
                         storageID: storageID,
-                        sizeBytes: info.compressedSize,
+                        sizeBytes: resolvedSize,
                         captureDate: info.captureDate,
                         pixelWidth: info.imagePixWidth,
                         pixelHeight: info.imagePixHeight,
-                        filename: filename))
+                        filename: filename,
+                        isPlayableProxy: MediaClipFilename.isPlayableProxy(filename)))
             }
         }
         let proxyStems = MediaClipFilename.playableProxyStems(in: clips.map(\.filename))
@@ -122,7 +128,7 @@ extension PTPIPClientSession {
 /// Flat wire format for the media listing crossing the JNI seam — one clip
 /// per line, tab-separated fields with the (sanitized, tab/newline-free)
 /// filename last:
-/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t filename`.
+/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t playable \t filename`.
 /// The Kotlin mirror lives in
 /// `Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/media/MediaClips.kt`.
 public enum MediaListWire {
@@ -131,7 +137,7 @@ public enum MediaListWire {
             [
                 String(clip.handle), String(clip.storageID), String(clip.sizeBytes),
                 clip.captureDate, String(clip.pixelWidth), String(clip.pixelHeight),
-                clip.filename,
+                clip.isPlayableProxy ? "1" : "0", clip.filename,
             ].joined(separator: "\t")
         }.joined(separator: "\n")
     }

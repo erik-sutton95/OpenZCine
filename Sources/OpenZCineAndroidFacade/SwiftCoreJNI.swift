@@ -418,7 +418,9 @@
     public func swiftCoreSessionListMedia(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, maxObjects: jint
     ) -> jstring? {
-        guard let session = ActiveSessionSlot.shared.current(),
+        guard let session = ActiveSessionSlot.shared.current() else { return nil }
+        session.enterMediaMode()
+        guard
             let clips = try? session.listMedia(maxObjects: Int(maxObjects))
         else { return nil }
         return javaString(env, MediaListWire.encode(clips))
@@ -444,6 +446,183 @@
                 base.assumingMemoryBound(to: jbyte.self))
         }
         return array
+    }
+
+    /// `SwiftCore.sessionExitMediaMode()` — stops any payload transfer, then
+    /// releases media ownership so the monitor may restart live view.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionExitMediaMode")
+    public func swiftCoreSessionExitMediaMode(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.exitMediaMode()
+    }
+
+    /// `SwiftCore.sessionResolveMediaSize(handle, reportedSize): Long` —
+    /// authoritative object length for cache creation, including Nikon's
+    /// 64-bit query when ObjectInfo carried the UINT32 sentinel.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResolveMediaSize")
+    public func swiftCoreSessionResolveMediaSize(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        handle: jint, reportedSize: jlong
+    ) -> jlong {
+        guard reportedSize >= 0, let session = ActiveSessionSlot.shared.current(),
+            let size = try? session.resolvedObjectSize(
+                handle: UInt32(bitPattern: handle), reportedSize: UInt64(reportedSize)),
+            size <= UInt64(Int64.max)
+        else { return -1 }
+        return Int64(size)
+    }
+
+    // MARK: - Media transfer (OPE-34 playback)
+
+    /// Kotlin-side `MediaTransferListener`, retained across the Swift pump
+    /// thread with JNI global references and process-wide method IDs.
+    private struct MediaTransferListenerHandle: @unchecked Sendable {
+        let vm: UnsafeMutablePointer<JavaVM?>
+        let listener: jobject
+        let onStarted: jmethodID
+        let onChunk: jmethodID
+        let onCompleted: jmethodID
+        let onStopped: jmethodID
+        let onFailed: jmethodID
+    }
+
+    /// `SwiftCore.sessionStartMediaTransfer(...)` — validates/resolves the
+    /// object on the caller's IO thread, then the facade pump pushes ordered
+    /// cache chunks from one Swift-owned thread.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartMediaTransfer")
+    public func swiftCoreSessionStartMediaTransfer(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        handle: jint, reportedSize: jlong, resumeOffset: jlong, listener: jobject?
+    ) {
+        let fns = table(env)
+        var vm: UnsafeMutablePointer<JavaVM?>?
+        guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
+        guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
+        guard let cls = fns.GetObjectClass!(env, global),
+            let onStarted = fns.GetMethodID!(env, cls, "onStarted", "(J)V"),
+            let onChunk = fns.GetMethodID!(env, cls, "onChunk", "(J[B)Z"),
+            let onCompleted = fns.GetMethodID!(env, cls, "onCompleted", "(J)V"),
+            let onStopped = fns.GetMethodID!(env, cls, "onStopped", "(J)V"),
+            let onFailed = fns.GetMethodID!(
+                env, cls, "onFailed", "(Ljava/lang/String;)V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        let listenerHandle = MediaTransferListenerHandle(
+            vm: vm, listener: global, onStarted: onStarted, onChunk: onChunk,
+            onCompleted: onCompleted, onStopped: onStopped, onFailed: onFailed)
+
+        func failOnCallerThread(_ message: String) {
+            let value = javaString(env, message)
+            var args = [jvalue(l: value)]
+            fns.CallVoidMethodA!(env, global, onFailed, &args)
+            if let value { fns.DeleteLocalRef!(env, value) }
+            fns.DeleteGlobalRef!(env, global)
+        }
+
+        guard reportedSize >= 0, resumeOffset >= 0 else {
+            failOnCallerThread("Camera-media offsets must not be negative.")
+            return
+        }
+        guard let session = ActiveSessionSlot.shared.current() else {
+            failOnCallerThread("Not connected to a camera.")
+            return
+        }
+
+        do {
+            try session.startMediaTransfer(
+                handle: UInt32(bitPattern: handle),
+                reportedSize: UInt64(reportedSize),
+                resumeOffset: UInt64(resumeOffset),
+                onStarted: { pushMediaStarted(listenerHandle, totalBytes: $0) },
+                onChunk: { pushMediaChunk(listenerHandle, offset: $0, data: $1) },
+                onCompleted: {
+                    finishMediaTransfer(
+                        listenerHandle, method: listenerHandle.onCompleted, value: $0)
+                },
+                onStopped: {
+                    finishMediaTransfer(
+                        listenerHandle, method: listenerHandle.onStopped, value: $0)
+                },
+                onFailed: { finishMediaTransfer(listenerHandle, message: $0) })
+        } catch {
+            failOnCallerThread(error.localizedDescription)
+        }
+    }
+
+    /// `SwiftCore.sessionStopMediaTransfer()` — joins the progressive object
+    /// pump after its terminal callback.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStopMediaTransfer")
+    public func swiftCoreSessionStopMediaTransfer(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.stopMediaTransfer()
+    }
+
+    private func mediaTransferEnvironment(
+        _ handle: MediaTransferListenerHandle
+    ) -> UnsafeMutablePointer<JNIEnv?>? {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var environment: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &environment, nil) == JNI_OK else {
+            return nil
+        }
+        return environment
+    }
+
+    private func pushMediaStarted(
+        _ handle: MediaTransferListenerHandle, totalBytes: UInt64
+    ) {
+        guard let env = mediaTransferEnvironment(handle) else { return }
+        var args = [jvalue(j: Int64(bitPattern: totalBytes))]
+        table(env).CallVoidMethodA!(env, handle.listener, handle.onStarted, &args)
+    }
+
+    private func pushMediaChunk(
+        _ handle: MediaTransferListenerHandle, offset: UInt64, data: Data
+    ) -> Bool {
+        guard let env = mediaTransferEnvironment(handle) else { return false }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(data.count)) else { return false }
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(data.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        var args = [jvalue(j: Int64(bitPattern: offset)), jvalue(l: array)]
+        let accepted = fns.CallBooleanMethodA!(env, handle.listener, handle.onChunk, &args)
+        fns.DeleteLocalRef!(env, array)
+        return accepted != 0
+    }
+
+    private func finishMediaTransfer(
+        _ handle: MediaTransferListenerHandle, method: jmethodID, value: UInt64
+    ) {
+        guard let env = mediaTransferEnvironment(handle) else { return }
+        let fns = table(env)
+        var args = [jvalue(j: Int64(bitPattern: value))]
+        fns.CallVoidMethodA!(env, handle.listener, method, &args)
+        fns.DeleteGlobalRef!(env, handle.listener)
+        // SAFETY: this terminal callback runs on the Swift-owned pump thread.
+        _ = handle.vm.pointee!.pointee.DetachCurrentThread!(handle.vm)
+    }
+
+    private func finishMediaTransfer(
+        _ handle: MediaTransferListenerHandle, message: String
+    ) {
+        guard let env = mediaTransferEnvironment(handle) else { return }
+        let fns = table(env)
+        let value = javaString(env, message)
+        var args = [jvalue(l: value)]
+        fns.CallVoidMethodA!(env, handle.listener, handle.onFailed, &args)
+        if let value { fns.DeleteLocalRef!(env, value) }
+        fns.DeleteGlobalRef!(env, handle.listener)
+        // SAFETY: this terminal callback runs on the Swift-owned pump thread.
+        _ = handle.vm.pointee!.pointee.DetachCurrentThread!(handle.vm)
     }
 
     /// Pushes `discovering → handshaking → connected` copy from the core to the

@@ -174,4 +174,51 @@ object SwiftCore {
      * a background dispatcher.
      */
     external fun sessionThumbnail(handle: Int): ByteArray?
+
+    /**
+     * Releases exclusive camera-media ownership. This stops any progressive
+     * transfer first, then allows monitor live view to resume. Blocking and
+     * safe when idle; call from a background dispatcher.
+     */
+    external fun sessionExitMediaMode()
+
+    /**
+     * Resolves the authoritative 64-bit object size through the shared core,
+     * or -1 when disconnected/rejected. Blocking; call from IO.
+     */
+    external fun sessionResolveMediaSize(handle: Int, reportedSize: Long): Long
+
+    /** Receives one progressive camera-object transfer from Swift. */
+    interface MediaTransferListener {
+        /** The core-resolved 64-bit size before the first chunk. */
+        fun onStarted(totalBytes: Long)
+
+        /** One ordered cache write at [offset]. */
+        fun onChunk(offset: Long, bytes: ByteArray): Boolean
+
+        /** The complete object is now cached. */
+        fun onCompleted(totalBytes: Long)
+
+        /** A requested stop completed after [cachedBytes] were delivered. */
+        fun onStopped(cachedBytes: Long)
+
+        /** Terminal transfer failure with operator-facing copy from Swift. */
+        fun onFailed(message: String)
+    }
+
+    /**
+     * Starts the shared core's object-transfer pump. Kotlin supplies identity
+     * and cache resume state only; Swift owns operation selection, 64-bit
+     * offset math, and chunk policy. Blocking setup, then callbacks arrive on
+     * one Swift-owned thread.
+     */
+    external fun sessionStartMediaTransfer(
+        handle: Int,
+        reportedSize: Long,
+        resumeOffset: Long,
+        listener: MediaTransferListener,
+    )
+
+    /** Stops and joins the active transfer. Blocking and safe when idle. */
+    external fun sessionStopMediaTransfer()
 }

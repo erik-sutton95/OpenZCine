@@ -10,7 +10,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -85,18 +84,36 @@ class MainActivity : ComponentActivity() {
                     // Media browse renders as a full-screen surface OVER the
                     // monitor (iOS-style) so the shell keeps its state; system
                     // back closes it first, like the screen's own X.
-                    var mediaOpen by rememberSaveable { mutableStateOf(false) }
+                    var mediaOpen by rememberSaveable {
+                        mutableStateOf(DemoHarness.opensMedia(intent))
+                    }
+                    val currentSessionState by session.state.collectAsState()
+                    val cameraID =
+                        (currentSessionState as? CameraSessionState.Connected)
+                            ?.identity
+                            ?.let { identity ->
+                                identity.serialNumber.ifBlank {
+                                    "${identity.model}:${identity.name}"
+                                }
+                            }
+                            ?: "camera"
                     Box {
                         MonitorScreen(
                             session,
                             frameSource = demo?.second,
+                            liveViewEnabled = !mediaOpen,
                             onOpenMedia = { mediaOpen = true },
                         )
                         if (mediaOpen) {
-                            MediaBrowseScreen(onClose = { mediaOpen = false })
+                            MediaBrowseScreen(
+                                cameraID = cameraID,
+                                cameraConnected =
+                                    currentSessionState is CameraSessionState.Connected,
+                                autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
+                                onClose = { mediaOpen = false },
+                            )
                         }
                     }
-                    BackHandler(enabled = mediaOpen) { mediaOpen = false }
                 } else {
                     MonitorShell(session, frameSource = demo?.second)
                 }

@@ -99,16 +99,16 @@ struct MediaBrowseTests {
             FacadeMediaClip(
                 handle: 0x1001, storageID: 0x0001_0001, sizeBytes: 1_284_505_600,
                 captureDate: "20260713T101010", pixelWidth: 5760, pixelHeight: 3240,
-                filename: "C0001.MOV"),
+                filename: "C0001.MOV", isPlayableProxy: true),
             FacadeMediaClip(
                 handle: 0x1008, storageID: 0x0001_0001, sizeBytes: 8_400_000,
                 captureDate: "20260714T102030", pixelWidth: 8256, pixelHeight: 5504,
-                filename: "DSC_0007.JPG"),
+                filename: "DSC_0007.JPG", isPlayableProxy: false),
         ]
         #expect(
             MediaListWire.encode(clips) == """
-                4097\t65537\t1284505600\t20260713T101010\t5760\t3240\tC0001.MOV
-                4104\t65537\t8400000\t20260714T102030\t8256\t5504\tDSC_0007.JPG
+                4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t1\tC0001.MOV
+                4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\tDSC_0007.JPG
                 """)
         #expect(MediaListWire.encode([]).isEmpty)
     }
@@ -125,6 +125,9 @@ struct MediaBrowseTests {
             UInt16(ProcessInfo.processInfo.environment["ZC_FAKE_ZR_PORT"] ?? "") ?? 15_740
         if ProcessInfo.processInfo.environment["ZC_FAKE_ZR_CLIPS"] == "0" {
             options.mediaObjects = []
+        }
+        if let path = ProcessInfo.processInfo.environment["ZC_FAKE_ZR_MEDIA"] {
+            options.mediaPayloadFileURL = URL(fileURLWithPath: path)
         }
         let server = try FakeZRServer(options: options)
         print("fake ZR serving on 127.0.0.1:\(server.port) — Ctrl-C to stop")

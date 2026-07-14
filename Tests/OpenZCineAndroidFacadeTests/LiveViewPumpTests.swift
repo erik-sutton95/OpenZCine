@@ -125,6 +125,35 @@ struct LiveViewPumpTests {
         }
     }
 
+    @Test func mediaOwnershipStopsAndExcludesLiveViewUntilReleased() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let first = FrameCollector()
+        try session.startLiveView(
+            onFrame: { frame, timestamp in first.record(frame, at: timestamp) },
+            onEnded: { first.markEnded() })
+        try first.waitForFrames(atLeast: 1)
+
+        session.enterMediaMode()
+        #expect(first.ended)
+        #expect(!server.isLiveViewActive())
+        #expect(throws: PTPIPClientSessionError.mediaModeActive) {
+            try session.startLiveView(onFrame: { _, _ in }, onEnded: {})
+        }
+
+        session.exitMediaMode()
+        let resumed = FrameCollector()
+        try session.startLiveView(
+            onFrame: { frame, timestamp in resumed.record(frame, at: timestamp) },
+            onEnded: { resumed.markEnded() })
+        try resumed.waitForFrames(atLeast: 1)
+        session.stopLiveView()
+        #expect(resumed.ended)
+    }
+
     /// Not a test: an opt-in dev server for the on-device end-to-end. Run
     /// `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForDevice` on the
     /// Mac, `adb reverse tcp:15740 tcp:15740`, then launch the app with
