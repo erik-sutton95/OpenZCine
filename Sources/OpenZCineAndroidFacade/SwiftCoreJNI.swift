@@ -407,6 +407,45 @@
         _ = invoke.DetachCurrentThread!(handle.vm)
     }
 
+    // MARK: - Media browse (OPE-34)
+
+    /// `SwiftCore.sessionListMedia(maxObjects): String?` — lists browsable
+    /// media on the active session's cards (bounded enumeration; see
+    /// `PTPIPClientSession.listMedia`), flattened per `MediaListWire`. Null
+    /// when disconnected or the listing failed; empty string for an empty
+    /// card. Blocking; Kotlin calls it from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionListMedia")
+    public func swiftCoreSessionListMedia(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, maxObjects: jint
+    ) -> jstring? {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let clips = try? session.listMedia(maxObjects: Int(maxObjects))
+        else { return nil }
+        return javaString(env, MediaListWire.encode(clips))
+    }
+
+    /// `SwiftCore.sessionThumbnail(handle): ByteArray?` — the camera's
+    /// embedded thumbnail JPEG for one object (`GetThumb`). Null when
+    /// disconnected, rejected, or the object has no thumbnail. Blocking;
+    /// Kotlin calls it from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionThumbnail")
+    public func swiftCoreSessionThumbnail(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+    ) -> jbyteArray? {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let jpeg = try? session.thumbnail(handle: UInt32(bitPattern: handle))
+        else { return nil }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else { return nil }
+        jpeg.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(jpeg.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        return array
+    }
+
     /// Pushes `discovering → handshaking → connected` copy from the core to the
     /// registered listener, then releases it.
     private func pushDemoPhases(_ handle: ListenerHandle) {

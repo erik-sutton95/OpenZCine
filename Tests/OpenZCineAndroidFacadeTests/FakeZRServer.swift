@@ -36,6 +36,9 @@ final class FakeZRServer: @unchecked Sendable {
         /// counter advances by wall clock at this period, so a slow poller
         /// sees counter gaps (frames dropped at the source, never queued).
         var liveViewFrameIntervalNanoseconds: UInt64 = 40_000_000  // 25 fps
+        /// Scripted card contents served by the storage/object operations
+        /// (`FakeZRMediaCard.objects` by default; empty = an empty card).
+        var mediaObjects: [FakeZRMediaObject] = FakeZRMediaCard.objects
         var cameraName = "ZR_6001234"
         var pairingPIN = "1234"
         var batteryPercent: UInt8 = 80
@@ -227,6 +230,41 @@ final class FakeZRServer: @unchecked Sendable {
             sendDataIn(
                 connection, data: liveViewObject(frameIndex: frameIndex),
                 transactionID: transactionID)
+        case .getVendorStorageIDs, .getStorageIDs:
+            // One valid volume (both ops report the same card, like a
+            // single-card body).
+            let payload = ByteCoding.uint32LE(1) + ByteCoding.uint32LE(FakeZRMediaCard.storageID)
+            sendDataIn(connection, data: Data(payload), transactionID: transactionID)
+        case .getObjectHandles:
+            let storageID = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            guard storageID == FakeZRMediaCard.storageID else {
+                // Invalid_StorageID.
+                sendResponse(connection, code: 0x2008, transactionID: transactionID)
+                return
+            }
+            var payload = ByteCoding.uint32LE(UInt32(options.mediaObjects.count))
+            for object in options.mediaObjects {
+                payload += ByteCoding.uint32LE(object.handle)
+            }
+            sendDataIn(connection, data: Data(payload), transactionID: transactionID)
+        case .getObjectInfo:
+            let handle = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            guard let object = options.mediaObjects.first(where: { $0.handle == handle }) else {
+                // Invalid_ObjectHandle.
+                sendResponse(connection, code: 0x2009, transactionID: transactionID)
+                return
+            }
+            sendDataIn(connection, data: objectInfoDataset(object), transactionID: transactionID)
+        case .getThumb:
+            let handle = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            guard let object = options.mediaObjects.first(where: { $0.handle == handle }),
+                !object.thumbnail.isEmpty
+            else {
+                // No_Thumbnail_Present.
+                sendResponse(connection, code: 0x2010, transactionID: transactionID)
+                return
+            }
+            sendDataIn(connection, data: Data(object.thumbnail), transactionID: transactionID)
         case .getDevicePropValueEx:
             let propertyCode = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
             switch PTPPropertyCode(rawValue: propertyCode) {
@@ -288,6 +326,33 @@ final class FakeZRServer: @unchecked Sendable {
         header[834] = UInt8((frameIndex >> 8) & 0xFF)
         header[835] = UInt8(frameIndex & 0xFF)
         return Data(header + jpeg)
+    }
+
+    /// Standard PTP `ObjectInfo` dataset (PIMA 15740 §5.3.1): the 52-byte
+    /// fixed prefix, then filename / capture date / modification date /
+    /// keywords strings — the layout `PTPObjectInfo` decodes.
+    private func objectInfoDataset(_ object: FakeZRMediaObject) -> Data {
+        var bytes: [UInt8] = []
+        bytes += ByteCoding.uint32LE(FakeZRMediaCard.storageID)  // @0  StorageID
+        bytes += ByteCoding.uint16LE(object.objectFormat)  // @4  ObjectFormat
+        bytes += ByteCoding.uint16LE(0)  // @6  ProtectionStatus
+        bytes += ByteCoding.uint32LE(object.sizeBytes)  // @8  ObjectCompressedSize
+        bytes += ByteCoding.uint16LE(0x3801)  // @12 ThumbFormat (EXIF JPEG)
+        bytes += ByteCoding.uint32LE(UInt32(object.thumbnail.count))  // @14 ThumbCompressedSize
+        bytes += ByteCoding.uint32LE(160)  // @18 ThumbPixWidth
+        bytes += ByteCoding.uint32LE(90)  // @22 ThumbPixHeight
+        bytes += ByteCoding.uint32LE(object.pixelWidth)  // @26 ImagePixWidth
+        bytes += ByteCoding.uint32LE(object.pixelHeight)  // @30 ImagePixHeight
+        bytes += ByteCoding.uint32LE(0)  // @34 ImageBitDepth
+        bytes += ByteCoding.uint32LE(0)  // @38 ParentObject
+        bytes += ByteCoding.uint16LE(0)  // @42 AssociationType
+        bytes += ByteCoding.uint32LE(0)  // @44 AssociationDesc
+        bytes += ByteCoding.uint32LE(0)  // @48 SequenceNumber
+        bytes += ptpString(object.filename)
+        bytes += ptpString(object.captureDate)
+        bytes += ptpString("")  // ModificationDate
+        bytes += ptpString("")  // Keywords
+        return Data(bytes)
     }
 
     /// PTP string: UINT8 code-unit count (including trailing NUL) + UTF-16LE units.
