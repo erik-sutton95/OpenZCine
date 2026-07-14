@@ -373,3 +373,23 @@ a facade of a dozen coarse functions, hand-written `@_cdecl` shims
 (`Sources/OpenZCineAndroidFacade`, importing the NDK's `<jni.h>` through the header-only `CJNI`
 target) cost ~150 lines and zero new dependencies. Revisit jextract when its runtime jars reach
 Maven Central and the API stabilizes; the facade surface is deliberately small enough to migrate.
+
+**Session layer landed (2026-07-14):** the facade now carries the PTP-IP protocol/session slice
+(`Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift`), with sockets Swift-side per shape 2
+above — the facade is the Android platform adapter, so a blocking POSIX twin of the iOS
+`PTPIPSocket` lives inside it and the JNI surface stays coarse. Facade functions to date:
+
+- `coreVersion()`, `deriveAccessPointSSID(name)`, `resolveDisplayName(name)`,
+  `startConnectionDemo(listener)` (spike surface), and the session slice:
+- `sessionConnect(host, listener)` — Init handshake on both channels + the Nikon
+  open/pair/identify sequence (quiet saved-profile attempt, falling back to first-time pairing
+  with the PIN pushed via the listener), phases mirroring `CameraConnectionPhase`;
+- `sessionReadProperty(code)` — `GetDevicePropValueEx` decoded by the core
+  (battery → percent, others raw hex until their display decoders are wired);
+- `sessionDisconnect()` — best-effort `CloseSession` before dropping sockets (the iOS
+  reconnect-wedge fix semantics).
+
+The layer compiles on Darwin too, so `Tests/OpenZCineAndroidFacadeTests` exercises the same wire
+behavior against a scripted fake ZR (`FakeZRServer`) in `swift test` — sequencing, the pairing
+fallback, property decode, and graceful teardown; real-ZR validation of connect + property read
+is the remaining hardware step.
