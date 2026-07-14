@@ -10,9 +10,9 @@ let package = Package(
     ],
     products: [
         .library(name: "OpenZCineCore", targets: ["OpenZCineCore"]),
-        // JNI facade consumed by the Android app (`just android-core`). The facade
-        // sources are fully `#if os(Android)`-gated, so on Darwin this product
-        // compiles to an empty module and iOS/macOS behavior is unchanged.
+        // JNI facade consumed by the Android app (`just android-core`). The JNI
+        // shims are `#if os(Android)`-gated; on Darwin only the platform-neutral
+        // wire helpers compile, so iOS/macOS behavior is unchanged.
         .library(
             name: "OpenZCineAndroid", type: .dynamic, targets: ["OpenZCineAndroidFacade"]),
     ],
@@ -39,9 +39,10 @@ let package = Package(
             name: "OpenZCineAndroidFacade",
             dependencies: ["OpenZCineCore", "CJNI"]
         ),
-        // Exercises the facade's PTP-IP session layer against a scripted fake
-        // camera server; runs on Darwin (and on Android via the cross-compile
-        // test path from the feasibility experiment).
+        // Runs on Darwin (and on Android via the cross-compile test path):
+        // the PTP-IP session layer against a scripted fake camera server, and
+        // the platform-independent zone-map wire format (MonitorZoneMapWire).
+        // The JNI shims themselves stay Android-only.
         .testTarget(
             name: "OpenZCineAndroidFacadeTests",
             dependencies: ["OpenZCineAndroidFacade", "OpenZCineCore"]

@@ -85,6 +85,42 @@
         return javaString(env, display)
     }
 
+    // MARK: - Monitor layout
+
+    /// `SwiftCore.monitorZoneMap(...): FloatArray` — the shared core's
+    /// `MonitorZoneLayout.map` flattened per `MonitorZoneMapWire` (records of
+    /// `[kind, style, x, y, width, height]`). The Compose shell consumes the
+    /// same zone frames the iOS shell does; no layout math lives in Kotlin.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_monitorZoneMap")
+    public func swiftCoreMonitorZoneMap(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        viewportWidth: jfloat, viewportHeight: jfloat,
+        safeTop: jfloat, safeLeading: jfloat, safeBottom: jfloat, safeTrailing: jfloat,
+        mode: jint, isPortrait: jboolean, aspectFill: jboolean,
+        scopeCount: jint, mirrored: jboolean, bottomBarHeight: jfloat
+    ) -> jfloatArray? {
+        let flat = MonitorZoneMapWire.flattened(
+            viewportWidth: Double(viewportWidth),
+            viewportHeight: Double(viewportHeight),
+            safeTop: Double(safeTop),
+            safeLeading: Double(safeLeading),
+            safeBottom: Double(safeBottom),
+            safeTrailing: Double(safeTrailing),
+            mode: Int(mode),
+            isPortrait: isPortrait != 0,
+            aspectFill: aspectFill != 0,
+            scopeCount: Int(scopeCount),
+            mirrored: mirrored != 0,
+            bottomBarHeight: Double(bottomBarHeight)
+        )
+        let fns = table(env)
+        guard let array = fns.NewFloatArray!(env, jsize(flat.count)) else { return nil }
+        flat.withUnsafeBufferPointer { buffer in
+            fns.SetFloatArrayRegion!(env, array, 0, jsize(flat.count), buffer.baseAddress)
+        }
+        return array
+    }
+
     // MARK: - Callback / streaming shape
 
     /// Listener state that crosses to the pushing thread.

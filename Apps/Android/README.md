@@ -1,7 +1,12 @@
 # OpenZCine Android
 
-Production Jetpack Compose shell — early scaffold. One placeholder monitor screen
-(black feed area, "No camera" state) wired through the camera-core seam.
+Production Jetpack Compose shell. The landscape monitor screen is a 1:1 port of the iOS
+shell's chrome, laid out by the shared core's zone map (`SwiftCore.monitorZoneMap` →
+`MonitorZoneLayout.map`) — no layout math lives in Kotlin. v1 covers the live feed, top
+info deck, capture readout strip, lock/battery band, and the record/DISP/media/settings
+rail with DISP 1↔2 cycling; assists, scopes, pickers, and portrait land later. Readouts
+are fake demo values until the session facade arrives. Without the staged Swift core the
+app falls back to the placeholder monitor ("No camera").
 
 - **Build:** `just android-build` from the repo root (or `just android-check` for build + tests + lint).
 - **Swift core:** the camera brain is the shared Swift core (`Sources/OpenZCineCore`), cross-compiled

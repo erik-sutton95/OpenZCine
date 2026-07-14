@@ -1,8 +1,14 @@
 package com.opencapture.openzcine
 
 import android.content.pm.ApplicationInfo
+import android.graphics.Color
 import android.net.nsd.NsdManager
 import android.os.Bundle
+import android.view.WindowManager
+import androidx.activity.SystemBarStyle
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.FakeCameraSession
 import com.opencapture.openzcine.core.LiveFrameSource
@@ -34,7 +41,28 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
-        enableEdgeToEdge()
+        // Camera-monitor chrome owns the whole panel, like the iOS shell:
+        // sticky-immersive system bars (hidden; a swipe reveals them
+        // transiently and they re-hide), forced-dark transparent bar styling
+        // so the transient overlay is never an opaque white band, and
+        // shortEdges cutout mode so the feed draws under the punch-hole (the
+        // cutout arrives as a safe-area inset for the zone map).
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
+        window.isNavigationBarContrastEnforced = false
+        window.attributes.layoutInDisplayCutoutMode =
+            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        // BEHAVIOR_DEFAULT, not TRANSIENT_BARS_BY_SWIPE: the swipe reveal is
+        // equally transient on this device under both, but only DEFAULT emits
+        // the legacy system-UI visibility event MonitorScreen listens to for
+        // the rail shift (verified on the SM-A127F — transient mode emits no
+        // observable signal at all).
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
         // ponytail: fake backend by default until the real core lands behind
         // the seam; DI arrives with the first production implementation. Two
         // debug-only overrides: the demo harness (synthetic feed) wins, then
@@ -45,7 +73,14 @@ class MainActivity : ComponentActivity() {
                 ?: if (isNsdTransportRequested()) nsdTransportSession() else FakeCameraSession()
         setContent {
             OpenZCineTheme {
-                MonitorShell(session, frameSource = demo?.second)
+                if (SwiftCore.isAvailable) {
+                    // The real shell needs the shared core's zone map. An APK
+                    // built without `just android-core` (plain CI android-check)
+                    // has no native library, so it keeps the placeholder.
+                    MonitorScreen(session, frameSource = demo?.second)
+                } else {
+                    MonitorShell(session, frameSource = demo?.second)
+                }
             }
         }
     }
