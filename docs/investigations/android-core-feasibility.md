@@ -1,6 +1,6 @@
 # Android core feasibility: Swift core reuse vs Kotlin PTP-IP port
 
-Status: decision pending a local cross-compile experiment (recommendation below).
+Status: **CONFIRMED** — the cross-compile experiment passed (see the addendum at the end).
 Scope: gates the Android epic ([discussion #19](https://github.com/erik-sutton95/OpenZCine/discussions/19),
 issues #69–#81). Tracked as issue #68 / Kaneo OPE-25.
 
@@ -272,3 +272,93 @@ near-copy, not new design.
 
 swift.org sources span Oct 2025 – Mar 2026; skip.dev porting docs and the CI action are
 current 2026; binary-size figures are 2026 third-party blogs, not official numbers.
+
+## Experiment results (2026-07-14) — decision CONFIRMED
+
+The Phase 0 confirmation experiment was run locally on an Apple Silicon Mac. Every unknown listed
+in the decision section was retired; none flipped the decision.
+
+### Versions used
+
+| Component | Version |
+| --- | --- |
+| Swift toolchain (swiftly, swift.org open source) | 6.3.3 (`swift-6.3.3-RELEASE`) — the bundle requires an exact match; Xcode's 6.3.2 cannot drive it |
+| Swift-on-Android artifactbundle | `swift-6.3.3-RELEASE_android` from download.swift.org (checksum-verified `swift sdk install`) |
+| Android NDK | r27d (`setup-android-sdk.sh` links `ndk-sysroot` into the bundle) |
+| Target triple | `aarch64-unknown-linux-android28` |
+| swift-crypto | 3.15.1 (resolved from `from: "3.0.0"`) |
+| Test device | Android emulator, API 28 `default;arm64-v8a` image, arm64 host (native, no translation) |
+
+### Build outcome
+
+`swift build --swift-sdk aarch64-unknown-linux-android28` (debug and release) **succeeds** for the
+whole package — all 55 core files plus the 58 test files — after a three-file diff:
+
+1. `Package.swift` — add `apple/swift-crypto` with the `Crypto` product gated
+   `.when(platforms: [.linux, .android])`, so Darwin builds do not link it (a `Package.resolved`
+   pin is the only Darwin-visible artifact).
+2. `Sources/OpenZCineCore/Frameio/FrameioOAuth.swift` — `#if canImport(CryptoKit)` / `import
+   Crypto` for the one SHA256 call, exactly as planned. **One surprise beyond the plan:** the
+   audit missed that `URLRequest` (used by the three Frame.io token-request builders in this same
+   file) lives in FoundationNetworking on non-Darwin. Importing FoundationNetworking works but
+   drags libcurl/ICU into the payload and its static variant is missing from the 6.3.3 bundle
+   (`-l_CFURLSessionInterface` link failure under `--static-swift-stdlib`). Since the Android
+   shell owns HTTP (OkHttp) and would never consume `URLRequest`, the three builders are now
+   `#if !os(Android)` instead; the pure PKCE/URL/parse logic compiles everywhere.
+3. `Tests/OpenZCineCoreTests/FrameioOAuthTests.swift` — the two tests covering those builders get
+   the same gate.
+
+Darwin behavior is untouched: `just check` and `just native-check` are green, all 650 tests pass
+on macOS.
+
+### Binary size (release, arm64, stripped with `llvm-strip`)
+
+| Artifact | Size |
+| --- | --- |
+| `libOpenZCineCore.so` (entire core + statically linked swift-crypto) | **3.9 MB** (20 MB unstripped) |
+| Required runtime `.so` set from the bundle (as currently linked, incl. ICU) | 76.9 MB |
+| — of which `lib_FoundationICU.so` 40.6 MB + `libFoundation.so` 8.6 MB + `libFoundationInternationalization.so` 3.6 MB | 52.8 MB |
+| Same payload gzip-compressed (≈ download cost) | 26.6 MB |
+| Runtime subset if the umbrella-Foundation symbols are migrated (see ICU below) | 24.1 MB |
+
+`--static-swift-stdlib` does not apply when the product is a dynamic library (it silently keeps
+dynamic runtime linking), so the shipped-runtime numbers above are the realistic packaging shape —
+the same one the official swift-android-examples use (runtime `.so` files in `jniLibs`).
+
+### ICU finding
+
+ICU **is** currently linked, but not for the suspected reason. The 8 `String(format:)` sites (and
+everything else) bind **zero** symbols from `libFoundationInternationalization.so` directly; the
+`NEEDED` entries come from the umbrella `libFoundation.so`, which the build autolinks because 18
+symbols resolve there rather than in `libFoundationEssentials.so` (which serves the other 88):
+`String(format:)`, the static `CharacterSet` sets (`.whitespaces`, `.newlines`, …),
+`NSString.pathExtension`/`lastPathComponent`/`deletingPathExtension`,
+`StringProtocol.components(separatedBy:)`/`trimmingCharacters(in:)`/`caseInsensitiveCompare`/
+`range(of:)`, and `Error.localizedDescription`. The umbrella hard-depends on Internationalization
+and ICU, so they ride along (~53 MB uncompressed). All 18 call sites are mechanically replaceable
+with Essentials-only equivalents, which would drop the per-ABI payload from ~82 MB to ~30 MB
+uncompressed — worthwhile Phase 5 (size-audit) work, **not** a feasibility blocker.
+
+### Test run on Android
+
+The full core test suite was executed **on an Android 28 arm64 emulator** (headless, local): the
+cross-built `OpenZCinePackageTests.xctest` executable plus the runtime `.so` set were pushed via
+`adb` to `/data/local/tmp` and run with `--testing-library swift-testing`.
+
+Result: **648 of 648 tests in 22 suites passed** (1.2 s) — the two gated URLRequest-builder tests
+are Darwin-only by design, all other 648 run identically to macOS. Byte-exact protocol codecs,
+layout golden-parity suites, and colorimetry curves all pass unmodified on Android. This also
+retires the strict-concurrency-runtime unknown for everything the tests exercise.
+
+### Verdict
+
+**CONFIRMED — Option A stands.** The core cross-compiles with a three-file, Darwin-identical diff;
+the artifact is 3.9 MB; the test suite passes on-device unmodified. Caveats carried forward:
+
+- The runtime payload is ~82 MB/ABI uncompressed (~27 MB gzipped) until the 18 umbrella-Foundation
+  call sites are migrated to Essentials-only APIs (→ ~30 MB); track under the Phase 5 size audit.
+- `--static-swift-stdlib` is not usable for the `.so` packaging shape today; plan on shipping the
+  runtime `.so` set like the official examples do.
+- Do not reintroduce `import FoundationNetworking` into the core — it adds 16 MB, re-links ICU
+  transitively, and its static archives are incomplete in the 6.3.3 bundle.
+- swift-java/JNI facade and on-device debugging remain untested (Phase 1 scope, as planned).

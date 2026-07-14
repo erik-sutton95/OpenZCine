@@ -39,28 +39,32 @@ private let config = FrameioConfiguration(
     #expect(items["scope"]?.isEmpty == false)
 }
 
-@Test func tokenExchangeRequestIsFormPost() throws {
-    let req = FrameioOAuth.tokenExchangeRequest(config: config, code: "auth-code", verifier: "v123")
-    #expect(req.httpMethod == "POST")
-    #expect(
-        req.url?.absoluteString
-            == "https://ims-na1.adobelogin.com/ims/token/v3?client_id=test-client-id")
-    #expect(
-        req.value(forHTTPHeaderField: "Content-Type") == "application/x-www-form-urlencoded")
-    let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
-    #expect(body.contains("grant_type=authorization_code"))
-    #expect(body.contains("code=auth-code"))
-    #expect(body.contains("code_verifier=v123"))
-    #expect(body.contains("client_id=test-client-id"))
-}
+// The URLRequest builders are Darwin-only (see FrameioOAuth.swift); Android shells own HTTP.
+#if !os(Android)
+    @Test func tokenExchangeRequestIsFormPost() throws {
+        let req = FrameioOAuth.tokenExchangeRequest(
+            config: config, code: "auth-code", verifier: "v123")
+        #expect(req.httpMethod == "POST")
+        #expect(
+            req.url?.absoluteString
+                == "https://ims-na1.adobelogin.com/ims/token/v3?client_id=test-client-id")
+        #expect(
+            req.value(forHTTPHeaderField: "Content-Type") == "application/x-www-form-urlencoded")
+        let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+        #expect(body.contains("grant_type=authorization_code"))
+        #expect(body.contains("code=auth-code"))
+        #expect(body.contains("code_verifier=v123"))
+        #expect(body.contains("client_id=test-client-id"))
+    }
 
-@Test func refreshRequestUsesRefreshGrant() throws {
-    let req = FrameioOAuth.refreshRequest(config: config, refreshToken: "r456")
-    let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
-    #expect(body.contains("grant_type=refresh_token"))
-    #expect(body.contains("refresh_token=r456"))
-    #expect(body.contains("client_id=test-client-id"))
-}
+    @Test func refreshRequestUsesRefreshGrant() throws {
+        let req = FrameioOAuth.refreshRequest(config: config, refreshToken: "r456")
+        let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+        #expect(body.contains("grant_type=refresh_token"))
+        #expect(body.contains("refresh_token=r456"))
+        #expect(body.contains("client_id=test-client-id"))
+    }
+#endif
 
 @Test func urlSchemeExtractsAdobeNativeAppRedirect() {
     let uri = "adobe+abc123://adobeid/727e9081b73a46b286d6f491ed0ff602"

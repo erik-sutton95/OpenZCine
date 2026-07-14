@@ -24,6 +24,8 @@
     "ios/**",
     "android/**",
     "build/**",
+    // SwiftPM dependency checkouts and build products.
+    ".build/**",
     "**/node_modules/**"
   ]
 }
