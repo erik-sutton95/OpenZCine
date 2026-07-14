@@ -162,9 +162,19 @@ android-build:
 android-test:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew test
 
+# Compile the Android instrumentation-test APK without requiring a device.
+# `android-check` includes this gate so UI-test source never silently rots in CI.
+android-ui-test-compile:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew :app:assembleDebugAndroidTest
+
+# Run Android instrumentation/UI tests on a connected arm64-v8a device or emulator.
+# The production app is arm64-only until another ABI has a verified Swift runtime.
+android-ui-test:
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew connectedDebugAndroidTest
+
 # Run all Android checks: build, unit tests, and Android lint.
 android-check:
-    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug test lint
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug :app:assembleDebugAndroidTest test lint
 
 # Generate the Play upload keystore into gitignored .local/ (never committed;
 # refuses to overwrite). keytool prompts for the store password interactively.

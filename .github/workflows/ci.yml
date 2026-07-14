@@ -152,9 +152,8 @@ jobs:
           build-tests: false
           run-tests: false
 
-      - name: Build, unit-test, lint, and verify release packages
+      - name: Build, compile UI tests, unit-test, lint, and verify release packages
         working-directory: Apps/Android
         env:
-          SWIFT_EXECUTABLE: ${{ steps.swift-android.outputs.swift-install }}/bin/swift
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
-        run: ./gradlew assembleDebug test lint verifyReleaseNativeLibraries
+        run: ./gradlew assembleDebug :app:assembleDebugAndroidTest test lint verifyReleaseNativeLibraries

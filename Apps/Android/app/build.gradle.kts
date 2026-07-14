@@ -40,6 +40,7 @@ android {
         targetSdk = 36
         versionCode = resolvedVersionCode
         versionName = resolvedVersionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += supportedAndroidAbi
@@ -165,4 +166,13 @@ dependencies {
 
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
+
+    debugImplementation(libs.compose.ui.test.manifest)
 }

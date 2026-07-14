@@ -41,6 +41,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick as semanticsOnClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 
@@ -296,7 +302,22 @@ fun RecordButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
 ) {
-    Canvas(modifier.chromeClickable(enabled = enabled, onClick = onClick)) {
+    val actionLabel = if (recording) "Stop recording" else "Start recording"
+    Canvas(
+        modifier
+            .chromeClickable(enabled = enabled, onClick = onClick)
+            .semantics {
+                contentDescription = actionLabel
+                stateDescription = if (recording) "Recording" else "Standby"
+                role = Role.Button
+                if (enabled) {
+                    semanticsOnClick(label = actionLabel) {
+                        onClick()
+                        true
+                    }
+                }
+            },
+    ) {
         val d = size.minDimension
         val center = Offset(size.width / 2, size.height / 2)
         if (recording) {
