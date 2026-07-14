@@ -42,3 +42,12 @@ time. Two things to know:
 
 Ideas live in GitHub Discussions (Ideas & Feature Requests) and are mirrored onto the board as
 `planned` + `investigation` tasks referencing the discussion number.
+
+## Attachments
+
+Task photos/attachments are stored in S3-compatible object storage (Backblaze B2). Uploads go
+directly from the browser to the bucket via presigned URLs, so the bucket carries a CORS rule
+allowing `PUT` from the Kaneo origin — note that B2's web console cannot create upload CORS
+rules; they must be set with the `b2` CLI. Files are private: reads are served back through
+Kaneo's authenticated API, so embedded images may not render for anonymous visitors on the
+public board view.
