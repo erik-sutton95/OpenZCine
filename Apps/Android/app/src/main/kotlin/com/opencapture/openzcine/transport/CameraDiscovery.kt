@@ -63,9 +63,15 @@ class CameraDiscovery(private val browser: NsdBrowser) {
             .scan(emptyMap<String, DiscoveredCamera>()) { known, event ->
                 when (event) {
                     is NsdEvent.ServiceResolved ->
-                        known +
-                            (event.serviceName to
-                                DiscoveredCamera(event.serviceName, event.host, event.port))
+                        if (isSupportedPtpIpDiscoveryHost(event.host)) {
+                            known +
+                                (event.serviceName to
+                                    DiscoveredCamera(event.serviceName, event.host, event.port))
+                        } else {
+                            // A service can re-resolve after a network change. Do not leave its
+                            // previous IPv4 address selectable if the new endpoint is unusable.
+                            known - event.serviceName
+                        }
                     is NsdEvent.ServiceLost -> known - event.serviceName
                     is NsdEvent.ServiceFound -> known
                 }
@@ -92,6 +98,33 @@ class CameraDiscovery(private val browser: NsdBrowser) {
          * — mirrors `CameraWiFiSSID.nikonAccessPointPrefix` in the shared core.
          */
         const val NIKON_ZR_SSID_PREFIX: String = "NIKON_ZR_"
+
+        /**
+         * Whether an NSD-resolved host is usable by the current PTP-IP stack.
+         *
+         * The Swift PTP-IP facade only opens numeric IPv4 sockets. This mirrors the iOS
+         * discovery path: Bonjour first limits results to `AF_INET`, then the shared
+         * `CameraDiscovery.isDefaultScanIPv4` policy retains only the supported private
+         * ranges. Keep the small parser here instead of crossing JNI: discovery must remain
+         * safe and JVM-testable when the optional Swift library is not installed.
+         *
+         * The default shared policy deliberately excludes `10/8`, even though it is RFC 1918,
+         * so mDNS discovery does not broaden the camera search beyond the iOS default scope.
+         */
+        internal fun isSupportedPtpIpDiscoveryHost(host: String): Boolean {
+            val octets = host.split('.')
+            if (octets.size != 4) return false
+
+            val values =
+                octets.map { octet ->
+                    if (octet.isEmpty() || octet.any { !it.isDigit() }) return false
+                    octet.toIntOrNull() ?: return false
+                }
+            if (values.any { it !in 0..255 }) return false
+
+            return (values[0] == 172 && values[1] in 16..31) ||
+                (values[0] == 192 && values[1] == 168)
+        }
 
         /** Direct-host camera for the camera-AP case; no mDNS browse needed. */
         fun accessPointCamera(): DiscoveredCamera =
