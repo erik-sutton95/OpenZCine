@@ -73,6 +73,40 @@ object SwiftCore {
      */
     external fun startConnectionDemo(listener: ConnectionPhaseListener)
 
+    // ── Feed effects (colour math baked in the core, uploaded by Kotlin) ──
+
+    /**
+     * A built-in monitor look baked by the core into a packed-2D RGBA8 grid
+     * (`size³ × 4` bytes) for a `width = size²`, `height = size` texture:
+     * pixel `(x = b·size + r, y = g)` — slice tiles along x, so a shader
+     * trilinearly samples with two bilinear taps. Null for an unknown
+     * [lookOrdinal] (`FeedLut.wireOrdinal`) or size outside 2–64. Bake once
+     * per selection (the cube generation is ~10⁵ transcendental calls), never
+     * per frame.
+     */
+    external fun bakeLut(lookOrdinal: Int, size: Int): ByteArray?
+
+    /**
+     * The core's false-colour cube (64³) in the same packed-2D RGBA8 grid.
+     * [scaleOrdinal] is `FeedFalseColorScale.wireOrdinal`; [curveOrdinal]
+     * selects the signal curve (0 = Log3G10, 1 = N-Log). Null for unknown
+     * ordinals.
+     */
+    external fun bakeFalseColorCube(scaleOrdinal: Int, curveOrdinal: Int): ByteArray?
+
+    /**
+     * Assist thresholds on the normalized 0–1 code axis:
+     * `[deLogBlack, deLogClip, zebraHighlight, zebraMidtoneCentre]` — the
+     * peaking de-log anchors and zebra comparison codes, computed by the
+     * core's `ExposureSignalMapping` for [curveOrdinal] and the given
+     * monitor-percent thresholds. Null for an unknown curve ordinal.
+     */
+    external fun feedEffectsScalars(
+        curveOrdinal: Int,
+        zebraHighlightIre: Float,
+        zebraMidtoneIre: Float,
+    ): FloatArray?
+
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 
     /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */

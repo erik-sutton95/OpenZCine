@@ -34,4 +34,14 @@ app falls back to the placeholder monitor ("No camera").
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
+- **Feed effects (view assists):** `FeedEffectsRenderer` bakes LUT preview, false colour,
+  focus peaking, and zebras into the live feed in one AGSL pass. All colour math is baked in
+  the shared Swift core (`Sources/OpenZCineAndroidFacade/FeedEffectsWire.swift` — cubes from
+  `MonitorLUT`/`FalseColorMap`, thresholds from `ExposureSignalMapping`); Kotlin only uploads
+  textures/uniforms and interpolates. Requires **API 33 (AGSL)** and the staged Swift core —
+  below that the plain feed still renders (minSdk 29) and a warning is logged. Debug-only
+  activation until the assist toolbar lands:
+  `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
+  --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
+  with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).

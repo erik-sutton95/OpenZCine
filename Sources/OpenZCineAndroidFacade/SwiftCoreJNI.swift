@@ -42,6 +42,32 @@
         return String(cString: chars)
     }
 
+    /// Copies a Swift byte buffer into a new JVM `byte[]` local reference.
+    private func javaByteArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ bytes: [UInt8]
+    ) -> jbyteArray? {
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(bytes.count)) else { return nil }
+        bytes.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(bytes.count), base.assumingMemoryBound(to: jbyte.self))
+        }
+        return array
+    }
+
+    /// Copies a Swift float buffer into a new JVM `float[]` local reference.
+    private func javaFloatArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [Float]
+    ) -> jfloatArray? {
+        let fns = table(env)
+        guard let array = fns.NewFloatArray!(env, jsize(values.count)) else { return nil }
+        values.withUnsafeBufferPointer { buffer in
+            fns.SetFloatArrayRegion!(env, array, 0, jsize(values.count), buffer.baseAddress)
+        }
+        return array
+    }
+
     // MARK: - Info
 
     /// `SwiftCore.coreVersion(): String` — proves the Swift core is alive in-process.
@@ -119,6 +145,53 @@
             fns.SetFloatArrayRegion!(env, array, 0, jsize(flat.count), buffer.baseAddress)
         }
         return array
+    }
+
+    // MARK: - Feed effects (baked in the core, uploaded by Kotlin)
+
+    /// `SwiftCore.bakeLut(lookOrdinal, size): ByteArray?` — a built-in monitor
+    /// look baked by the core into the packed-2D RGBA8 grid described in
+    /// `FeedEffectsWire`. Null for unknown ordinals/sizes.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeLut")
+    public func swiftCoreBakeLut(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, lookOrdinal: jint, size: jint
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedLUT(
+                lookOrdinal: Int(lookOrdinal), size: Int(size))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.bakeFalseColorCube(scaleOrdinal, curveOrdinal): ByteArray?` —
+    /// the core's false-colour cube (64³) in the same packed-2D RGBA8 grid.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorCube")
+    public func swiftCoreBakeFalseColorCube(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
+        curveOrdinal: jint
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedFalseColor(
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.feedEffectsScalars(curveOrdinal, zebraHighlightIre, zebraMidtoneIre):
+    /// FloatArray?` — `[deLogBlack, deLogClip, zebraHighlight, zebraMidtoneCentre]`
+    /// on the normalized 0–1 code axis (see `FeedEffectsWire.scalars`).
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_feedEffectsScalars")
+    public func swiftCoreFeedEffectsScalars(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint,
+        zebraHighlightIre: jfloat, zebraMidtoneIre: jfloat
+    ) -> jfloatArray? {
+        guard
+            let values = FeedEffectsWire.scalars(
+                curveOrdinal: Int(curveOrdinal),
+                zebraHighlightIRE: Double(zebraHighlightIre),
+                zebraMidtoneIRE: Double(zebraMidtoneIre))
+        else { return nil }
+        return javaFloatArray(env, values)
     }
 
     // MARK: - Callback / streaming shape
