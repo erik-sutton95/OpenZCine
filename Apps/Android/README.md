@@ -19,4 +19,14 @@ Production Jetpack Compose shell — early scaffold. One placeholder monitor scr
   settle-then-backoff reconnect). PTP-IP protocol/session logic arrives behind the JNI facade;
   this layer is bytes only. Debug hook to try it live:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez openzcine.nsdTransport true`.
+- **Camera session (Swift core):** `bridge/SwiftCoreCameraSession` implements the `CameraSession`
+  seam over the Swift core's PTP-IP session layer
+  (`Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift`): Init handshake, the Nikon
+  open/pair/identify sequence, core-decoded property reads, and graceful `CloseSession` teardown
+  all run inside the `.so` — the facade owns the session sockets (decision record: the feasibility
+  doc's "Where sockets go"). Point the debug probe at a camera or fake server:
+  `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.session.host <ipv4>`
+  (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
+  twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
+  `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).

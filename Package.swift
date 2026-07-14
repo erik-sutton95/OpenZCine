@@ -39,5 +39,12 @@ let package = Package(
             name: "OpenZCineAndroidFacade",
             dependencies: ["OpenZCineCore", "CJNI"]
         ),
+        // Exercises the facade's PTP-IP session layer against a scripted fake
+        // camera server; runs on Darwin (and on Android via the cross-compile
+        // test path from the feasibility experiment).
+        .testTarget(
+            name: "OpenZCineAndroidFacadeTests",
+            dependencies: ["OpenZCineAndroidFacade", "OpenZCineCore"]
+        ),
     ]
 )

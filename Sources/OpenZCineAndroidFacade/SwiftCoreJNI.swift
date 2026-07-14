@@ -122,6 +122,140 @@
         Thread.detachNewThread { pushDemoPhases(handle) }
     }
 
+    // MARK: - Camera session (PTP-IP)
+
+    /// Kotlin-side listener for `sessionConnect`, resolved to global refs +
+    /// method IDs so the connect thread can push into it.
+    ///
+    /// The raw pointers are a JNI global reference, process-wide `jmethodID`s,
+    /// and the process-wide `JavaVM*` — all valid across threads per the JNI
+    /// spec, hence `@unchecked Sendable`.
+    private struct SessionListenerHandle: @unchecked Sendable {
+        let vm: UnsafeMutablePointer<JavaVM?>
+        let listener: jobject
+        let onPhase: jmethodID
+        let onConnected: jmethodID
+        let onFailed: jmethodID
+    }
+
+    /// Process-wide active session slot behind the coarse JNI facade: one
+    /// camera at a time, matching the app's single-camera model.
+    private final class ActiveSessionSlot: @unchecked Sendable {
+        static let shared = ActiveSessionSlot()
+        private let lock = NSLock()
+        private var session: PTPIPClientSession?
+
+        /// Stores `new` and returns the displaced session (for teardown).
+        func replace(with new: PTPIPClientSession?) -> PTPIPClientSession? {
+            lock.lock()
+            defer { lock.unlock() }
+            let old = session
+            session = new
+            return old
+        }
+
+        func current() -> PTPIPClientSession? {
+            lock.lock()
+            defer { lock.unlock() }
+            return session
+        }
+    }
+
+    /// `SwiftCore.sessionConnect(host, listener)` — async connect: PTP-IP Init
+    /// handshake + Nikon open/pair/identify on a Swift background thread, with
+    /// phases pushed to the listener (`onPhase`), ending in `onConnected` or
+    /// `onFailed`. The established session parks in the process-wide slot for
+    /// `sessionReadProperty` / `sessionDisconnect`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConnect")
+    public func swiftCoreSessionConnect(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, host: jstring?, listener: jobject?
+    ) {
+        let fns = table(env)
+        var vm: UnsafeMutablePointer<JavaVM?>?
+        guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
+        guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
+        guard let cls = fns.GetObjectClass!(env, global),
+            let onPhase = fns.GetMethodID!(
+                env, cls, "onPhase", "(Ljava/lang/String;Ljava/lang/String;)V"),
+            let onConnected = fns.GetMethodID!(
+                env, cls, "onConnected",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+            let onFailed = fns.GetMethodID!(env, cls, "onFailed", "(Ljava/lang/String;)V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        let handle = SessionListenerHandle(
+            vm: vm, listener: global, onPhase: onPhase, onConnected: onConnected,
+            onFailed: onFailed)
+        let hostString = swiftString(env, host) ?? ""
+        Thread.detachNewThread { runSessionConnect(handle, host: hostString) }
+    }
+
+    /// Connect-thread body: attaches to the JVM, drives the blocking session
+    /// establishment, and pushes phases/terminal callbacks to the listener.
+    private func runSessionConnect(_ handle: SessionListenerHandle, host: String) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else { return }
+        defer { _ = invoke.DetachCurrentThread!(handle.vm) }
+        let fns = table(env)
+        defer { fns.DeleteGlobalRef!(env, handle.listener) }
+
+        func callStrings(_ method: jmethodID, _ values: [String]) {
+            let jValues = values.map { javaString(env, $0) }
+            var args = jValues.map { jvalue(l: $0) }
+            fns.CallVoidMethodA!(env, handle.listener, method, &args)
+            for value in jValues where value != nil {
+                fns.DeleteLocalRef!(env, value)
+            }
+        }
+
+        do {
+            let session = try PTPIPClientSession.connect(host: host) { phase, detail in
+                callStrings(handle.onPhase, [String(describing: phase), detail])
+            }
+            // A replaced session (reconnect without disconnect) is torn down
+            // gracefully so the camera's slot is released.
+            ActiveSessionSlot.shared.replace(with: session)?.disconnect()
+            callStrings(
+                handle.onConnected,
+                [
+                    session.identity.displayName, session.identity.model,
+                    session.identity.serialNumber,
+                ])
+        } catch {
+            callStrings(handle.onFailed, [error.localizedDescription])
+        }
+    }
+
+    /// `SwiftCore.sessionReadProperty(code): String?` — reads one camera
+    /// property through the active session, decoded by the core (battery →
+    /// percent, others → raw hex). Null when disconnected or rejected.
+    /// Blocking; Kotlin calls it from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionReadProperty")
+    public func swiftCoreSessionReadProperty(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, code: jint
+    ) -> jstring? {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let value = try? session.readPropertyDisplayValue(code: UInt32(bitPattern: code))
+        else { return nil }
+        return javaString(env, value)
+    }
+
+    /// `SwiftCore.sessionDisconnect()` — graceful teardown of the active
+    /// session: best-effort `CloseSession` then both sockets (the iOS
+    /// reconnect-wedge fix semantics). No-op when nothing is connected.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionDisconnect")
+    public func swiftCoreSessionDisconnect(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.replace(with: nil)?.disconnect()
+    }
+
     /// Pushes `discovering → handshaking → connected` copy from the core to the
     /// registered listener, then releases it.
     private func pushDemoPhases(_ handle: ListenerHandle) {

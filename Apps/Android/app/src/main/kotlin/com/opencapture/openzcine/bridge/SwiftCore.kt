@@ -47,4 +47,52 @@ object SwiftCore {
      * and live-view frames will use.
      */
     external fun startConnectionDemo(listener: ConnectionPhaseListener)
+
+    // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
+
+    /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */
+    interface SessionListener {
+        /**
+         * Progress update. [phase] is a stable machine-readable name mirroring
+         * the core's `CameraConnectionPhase` (`handshaking`, `pairing`,
+         * `confirmOnCamera`, `connected`); [detail] carries the pairing PIN on
+         * `confirmOnCamera` and the display name on `connected`.
+         */
+        fun onPhase(phase: String, detail: String)
+
+        /** Terminal success: the PTP session is open and the camera identified. */
+        fun onConnected(name: String, model: String, serialNumber: String)
+
+        /** Terminal failure with an operator-facing message. */
+        fun onFailed(message: String)
+    }
+
+    /** MTP BatteryLevel (0x5001) — UINT8 percentage. */
+    const val PROP_BATTERY_LEVEL: Int = 0x5001
+
+    /** Nikon MovieRecProhibitionCondition (0xD0A4) — 0 means recording is allowed. */
+    const val PROP_MOVIE_REC_PROHIBITION: Int = 0xD0A4
+
+    /**
+     * Connects to the camera at [host] (numeric IPv4, port 15740): PTP-IP Init
+     * handshake on both channels, then the Nikon open/pair/identify sequence,
+     * all inside the Swift core's session layer. Returns immediately; progress
+     * and the terminal result arrive on [listener] from a background thread.
+     */
+    external fun sessionConnect(host: String, listener: SessionListener)
+
+    /**
+     * Reads one camera property through the active session, decoded by the
+     * Swift core (battery → percent string, others → raw hex). Null when no
+     * session is active or the camera rejected the read. Blocking — call from
+     * a background dispatcher.
+     */
+    external fun sessionReadProperty(code: Int): String?
+
+    /**
+     * Gracefully tears down the active session: best-effort `CloseSession` so
+     * the camera frees its connection slot, then both sockets. Blocking
+     * (bounded ~2 s) — call from a background dispatcher. Safe when idle.
+     */
+    external fun sessionDisconnect()
 }
