@@ -1,0 +1,402 @@
+@file:androidx.media3.common.util.UnstableApi
+
+package com.opencapture.openzcine.media
+
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.datasource.DataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.compose.PlayerSurface
+import com.opencapture.openzcine.LiveDesign
+import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.chromeClickable
+import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.glass
+import java.io.IOException
+import kotlin.math.max
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private sealed interface PlaybackPreparation {
+    data object Loading : PlaybackPreparation
+
+    data class Ready(val entry: MediaCacheEntry) : PlaybackPreparation
+
+    data class Failed(val message: String) : PlaybackPreparation
+}
+
+/**
+ * Full-screen progressive proxy player. Camera bytes stream into a persistent
+ * growing cache while Media3 reads the same entry; all PTP policy remains in
+ * the shared Swift facade.
+ */
+@Composable
+fun MediaPlaybackScreen(
+    clip: MediaClipRecord,
+    cameraID: String,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    val cacheStore =
+        remember(context) {
+            MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
+        }
+    var preparation by remember(clip.handle) {
+        mutableStateOf<PlaybackPreparation>(PlaybackPreparation.Loading)
+    }
+    var closeRequested by remember { mutableStateOf(false) }
+    var stopFinished by remember { mutableStateOf(false) }
+
+    LaunchedEffect(clip.handle) {
+        preparation =
+            withContext(Dispatchers.IO) {
+                preparePlayback(cacheStore, cameraID, clip)
+            }
+    }
+
+    LaunchedEffect(closeRequested) {
+        if (!closeRequested) return@LaunchedEffect
+        withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+        stopFinished = true
+        onClose()
+    }
+    BackHandler { closeRequested = true }
+
+    // Activity teardown can dispose the surface without the in-app back path.
+    // Preserve the camera invariant by stopping on a bounded IO coroutine.
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!stopFinished) {
+                val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                cleanup.launch {
+                    SwiftCore.sessionStopMediaTransfer()
+                    cleanup.cancel()
+                }
+            }
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        when (val current = preparation) {
+            PlaybackPreparation.Loading -> PlaybackLoading("Preparing camera media…")
+            is PlaybackPreparation.Failed -> PlaybackFailure(current.message)
+            is PlaybackPreparation.Ready -> ProgressivePlayer(current.entry)
+        }
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PlaybackButton("‹", "Back", enabled = !closeRequested) { closeRequested = true }
+            Text(
+                clip.filename,
+                style = chromeStyle(14f, FontWeight.SemiBold),
+                color = LiveDesign.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun preparePlayback(
+    cacheStore: MediaCacheStore,
+    cameraID: String,
+    clip: MediaClipRecord,
+): PlaybackPreparation {
+    if (!SwiftCore.isAvailable) {
+        return PlaybackPreparation.Failed("Camera core is not bundled in this build.")
+    }
+    return try {
+        val totalBytes =
+            SwiftCore.sessionResolveMediaSize(clip.handle.toInt(), clip.sizeBytes)
+        if (totalBytes < 0) throw IOException("Camera did not provide the clip size.")
+        val entry = cacheStore.openEntry(cameraID, clip.filename, totalBytes)
+        when (entry.state) {
+            MediaCacheState.FAILED,
+            MediaCacheState.CANCELLED,
+            -> entry.resume()
+            MediaCacheState.ACTIVE,
+            MediaCacheState.COMPLETE,
+            -> Unit
+        }
+        if (entry.state != MediaCacheState.COMPLETE) {
+            SwiftCore.sessionStartMediaTransfer(
+                handle = clip.handle.toInt(),
+                reportedSize = totalBytes,
+                resumeOffset = entry.downloadedBytes,
+                listener = entry.transferListener(),
+            )
+        }
+        PlaybackPreparation.Ready(entry)
+    } catch (error: Exception) {
+        PlaybackPreparation.Failed(error.message ?: "Camera media could not be opened.")
+    }
+}
+
+private fun MediaCacheEntry.transferListener(): SwiftCore.MediaTransferListener =
+    object : SwiftCore.MediaTransferListener {
+        override fun onStarted(totalBytes: Long) {
+            if (totalBytes != expectedLength) {
+                fail(MediaCacheLengthException(expectedLength, totalBytes))
+            }
+        }
+
+        override fun onChunk(offset: Long, bytes: ByteArray): Boolean =
+            try {
+                append(offset, bytes)
+                true
+            } catch (error: Exception) {
+                fail(error.asIOException())
+                false
+            }
+
+        override fun onCompleted(totalBytes: Long) {
+            try {
+                if (totalBytes != expectedLength) {
+                    throw MediaCacheLengthException(expectedLength, totalBytes)
+                }
+                complete()
+            } catch (error: Exception) {
+                fail(error.asIOException())
+            }
+        }
+
+        override fun onStopped(cachedBytes: Long) {
+            cancel()
+        }
+
+        override fun onFailed(message: String) {
+            fail(IOException(message))
+        }
+    }
+
+private fun Exception.asIOException(): IOException =
+    this as? IOException ?: IOException(message ?: "Media cache write failed.", this)
+
+@Composable
+private fun ProgressivePlayer(entry: MediaCacheEntry) {
+    val context = LocalContext.current
+    val player =
+        remember(entry) {
+            val dataSourceFactory = DataSource.Factory { GrowingFileDataSource(entry) }
+            ExoPlayer.Builder(context).build().apply {
+                val source =
+                    ProgressiveMediaSource.Factory(dataSourceFactory)
+                        .createMediaSource(MediaItem.fromUri(Uri.parse("camera-cache://clip")))
+                setMediaSource(source)
+                prepare()
+                playWhenReady = true
+            }
+        }
+    DisposableEffect(player) { onDispose { player.release() } }
+
+    var position by remember { mutableLongStateOf(0) }
+    var duration by remember { mutableLongStateOf(0) }
+    var bufferedFraction by remember { mutableFloatStateOf(0f) }
+    var playing by remember { mutableStateOf(true) }
+    var muted by remember { mutableStateOf(false) }
+    var playbackState by remember { mutableIntStateOf(Player.STATE_BUFFERING) }
+    var playbackError by remember { mutableStateOf<String?>(null) }
+    var scrubPosition by remember { mutableFloatStateOf(0f) }
+    var scrubbing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(player) {
+        while (isActive) {
+            position = max(0, player.currentPosition)
+            duration = max(0, player.duration)
+            bufferedFraction = entry.progress.toFloat().coerceIn(0f, 1f)
+            playing = player.isPlaying
+            playbackState = player.playbackState
+            playbackError = player.playerError?.message
+            if (!scrubbing) scrubPosition = position.toFloat()
+            delay(200)
+        }
+    }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        PlayerSurface(player = player, modifier = Modifier.fillMaxSize())
+
+        val cacheFailed = entry.state == MediaCacheState.FAILED
+        when {
+            playbackError != null || cacheFailed ->
+                PlaybackFailure(playbackError ?: "Camera media transfer failed.")
+            playbackState == Player.STATE_BUFFERING ->
+                PlaybackLoading("Buffering ${(bufferedFraction * 100).toInt()}%")
+        }
+
+        Column(
+            Modifier.align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TimeLabel(position)
+                Slider(
+                    value = scrubPosition.coerceIn(0f, max(1f, duration.toFloat())),
+                    onValueChange = {
+                        scrubbing = true
+                        scrubPosition = it
+                    },
+                    onValueChangeFinished = {
+                        player.seekTo(scrubPosition.toLong())
+                        scrubbing = false
+                    },
+                    valueRange = 0f..max(1f, duration.toFloat()),
+                    modifier = Modifier.weight(1f),
+                    colors =
+                        SliderDefaults.colors(
+                            thumbColor = LiveDesign.accent,
+                            activeTrackColor = LiveDesign.accent,
+                            inactiveTrackColor = LiveDesign.hairline,
+                        ),
+                )
+                TimeLabel(duration)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PlaybackButton("−15", "Back 15 seconds") {
+                    player.seekTo(max(0, player.currentPosition - 15_000))
+                }
+                PlaybackButton(if (playing) "Ⅱ" else "▶", "Play or pause") {
+                    if (player.isPlaying) player.pause() else player.play()
+                }
+                PlaybackButton("+15", "Forward 15 seconds") {
+                    player.seekTo(
+                        if (duration > 0) minOf(duration, player.currentPosition + 15_000)
+                        else player.currentPosition + 15_000,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                PlaybackButton(if (muted) "MUTED" else "AUDIO", "Mute") {
+                    muted = !muted
+                    player.volume = if (muted) 0f else 1f
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaybackLoading(message: String) {
+    Column(
+        Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        CircularProgressIndicator(color = LiveDesign.muted)
+        Text(
+            message,
+            modifier = Modifier.padding(top = 12.dp),
+            style = chromeStyle(12f, FontWeight.Medium),
+            color = LiveDesign.muted,
+        )
+    }
+}
+
+@Composable
+private fun PlaybackFailure(message: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            message,
+            style = chromeStyle(13f, FontWeight.Medium),
+            color = LiveDesign.muted,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun PlaybackButton(
+    label: String,
+    contentDescription: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier.size(width = if (label.length > 2) 54.dp else 44.dp, height = 40.dp)
+            .glass(CircleShape)
+            .semantics {
+                this.contentDescription = contentDescription
+                role = Role.Button
+                if (!enabled) disabled()
+            }
+            .chromeClickable { if (enabled) onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = chromeStyle(if (label.length > 2) 9f else 16f, FontWeight.SemiBold),
+            color = if (enabled) LiveDesign.text else LiveDesign.faint,
+        )
+    }
+}
+
+@Composable
+private fun TimeLabel(milliseconds: Long) {
+    Text(
+        formatPlaybackTime(milliseconds),
+        modifier = Modifier.size(width = 42.dp, height = 18.dp),
+        style = chromeStyle(10f, FontWeight.Medium, mono = true),
+        color = LiveDesign.muted,
+    )
+}
+
+internal fun formatPlaybackTime(milliseconds: Long): String {
+    val seconds = max(0, milliseconds) / 1_000
+    return "%d:%02d".format(seconds / 60, seconds % 60)
+}

@@ -33,6 +33,7 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.pairing.PairingExperience
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
@@ -86,22 +87,52 @@ class MainActivity : ComponentActivity() {
                     // The real shell needs the shared core's zone map. An APK
                     // built without `just android-core` (plain CI android-check)
                     // has no native library, so it keeps the placeholder.
-                    // Operator Settings renders as a full-screen surface OVER
-                    // the monitor (iOS-style) so the shell keeps its state;
-                    // system back closes it first, like the panel's own X.
+                    // Settings and Media render as mutually-exclusive,
+                    // full-screen surfaces over the monitor so the shell keeps
+                    // its state while either surface owns interaction.
                     var settingsOpen by rememberSaveable { mutableStateOf(false) }
+                    var mediaOpen by rememberSaveable {
+                        mutableStateOf(DemoHarness.opensMedia(intent))
+                    }
+                    val currentSessionState by active.state.collectAsState()
+                    val cameraID =
+                        (currentSessionState as? CameraSessionState.Connected)
+                            ?.identity
+                            ?.let { identity ->
+                                identity.serialNumber.ifBlank {
+                                    "${identity.model}:${identity.name}"
+                                }
+                            }
+                            ?: "camera"
                     Box {
                         MonitorScreen(
                             active,
                             frameSource = demo?.second,
+                            liveViewEnabled = !mediaOpen,
                             glassTierOverride = DemoHarness.glassTierOverride(intent),
                             scopeKind = DemoHarness.scopeKind(intent),
-                            onOpenSettings = { settingsOpen = true },
+                            onOpenSettings = {
+                                mediaOpen = false
+                                settingsOpen = true
+                            },
+                            onOpenMedia = {
+                                settingsOpen = false
+                                mediaOpen = true
+                            },
                         )
                         if (settingsOpen) {
                             OperatorSettingsScreen(
                                 session = active,
                                 onClose = { settingsOpen = false },
+                            )
+                        }
+                        if (mediaOpen) {
+                            MediaBrowseScreen(
+                                cameraID = cameraID,
+                                cameraConnected =
+                                    currentSessionState is CameraSessionState.Connected,
+                                autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
+                                onClose = { mediaOpen = false },
                             )
                         }
                     }

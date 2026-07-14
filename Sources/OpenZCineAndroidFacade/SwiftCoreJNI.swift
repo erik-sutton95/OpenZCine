@@ -425,6 +425,339 @@
         ActiveSessionSlot.shared.replace(with: nil)?.disconnect()
     }
 
+    // MARK: - Live view
+
+    /// Kotlin-side `LiveFrameListener`, resolved to a global ref + method IDs
+    /// so the facade's pump thread can push into it.
+    ///
+    /// The raw pointers are a JNI global reference, process-wide `jmethodID`s,
+    /// and the process-wide `JavaVM*` — all valid across threads per the JNI
+    /// spec, hence `@unchecked Sendable`.
+    private struct LiveFrameListenerHandle: @unchecked Sendable {
+        let vm: UnsafeMutablePointer<JavaVM?>
+        let listener: jobject
+        let onFrame: jmethodID
+        let onEnded: jmethodID
+    }
+
+    /// `SwiftCore.sessionStartLiveView(listener)` — starts live view on the
+    /// active session (blocking `StartLiveView` + readiness poll on the caller
+    /// thread) and pumps JPEG frames to `listener.onFrame(jpeg, timestampNanos)`
+    /// from the facade's pump thread. `onEnded` fires exactly once when the
+    /// stream ends — stop, disconnect, a transport error, or (immediately, on
+    /// the calling thread) when there is no active session or the start fails.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartLiveView")
+    public func swiftCoreSessionStartLiveView(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, listener: jobject?
+    ) {
+        let fns = table(env)
+        var vm: UnsafeMutablePointer<JavaVM?>?
+        guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
+        guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
+        guard let cls = fns.GetObjectClass!(env, global),
+            let onFrame = fns.GetMethodID!(env, cls, "onFrame", "([BJ)V"),
+            let onEnded = fns.GetMethodID!(env, cls, "onEnded", "()V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        let handle = LiveFrameListenerHandle(
+            vm: vm, listener: global, onFrame: onFrame, onEnded: onEnded)
+
+        /// Terminal path on the CALLING (JVM-owned) thread: report the end and
+        /// release the listener without ever detaching this thread.
+        func endOnCallerThread() {
+            var noArguments = jvalue()
+            fns.CallVoidMethodA!(env, global, onEnded, &noArguments)
+            fns.DeleteGlobalRef!(env, global)
+        }
+
+        guard let session = ActiveSessionSlot.shared.current() else {
+            endOnCallerThread()
+            return
+        }
+        do {
+            // Both callbacks run on the ONE pump thread, `onEnded` last —
+            // that ordering is what makes the attach-per-callback /
+            // detach-once-at-the-end pairing below sound.
+            try session.startLiveView(
+                onFrame: { frame, timestampNanos in
+                    pushLiveFrame(handle, jpeg: frame.jpeg, timestampNanos: timestampNanos)
+                },
+                onEnded: { finishLiveFrameStream(handle) })
+        } catch {
+            endOnCallerThread()
+        }
+    }
+
+    /// `SwiftCore.sessionStopLiveView()` — stops the pump and blocks until it
+    /// has exited (the camera got its `EndLiveView`). No-op when idle.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStopLiveView")
+    public func swiftCoreSessionStopLiveView(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.stopLiveView()
+    }
+
+    /// Delivers one JPEG frame to the Kotlin listener from the pump thread.
+    /// Attaches the thread on every call (idempotent and cheap when already
+    /// attached); the matching single detach happens in `finishLiveFrameStream`.
+    private func pushLiveFrame(
+        _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64
+    ) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else { return }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else { return }
+        jpeg.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(jpeg.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        var args = [jvalue(l: array), jvalue(j: timestampNanos)]
+        fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &args)
+        fns.DeleteLocalRef!(env, array)
+    }
+
+    /// Terminal upcall from the pump thread: report the end, release the
+    /// listener, and detach the (Swift-owned) thread from the JVM.
+    private func finishLiveFrameStream(_ handle: LiveFrameListenerHandle) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else { return }
+        let fns = table(env)
+        var noArguments = jvalue()
+        fns.CallVoidMethodA!(env, handle.listener, handle.onEnded, &noArguments)
+        fns.DeleteGlobalRef!(env, handle.listener)
+        _ = invoke.DetachCurrentThread!(handle.vm)
+    }
+
+    // MARK: - Media browse (OPE-34)
+
+    /// `SwiftCore.sessionListMedia(maxObjects): String?` — lists browsable
+    /// media on the active session's cards (bounded enumeration; see
+    /// `PTPIPClientSession.listMedia`), flattened per `MediaListWire`. Null
+    /// when disconnected or the listing failed; empty string for an empty
+    /// card. Blocking; Kotlin calls it from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionListMedia")
+    public func swiftCoreSessionListMedia(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, maxObjects: jint
+    ) -> jstring? {
+        guard let session = ActiveSessionSlot.shared.current() else { return nil }
+        session.enterMediaMode()
+        guard
+            let clips = try? session.listMedia(maxObjects: Int(maxObjects))
+        else { return nil }
+        return javaString(env, MediaListWire.encode(clips))
+    }
+
+    /// `SwiftCore.sessionThumbnail(handle): ByteArray?` — the camera's
+    /// embedded thumbnail JPEG for one object (`GetThumb`). Null when
+    /// disconnected, rejected, or the object has no thumbnail. Blocking;
+    /// Kotlin calls it from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionThumbnail")
+    public func swiftCoreSessionThumbnail(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+    ) -> jbyteArray? {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let jpeg = try? session.thumbnail(handle: UInt32(bitPattern: handle))
+        else { return nil }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(jpeg.count)) else { return nil }
+        jpeg.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(jpeg.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        return array
+    }
+
+    /// `SwiftCore.sessionExitMediaMode()` — stops any payload transfer, then
+    /// releases media ownership so the monitor may restart live view.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionExitMediaMode")
+    public func swiftCoreSessionExitMediaMode(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.exitMediaMode()
+    }
+
+    /// `SwiftCore.sessionResolveMediaSize(handle, reportedSize): Long` —
+    /// authoritative object length for cache creation, including Nikon's
+    /// 64-bit query when ObjectInfo carried the UINT32 sentinel.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResolveMediaSize")
+    public func swiftCoreSessionResolveMediaSize(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        handle: jint, reportedSize: jlong
+    ) -> jlong {
+        guard reportedSize >= 0, let session = ActiveSessionSlot.shared.current(),
+            let size = try? session.resolvedObjectSize(
+                handle: UInt32(bitPattern: handle), reportedSize: UInt64(reportedSize)),
+            size <= UInt64(Int64.max)
+        else { return -1 }
+        return Int64(size)
+    }
+
+    // MARK: - Media transfer (OPE-34 playback)
+
+    /// Kotlin-side `MediaTransferListener`, retained across the Swift pump
+    /// thread with JNI global references and process-wide method IDs.
+    private struct MediaTransferListenerHandle: @unchecked Sendable {
+        let vm: UnsafeMutablePointer<JavaVM?>
+        let listener: jobject
+        let onStarted: jmethodID
+        let onChunk: jmethodID
+        let onCompleted: jmethodID
+        let onStopped: jmethodID
+        let onFailed: jmethodID
+    }
+
+    /// `SwiftCore.sessionStartMediaTransfer(...)` — validates/resolves the
+    /// object on the caller's IO thread, then the facade pump pushes ordered
+    /// cache chunks from one Swift-owned thread.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartMediaTransfer")
+    public func swiftCoreSessionStartMediaTransfer(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        handle: jint, reportedSize: jlong, resumeOffset: jlong, listener: jobject?
+    ) {
+        let fns = table(env)
+        var vm: UnsafeMutablePointer<JavaVM?>?
+        guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
+        guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
+        guard let cls = fns.GetObjectClass!(env, global),
+            let onStarted = fns.GetMethodID!(env, cls, "onStarted", "(J)V"),
+            let onChunk = fns.GetMethodID!(env, cls, "onChunk", "(J[B)Z"),
+            let onCompleted = fns.GetMethodID!(env, cls, "onCompleted", "(J)V"),
+            let onStopped = fns.GetMethodID!(env, cls, "onStopped", "(J)V"),
+            let onFailed = fns.GetMethodID!(
+                env, cls, "onFailed", "(Ljava/lang/String;)V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        let listenerHandle = MediaTransferListenerHandle(
+            vm: vm, listener: global, onStarted: onStarted, onChunk: onChunk,
+            onCompleted: onCompleted, onStopped: onStopped, onFailed: onFailed)
+
+        func failOnCallerThread(_ message: String) {
+            let value = javaString(env, message)
+            var args = [jvalue(l: value)]
+            fns.CallVoidMethodA!(env, global, onFailed, &args)
+            if let value { fns.DeleteLocalRef!(env, value) }
+            fns.DeleteGlobalRef!(env, global)
+        }
+
+        guard reportedSize >= 0, resumeOffset >= 0 else {
+            failOnCallerThread("Camera-media offsets must not be negative.")
+            return
+        }
+        guard let session = ActiveSessionSlot.shared.current() else {
+            failOnCallerThread("Not connected to a camera.")
+            return
+        }
+
+        do {
+            try session.startMediaTransfer(
+                handle: UInt32(bitPattern: handle),
+                reportedSize: UInt64(reportedSize),
+                resumeOffset: UInt64(resumeOffset),
+                onStarted: { pushMediaStarted(listenerHandle, totalBytes: $0) },
+                onChunk: { pushMediaChunk(listenerHandle, offset: $0, data: $1) },
+                onCompleted: {
+                    finishMediaTransfer(
+                        listenerHandle, method: listenerHandle.onCompleted, value: $0)
+                },
+                onStopped: {
+                    finishMediaTransfer(
+                        listenerHandle, method: listenerHandle.onStopped, value: $0)
+                },
+                onFailed: { finishMediaTransfer(listenerHandle, message: $0) })
+        } catch {
+            failOnCallerThread(error.localizedDescription)
+        }
+    }
+
+    /// `SwiftCore.sessionStopMediaTransfer()` — joins the progressive object
+    /// pump after its terminal callback.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStopMediaTransfer")
+    public func swiftCoreSessionStopMediaTransfer(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.stopMediaTransfer()
+    }
+
+    private func mediaTransferEnvironment(
+        _ handle: MediaTransferListenerHandle
+    ) -> UnsafeMutablePointer<JNIEnv?>? {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var environment: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &environment, nil) == JNI_OK else {
+            return nil
+        }
+        return environment
+    }
+
+    private func pushMediaStarted(
+        _ handle: MediaTransferListenerHandle, totalBytes: UInt64
+    ) {
+        guard let env = mediaTransferEnvironment(handle) else { return }
+        var args = [jvalue(j: Int64(bitPattern: totalBytes))]
+        table(env).CallVoidMethodA!(env, handle.listener, handle.onStarted, &args)
+    }
+
+    private func pushMediaChunk(
+        _ handle: MediaTransferListenerHandle, offset: UInt64, data: Data
+    ) -> Bool {
+        guard let env = mediaTransferEnvironment(handle) else { return false }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(data.count)) else { return false }
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(data.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        var args = [jvalue(j: Int64(bitPattern: offset)), jvalue(l: array)]
+        let accepted = fns.CallBooleanMethodA!(env, handle.listener, handle.onChunk, &args)
+        fns.DeleteLocalRef!(env, array)
+        return accepted != 0
+    }
+
+    private func finishMediaTransfer(
+        _ handle: MediaTransferListenerHandle, method: jmethodID, value: UInt64
+    ) {
+        guard let env = mediaTransferEnvironment(handle) else { return }
+        let fns = table(env)
+        var args = [jvalue(j: Int64(bitPattern: value))]
+        fns.CallVoidMethodA!(env, handle.listener, method, &args)
+        fns.DeleteGlobalRef!(env, handle.listener)
+        // SAFETY: this terminal callback runs on the Swift-owned pump thread.
+        _ = handle.vm.pointee!.pointee.DetachCurrentThread!(handle.vm)
+    }
+
+    private func finishMediaTransfer(
+        _ handle: MediaTransferListenerHandle, message: String
+    ) {
+        guard let env = mediaTransferEnvironment(handle) else { return }
+        let fns = table(env)
+        let value = javaString(env, message)
+        var args = [jvalue(l: value)]
+        fns.CallVoidMethodA!(env, handle.listener, handle.onFailed, &args)
+        if let value { fns.DeleteLocalRef!(env, value) }
+        fns.DeleteGlobalRef!(env, handle.listener)
+        // SAFETY: this terminal callback runs on the Swift-owned pump thread.
+        _ = handle.vm.pointee!.pointee.DetachCurrentThread!(handle.vm)
+    }
+
     /// Pushes `discovering → handshaking → connected` copy from the core to the
     /// registered listener, then releases it.
     private func pushDemoPhases(_ handle: ListenerHandle) {

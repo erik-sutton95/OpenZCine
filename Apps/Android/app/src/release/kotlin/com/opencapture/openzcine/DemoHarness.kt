@@ -17,9 +17,23 @@ object DemoHarness {
     /** Never matched in release: the extra is read only by the debug harness. */
     const val EXTRA_SCOPES = "zc.scopes"
 
+    /** Never matched in release: the extra is read only by the debug harness. */
+    const val EXTRA_SESSION_HOST = "zc.session.host"
+
+    /** Never matched in release: the extra is read only by the debug harness. */
+    const val EXTRA_MEDIA = "zc.media"
+
+    /** Release builds cannot auto-open debug surfaces. */
+    @Suppress("UNUSED_PARAMETER")
+    fun opensMedia(intent: Intent): Boolean = false
+
+    /** Release builds cannot auto-open debug surfaces. */
+    @Suppress("UNUSED_PARAMETER")
+    fun autoPlaysMedia(intent: Intent): Boolean = false
+
     /** Always null: release builds carry no demo frame source. */
     @Suppress("UNUSED_PARAMETER")
-    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource>? = null
+    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource?>? = null
 
     /** Always null: release builds carry no scripted pairing wizard. */
     @Suppress("UNUSED_PARAMETER")

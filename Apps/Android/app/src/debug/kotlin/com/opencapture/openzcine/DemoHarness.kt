@@ -1,7 +1,9 @@
 package com.opencapture.openzcine
 
 import android.content.Intent
-import com.opencapture.openzcine.bridge.SwiftCoreSessionProbe
+import android.util.Log
+import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
@@ -45,8 +47,18 @@ import kotlinx.coroutines.flow.flow
  * --es zc.lut log3g10|nlog|mono                 built-in look (default log3g10)
  * --es zc.fc.scale stops|ire                    false-colour scale (default stops)
  * ```
+ *
+ * Or drive the real shell session (Swift-core PTP-IP connect + live view)
+ * against a camera or fake-ZR server:
+ * ```
+ * adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.session.host <ipv4>
+ * ```
+ * (fake ZR on the development Mac: `adb reverse tcp:15740 tcp:15740`, host
+ * `127.0.0.1`; connect phases log under the `SwiftCoreCameraSession` tag).
  */
 object DemoHarness {
+    private const val TAG = "SwiftCoreCameraSession"
+
     /** Boolean intent extra that switches the synthetic demo feed on. */
     const val EXTRA_DEMO_FEED = "zc.demo.feed"
 
@@ -80,22 +92,40 @@ object DemoHarness {
     fun scopeKind(intent: Intent): ScopeKind? =
         ScopeKind.fromToken(intent.getStringExtra(EXTRA_SCOPES))
 
+    /** String intent extra carrying the camera host for a real Swift-core session. */
+    const val EXTRA_SESSION_HOST = "zc.session.host"
+
+    /** `browse` opens Media; `play` also opens its first playable proxy. */
+    const val EXTRA_MEDIA = "zc.media"
+
+    fun opensMedia(intent: Intent): Boolean =
+        intent.getStringExtra(EXTRA_MEDIA) in setOf("browse", "play")
+
+    fun autoPlaysMedia(intent: Intent): Boolean = intent.getStringExtra(EXTRA_MEDIA) == "play"
+
     /**
-     * A demo session + synthetic 25 fps frame source when [intent] carries
-     * [EXTRA_DEMO_FEED]; null in a normal launch. Also the debug intent entry
-     * point for the Swift-core session probe (`zc.session.host` — see
-     * [SwiftCoreSessionProbe]), which runs as a logcat side effect without
-     * replacing the shell's session, and for the feed-effect flags
-     * (`zc.assist` — applied to whichever feed renders, demo or live).
+     * The debug session/feed override for [intent], or null in a normal
+     * launch: `zc.session.host` makes the shell session a real
+     * [SwiftCoreCameraSession] (null frame source — the shell streams the
+     * session's own live view once connected); `zc.demo.feed` pairs a fake
+     * session with the synthetic 25 fps frame source.
      */
-    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource>? {
-        SwiftCoreSessionProbe.maybeStart(intent)
+    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource?>? {
         FeedEffectsState.current =
             FeedEffects.parse(
                 intent.getStringExtra("zc.assist"),
                 intent.getStringExtra("zc.lut"),
                 intent.getStringExtra("zc.fc.scale"),
             )
+        intent.getStringExtra(EXTRA_SESSION_HOST)?.let { host ->
+            if (!SwiftCore.isAvailable) {
+                Log.w(TAG, "libOpenZCineAndroid.so not bundled — run `just android-core` first")
+            }
+            Log.i(TAG, "shell session → Swift core at $host")
+            return SwiftCoreCameraSession(host) { phase, detail ->
+                Log.i(TAG, "phase: $phase${if (detail.isEmpty()) "" else " — $detail"}")
+            } to null
+        }
         if (!intent.getBooleanExtra(EXTRA_DEMO_FEED, false)) return null
         val session =
             FakeCameraSession(

@@ -192,7 +192,108 @@ object SwiftCore {
     /**
      * Gracefully tears down the active session: best-effort `CloseSession` so
      * the camera frees its connection slot, then both sockets. Blocking
-     * (bounded ~2 s) — call from a background dispatcher. Safe when idle.
+     * (bounded ~2 s) — call from a background dispatcher. A running live-view
+     * pump is stopped first (`EndLiveView` before `CloseSession`). Safe when
+     * idle.
      */
     external fun sessionDisconnect()
+
+    /** Receives live-view frames pushed from Swift (the facade's pump thread). */
+    interface LiveFrameListener {
+        /**
+         * One live-view JPEG, freshly pulled from the camera. [timestampNanos]
+         * is `CLOCK_MONOTONIC` at delivery — the same clock as
+         * `System.nanoTime()`.
+         */
+        fun onFrame(jpeg: ByteArray, timestampNanos: Long)
+
+        /**
+         * The stream ended — stop, disconnect, a transport error, or an
+         * immediately-failed start. Called exactly once per
+         * [sessionStartLiveView].
+         */
+        fun onEnded()
+    }
+
+    /**
+     * Starts live view on the active session (blocking `StartLiveView` +
+     * readiness poll — call from a background dispatcher) and pumps JPEG
+     * frames to [listener] from a Swift background thread. Backpressure is
+     * latest-wins: frames are pulled one at a time, so a slow consumer skips
+     * camera frames instead of queueing latency.
+     */
+    external fun sessionStartLiveView(listener: LiveFrameListener)
+
+    /**
+     * Stops the live-view pump and blocks until the camera got its
+     * `EndLiveView` (never leave the body streaming — the heat-audit rule).
+     * Call from a background dispatcher. Safe when idle.
+     */
+    external fun sessionStopLiveView()
+
+    // ── Media browse (OPE-34) ──
+
+    /**
+     * Lists browsable media (clips, stills, unpaired R3D masters) on the
+     * active session's cards, flattened one record per line (see
+     * `MediaClips.parse`). Enumeration is bounded to [maxObjects] ObjectInfo
+     * reads so a packed card never blocks the session unboundedly. Null when
+     * no session is active or the listing failed; empty string for an empty
+     * card. Blocking — call from a background dispatcher.
+     */
+    external fun sessionListMedia(maxObjects: Int): String?
+
+    /**
+     * The camera's embedded thumbnail JPEG for one object handle, or null
+     * when disconnected or the object has no thumbnail. Blocking — call from
+     * a background dispatcher.
+     */
+    external fun sessionThumbnail(handle: Int): ByteArray?
+
+    /**
+     * Releases exclusive camera-media ownership. This stops any progressive
+     * transfer first, then allows monitor live view to resume. Blocking and
+     * safe when idle; call from a background dispatcher.
+     */
+    external fun sessionExitMediaMode()
+
+    /**
+     * Resolves the authoritative 64-bit object size through the shared core,
+     * or -1 when disconnected/rejected. Blocking; call from IO.
+     */
+    external fun sessionResolveMediaSize(handle: Int, reportedSize: Long): Long
+
+    /** Receives one progressive camera-object transfer from Swift. */
+    interface MediaTransferListener {
+        /** The core-resolved 64-bit size before the first chunk. */
+        fun onStarted(totalBytes: Long)
+
+        /** One ordered cache write at [offset]. */
+        fun onChunk(offset: Long, bytes: ByteArray): Boolean
+
+        /** The complete object is now cached. */
+        fun onCompleted(totalBytes: Long)
+
+        /** A requested stop completed after [cachedBytes] were delivered. */
+        fun onStopped(cachedBytes: Long)
+
+        /** Terminal transfer failure with operator-facing copy from Swift. */
+        fun onFailed(message: String)
+    }
+
+    /**
+     * Starts the shared core's object-transfer pump. Kotlin supplies identity
+     * and cache resume state only; Swift owns operation selection, 64-bit
+     * offset math, and chunk policy. Blocking setup, then callbacks arrive on
+     * one Swift-owned thread.
+     */
+    external fun sessionStartMediaTransfer(
+        handle: Int,
+        reportedSize: Long,
+        resumeOffset: Long,
+        listener: MediaTransferListener,
+    )
+
+    /** Stops and joins the active transfer. Blocking and safe when idle. */
+    external fun sessionStopMediaTransfer()
 }

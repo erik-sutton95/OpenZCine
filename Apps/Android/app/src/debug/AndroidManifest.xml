@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Device-verification harness only: wake/show the debug monitor over a
+    locked floor device. Release builds carry neither attribute. -->
+    <application>
+        <activity
+            android:name=".MainActivity"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+    </application>
+
+</manifest>

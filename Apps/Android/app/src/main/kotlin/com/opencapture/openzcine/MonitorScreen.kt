@@ -48,9 +48,13 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
 import kotlinx.coroutines.delay
 
@@ -141,9 +145,11 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
 fun MonitorScreen(
     session: CameraSession,
     frameSource: LiveFrameSource?,
+    liveViewEnabled: Boolean = true,
     glassTierOverride: String? = null,
     scopeKind: ScopeKind? = null,
     onOpenSettings: () -> Unit = {},
+    onOpenMedia: () -> Unit = {},
 ) {
     val sessionState by session.state.collectAsState()
     LaunchedEffect(session) { session.connect() }
@@ -352,6 +358,24 @@ fun MonitorScreen(
         val isClean = dispIndex == 1
         val isCommand = dispIndex == 2
 
+        // An explicit demo source wins; otherwise a connected Swift-core
+        // session streams its own live view. Media ownership gates collection,
+        // and backgrounding drops below STARTED so the camera receives
+        // EndLiveView instead of continuing sensor readout for no consumer.
+        val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+        val activeFrameSource =
+            if (!liveViewEnabled) {
+                null
+            } else {
+                frameSource
+                    ?: (session as? SwiftCoreCameraSession)
+                        ?.liveFrames
+                        ?.takeIf {
+                            sessionState is CameraSessionState.Connected &&
+                                lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+                        }
+            }
+
         // Backdrop geometry for the glass pipeline: the viewport and the feed
         // zone in root px. The blurred texture covers the whole viewport
         // (black letterbox included), so pills over black sample the same
@@ -376,8 +400,12 @@ fun MonitorScreen(
         // semantics.
         if (!isCommand) {
             Box(Modifier.zone(zones.feed), contentAlignment = Alignment.Center) {
-                if (frameSource != null) {
-                    LiveFeedView(frameSource, Modifier.fillMaxSize(), onFrame = glass::submit)
+                if (activeFrameSource != null) {
+                    LiveFeedView(
+                        activeFrameSource,
+                        Modifier.fillMaxSize(),
+                        onFrame = glass::submit,
+                    )
                 } else {
                     Text(
                         text =
@@ -484,7 +512,10 @@ fun MonitorScreen(
                 ) { glyphModifier, tint ->
                     GearGlyph(tint, glyphModifier)
                 }
-                AuxCircleButton(Modifier.zone(zones.media)) { glyphModifier, tint ->
+                AuxCircleButton(
+                    Modifier.zone(zones.media),
+                    onClick = onOpenMedia,
+                ) { glyphModifier, tint ->
                     MediaStackGlyph(tint, glyphModifier)
                 }
                 RecordButton(recording, Modifier.zone(zones.record)) { recording = !recording }
@@ -501,7 +532,7 @@ fun MonitorScreen(
         // floats it over the feed (the map carries no scopes zone there);
         // portrait mounts the stacked zone the map emits (fit + live only).
         val activeScope = assist.scope
-        if (!isCommand && activeScope != null && frameSource != null) {
+        if (!isCommand && activeScope != null && activeFrameSource != null) {
             val scopeFrame =
                 if (isPortrait) {
                     zones.scopes?.let {
@@ -510,7 +541,7 @@ fun MonitorScreen(
                 } else {
                     zones.scopes ?: floatingScopeFrame(activeScope, zones.feed, zones.infoBar)
             }
-            scopeFrame?.let { ScopePanel(activeScope, frameSource, Modifier.zone(it)) }
+            scopeFrame?.let { ScopePanel(activeScope, activeFrameSource, Modifier.zone(it)) }
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).

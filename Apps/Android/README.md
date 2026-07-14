@@ -40,9 +40,15 @@ to the placeholder monitor ("No camera").
 - **Camera session (Swift core):** `bridge/SwiftCoreCameraSession` implements the `CameraSession`
   seam over the Swift core's PTP-IP session layer
   (`Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift`): Init handshake, the Nikon
-  open/pair/identify sequence, core-decoded property reads, and graceful `CloseSession` teardown
-  all run inside the `.so` — the facade owns the session sockets (decision record: the feasibility
-  doc's "Where sockets go"). Point the debug probe at a camera or fake server:
+  open/pair/identify sequence, core-decoded property reads, live view, and graceful `CloseSession`
+  teardown all run inside the `.so` — the facade owns the session sockets (decision record: the
+  feasibility doc's "Where sockets go"). Live view is a Swift-side frame pump
+  (`sessionStartLiveView` / `sessionStopLiveView`, latest-wins backpressure, absolute-schedule
+  poll pacing) bridged into the `LiveFrameSource` seam by `bridge/SwiftCoreLiveFrameSource`;
+  `MonitorScreen` streams a connected Swift-core session's frames automatically (gated on a
+  STARTED lifecycle), and ending collection — disconnect or backgrounding — always sends
+  `EndLiveView` (the heat-audit rule). Drive the real shell against a
+  camera or fake server:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.session.host <ipv4>`
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
@@ -73,4 +79,25 @@ to the placeholder monitor ("No camera").
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
   --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
   with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).
+- **Real-session diagnostics:** connect phases use the `SwiftCoreCameraSession` logcat tag and
+  frame pacing uses `ZCLiveFeed`. For a
+  fake-ZR server on the development Mac (scripted twin, incl. a synthesized live-view stream:
+  `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), run
+  `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForDevice` at the repo root, forward the
+  port with `adb reverse tcp:15740 tcp:15740`, and use host `127.0.0.1`.
+- **Media browse + progressive playback:** the monitor's media button opens
+  `media/MediaBrowseScreen`, an iOS-look dark clip grid (thumbnails, size/codec badges,
+  listing/empty/error states) listed through the facade's bounded
+  `sessionListMedia`/`sessionThumbnail` (`GetObjectHandles`/`GetObjectInfo`/`GetThumb`). MOV/MP4/M4V
+  proxies open `MediaPlaybackScreen`; stills and R3D masters are explicitly view-only. The Swift
+  core selects standard `GetPartialObject` or Nikon's 64-bit `GetObjectSize`/`GetPartialObjectEx`
+  path and pumps ordered 4 MiB chunks over JNI. Kotlin persists them below `noBackupFilesDir` in a
+  resumable `.part` cache while Media3 reads the growing file; completion publishes the final file
+  atomically. Opening Media stops and excludes live view until the browser closes, so both pumps
+  never contend for the serialized camera command channel. The Nikon large-object operations still
+  require real-ZR verification. For an on-device fake-ZR playback run, set
+  `ZC_FAKE_ZR_MEDIA=/absolute/path/to/a/playable.mp4` alongside `ZC_FAKE_ZR_PORT=15740` when running
+  `swift test --filter servesFakeZRForMediaBrowse`, then `adb reverse tcp:15740 tcp:15740`, launch
+  with `--es zc.session.host 127.0.0.1`, and open `C0008.MOV`. The file is local-only and must stay
+  under an ignored path; `ZC_FAKE_ZR_CLIPS=0` still serves the empty-card state.
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).
