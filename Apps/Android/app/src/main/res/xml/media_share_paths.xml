@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only atomically published share copies are in this subtree. Keep the
+  progressive no-backup cache and cacheDir/share/staging outside FileProvider. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        name="shared_media"
+        path="share/ready/" />
+</paths>
