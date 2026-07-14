@@ -6,10 +6,13 @@ chrome, laid out by the shared core's zone map (`SwiftCore.monitorZoneMap` →
 the live feed, top info deck, capture readout strip, the assist toolbar (wired to the
 feed-effects engine + scope panels, toggles persisted), lock/battery band, the
 record/DISP/media/settings controls with DISP 1→2→3 cycling (3 = the command dashboard),
-and the portrait fit layout (sensor rotation; the activity survives it). Deferred:
-pickers/panels, the portrait fill aspect, command tile interaction. Readouts are fake demo
-values until the session facade arrives. Without the staged Swift core the app falls back
-to the placeholder monitor ("No camera").
+and the portrait fit layout (sensor rotation; the activity survives it). DISP 3 observes the
+real Swift-core property snapshot, persists its primary-tile order, and opens typed control
+pickers for ISO, shutter, iris, white balance, exposure mode, focus, and supported audio
+settings. Resolution, codec, and VR/e-VR remain read-only until camera descriptor options or
+write selectors are available. General monitor picker panels and the portrait fill aspect remain
+deferred. Without the staged Swift core the app falls back to the placeholder monitor ("No
+camera") and every unavailable command value is shown as an em dash rather than a demo value.
 
 The installed app uses an adaptive launcher icon with the same monitor, exposure-graph, and camera
 language as the iOS app icon. Its foreground stays inside Android's adaptive safe zone, so circular,

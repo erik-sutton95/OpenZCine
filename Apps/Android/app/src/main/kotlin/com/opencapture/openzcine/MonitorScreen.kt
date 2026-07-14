@@ -56,6 +56,8 @@ import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
@@ -141,8 +143,9 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * Scope: feed, top info deck (landscape pill / portrait bar), lock/battery
  * band, capture strip, assist toolbar (wired to the feed-effects engine and
  * the scope panels), record / DISP / media / settings controls, DISP 1→2→3
- * cycling incl. the command dashboard, and the portrait fit layout. Deferred:
- * pickers/panels, portrait fill aspect, command tile interaction.
+ * cycling incl. the command dashboard, and the portrait fit layout. Safe
+ * command-dashboard controls use the typed Swift property snapshot; general
+ * monitor pickers and the portrait fill aspect remain deferred.
  *
  * Chrome glass runs the tiered GPU treatment (GlassChrome.kt) at this
  * device's [resolveTier] ceiling; [glassTierOverride] (`zc.glass.tier`
@@ -164,6 +167,8 @@ fun MonitorScreen(
 ) {
     val appContext = LocalContext.current.applicationContext
     val sessionState by session.state.collectAsState()
+    val cameraProperties by session.cameraProperties.collectAsState()
+    val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     LaunchedEffect(session) { session.connect() }
 
     // Shared glass state: the active tier plus the one blurred backdrop
@@ -200,6 +205,61 @@ fun MonitorScreen(
     val recordControlEnabled =
         sessionState is CameraSessionState.Connected && !recordCommandPending
     val recordScope = rememberCoroutineScope()
+    val commandTileOrderStore = remember(appContext) { CommandTileOrderStore(appContext) }
+    var commandTileOrder by remember(commandTileOrderStore) {
+        mutableStateOf(commandTileOrderStore.load())
+    }
+    var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
+    var pendingCommandControl by remember { mutableStateOf<CameraControl?>(null) }
+    var commandControlFeedback by remember { mutableStateOf<CommandControlFeedback?>(null) }
+    val commandPresentation =
+        remember(
+            cameraProperties,
+            propertyRefreshStatus,
+            sessionState,
+            commandTileOrder,
+            recording,
+        ) {
+            commandDashboardPresentation(
+                snapshot = cameraProperties,
+                refreshStatus = propertyRefreshStatus,
+                sessionState = sessionState,
+                tileOrder = commandTileOrder,
+                recording = recording,
+            )
+        }
+    val commandControlsEnabled = sessionState is CameraSessionState.Connected && !locked
+    val moveCommandTileLater: (CommandTileKind) -> Unit = { kind ->
+        val current = commandTileOrder
+        val index = current.indexOf(kind)
+        val target = if (index == current.lastIndex) 0 else index + 1
+        val next = moveCommandTile(current, kind, target)
+        commandTileOrder = next
+        commandTileOrderStore.save(next)
+    }
+    val applyCommandControl: (String) -> Unit = applyCommandControl@{ label ->
+        val request = activeCommandControl ?: return@applyCommandControl
+        if (!commandControlsEnabled || pendingCommandControl != null) return@applyCommandControl
+        pendingCommandControl = request.control
+        commandControlFeedback = null
+        recordScope.launch {
+            try {
+                session.applyControl(request.control, label)
+                session.refreshProperties()
+                activeCommandControl = request.copy(currentValue = label)
+                commandControlFeedback =
+                    CommandControlFeedback("${request.title} set to $label.", isError = false)
+            } catch (error: CameraControlException) {
+                commandControlFeedback =
+                    CommandControlFeedback(
+                        error.message ?: "The camera rejected the control change.",
+                        isError = true,
+                    )
+            } finally {
+                pendingCommandControl = null
+            }
+        }
+    }
     var pendingRecordTarget by remember { mutableStateOf<Boolean?>(null) }
     val sendRecordCommand: (Boolean) -> Unit = { target ->
         recordScope.launch {
@@ -491,6 +551,9 @@ fun MonitorScreen(
                     frameCount = frameCount,
                     assist = assist,
                     operatorSettings = operatorSettings,
+                    commandPresentation = commandPresentation,
+                    commandControlsEnabled = commandControlsEnabled,
+                    pendingCommandControl = pendingCommandControl,
                     dispIndex = dispIndex,
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
@@ -498,6 +561,11 @@ fun MonitorScreen(
                     onDisp = { dispIndex = (dispIndex + 1) % 3 },
                     onOpenMedia = onOpenMedia,
                     onOpenSettings = onOpenSettings,
+                    onOpenCommandControl = {
+                        activeCommandControl = it
+                        commandControlFeedback = null
+                    },
+                    onMoveCommandTileLater = moveCommandTileLater,
                 )
             } else {
                 if (isCommand) {
@@ -507,7 +575,17 @@ fun MonitorScreen(
                     val top = maxOf(14f, safeTop)
                     CommandDashboard(
                         recording = recording,
-                        frameCount = frameCount,
+                        // Android has no authoritative live-view timecode bridge yet.
+                        // Keep the command dashboard neutral rather than show the shell clock.
+                        frameCount = null,
+                        presentation = commandPresentation,
+                        controlsEnabled = commandControlsEnabled,
+                        pendingControl = pendingCommandControl,
+                        onOpenControl = {
+                            activeCommandControl = it
+                            commandControlFeedback = null
+                        },
+                        onMoveTileLater = moveCommandTileLater,
                         modifier =
                             Modifier.zone(
                                 ZoneFrame(
@@ -666,6 +744,16 @@ fun MonitorScreen(
             },
         )
     }
+    activeCommandControl?.let { request ->
+        CommandControlDialog(
+            request = request,
+            controlsEnabled = commandControlsEnabled,
+            pendingControl = pendingCommandControl,
+            feedback = commandControlFeedback,
+            onSelect = applyCommandControl,
+            onDismiss = { activeCommandControl = null },
+        )
+    }
 }
 
 /** The landscape top deck (iOS `MonitorInfoBar` `.infoPill`). */
@@ -722,6 +810,9 @@ private fun PortraitChrome(
     frameCount: Long,
     assist: AssistState,
     operatorSettings: OperatorSettings,
+    commandPresentation: CommandDashboardPresentation,
+    commandControlsEnabled: Boolean,
+    pendingCommandControl: CameraControl?,
     dispIndex: Int,
     onLock: () -> Unit,
     recordEnabled: Boolean,
@@ -729,6 +820,8 @@ private fun PortraitChrome(
     onDisp: () -> Unit,
     onOpenMedia: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenCommandControl: (CommandControlRequest) -> Unit,
+    onMoveCommandTileLater: (CommandTileKind) -> Unit,
 ) {
     if (operatorSettings.statusBarVisible.value) {
         PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
@@ -760,11 +853,23 @@ private fun PortraitChrome(
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                CommandTimecode(frameCount, sizeSp = 52f)
+                CommandTimecode(
+                    // See the landscape command dashboard: this is deliberately
+                    // neutral until live-view timecode is bridged from Swift.
+                    frameCount = null,
+                    frameRate = commandPresentation.frameRateValue,
+                    sizeSp = 52f,
+                )
             }
         }
         CommandGrid(
-            Modifier.zone(
+            tiles = commandPresentation.tiles,
+            controlsEnabled = commandControlsEnabled,
+            pendingControl = pendingCommandControl,
+            onOpenControl = onOpenCommandControl,
+            onMoveTileLater = onMoveCommandTileLater,
+            modifier =
+                Modifier.zone(
                 ZoneFrame(
                     grid.x,
                     grid.y + tcBand,
