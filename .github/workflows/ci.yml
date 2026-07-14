@@ -95,6 +95,13 @@ jobs:
               - 'justfile'
             android:
               - 'Apps/Android/**'
+              - 'Sources/OpenZCineCore/**'
+              - 'Sources/OpenZCineAndroidFacade/**'
+              - 'Sources/CJNI/**'
+              - 'Package.swift'
+              - 'Package.resolved'
+              - 'scripts/android-*.sh'
+              - 'justfile'
 
   native:
     name: Native Swift/iOS
@@ -131,6 +138,23 @@ jobs:
           java-version: "21"
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
-      - name: Build, unit-test, and lint
+
+      # Swift 6.3.3 plus its matching Android SDK. The action configures the
+      # NDK sysroot; Gradle then cross-compiles the arm64-v8a core itself.
+      - name: Set up Swift Android toolchain
+        id: swift-android
+        uses: skiptools/swift-android-action@2044b79660f201ccef8cbce62877e4ec5409f9c8 # v2.9.5
+        with:
+          swift-version: '6.3.3'
+          ndk-version: '27'
+          compile-sdk-api-level: '29'
+          build-package: false
+          build-tests: false
+          run-tests: false
+
+      - name: Build, unit-test, lint, and verify release packages
         working-directory: Apps/Android
-        run: ./gradlew assembleDebug test lint
+        env:
+          SWIFT_EXECUTABLE: ${{ steps.swift-android.outputs.swift-install }}/bin/swift
+          SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
+        run: ./gradlew assembleDebug test lint verifyReleaseNativeLibraries

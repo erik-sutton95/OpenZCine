@@ -24,10 +24,15 @@ to the placeholder monitor ("No camera").
   --es zc.demo.pairingPath ap|hotspot` (debug builds only).
 - **Swift core:** the camera brain is the shared Swift core (`Sources/OpenZCineCore`), cross-compiled
   to `libOpenZCineAndroid.so` and bound via JNI (`bridge/SwiftCore.kt` ↔
-  `Sources/OpenZCineAndroidFacade`). Run **`just android-core` before installing** — it stages the
-  `.so` set into `app/src/main/jniLibs/` (gitignored build artifacts, never committed). Plain
-  `android-build`/`android-check` work without it; the app then logs a warning instead of loading
-  the core. CI does not cross-compile yet (follow-up: `swift-android-action`).
+  `Sources/OpenZCineAndroidFacade`). Every Gradle debug/release build stages the optimized core and
+  its dynamic Swift runtime closure into Gradle-owned `app/build/generated/` output; it never reads
+  ignored `src/main/jniLibs/`. The one supported ABI is **arm64-v8a** (target triple
+  `aarch64-unknown-linux-android29`, matching minSdk 29). Install Swift 6.3.3 and its matching
+  `swift-6.3.3-RELEASE_android` SDK bundle locally; `just android-core` stages only, while
+  `just android-release-check` also verifies the release APK and AAB contain every required `.so`.
+  `just android-bridge-smoke <adb-serial>` installs the generated debug APK without clearing data
+  and requires the `SwiftCoreSmoke` JNI core-version line on an arm64 device. CI and the Play
+  workflow provision the same pinned toolchain/SDK before running Gradle.
 - **Core seam:** `core-api/` is a pure-JVM module defining `CameraSession`, `LiveFrameSource`, and
   `CameraIdentity`; the Swift core plugs in behind it. Decision record:
   `docs/investigations/android-core-feasibility.md`.

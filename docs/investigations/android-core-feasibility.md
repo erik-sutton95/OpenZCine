@@ -400,3 +400,19 @@ The layer compiles on Darwin too, so `Tests/OpenZCineAndroidFacadeTests` exercis
 behavior against a scripted fake ZR (`FakeZRServer`) in `swift test` — sequencing, the pairing
 fallback, property decode, and graceful teardown; real-ZR validation of connect + property read
 is the remaining hardware step.
+
+### Release packaging (2026-07-14)
+
+Android builds now cross-compile and stage the Swift core through a Gradle-owned task rather than
+reading an ignored `src/main/jniLibs` directory. The release contract is explicit: ship only
+**arm64-v8a**, built as `aarch64-unknown-linux-android29` for the app's Android 10 minimum. The
+task uses the exact Swift 6.3.3 toolchain and `swift-6.3.3-RELEASE_android` SDK, copies the full
+dynamic `NEEDED` closure, and records it for archive verification. `verifyReleaseNativeLibraries`
+then checks the release APK and AAB entry lists without extracting either archive: every staged
+library, including `libOpenZCineAndroid.so`, must be present under that ABI and no second ABI may
+slip into a Play upload. The Android CI and Play-internal workflow install the same pinned SDK
+before Gradle runs. A debug-device startup calls the existing `SwiftCoreSmoke` JNI round trip; it
+remains a hardware smoke check because hosted x86 GitHub runners cannot load the arm64-only app.
+`just android-bridge-smoke <adb-serial>` makes that check reproducible: it builds the generated
+debug APK, installs it with data preserved, launches the app, and requires the arm64 core-version
+line from logcat.

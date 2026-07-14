@@ -3,6 +3,18 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// OpenZCine is intentionally arm64-only until another ABI has both a Swift
+// runtime package and on-device verification. Keep the Gradle ABI and the
+// Swift target in lockstep (scripts/android-stage-swift-core.sh).
+val supportedAndroidAbi = "arm64-v8a"
+val swiftCoreJniLibsRoot = layout.buildDirectory.dir("generated/swiftCore/jniLibs")
+val swiftCoreArm64Directory = swiftCoreJniLibsRoot.map { it.dir(supportedAndroidAbi) }
+val releaseApkDirectory = layout.buildDirectory.dir("outputs/apk/release")
+val releaseAabDirectory = layout.buildDirectory.dir("outputs/bundle/release")
+val repositoryRoot = rootProject.projectDir.parentFile.parentFile
+val stageSwiftCoreScript = repositoryRoot.resolve("scripts/android-stage-swift-core.sh")
+val verifyNativeLibrariesScript = repositoryRoot.resolve("scripts/verify-android-native-libs.sh")
+
 // Single version source: gradle.properties (mirrors ios/Config/Version.xcconfig).
 // CI overrides the code per build with `-PversionCode=<n>`; the name changes only
 // through a reviewed edit to gradle.properties. See docs/android-distribution.md.
@@ -28,6 +40,10 @@ android {
         targetSdk = 36
         versionCode = resolvedVersionCode
         versionName = resolvedVersionName
+
+        ndk {
+            abiFilters += supportedAndroidAbi
+        }
     }
 
     signingConfigs {
@@ -70,6 +86,71 @@ android {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
     }
+
+    sourceSets {
+        getByName("main").jniLibs.directories.apply {
+            clear()
+            add(swiftCoreJniLibsRoot.get().asFile.absolutePath)
+        }
+    }
+}
+
+/**
+ * Builds the shared Swift core and stages its full runtime closure under
+ * Gradle-owned output. `src/main/jniLibs` is deliberately not an input: a
+ * clean clone must never package an ignored or stale local .so set.
+ */
+val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
+    group = "build"
+    description = "Cross-compile and stage the Swift camera core for arm64-v8a."
+    workingDir = repositoryRoot
+    inputs.files(
+        fileTree(repositoryRoot) {
+            include("Package.swift", "Package.resolved", "Sources/**")
+        },
+        stageSwiftCoreScript,
+    )
+    inputs.property("swiftExecutable", providers.environmentVariable("SWIFT_EXECUTABLE").orElse("auto"))
+    inputs.property(
+        "swiftAndroidSdk",
+        providers.environmentVariable("SWIFT_ANDROID_SDK_ID").orElse("swift-6.3.3-RELEASE_android"),
+    )
+    outputs.dir(swiftCoreArm64Directory)
+    commandLine(
+        "bash",
+        stageSwiftCoreScript.absolutePath,
+        "--output",
+        swiftCoreArm64Directory.get().asFile.absolutePath,
+    )
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(stageSwiftCore)
+}
+
+/**
+ * Inspects the unsigned release APK and AAB without extracting either archive.
+ * Every staged Swift runtime library must be present under the sole supported
+ * ABI, so a future packaging regression fails before a Play upload.
+ */
+val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibraries") {
+    group = "verification"
+    description = "Verify release APK/AAB include the generated Swift core and runtime closure."
+    dependsOn("assembleRelease", "bundleRelease")
+    workingDir = repositoryRoot
+    inputs.dir(swiftCoreArm64Directory)
+    inputs.dir(releaseApkDirectory)
+    inputs.dir(releaseAabDirectory)
+    commandLine(
+        "bash",
+        verifyNativeLibrariesScript.absolutePath,
+        "--staged-dir",
+        swiftCoreArm64Directory.get().asFile.absolutePath,
+        "--apk-dir",
+        releaseApkDirectory.get().asFile.absolutePath,
+        "--aab-dir",
+        releaseAabDirectory.get().asFile.absolutePath,
+    )
 }
 
 dependencies {

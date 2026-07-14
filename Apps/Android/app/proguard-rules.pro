@@ -6,7 +6,7 @@
 # contract, and reflection/JNI lookups against it must keep working.
 -keep class com.opencapture.openzcine.core.** { *; }
 
-# Swift calls these bridge callback methods with JNI GetMethodID. Keep the
-# bridge package intact so R8 cannot rename or remove listener methods or their
-# anonymous implementations in release builds.
+# Swift invokes the bridge methods and listener callbacks by their exact JNI
+# names (`Java_com_opencapture_…` / GetMethodID). R8 must not rename or remove
+# either side of that contract from a release package.
 -keep class com.opencapture.openzcine.bridge.** { *; }
