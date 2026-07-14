@@ -80,6 +80,33 @@ private object DemoMonitorState {
 private fun Modifier.zone(frame: ZoneFrame): Modifier =
     offset(frame.x.dp, frame.y.dp).size(frame.width.dp, frame.height.dp)
 
+/**
+ * The iPhone Dynamic Island's landscape leading safe-area inset, in points/dp —
+ * the canonical iOS geometry throughout the core tests
+ * (`Tests/OpenZCineCoreTests/MonitorLayoutPolicyTests.swift`:
+ * `MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)`).
+ * `MonitorFeedLayout.leadingInset` turns it into a left chrome lane: the feed
+ * starts at x = 59 while the fixed-margin lock button and battery rail
+ * (chrome insets ignore the safe area; lock spans x 16–56) sit beside it.
+ */
+internal const val IOS_ISLAND_LANE_DP = 59f
+
+/**
+ * Leading inset handed to the zone map, in dp: the display cutout floored at
+ * [IOS_ISLAND_LANE_DP], plus any transient system-bar lane on this edge.
+ *
+ * Devices whose punch-hole resolves below the core's 50dp cutout threshold
+ * (SM-A127F: zero inset) would otherwise run the feed edge-to-edge, putting
+ * the lock button and battery rail ON the image. Flooring the cutout at the
+ * iPhone island lane synthesizes the iOS composition — feed right of the
+ * chrome — as a platform-adapter decision, keeping the shared core
+ * platform-blind. The floor is a MINIMUM under the physical cutout only; a
+ * transient bar on this edge (reverse-landscape nav bar) still ADDS its lane
+ * on top so the feed clears the overlay.
+ */
+internal fun monitorLeadingInsetDp(cutoutDp: Float, transientBarDp: Float): Float =
+    maxOf(cutoutDp, IOS_ISLAND_LANE_DP) + maxOf(0f, transientBarDp - cutoutDp)
+
 /** Unwraps the owning [android.app.Activity] (a ComposeView's context is a wrapper). */
 private tailrec fun android.content.Context.findActivity(): android.app.Activity? =
     when (this) {
@@ -212,8 +239,19 @@ fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
             edgeDp(cutout.getBottom(density), barInsets.bottom),
             label = "safeBottom",
         )
+        // Leading carries the synthesized iPhone island lane (see
+        // monitorLeadingInsetDp); trailing gets NO floor — in the landscape
+        // zone map the trailing inset only feeds the which-side-is-the-cutout
+        // comparison and moves no frame (iOS's 44pt trailing is < the 59pt
+        // leading, same branch), the rail centering in the letterbox lane on
+        // both platforms.
         val safeLeading by animateFloatAsState(
-            edgeDp(cutout.getLeft(density, direction), barInsets.left),
+            with(density) {
+                monitorLeadingInsetDp(
+                    cutoutDp = cutout.getLeft(this, direction).toDp().value,
+                    transientBarDp = barInsets.left.toDp().value,
+                )
+            },
             label = "safeLeading",
         )
         val safeTrailing =
@@ -270,18 +308,11 @@ fun MonitorScreen(session: CameraSession, frameSource: LiveFrameSource?) {
         }
 
         // Top info pill, centered in the deck band; compact in clean mode.
-        // The core anchors the deck to the feed, and iPhones always carry a
-        // landscape island inset that starts the feed right of the lock; this
-        // device's sub-50dp cutout resolves to no inset, so the raw band would
-        // run under the lock. Clamp the band's leading edge past the lock —
-        // on iPhone-style geometry (deck.x > lock.maxX) this is a no-op.
-        val pillBand =
-            zones.infoBar.let { deck ->
-                val leading = maxOf(deck.x, zones.lock.x + zones.lock.width + 8f)
-                ZoneFrame(leading, deck.y, deck.width - (leading - deck.x), deck.height)
-            }
-        Box(Modifier.zone(pillBand), contentAlignment = Alignment.Center) {
-            FitScale(pillBand.width.dp) {
+        // The deck is feed-anchored and the synthesized island lane (see
+        // monitorLeadingInsetDp) starts the feed right of the lock, so the
+        // band always clears it — same as iPhone geometry.
+        Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
+            FitScale(zones.infoBar.width.dp) {
                 InfoPill(compact = isClean, recording = recording, frameCount = frameCount)
             }
         }

@@ -1,0 +1,42 @@
+package com.opencapture.openzcine
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+/**
+ * Pure-JVM check of the zone-map leading-inset derivation: the display cutout
+ * floored at the synthesized iPhone island lane, plus any transient
+ * system-bar lane on the same edge.
+ */
+class MonitorInsetsTest {
+    @Test
+    fun zeroCutoutFloorsAtTheIslandLane() {
+        // SM-A127F: the punch-hole resolves to a zero inset — the floor alone
+        // must carve the iPhone-parity left lane.
+        assertEquals(IOS_ISLAND_LANE_DP, monitorLeadingInsetDp(0f, 0f))
+    }
+
+    @Test
+    fun cutoutWiderThanTheLaneWins() {
+        assertEquals(70f, monitorLeadingInsetDp(70f, 0f))
+    }
+
+    @Test
+    fun transientBarAddsItsLaneOnTopOfTheFloor() {
+        // Reverse-landscape nav bar on the leading edge: the bar lane stacks
+        // on the floored cutout so the feed clears the overlay.
+        assertEquals(IOS_ISLAND_LANE_DP + 48f, monitorLeadingInsetDp(0f, 48f))
+    }
+
+    @Test
+    fun transientBarOverlappingTheCutoutOnlyAddsTheExcess() {
+        // Bar (80) renders over the physical cutout (70): only the 10dp of
+        // bar beyond the cutout stacks — no double count.
+        assertEquals(80f, monitorLeadingInsetDp(70f, 80f))
+    }
+
+    @Test
+    fun transientBarNarrowerThanTheCutoutAddsNothing() {
+        assertEquals(70f, monitorLeadingInsetDp(70f, 40f))
+    }
+}
