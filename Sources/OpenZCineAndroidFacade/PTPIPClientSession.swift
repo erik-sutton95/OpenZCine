@@ -43,6 +43,7 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case liveViewAlreadyActive
     case mediaModeActive
     case mediaModeRequired
+    case eventDrainAlreadyActive
 
     public var errorDescription: String? {
         switch self {
@@ -73,6 +74,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "Live view is unavailable while camera media is open."
         case .mediaModeRequired:
             return "Open camera media before starting an object transfer."
+        case .eventDrainAlreadyActive:
+            return "The camera event channel is already being drained."
         }
     }
 }
@@ -118,6 +121,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var liveViewPumpActive = false
     private var liveViewStopRequested = false
     private var mediaModeActive = false
+
+    /// Event-channel ownership. PTP-IP events arrive on their own TCP socket,
+    /// so a dedicated reader can drain sparse camera pushes without blocking
+    /// serialized command transactions or live-view frame reads.
+    private let eventDrainCondition = NSCondition()
+    private var eventDrainActive = false
+    private var eventDrainStopRequested = false
 
     /// Media payload pump state. Like live view, this is independent of the
     /// transaction lock so stop/join can proceed while one camera read is in
@@ -349,6 +359,126 @@ public final class PTPIPClientSession: @unchecked Sendable {
             throw PTPIPClientSessionError.mediaModeActive
         }
         try transactExpectingOK(operation)
+    }
+
+    // MARK: - Event channel
+
+    /// Starts one bounded background reader for the PTP-IP event socket.
+    ///
+    /// The Nikon body pushes asynchronous notifications on this socket. If no
+    /// reader drains it, the camera's send buffer can eventually stall an
+    /// otherwise healthy session. Parsed events retain their raw code and
+    /// parameters, so callers never have to guess the meaning of a vendor
+    /// event that the shared core has not classified yet.
+    ///
+    /// Idle reads time out normally and keep draining. Any other transport
+    /// failure ends the stream, closes the command socket (the session is no
+    /// longer trustworthy), and is passed to [onEnded] as an operator-facing
+    /// message. The callback is delivered at most once. A session owns one
+    /// drain for its lifetime; disconnect closes the event socket and joins its
+    /// reader before tearing down the command socket.
+    public func startEventDrain(
+        onEvent: @escaping @Sendable (PTPEvent) -> Void,
+        onEnded: @escaping @Sendable (String?) -> Void
+    ) throws {
+        transactionLock.lock()
+        let closed = isClosed
+        transactionLock.unlock()
+        guard !closed else { throw PTPIPClientSessionError.connectionClosed }
+
+        eventDrainCondition.lock()
+        guard !eventDrainActive else {
+            eventDrainCondition.unlock()
+            throw PTPIPClientSessionError.eventDrainAlreadyActive
+        }
+        eventDrainActive = true
+        eventDrainStopRequested = false
+        eventDrainCondition.unlock()
+
+        Thread.detachNewThread { [self] in
+            runEventDrain(onEvent: onEvent, onEnded: onEnded)
+        }
+    }
+
+    /// Stops the event reader by closing its dedicated socket, then waits only
+    /// until the reader observes that closure. This is intentionally private:
+    /// an active PTP-IP session needs its event socket drained continuously.
+    private func stopEventDrain() {
+        eventDrainCondition.lock()
+        guard eventDrainActive else {
+            eventDrainCondition.unlock()
+            return
+        }
+        eventDrainStopRequested = true
+        eventDrainCondition.unlock()
+
+        // Closing the event descriptor interrupts a blocked poll immediately;
+        // the bounded wait below is only a guard against a platform-level wake
+        // race, not a normal ten-second socket timeout.
+        event.close()
+
+        eventDrainCondition.lock()
+        let deadline = Date().addingTimeInterval(
+            Double(event.timeoutMilliseconds) / 1_000 + 2)
+        while eventDrainActive {
+            guard eventDrainCondition.wait(until: deadline) else { break }
+        }
+        eventDrainCondition.unlock()
+    }
+
+    private func runEventDrain(
+        onEvent: @escaping @Sendable (PTPEvent) -> Void,
+        onEnded: @escaping @Sendable (String?) -> Void
+    ) {
+        var failure: String?
+        while !eventDrainStopIsRequested() {
+            do {
+                // Mirror the iOS transport: unexpected packets and malformed
+                // event payloads are skipped, while valid-but-unknown event
+                // codes still surface through PTPEvent.rawEventCode.
+                let packet = try event.readPacket()
+                guard let parsed = try? PTPEvent(from: packet) else { continue }
+                onEvent(parsed)
+            } catch let error as PTPIPClientSessionError {
+                if case .timeout = error { continue }
+                if !eventDrainStopIsRequested() {
+                    failure = error.localizedDescription
+                }
+                break
+            } catch {
+                if !eventDrainStopIsRequested() {
+                    failure = error.localizedDescription
+                }
+                break
+            }
+        }
+
+        if failure != nil {
+            // A broken event channel means this PTP-IP session can no longer
+            // guarantee camera-authoritative state. Close the command socket
+            // too, waking any in-flight transaction before Kotlin receives the
+            // terminal callback and is allowed to reconnect.
+            command.close()
+            transactionLock.lock()
+            isClosed = true
+            transactionLock.unlock()
+        }
+
+        // Mark inactive before calling out: a Kotlin listener may respond to a
+        // terminal event by disconnecting, and that must never wait for this
+        // same Swift-owned reader thread.
+        eventDrainCondition.lock()
+        eventDrainActive = false
+        eventDrainStopRequested = false
+        eventDrainCondition.broadcast()
+        eventDrainCondition.unlock()
+        onEnded(failure)
+    }
+
+    private func eventDrainStopIsRequested() -> Bool {
+        eventDrainCondition.lock()
+        defer { eventDrainCondition.unlock() }
+        return eventDrainStopRequested
     }
 
     // MARK: - Media ownership and transfer
@@ -670,6 +800,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// A running live-view pump is stopped (and joined) first, so the wire
     /// order on teardown is always `EndLiveView` → `CloseSession`.
     public func disconnect() {
+        stopEventDrain()
         exitMediaMode()
         stopLiveView()
         transactionLock.lock()

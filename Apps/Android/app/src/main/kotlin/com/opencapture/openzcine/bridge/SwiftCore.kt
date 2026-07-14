@@ -167,6 +167,23 @@ object SwiftCore {
         fun onFailed(message: String)
     }
 
+    /** Receives raw camera-pushed PTP events from the active event socket. */
+    interface SessionEventListener {
+        /**
+         * One parsed PTP event. [rawEventCode] is `0..0xFFFF`,
+         * [transactionId] and every [rawParameters] element are lossless
+         * non-negative representations of wire UINT32 values. Unknown Nikon
+         * codes remain raw rather than receiving speculative labels.
+         */
+        fun onEvent(rawEventCode: Int, transactionId: Long, rawParameters: LongArray)
+
+        /**
+         * The native event reader ended. `null` means normal local teardown;
+         * a non-null message describes an unexpected event-channel failure.
+         */
+        fun onEnded(message: String?)
+    }
+
     /** MTP BatteryLevel (0x5001) — UINT8 percentage. */
     const val PROP_BATTERY_LEVEL: Int = 0x5001
 
@@ -195,6 +212,14 @@ object SwiftCore {
      * and the terminal result arrive on [listener] from a background thread.
      */
     external fun sessionConnect(host: String, listener: SessionListener)
+
+    /**
+     * Starts draining the connected camera's dedicated PTP-IP event channel.
+     * Returns after the Swift-owned reader starts; callbacks arrive from that
+     * background thread until disconnect or an event-channel failure. Call
+     * once for each successful [sessionConnect].
+     */
+    external fun sessionStartEventStream(listener: SessionEventListener)
 
     /**
      * Reads one camera property through the active session, decoded by the

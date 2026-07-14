@@ -2,6 +2,7 @@ package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraRecordingState
+import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -9,6 +10,7 @@ import kotlin.test.assertNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
@@ -102,14 +104,83 @@ class SwiftCoreCameraSessionTest {
         assertEquals(CameraRecordingState.RECORDING, session.recordingState.value)
     }
 
+    @Test
+    fun `camera events preserve raw property data and authoritatively update recording`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        val propertyEvent = async { session.events.first() }
+        runCurrent()
+        bridge.eventListeners.single().onEvent(
+            0x4006,
+            9,
+            longArrayOf(0xD0A4, -1),
+        )
+
+        assertEquals(
+            CameraSessionEvent.PropertyChanged(
+                rawEventCode = 0x4006,
+                transactionId = 9,
+                rawParameters = listOf(0xD0A4, 0xFFFF_FFFFL),
+                propertyCode = 0xD0A4,
+            ),
+            propertyEvent.await(),
+        )
+
+        bridge.eventListeners.single().onEvent(0xC10A, 10, longArrayOf())
+
+        assertEquals(CameraRecordingState.RECORDING, session.recordingState.value)
+    }
+
+    @Test
+    fun `late camera event after disconnect is ignored`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        session.disconnect()
+        bridge.eventListeners.single().onEvent(0xC10A, 10, longArrayOf())
+
+        assertEquals(CameraSessionState.Disconnected, session.state.value)
+        assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
+    }
+
+    @Test
+    fun `unexpected event channel end makes the session disconnected`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        bridge.eventListeners.single().onEnded("The camera closed the connection.")
+        bridge.eventListeners.single().onEvent(0xC10A, 10, longArrayOf())
+
+        assertEquals(CameraSessionState.Disconnected, session.state.value)
+        assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
+    }
+
     private class FakeBridge : SwiftCoreSessionBridge {
         override val isAvailable: Boolean = true
         val listeners = mutableListOf<SwiftCore.SessionListener>()
+        val eventListeners = mutableListOf<SwiftCore.SessionEventListener>()
         val recordingRequests = mutableListOf<Boolean>()
         var disconnects = 0
 
         override fun connect(host: String, listener: SwiftCore.SessionListener) {
             listeners += listener
+        }
+
+        override fun startEventStream(listener: SwiftCore.SessionEventListener) {
+            eventListeners += listener
         }
 
         override fun readProperty(code: Int): String? = null

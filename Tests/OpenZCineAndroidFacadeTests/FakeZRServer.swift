@@ -70,6 +70,8 @@ final class FakeZRServer: @unchecked Sendable {
     private let options: Options
     private let listenDescriptor: Int32
     private let lock = NSLock()
+    private let eventConnectionCondition = NSCondition()
+    private let eventSendLock = NSLock()
     private var operationLog: [PTPOperationCode] = []
     private var requestLog: [FakeZRRequest] = []
     private var transactionIDLog: [UInt32] = []
@@ -78,6 +80,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var liveViewActive = false
     private var liveViewEpoch = Date()
     private var recording = false
+    private var eventConnection: Int32 = -1
 
     init(options: Options = Options()) throws {
         self.options = options
@@ -163,6 +166,52 @@ final class FakeZRServer: @unchecked Sendable {
         return recording
     }
 
+    /// Waits until a client has completed the PTP-IP event-channel handshake.
+    /// Tests use this before injecting an event so delivery never depends on a
+    /// connection-accept race.
+    func waitForEventChannel(timeout: TimeInterval = 1) -> Bool {
+        eventConnectionCondition.lock()
+        defer { eventConnectionCondition.unlock() }
+        if eventConnection >= 0 { return true }
+        return eventConnectionCondition.wait(
+            until: Date().addingTimeInterval(timeout)) && eventConnection >= 0
+    }
+
+    /// Pushes one raw PTP-IP Event packet to the connected event socket.
+    ///
+    /// Event codes and parameters intentionally stay raw so facade tests can
+    /// cover established Nikon recording events as well as unknown/property
+    /// notifications without this fake inventing a vendor-value vocabulary.
+    @discardableResult
+    func sendEvent(
+        rawEventCode: UInt16,
+        transactionID: UInt32 = 0,
+        parameters: [UInt32] = []
+    ) -> Bool {
+        eventConnectionCondition.lock()
+        let connection = eventConnection
+        eventConnectionCondition.unlock()
+        guard connection >= 0 else { return false }
+
+        var payload = ByteCoding.uint16LE(rawEventCode) + ByteCoding.uint32LE(transactionID)
+        for parameter in parameters { payload += ByteCoding.uint32LE(parameter) }
+        eventSendLock.lock()
+        send(connection, PTPIPPacket(type: .event, payload: Data(payload)))
+        eventSendLock.unlock()
+        return true
+    }
+
+    /// Simulates the camera dropping only its PTP-IP event socket. The serve
+    /// thread owns the eventual close; shutdown merely wakes its blocked read
+    /// without racing descriptor reuse in this test server.
+    func closeEventChannel() {
+        eventConnectionCondition.lock()
+        let connection = eventConnection
+        eventConnectionCondition.unlock()
+        guard connection >= 0 else { return }
+        shutdown(connection, Int32(SHUT_RDWR))
+    }
+
     /// Reconstructs the served frame counter from a delivered frame's header
     /// timecode (the base-256 encoding `liveViewObject` writes).
     static func frameCounter(of timecode: Timecode) -> Int {
@@ -180,7 +229,11 @@ final class FakeZRServer: @unchecked Sendable {
     }
 
     private func serve(_ connection: Int32) {
-        defer { close(connection) }
+        var isEventConnection = false
+        defer {
+            if isEventConnection { unregisterEventConnection(connection) }
+            close(connection)
+        }
         while let packet = try? readPacket(connection) {
             switch packet.type {
             case .initCommandRequest:
@@ -196,6 +249,8 @@ final class FakeZRServer: @unchecked Sendable {
                 payload += PTPIPFriendlyName.encode(options.cameraName)
                 send(connection, PTPIPPacket(type: .initCommandAck, payload: Data(payload)))
             case .initEventRequest:
+                registerEventConnection(connection)
+                isEventConnection = true
                 send(connection, PTPIPPacket(type: .initEventAck, payload: Data()))
             case .operationRequest:
                 respond(connection, requestPayload: Array(packet.payload))
@@ -266,12 +321,18 @@ final class FakeZRServer: @unchecked Sendable {
             if responseCode == 0x2001 { recording = true }
             lock.unlock()
             sendResponse(connection, code: responseCode, transactionID: transactionID)
+            if responseCode == 0x2001 {
+                _ = sendEvent(rawEventCode: 0xC10A, transactionID: transactionID)
+            }
         case .endMovieRec:
             lock.lock()
             let responseCode = options.stopRecordingResponseCode
             if responseCode == 0x2001 { recording = false }
             lock.unlock()
             sendResponse(connection, code: responseCode, transactionID: transactionID)
+            if responseCode == 0x2001 {
+                _ = sendEvent(rawEventCode: 0xC108, transactionID: transactionID)
+            }
         case .getLiveViewImageEx:
             lock.lock()
             let active = liveViewActive
@@ -514,6 +575,20 @@ final class FakeZRServer: @unchecked Sendable {
     }
 
     // MARK: - Framing
+
+    private func registerEventConnection(_ connection: Int32) {
+        eventConnectionCondition.lock()
+        eventConnection = connection
+        eventConnectionCondition.broadcast()
+        eventConnectionCondition.unlock()
+    }
+
+    private func unregisterEventConnection(_ connection: Int32) {
+        eventConnectionCondition.lock()
+        if eventConnection == connection { eventConnection = -1 }
+        eventConnectionCondition.broadcast()
+        eventConnectionCondition.unlock()
+    }
 
     private func sendResponse(
         _ connection: Int32, code: UInt16, transactionID: UInt32,

@@ -1,6 +1,11 @@
 package com.opencapture.openzcine.core
 
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+
+private val noCameraSessionEvents: SharedFlow<CameraSessionEvent> =
+    MutableSharedFlow<CameraSessionEvent>()
 
 /**
  * Connection lifecycle of a [CameraSession].
@@ -38,6 +43,71 @@ public enum class CameraRecordingState {
 
     /** A stop command is in flight. */
     STOPPING,
+}
+
+/**
+ * One camera-pushed PTP event observed on a connected session's event socket.
+ *
+ * PTP event codes and parameters are unsigned wire values. Kotlin represents
+ * them as non-negative [Int] / [Long] values so unknown Nikon events are
+ * preserved instead of being decoded speculatively. Every variant retains the
+ * complete wire fields through [rawEventCode], [transactionId], and
+ * [rawParameters].
+ */
+public sealed interface CameraSessionEvent {
+    /** The exact PTP event code sent by the camera (`0..0xFFFF`). */
+    public val rawEventCode: Int
+
+    /** The exact PTP transaction ID associated with this event (`0..0xFFFFFFFF`). */
+    public val transactionId: Long
+
+    /** All raw UINT32 event parameters in their original order. */
+    public val rawParameters: List<Long>
+
+    /** Nikon MovieRecordStarted (`0xC10A`), an authoritative recording transition. */
+    public data class RecordingStarted(
+        override val rawEventCode: Int,
+        override val transactionId: Long,
+        override val rawParameters: List<Long>,
+    ) : CameraSessionEvent
+
+    /** Nikon MovieRecordComplete (`0xC108`), an authoritative standby transition. */
+    public data class RecordingStopped(
+        override val rawEventCode: Int,
+        override val transactionId: Long,
+        override val rawParameters: List<Long>,
+    ) : CameraSessionEvent
+
+    /**
+     * Nikon MovieRecordInterrupted (`0xC105`). [errorCode] is intentionally
+     * raw: Nikon does not publish a stable table for this camera-provided
+     * value, so callers must not label it as thermal, card, or buffer failure.
+     */
+    public data class RecordingInterrupted(
+        override val rawEventCode: Int,
+        override val transactionId: Long,
+        override val rawParameters: List<Long>,
+        val errorCode: Long?,
+    ) : CameraSessionEvent
+
+    /**
+     * Standard DevicePropChanged (`0x4006`). [propertyCode] is its first raw
+     * UINT32 parameter when present; no property value is invented by this
+     * notification alone.
+     */
+    public data class PropertyChanged(
+        override val rawEventCode: Int,
+        override val transactionId: Long,
+        override val rawParameters: List<Long>,
+        val propertyCode: Long?,
+    ) : CameraSessionEvent
+
+    /** A valid camera event whose model-specific semantics are not known here. */
+    public data class Unknown(
+        override val rawEventCode: Int,
+        override val transactionId: Long,
+        override val rawParameters: List<Long>,
+    ) : CameraSessionEvent
 }
 
 /** Typed failures from [CameraSession.setRecording]. */
@@ -81,6 +151,16 @@ public interface CameraSession {
 
     /** Current movie-record lifecycle for this session. */
     public val recordingState: StateFlow<CameraRecordingState>
+
+    /**
+     * Camera-pushed PTP events from the active event channel.
+     *
+     * Production sessions use a bounded, non-blocking stream so slow UI
+     * collectors cannot back up the camera socket. Implementations without an
+     * event-capable transport expose an empty stream.
+     */
+    public val events: SharedFlow<CameraSessionEvent>
+        get() = noCameraSessionEvents
 
     /**
      * Discovers and connects to a camera.

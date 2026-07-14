@@ -4,14 +4,19 @@ import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
+import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -22,6 +27,8 @@ internal interface SwiftCoreSessionBridge {
     val isAvailable: Boolean
 
     fun connect(host: String, listener: SwiftCore.SessionListener)
+
+    fun startEventStream(listener: SwiftCore.SessionEventListener)
 
     fun readProperty(code: Int): String?
 
@@ -35,6 +42,10 @@ internal interface SwiftCoreSessionBridge {
 
         override fun connect(host: String, listener: SwiftCore.SessionListener) {
             SwiftCore.sessionConnect(host, listener)
+        }
+
+        override fun startEventStream(listener: SwiftCore.SessionEventListener) {
+            SwiftCore.sessionStartEventStream(listener)
         }
 
         override fun readProperty(code: Int): String? = SwiftCore.sessionReadProperty(code)
@@ -80,6 +91,14 @@ class SwiftCoreCameraSession internal constructor(
     private val _recordingState = MutableStateFlow(CameraRecordingState.STANDBY)
     override val recordingState: StateFlow<CameraRecordingState> = _recordingState.asStateFlow()
 
+    private val _events =
+        MutableSharedFlow<CameraSessionEvent>(
+            replay = 0,
+            extraBufferCapacity = EVENT_BUFFER_CAPACITY,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        )
+    override val events: SharedFlow<CameraSessionEvent> = _events.asSharedFlow()
+
     /** Serializes record commands with disconnect so an in-flight JNI call never races teardown. */
     private val recordingCommandMutex = Mutex()
 
@@ -89,6 +108,9 @@ class SwiftCoreCameraSession internal constructor(
      * stale live-view header for a few frames after accepting the operation.
      */
     @Volatile private var ignoreLiveRecordingStateUntilNanos: Long = 0L
+
+    /** Incremented only by authoritative camera record events. */
+    @Volatile private var cameraRecordingEventVersion: Long = 0L
 
     /**
      * Live-view frames from the Swift core's pump. Collect only while the
@@ -126,13 +148,16 @@ class SwiftCoreCameraSession internal constructor(
                             )
                         ) {
                             ignoreLiveRecordingStateUntilNanos = 0L
+                            cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
+                            startEventStream(attempt)
                         }
                     }
 
                     override fun onFailed(message: String) {
                         if (updateAttempt(attempt, CameraSessionState.Disconnected)) {
                             ignoreLiveRecordingStateUntilNanos = 0L
+                            cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
                             phaseLogger("failed", message)
                         }
@@ -140,7 +165,7 @@ class SwiftCoreCameraSession internal constructor(
                 },
             )
             _state.first { it !is CameraSessionState.Connecting || !isCurrentAttempt(attempt) }
-            clearAttempt(attempt)
+            clearCompletedConnectionAttempt(attempt)
         } catch (error: CancellationException) {
             cancelAttempt(attempt)
             throw error
@@ -181,6 +206,7 @@ class SwiftCoreCameraSession internal constructor(
             if (_recordingState.value == target) return
 
             val rollback = if (recording) CameraRecordingState.STANDBY else CameraRecordingState.RECORDING
+            val eventVersionAtCommandStart = cameraRecordingEventVersion
             _recordingState.value =
                 if (recording) CameraRecordingState.STARTING else CameraRecordingState.STOPPING
             // Suppress a stale live-view header both while the command is
@@ -193,15 +219,34 @@ class SwiftCoreCameraSession internal constructor(
                         core.setRecording(recording)
                     }
                 nativeResult.throwIfRecordingCommandFailed()
-                _recordingState.value = target
-                ignoreLiveRecordingStateUntilNanos =
-                    System.nanoTime() + RECORDING_READBACK_GRACE_NANOS
+                if (
+                    cameraRecordingEventVersion == eventVersionAtCommandStart &&
+                        _state.value is CameraSessionState.Connected
+                ) {
+                    _recordingState.value = target
+                    ignoreLiveRecordingStateUntilNanos =
+                        System.nanoTime() + RECORDING_READBACK_GRACE_NANOS
+                } else {
+                    // A PTP event arrived while the command crossed JNI. It
+                    // is more authoritative than this local command result.
+                    ignoreLiveRecordingStateUntilNanos = 0L
+                }
             } catch (error: CameraRecordingException) {
-                _recordingState.value = rollback
+                if (
+                    cameraRecordingEventVersion == eventVersionAtCommandStart &&
+                        _state.value is CameraSessionState.Connected
+                ) {
+                    _recordingState.value = rollback
+                }
                 ignoreLiveRecordingStateUntilNanos = 0L
                 throw error
             } catch (_: Throwable) {
-                _recordingState.value = rollback
+                if (
+                    cameraRecordingEventVersion == eventVersionAtCommandStart &&
+                        _state.value is CameraSessionState.Connected
+                ) {
+                    _recordingState.value = rollback
+                }
                 ignoreLiveRecordingStateUntilNanos = 0L
                 throw CameraRecordingException.TransportFailed
             }
@@ -215,17 +260,128 @@ class SwiftCoreCameraSession internal constructor(
                 withContext(Dispatchers.IO + NonCancellable) { core.disconnect() }
             }
             ignoreLiveRecordingStateUntilNanos = 0L
+            cameraRecordingEventVersion = 0L
             _recordingState.value = CameraRecordingState.STANDBY
             _state.value = CameraSessionState.Disconnected
         }
     }
 
     /** Applies camera-authoritative record state from a decoded live-view frame. */
-    private fun applyCameraRecordingState(recording: Boolean) {
+    private fun applyCameraRecordingState(recording: Boolean, force: Boolean = false) {
         if (_state.value !is CameraSessionState.Connected) return
-        if (System.nanoTime() < ignoreLiveRecordingStateUntilNanos) return
+        if (!force && System.nanoTime() < ignoreLiveRecordingStateUntilNanos) return
         _recordingState.value =
             if (recording) CameraRecordingState.RECORDING else CameraRecordingState.STANDBY
+    }
+
+    /** Starts the native event drain after the current connection is established. */
+    private fun startEventStream(attempt: Long) {
+        try {
+            core.startEventStream(
+                object : SwiftCore.SessionEventListener {
+                    override fun onEvent(
+                        rawEventCode: Int,
+                        transactionId: Long,
+                        rawParameters: LongArray,
+                    ) {
+                        applyCameraEvent(attempt, rawEventCode, transactionId, rawParameters)
+                    }
+
+                    override fun onEnded(message: String?) {
+                        if (message != null) markEventChannelEnded(attempt, message)
+                    }
+                },
+            )
+        } catch (error: Throwable) {
+            if (isCurrentAttempt(attempt)) {
+                phaseLogger("eventChannelEnded", error.message ?: "Camera event channel failed.")
+            }
+        }
+    }
+
+    /**
+     * Makes an unexpected event-channel loss terminal for this session. The
+     * native reader has already closed the command socket before this callback,
+     * so dropping to disconnected cannot leave a hidden, usable control link.
+     */
+    private fun markEventChannelEnded(attempt: Long, message: String) {
+        val ownsAttempt =
+            synchronized(attemptLock) {
+                if (activeAttempt != attempt) return@synchronized false
+                activeAttempt = null
+                _state.value = CameraSessionState.Disconnected
+                true
+            }
+        if (!ownsAttempt) return
+        ignoreLiveRecordingStateUntilNanos = 0L
+        cameraRecordingEventVersion = 0L
+        _recordingState.value = CameraRecordingState.STANDBY
+        phaseLogger("eventChannelEnded", message)
+    }
+
+    /** Maps only established event codes; all other camera data remains raw. */
+    private fun applyCameraEvent(
+        attempt: Long,
+        rawEventCode: Int,
+        transactionId: Long,
+        rawParameters: LongArray,
+    ) {
+        if (!isCurrentAttempt(attempt) || _state.value !is CameraSessionState.Connected) return
+        val code = rawEventCode and EVENT_CODE_MASK
+        val parameters = rawParameters.map { it and UINT32_MASK }
+        val event =
+            when (code) {
+                MOVIE_RECORD_STARTED ->
+                    CameraSessionEvent.RecordingStarted(
+                        code,
+                        transactionId and UINT32_MASK,
+                        parameters,
+                    )
+                MOVIE_RECORD_COMPLETE ->
+                    CameraSessionEvent.RecordingStopped(
+                        code,
+                        transactionId and UINT32_MASK,
+                        parameters,
+                    )
+                MOVIE_RECORD_INTERRUPTED ->
+                    CameraSessionEvent.RecordingInterrupted(
+                        code,
+                        transactionId and UINT32_MASK,
+                        parameters,
+                        parameters.firstOrNull(),
+                    )
+                DEVICE_PROPERTY_CHANGED ->
+                    CameraSessionEvent.PropertyChanged(
+                        code,
+                        transactionId and UINT32_MASK,
+                        parameters,
+                        parameters.firstOrNull(),
+                    )
+                else ->
+                    CameraSessionEvent.Unknown(
+                        code,
+                        transactionId and UINT32_MASK,
+                        parameters,
+                    )
+            }
+        _events.tryEmit(event)
+
+        when (event) {
+            is CameraSessionEvent.RecordingStarted -> {
+                cameraRecordingEventVersion += 1
+                applyCameraRecordingState(recording = true, force = true)
+            }
+            is CameraSessionEvent.RecordingStopped -> {
+                cameraRecordingEventVersion += 1
+                applyCameraRecordingState(recording = false, force = true)
+            }
+            is CameraSessionEvent.RecordingInterrupted -> {
+                cameraRecordingEventVersion += 1
+                applyCameraRecordingState(recording = false, force = true)
+            }
+            is CameraSessionEvent.PropertyChanged -> Unit
+            is CameraSessionEvent.Unknown -> Unit
+        }
     }
 
     private fun Int.throwIfRecordingCommandFailed() {
@@ -242,6 +398,13 @@ class SwiftCoreCameraSession internal constructor(
 
     private companion object {
         const val RECORDING_READBACK_GRACE_NANOS: Long = 1_500_000_000L
+        const val EVENT_BUFFER_CAPACITY: Int = 64
+        const val EVENT_CODE_MASK: Int = 0xFFFF
+        const val UINT32_MASK: Long = 0xFFFF_FFFFL
+        const val DEVICE_PROPERTY_CHANGED: Int = 0x4006
+        const val MOVIE_RECORD_INTERRUPTED: Int = 0xC105
+        const val MOVIE_RECORD_COMPLETE: Int = 0xC108
+        const val MOVIE_RECORD_STARTED: Int = 0xC10A
     }
 
     private fun beginAttempt(): Long? =
@@ -263,9 +426,15 @@ class SwiftCoreCameraSession internal constructor(
             true
         }
 
-    private fun clearAttempt(attempt: Long) {
+    /**
+     * Keeps a successful attempt current for its event stream, while releasing
+     * a failed attempt so a new connection can begin immediately.
+     */
+    private fun clearCompletedConnectionAttempt(attempt: Long) {
         synchronized(attemptLock) {
-            if (activeAttempt == attempt) activeAttempt = null
+            if (activeAttempt == attempt && _state.value !is CameraSessionState.Connected) {
+                activeAttempt = null
+            }
         }
     }
 
