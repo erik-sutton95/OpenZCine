@@ -3,6 +3,21 @@
 
     <!-- PTP-IP camera sockets (local network only; there is no server backend). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Camera-AP join: WifiNetworkSpecifier requestNetwork + bindProcessToNetwork. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- NSD/Wi-Fi camera discovery: NEARBY_WIFI_DEVICES on 13+ (never used
+        for location — the app only finds its own camera), location below. -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <!-- Android 12 requires COARSE alongside FINE; approximate is enough for NSD. -->
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32" />
 
     <application
         android:label="OpenZCine"

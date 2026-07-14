@@ -87,6 +87,12 @@ class CameraDiscovery(private val browser: NsdBrowser) {
          */
         const val NIKON_ZR_ACCESS_POINT_HOST: String = "192.168.1.1"
 
+        /**
+         * Prefix of the camera's own access-point SSID (e.g. `NIKON_ZR_01234`)
+         * — mirrors `CameraWiFiSSID.nikonAccessPointPrefix` in the shared core.
+         */
+        const val NIKON_ZR_SSID_PREFIX: String = "NIKON_ZR_"
+
         /** Direct-host camera for the camera-AP case; no mDNS browse needed. */
         fun accessPointCamera(): DiscoveredCamera =
             DiscoveredCamera(
