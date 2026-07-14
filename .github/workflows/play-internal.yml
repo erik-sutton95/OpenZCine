@@ -58,7 +58,6 @@ jobs:
       - name: Run Android checks
         working-directory: Apps/Android
         env:
-          SWIFT_EXECUTABLE: ${{ steps.swift-android.outputs.swift-install }}/bin/swift
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
         run: ./gradlew test lint
 
@@ -85,7 +84,6 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
-          SWIFT_EXECUTABLE: ${{ steps.swift-android.outputs.swift-install }}/bin/swift
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
         run: ./gradlew verifyReleaseNativeLibraries "-PversionCode=$VERSION_CODE"
 

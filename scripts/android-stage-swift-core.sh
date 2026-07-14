@@ -55,6 +55,11 @@ done
 
 if [[ -n "${SWIFT_EXECUTABLE:-}" ]]; then
     swift="$SWIFT_EXECUTABLE"
+elif [[ -x "${SWIFT_INSTALLATION:-}/bin/swift" ]]; then
+    # skiptools/swift-android-action exports the installed host toolchain through
+    # GITHUB_ENV as SWIFT_INSTALLATION. Prefer it to the runner's system Swift:
+    # the Android SDK must be driven by its exact matching host toolchain.
+    swift="$SWIFT_INSTALLATION/bin/swift"
 elif [[ -x "$HOME/Library/Developer/Toolchains/swift-${SWIFT_VERSION}-RELEASE.xctoolchain/usr/bin/swift" ]]; then
     # Swiftly puts the requested macOS release toolchain here.
     swift="$HOME/Library/Developer/Toolchains/swift-${SWIFT_VERSION}-RELEASE.xctoolchain/usr/bin/swift"
