@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.settings
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -29,14 +30,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,13 +50,16 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.FeedFalseColorScale
+import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.glass
 
 /**
  * Operator Setup rail tabs — the Android v1 subset of the iOS
  * `OperatorSettingsTab` set (Link / View Assist / Controls / Display /
- * Storage / System). Link, Controls, and Storage arrive with the features
- * that back them (link scoring, touch safety, media cache).
+ * Storage / System). Android exposes every tab whose current controls are
+ * locally actionable; camera-property and integration tabs arrive with their
+ * underlying platform adapters.
  */
 public enum class OperatorSettingsTab(
     public val title: String,
@@ -65,6 +68,7 @@ public enum class OperatorSettingsTab(
     public val pill: String,
 ) {
     ASSIST("View Assist", "Scopes & overlays", "Behavior for live-view tools.", "ASSIST"),
+    CONTROLS("Controls", "Dials & safety", "Touch behavior and safety.", "TOUCH"),
     DISPLAY("Display", "Live view", "Live view buttons and chrome.", "VISIBILITY"),
     SYSTEM("System", "App behavior", "App-level behavior.", "APP"),
 }
@@ -80,10 +84,29 @@ public enum class OperatorSettingsTab(
 public fun OperatorSettingsScreen(
     session: CameraSession,
     assistState: AssistState,
+    settings: OperatorSettings,
     onClose: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val settings = remember { OperatorSettings(context) }
+    val feedbackView = LocalView.current
+    val toggleSetting: (OperatorSettings.Toggle) -> Unit = { toggle ->
+        val hapticsWereEnabled = settings.hapticsEnabled.value
+        toggle.toggle()
+        if (hapticsWereEnabled) {
+            feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
+    val toggleAssist: (AssistTool) -> Unit = { tool ->
+        val hapticsEnabled = settings.hapticsEnabled.value
+        assistState.toggle(tool)
+        if (hapticsEnabled) {
+            feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
+    val emitHaptic: () -> Unit = {
+        if (settings.hapticsEnabled.value) {
+            feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
     var selectedTab by rememberSaveable { mutableStateOf(OperatorSettingsTab.ASSIST) }
 
     BoxWithConstraints(
@@ -113,6 +136,9 @@ public fun OperatorSettingsScreen(
                     selectedTab,
                     settings,
                     assistState,
+                    onSettingToggle = toggleSetting,
+                    onAssistToggle = toggleAssist,
+                    onInteraction = emitHaptic,
                     compact = true,
                     modifier = Modifier.weight(1f),
                 )
@@ -126,6 +152,9 @@ public fun OperatorSettingsScreen(
                         selectedTab,
                         settings,
                         assistState,
+                        onSettingToggle = toggleSetting,
+                        onAssistToggle = toggleAssist,
+                        onInteraction = emitHaptic,
                         compact = false,
                         modifier = Modifier.weight(1f),
                     )
@@ -336,6 +365,9 @@ private fun SettingsContentPane(
     tab: OperatorSettingsTab,
     settings: OperatorSettings,
     assistState: AssistState,
+    onSettingToggle: (OperatorSettings.Toggle) -> Unit,
+    onAssistToggle: (AssistTool) -> Unit,
+    onInteraction: () -> Unit,
     compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -381,8 +413,11 @@ private fun SettingsContentPane(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 when (tab) {
-                    OperatorSettingsTab.ASSIST -> AssistRows(assistState)
-                    OperatorSettingsTab.DISPLAY -> DisplayRows(settings, compact)
+                    OperatorSettingsTab.ASSIST ->
+                        AssistRows(assistState, onAssistToggle, onInteraction)
+                    OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
+                    OperatorSettingsTab.DISPLAY ->
+                        DisplayRows(settings, compact, onSettingToggle, onInteraction)
                     OperatorSettingsTab.SYSTEM -> SystemRows()
                 }
             }
@@ -395,32 +430,170 @@ private fun SettingsContentPane(
  * shared [AssistState], so changes immediately reach effects and scopes.
  */
 @Composable
-private fun AssistRows(assistState: AssistState) {
+private fun AssistRows(
+    assistState: AssistState,
+    onToggle: (AssistTool) -> Unit,
+    onInteraction: () -> Unit,
+) {
+    SettingsRowCard {
+        AssistTool.entries.forEachIndexed { index, tool ->
+            SettingsSwitchRow(
+                tool.settingsTitle,
+                isOn = assistState.isOn(tool),
+                showTopDivider = index != 0,
+            ) { onToggle(tool) }
+        }
+    }
+    SettingsGroupCard(
+        title = "Image Processing",
+        caption = "Choose the look and false-color scale used when each assist is enabled.",
+    ) {
+        SettingsInlineRow(title = "LUT Look", showTopDivider = false) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FeedLut.entries.forEach { lut ->
+                    AssistChoice(
+                        label = lut.label,
+                        selected = assistState.selectedLut == lut,
+                    ) {
+                        assistState.selectLut(lut)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        SettingsInlineRow(title = "False Color") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FeedFalseColorScale.entries.forEach { scale ->
+                    AssistChoice(
+                        label = scale.label,
+                        selected = assistState.selectedFalseColorScale == scale,
+                    ) {
+                        assistState.selectFalseColorScale(scale)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Controls whose effects stay wholly within the Android shell. */
+@Composable
+private fun ControlsRows(
+    settings: OperatorSettings,
+    onToggle: (OperatorSettings.Toggle) -> Unit,
+) {
     SettingsRowCard {
         SettingsSwitchRow(
-            "False Color",
-            isOn = assistState.isOn(AssistTool.FALSE),
+            "Record Confirmation",
+            isOn = settings.recordConfirmationEnabled.value,
             showTopDivider = false,
-        ) { assistState.toggle(AssistTool.FALSE) }
-        SettingsSwitchRow("Zebra", isOn = assistState.isOn(AssistTool.ZEBRA)) {
-            assistState.toggle(AssistTool.ZEBRA)
+        ) { onToggle(settings.recordConfirmationEnabled) }
+        SettingsSwitchRow("Haptics", isOn = settings.hapticsEnabled.value) {
+            onToggle(settings.hapticsEnabled)
         }
-        SettingsSwitchRow("Focus Peaking", isOn = assistState.isOn(AssistTool.PEAK)) {
-            assistState.toggle(AssistTool.PEAK)
-        }
-        SettingsSwitchRow("Waveform", isOn = assistState.isOn(AssistTool.WAVE)) {
-            assistState.toggle(AssistTool.WAVE)
+        SettingsSwitchRow("Keep Screen Awake", isOn = settings.keepScreenAwake.value) {
+            onToggle(settings.keepScreenAwake)
         }
     }
 }
 
 /**
- * Display tab. Readout visibility persists but the monitor `InfoPill` does
- * not consume it yet — that wiring belongs to the shell task (the monitor
- * files are deliberately out of scope here; see [OperatorSettings]).
+ * Display tab. Every exposed toggle maps to Android monitor chrome rather
+ * than merely recording an intent for a later shell pass.
  */
 @Composable
-private fun DisplayRows(settings: OperatorSettings, compact: Boolean) {
+private fun DisplayRows(
+    settings: OperatorSettings,
+    compact: Boolean,
+    onToggle: (OperatorSettings.Toggle) -> Unit,
+    onInteraction: () -> Unit,
+) {
+    SettingsGroupCard(
+        title = "Monitor Chrome",
+        caption = "Show only the monitor regions you need during a take.",
+    ) {
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    DisplayToggleItem(
+                        "STATUS",
+                        isOn = settings.statusBarVisible.value,
+                        modifier = Modifier.weight(1f),
+                    ) { onToggle(settings.statusBarVisible) }
+                    DisplayToggleItem(
+                        "ASSISTS",
+                        isOn = settings.assistToolbarVisible.value,
+                        modifier = Modifier.weight(1f),
+                    ) { onToggle(settings.assistToolbarVisible) }
+                }
+                DisplayToggleItem(
+                    "VALUES",
+                    isOn = settings.cameraValuesVisible.value,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { onToggle(settings.cameraValuesVisible) }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                DisplayToggleItem(
+                    "STATUS",
+                    isOn = settings.statusBarVisible.value,
+                    modifier = Modifier.weight(1f),
+                ) { onToggle(settings.statusBarVisible) }
+                DisplayToggleItem(
+                    "ASSISTS",
+                    isOn = settings.assistToolbarVisible.value,
+                    modifier = Modifier.weight(1f),
+                ) { onToggle(settings.assistToolbarVisible) }
+                DisplayToggleItem(
+                    "VALUES",
+                    isOn = settings.cameraValuesVisible.value,
+                    modifier = Modifier.weight(1f),
+                ) { onToggle(settings.cameraValuesVisible) }
+            }
+        }
+    }
+    SettingsGroupCard(
+        title = "View Assist Toolbar",
+        caption = "Show or hide tools, then use arrows to set their monitor order.",
+    ) {
+        settings.assistToolbarOrder.forEachIndexed { index, tool ->
+            SettingsInlineRow(
+                title = "${index + 1}. ${tool.settingsTitle}",
+                showTopDivider = index != 0,
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (tool == AssistTool.LUT) {
+                        SettingsValueText("PINNED")
+                    } else {
+                        Box(
+                            Modifier.settingsClickable(role = Role.Switch) {
+                                settings.toggleAssistToolbarToolVisibility(tool)
+                                onInteraction()
+                            },
+                        ) {
+                            SettingsSwitchGraphic(settings.isAssistToolbarToolVisible(tool))
+                        }
+                    }
+                    SettingsLinkAction("↑") {
+                        settings.moveAssistToolbarTool(tool, direction = -1)
+                        onInteraction()
+                    }
+                    SettingsLinkAction("↓") {
+                        settings.moveAssistToolbarTool(tool, direction = 1)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        SettingsLinkAction("Reset toolbar") {
+            settings.resetAssistToolbarPreferences()
+            onInteraction()
+        }
+    }
     SettingsGroupCard(
         title = "Live Status Readouts",
         caption = "Hide readouts you do not ride during a take.",
@@ -432,24 +605,24 @@ private fun DisplayRows(settings: OperatorSettings, compact: Boolean) {
                         "REC",
                         isOn = settings.recReadoutVisible.value,
                         modifier = Modifier.weight(1f),
-                    ) { settings.recReadoutVisible.toggle() }
+                    ) { onToggle(settings.recReadoutVisible) }
                     DisplayToggleItem(
                         "CODEC",
                         isOn = settings.codecReadoutVisible.value,
                         modifier = Modifier.weight(1f),
-                    ) { settings.codecReadoutVisible.toggle() }
+                    ) { onToggle(settings.codecReadoutVisible) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     DisplayToggleItem(
                         "MEDIA",
                         isOn = settings.mediaReadoutVisible.value,
                         modifier = Modifier.weight(1f),
-                    ) { settings.mediaReadoutVisible.toggle() }
+                    ) { onToggle(settings.mediaReadoutVisible) }
                     DisplayToggleItem(
                         "FPS",
                         isOn = settings.fpsReadoutVisible.value,
                         modifier = Modifier.weight(1f),
-                    ) { settings.fpsReadoutVisible.toggle() }
+                    ) { onToggle(settings.fpsReadoutVisible) }
                 }
             }
         } else {
@@ -458,25 +631,45 @@ private fun DisplayRows(settings: OperatorSettings, compact: Boolean) {
                     "REC",
                     isOn = settings.recReadoutVisible.value,
                     modifier = Modifier.weight(1f),
-                ) { settings.recReadoutVisible.toggle() }
+                ) { onToggle(settings.recReadoutVisible) }
                 DisplayToggleItem(
                     "CODEC",
                     isOn = settings.codecReadoutVisible.value,
                     modifier = Modifier.weight(1f),
-                ) { settings.codecReadoutVisible.toggle() }
+                ) { onToggle(settings.codecReadoutVisible) }
                 DisplayToggleItem(
                     "MEDIA",
                     isOn = settings.mediaReadoutVisible.value,
                     modifier = Modifier.weight(1f),
-                ) { settings.mediaReadoutVisible.toggle() }
+                ) { onToggle(settings.mediaReadoutVisible) }
                 DisplayToggleItem(
                     "FPS",
                     isOn = settings.fpsReadoutVisible.value,
                     modifier = Modifier.weight(1f),
-                ) { settings.fpsReadoutVisible.toggle() }
+                ) { onToggle(settings.fpsReadoutVisible) }
             }
         }
     }
+}
+
+/** Compact active/inactive choice chip shared by the local image-assist settings. */
+@Composable
+private fun AssistChoice(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        label,
+        style = chromeStyle(10f, FontWeight.SemiBold, mono = true),
+        color = if (selected) LiveDesign.accent else LiveDesign.muted,
+        maxLines = 1,
+        modifier =
+            Modifier
+                .background(
+                    if (selected) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
+                    ChromeShape,
+                )
+                .border(1.dp, if (selected) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
+                .settingsClickable(role = Role.RadioButton, onClick = onClick)
+                .padding(horizontal = 6.dp, vertical = 5.dp),
+    )
 }
 
 /** System tab — fully real: version, support, legal links, licenses (iOS `systemRows`). */

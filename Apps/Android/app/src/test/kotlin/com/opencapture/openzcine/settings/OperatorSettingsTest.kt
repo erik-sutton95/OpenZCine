@@ -1,20 +1,28 @@
 package com.opencapture.openzcine.settings
 
-import android.content.SharedPreferences
+import com.opencapture.openzcine.AssistTool
+import com.opencapture.openzcine.TestSharedPreferences
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class OperatorSettingsTest {
-    private val store = FakePreferences()
+    private val store = TestSharedPreferences()
 
     @Test
     fun `readouts default visible`() {
         val settings = OperatorSettings(store)
+        assertTrue(settings.statusBarVisible.value)
+        assertTrue(settings.assistToolbarVisible.value)
+        assertTrue(settings.cameraValuesVisible.value)
         assertTrue(settings.recReadoutVisible.value)
         assertTrue(settings.codecReadoutVisible.value)
         assertTrue(settings.mediaReadoutVisible.value)
         assertTrue(settings.fpsReadoutVisible.value)
+        assertTrue(settings.recordConfirmationEnabled.value)
+        assertTrue(settings.hapticsEnabled.value)
+        assertTrue(settings.keepScreenAwake.value)
     }
 
     @Test
@@ -33,78 +41,63 @@ class OperatorSettingsTest {
     }
 
     @Test
+    fun `local monitor controls persist and drive the screen awake policy`() {
+        OperatorSettings(store).apply {
+            statusBarVisible.toggle()
+            assistToolbarVisible.toggle()
+            cameraValuesVisible.toggle()
+            recordConfirmationEnabled.toggle()
+            keepScreenAwake.toggle()
+        }
+
+        val restored = OperatorSettings(store)
+        assertFalse(restored.statusBarVisible.value)
+        assertFalse(restored.assistToolbarVisible.value)
+        assertFalse(restored.cameraValuesVisible.value)
+        assertFalse(restored.recordConfirmationEnabled.value)
+        assertFalse(restored.shouldKeepScreenAwake(monitorPresented = true))
+        assertFalse(restored.shouldKeepScreenAwake(monitorPresented = false))
+    }
+
+    @Test
+    fun `assist toolbar visibility retains LUT and survives a reload`() {
+        val settings = OperatorSettings(store)
+        settings.toggleAssistToolbarToolVisibility(AssistTool.LUT)
+        settings.toggleAssistToolbarToolVisibility(AssistTool.PEAK)
+
+        assertTrue(settings.isAssistToolbarToolVisible(AssistTool.LUT))
+        assertFalse(settings.isAssistToolbarToolVisible(AssistTool.PEAK))
+        assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.PEAK))
+    }
+
+    @Test
+    fun `toolbar order reconciles malformed stored data and retains moves`() {
+        store.edit()
+            .putString("display.assistToolbar.order.v1", "VECTOR,UNKNOWN,VECTOR,LUT")
+            .apply()
+
+        val settings = OperatorSettings(store)
+        assertEquals(AssistTool.VECTOR, settings.assistToolbarOrder.first())
+        assertEquals(AssistTool.LUT, settings.assistToolbarOrder[1])
+        assertEquals(AssistTool.entries.toSet(), settings.assistToolbarOrder.toSet())
+
+        settings.moveAssistToolbarTool(AssistTool.LUT, direction = -1)
+        assertEquals(AssistTool.LUT, OperatorSettings(store).assistToolbarOrder.first())
+    }
+
+    @Test
+    fun `toolbar reset restores every currently supported tool`() {
+        val settings = OperatorSettings(store)
+        settings.toggleAssistToolbarToolVisibility(AssistTool.WAVE)
+        settings.moveAssistToolbarTool(AssistTool.VECTOR, direction = -1)
+        settings.resetAssistToolbarPreferences()
+
+        assertEquals(AssistTool.entries.toList(), settings.assistToolbarOrder)
+        assertEquals(AssistTool.entries.toList(), settings.visibleAssistToolbarTools)
+    }
+
+    @Test
     fun `version text matches the iOS format`() {
         assertEquals("0.1.117 (42)", appVersionText("0.1.117", 42))
-    }
-}
-
-/** In-memory [SharedPreferences] — only the boolean surface the store uses is real. */
-private class FakePreferences : SharedPreferences {
-    private val values = mutableMapOf<String, Any?>()
-
-    override fun getAll(): MutableMap<String, *> = values
-
-    override fun getString(key: String?, defValue: String?): String? =
-        values[key] as? String ?: defValue
-
-    override fun getStringSet(
-        key: String?,
-        defValues: MutableSet<String>?,
-    ): MutableSet<String>? {
-        @Suppress("UNCHECKED_CAST")
-        return values[key] as? MutableSet<String> ?: defValues
-    }
-
-    override fun getInt(key: String?, defValue: Int): Int = values[key] as? Int ?: defValue
-
-    override fun getLong(key: String?, defValue: Long): Long = values[key] as? Long ?: defValue
-
-    override fun getFloat(key: String?, defValue: Float): Float =
-        values[key] as? Float ?: defValue
-
-    override fun getBoolean(key: String?, defValue: Boolean): Boolean =
-        values[key] as? Boolean ?: defValue
-
-    override fun contains(key: String?): Boolean = values.containsKey(key)
-
-    override fun edit(): SharedPreferences.Editor = FakeEditor()
-
-    override fun registerOnSharedPreferenceChangeListener(
-        listener: SharedPreferences.OnSharedPreferenceChangeListener?
-    ) = Unit
-
-    override fun unregisterOnSharedPreferenceChangeListener(
-        listener: SharedPreferences.OnSharedPreferenceChangeListener?
-    ) = Unit
-
-    private inner class FakeEditor : SharedPreferences.Editor {
-        override fun putString(key: String?, value: String?): SharedPreferences.Editor =
-            apply { values[key!!] = value }
-
-        override fun putStringSet(
-            key: String?,
-            value: MutableSet<String>?,
-        ): SharedPreferences.Editor = apply { values[key!!] = value }
-
-        override fun putInt(key: String?, value: Int): SharedPreferences.Editor =
-            apply { values[key!!] = value }
-
-        override fun putLong(key: String?, value: Long): SharedPreferences.Editor =
-            apply { values[key!!] = value }
-
-        override fun putFloat(key: String?, value: Float): SharedPreferences.Editor =
-            apply { values[key!!] = value }
-
-        override fun putBoolean(key: String?, value: Boolean): SharedPreferences.Editor =
-            apply { values[key!!] = value }
-
-        override fun remove(key: String?): SharedPreferences.Editor =
-            apply { values.remove(key) }
-
-        override fun clear(): SharedPreferences.Editor = apply { values.clear() }
-
-        override fun commit(): Boolean = true
-
-        override fun apply() = Unit
     }
 }

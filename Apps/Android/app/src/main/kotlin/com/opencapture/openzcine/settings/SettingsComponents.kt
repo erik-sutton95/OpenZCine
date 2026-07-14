@@ -178,7 +178,7 @@ public fun SettingsGroupCard(title: String, caption: String, content: @Composabl
                 caption,
                 style = chromeStyle(11.5f, FontWeight.Normal),
                 color = LiveDesign.muted,
-                maxLines = 1,
+                maxLines = 2,
             )
         }
         content()

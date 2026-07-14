@@ -40,6 +40,7 @@ import com.opencapture.openzcine.pairing.SavedCameraRecords
 import com.opencapture.openzcine.pairing.SavedCamerasExperience
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
+import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
@@ -90,6 +91,7 @@ class MainActivity : ComponentActivity() {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 val savedCameraStore =
                     remember { SharedPreferencesSavedCameraStore(applicationContext) }
+                val operatorSettings = remember { OperatorSettings(applicationContext) }
                 var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
                 // Keep the process-wide camera-AP binding alive while its
                 // handed-off session is active, then release it alongside the
@@ -131,6 +133,13 @@ class MainActivity : ComponentActivity() {
                 // startup screens keep the status bar.
                 val immersive = monitorSession != null
                 LaunchedEffect(immersive) { setSystemBarsHidden(immersive) }
+                LaunchedEffect(immersive, operatorSettings.keepScreenAwake.value) {
+                    if (operatorSettings.shouldKeepScreenAwake(immersive)) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
                 val active = monitorSession
                 if (active == null) {
                     BackHandler(
@@ -210,6 +219,7 @@ class MainActivity : ComponentActivity() {
                                 active,
                                 frameSource = demo?.second,
                                 assist = assist,
+                                operatorSettings = operatorSettings,
                                 liveViewEnabled = overlay != MonitorOverlay.MEDIA,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 onOpenSettings = { overlay = MonitorOverlay.SETTINGS },
@@ -221,6 +231,7 @@ class MainActivity : ComponentActivity() {
                                     OperatorSettingsScreen(
                                         session = active,
                                         assistState = assist,
+                                        settings = operatorSettings,
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                                 MonitorOverlay.MEDIA ->

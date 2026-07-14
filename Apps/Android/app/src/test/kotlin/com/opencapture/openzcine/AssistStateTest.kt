@@ -19,14 +19,14 @@ class AssistStateTest {
     }
 
     @Test
-    fun `false colour replaces the lut and vice versa`() {
+    fun `false colour replaces the lut and restores the selected look`() {
         val state = AssistState(FeedEffects(lut = FeedLut.MONO), null)
         state.toggle(AssistTool.FALSE)
         assertNull(state.effects.lut)
         assertEquals(FeedFalseColorScale.STOPS, state.effects.falseColor)
         state.toggle(AssistTool.LUT)
         assertNull(state.effects.falseColor)
-        assertEquals(FeedLut.LOG3G10_709, state.effects.lut)
+        assertEquals(FeedLut.MONO, state.effects.lut)
     }
 
     @Test
@@ -70,5 +70,40 @@ class AssistStateTest {
         val effects = savedEffects!!
         val restored = AssistState.tokens(effects).let { FeedEffects.parse(it, effects.lut?.id, effects.falseColor?.id) }
         assertEquals(effects, restored)
+    }
+
+    @Test
+    fun `inactive image-assist selections restore and become active choices`() {
+        val preferences = TestSharedPreferences()
+        preferences.edit()
+            .putString("tokens", "zebra")
+            .putString("lut", FeedLut.MONO.id)
+            .putString("fcScale", FeedFalseColorScale.IRE.id)
+            .apply()
+
+        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+        assertTrue(state.effects.zebra)
+        assertEquals(FeedLut.MONO, state.selectedLut)
+        assertEquals(FeedFalseColorScale.IRE, state.selectedFalseColorScale)
+
+        state.toggle(AssistTool.LUT)
+        assertEquals(FeedLut.MONO, state.effects.lut)
+        state.toggle(AssistTool.FALSE)
+        assertEquals(FeedFalseColorScale.IRE, state.effects.falseColor)
+    }
+
+    @Test
+    fun `changing a stored look persists even while that assist is off`() {
+        val preferences = TestSharedPreferences()
+        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+
+        state.selectLut(FeedLut.NLOG_709)
+        state.selectFalseColorScale(FeedFalseColorScale.IRE)
+
+        val restored = AssistState.restore(preferences, FeedEffects.NONE, null)
+        assertEquals(FeedLut.NLOG_709, restored.selectedLut)
+        assertEquals(FeedFalseColorScale.IRE, restored.selectedFalseColorScale)
+        restored.toggle(AssistTool.LUT)
+        assertEquals(FeedLut.NLOG_709, restored.effects.lut)
     }
 }

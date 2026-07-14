@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -60,6 +62,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.settings.OperatorSettings
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -151,6 +154,7 @@ fun MonitorScreen(
     session: CameraSession,
     frameSource: LiveFrameSource?,
     assist: AssistState,
+    operatorSettings: OperatorSettings,
     liveViewEnabled: Boolean = true,
     glassTierOverride: String? = null,
     onOpenSettings: () -> Unit = {},
@@ -194,14 +198,23 @@ fun MonitorScreen(
     val recordControlEnabled =
         sessionState is CameraSessionState.Connected && !recordCommandPending
     val recordScope = rememberCoroutineScope()
+    var pendingRecordTarget by remember { mutableStateOf<Boolean?>(null) }
+    val sendRecordCommand: (Boolean) -> Unit = { target ->
+        recordScope.launch {
+            try {
+                session.setRecording(target)
+            } catch (error: CameraRecordingException) {
+                Toast.makeText(appContext, error.message, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     val requestRecordToggle: () -> Unit = {
         if (recordControlEnabled) {
-            recordScope.launch {
-                try {
-                    session.setRecording(!recording)
-                } catch (error: CameraRecordingException) {
-                    Toast.makeText(appContext, error.message, Toast.LENGTH_SHORT).show()
-                }
+            val target = !recording
+            if (operatorSettings.recordConfirmationEnabled.value) {
+                pendingRecordTarget = target
+            } else {
+                sendRecordCommand(target)
             }
         }
     }
@@ -349,6 +362,16 @@ fun MonitorScreen(
         val viewportWidth = maxWidth.value - navLane
         val viewportHeight = maxHeight.value
 
+        val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
+        val cameraValuesVisible = operatorSettings.cameraValuesVisible.value
+        val bottomBarHeight =
+            when {
+                isPortrait && assistToolbarVisible -> LiveDesign.CONTROL_HEIGHT_DP
+                !isPortrait && (assistToolbarVisible || cameraValuesVisible) ->
+                    LiveDesign.CONTROL_HEIGHT_DP
+                else -> 0f
+            }
+
         // Same core call the iOS shell makes once per layout pass. The
         // landscape map is mode-invariant (iOS gates chrome shell-side), but
         // the portrait map encodes per-mode zones, so mode/scope key the map
@@ -357,7 +380,7 @@ fun MonitorScreen(
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
-                isPortrait, dispIndex, scopeCount,
+                isPortrait, dispIndex, scopeCount, bottomBarHeight,
             ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
@@ -372,7 +395,7 @@ fun MonitorScreen(
                         aspectFill = false,
                         scopeCount = scopeCount,
                         mirrored = false,
-                        bottomBarHeight = LiveDesign.CONTROL_HEIGHT_DP,
+                        bottomBarHeight = bottomBarHeight,
                     ),
                 )
             }
@@ -452,6 +475,7 @@ fun MonitorScreen(
                     recording = recording,
                     frameCount = frameCount,
                     assist = assist,
+                    operatorSettings = operatorSettings,
                     dispIndex = dispIndex,
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
@@ -485,9 +509,19 @@ fun MonitorScreen(
                     // lane (see monitorLeadingInsetDp) starts the feed right of
                     // the lock, so the band always clears it — same as iPhone
                     // geometry.
-                    Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
-                        FitScale(zones.infoBar.width.dp) {
-                            InfoPill(compact = isClean, recording = recording, frameCount = frameCount)
+                    if (operatorSettings.statusBarVisible.value) {
+                        Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
+                            FitScale(zones.infoBar.width.dp) {
+                                InfoPill(
+                                    compact = isClean,
+                                    recording = recording,
+                                    frameCount = frameCount,
+                                    recReadoutVisible = operatorSettings.recReadoutVisible.value,
+                                    codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
+                                    mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
+                                    fpsReadoutVisible = operatorSettings.fpsReadoutVisible.value,
+                                )
+                            }
                         }
                     }
 
@@ -496,18 +530,24 @@ fun MonitorScreen(
                     // glass hugs its readouts against the band's trailing edge
                     // like the iOS content-hugging strip.
                     if (!isClean) {
-                        zones.assistStrip?.let { strip ->
-                            AssistToolbar(
-                                assist,
-                                Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
-                            )
+                        if (assistToolbarVisible) {
+                            zones.assistStrip?.let { strip ->
+                                AssistToolbar(
+                                    assist,
+                                    Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
+                                    visibleTools = operatorSettings.visibleAssistToolbarTools,
+                                    hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                                )
+                            }
                         }
-                        zones.captureStrip?.let { strip ->
-                            Box(
-                                Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
-                                contentAlignment = Alignment.CenterEnd,
-                            ) {
-                                FitScale(strip.width.dp) { CaptureStrip() }
+                        if (cameraValuesVisible) {
+                            zones.captureStrip?.let { strip ->
+                                Box(
+                                    Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
+                                    contentAlignment = Alignment.CenterEnd,
+                                ) {
+                                    FitScale(strip.width.dp) { CaptureStrip() }
+                                }
                             }
                         }
                     }
@@ -581,17 +621,55 @@ fun MonitorScreen(
             )
         }
     }
+    pendingRecordTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingRecordTarget = null },
+            title = { Text(if (target) "Start recording?" else "Stop recording?") },
+            text = {
+                Text(
+                    if (target) {
+                        "The camera will begin recording."
+                    } else {
+                        "The camera will stop recording."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingRecordTarget = null
+                        if (recordControlEnabled && target != recording) {
+                            sendRecordCommand(target)
+                        }
+                    },
+                ) {
+                    Text(if (target) "Start" else "Stop")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRecordTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 /** The landscape top deck (iOS `MonitorInfoBar` `.infoPill`). */
 @Composable
-private fun InfoPill(compact: Boolean, recording: Boolean, frameCount: Long) {
+private fun InfoPill(
+    compact: Boolean,
+    recording: Boolean,
+    frameCount: Long,
+    recReadoutVisible: Boolean,
+    codecReadoutVisible: Boolean,
+    mediaReadoutVisible: Boolean,
+    fpsReadoutVisible: Boolean,
+) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RecordChip(recording)
+        if (recReadoutVisible) RecordChip(recording)
         Text(
             timecodeAnnotated(frameCount, DemoMonitorState.FRAME_RATE),
             style = chromeStyle(20f, FontWeight.Medium, mono = true),
@@ -599,10 +677,16 @@ private fun InfoPill(compact: Boolean, recording: Boolean, frameCount: Long) {
         )
         if (!compact) {
             ReadoutPill(DemoMonitorState.RESOLUTION) { VideoGlyph(LiveDesign.muted) }
-            ReadoutPill(DemoMonitorState.CODEC) { FilmGlyph(LiveDesign.muted) }
-            ReadoutPill(DemoMonitorState.MEDIA) { SdCardGlyph(LiveDesign.muted) }
+            if (codecReadoutVisible) {
+                ReadoutPill(DemoMonitorState.CODEC) { FilmGlyph(LiveDesign.muted) }
+            }
+            if (mediaReadoutVisible) {
+                ReadoutPill(DemoMonitorState.MEDIA) { SdCardGlyph(LiveDesign.muted) }
+            }
         }
-        FpsChip(DemoMonitorState.SIGNAL_BARS, DemoMonitorState.FPS)
+        if (fpsReadoutVisible) {
+            FpsChip(DemoMonitorState.SIGNAL_BARS, DemoMonitorState.FPS)
+        }
     }
 }
 
@@ -622,6 +706,7 @@ private fun PortraitChrome(
     recording: Boolean,
     frameCount: Long,
     assist: AssistState,
+    operatorSettings: OperatorSettings,
     dispIndex: Int,
     onLock: () -> Unit,
     recordEnabled: Boolean,
@@ -630,18 +715,22 @@ private fun PortraitChrome(
     onOpenMedia: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
+    if (operatorSettings.statusBarVisible.value) {
+        PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
+    }
 
     // Fit-mode horizontal assist toolbar between the scopes zone and the tile
     // grid (live only — the map emits the zone). 12/4dp insets float the
     // glass pill off the screen edges, like iOS.
-    if (!isCommand) {
+    if (!isCommand && operatorSettings.assistToolbarVisible.value) {
         zones.assistStrip?.let { strip ->
             AssistToolbar(
                 assist,
                 Modifier.zone(
                     ZoneFrame(strip.x + 12f, strip.y + 4f, strip.width - 24f, strip.height - 8f),
                 ).alpha(if (locked) 0.4f else 1f),
+                visibleTools = operatorSettings.visibleAssistToolbarTools,
+                hapticsEnabled = operatorSettings.hapticsEnabled.value,
             )
         }
     }
