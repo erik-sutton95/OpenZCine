@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.FakeCameraSession
 import com.opencapture.openzcine.core.LiveFrameSource
@@ -45,7 +46,14 @@ class MainActivity : ComponentActivity() {
                 ?: if (isNsdTransportRequested()) nsdTransportSession() else FakeCameraSession()
         setContent {
             OpenZCineTheme {
-                MonitorShell(session, frameSource = demo?.second)
+                if (SwiftCore.isAvailable) {
+                    // The real shell needs the shared core's zone map. An APK
+                    // built without `just android-core` (plain CI android-check)
+                    // has no native library, so it keeps the placeholder.
+                    MonitorScreen(session, frameSource = demo?.second)
+                } else {
+                    MonitorShell(session, frameSource = demo?.second)
+                }
             }
         }
     }

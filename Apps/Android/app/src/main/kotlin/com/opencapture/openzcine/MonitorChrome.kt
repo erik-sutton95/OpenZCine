@@ -1,0 +1,602 @@
+package com.opencapture.openzcine
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.Text
+
+// Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
+// MonitorControls.swift + MonitorExperience.swift). Layout frames come from the
+// shared core's zone map; these components only mirror the DRAWING — pill
+// shapes, type hierarchy, and LiveDesign colors. SF Symbols are approximated
+// with small Canvas glyphs; SF→Roboto type differences are accepted.
+
+/** Rounded chrome shape (iOS `LiveDesign.cornerRadius`). */
+val ChromeShape = RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)
+
+/** iOS `liquidGlass` fallback treatment: glass fill + hairline stroke. */
+fun Modifier.glass(shape: Shape = ChromeShape): Modifier =
+    background(LiveDesign.glass, shape).border(1.dp, LiveDesign.hairline, shape)
+
+/** Click without the Material ripple (chrome buttons highlight by state, not ripple). */
+@Composable
+fun Modifier.chromeClickable(onClick: () -> Unit): Modifier =
+    clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        onClick = onClick,
+    )
+
+/** Text style matching iOS `.system(size:weight:design:)` closely enough. */
+fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextStyle =
+    TextStyle(
+        fontSize = size.sp,
+        lineHeight = size.sp,
+        fontWeight = weight,
+        fontFamily = if (mono) FontFamily.Monospace else FontFamily.SansSerif,
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+    )
+
+/** `HH:MM:SS` in text with the `:FF` frame field tinted accent (iOS TimecodeReadout). */
+fun timecodeAnnotated(frameCount: Long, fps: Int): AnnotatedString {
+    val seconds = frameCount / fps
+    val main = "%02d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60)
+    val frames = ":%02d".format(frameCount % fps)
+    return buildAnnotatedString {
+        withStyle(SpanStyle(color = LiveDesign.text)) { append(main) }
+        withStyle(SpanStyle(color = LiveDesign.accent)) { append(frames) }
+    }
+}
+
+/** STBY/REC pill: state dot + label in a glass capsule (iOS `RecordChip`). */
+@Composable
+fun RecordChip(recording: Boolean) {
+    Row(
+        modifier = Modifier.glass(CircleShape).padding(horizontal = 12.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(9.dp)
+                .background(if (recording) LiveDesign.rec else LiveDesign.faint, CircleShape),
+        )
+        Text(
+            text = if (recording) "REC" else "STBY",
+            style = chromeStyle(11f, FontWeight.Bold, mono = true),
+            color = if (recording) LiveDesign.text else LiveDesign.muted,
+        )
+    }
+}
+
+/** Glyph + value in a glass capsule (iOS `inlineReadout`). */
+@Composable
+fun ReadoutPill(value: String, icon: @Composable () -> Unit) {
+    Row(
+        modifier = Modifier.glass(CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon()
+        Text(
+            text = value,
+            style = chromeStyle(15f, FontWeight.Medium, mono = true),
+            color = LiveDesign.text,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Signal bars + FPS readout capsule (iOS `FPSChip`). */
+@Composable
+fun FpsChip(signalBars: Int, fps: String) {
+    val tint =
+        when {
+            signalBars >= 3 -> LiveDesign.good
+            signalBars == 2 -> LiveDesign.accent
+            signalBars == 1 -> LiveDesign.rec
+            else -> LiveDesign.faint
+        }
+    Row(
+        modifier = Modifier.glass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SignalBarsGlyph(bars = signalBars, tint = tint)
+        Text(
+            "FPS",
+            style = chromeStyle(8f, FontWeight.Bold, mono = true),
+            color = LiveDesign.faint,
+        )
+        Text(
+            fps,
+            style = chromeStyle(12f, FontWeight.Medium, mono = true),
+            color = LiveDesign.text,
+        )
+    }
+}
+
+/** One exposure readout: small label over a large mono value (iOS `CaptureSettingButton`). */
+@Composable
+fun CaptureSettingCell(label: String, value: String) {
+    Column(
+        modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(label, style = chromeStyle(9f, FontWeight.SemiBold), color = LiveDesign.faint)
+        Text(
+            value,
+            style = chromeStyle(19f, FontWeight.Medium, mono = true),
+            color = LiveDesign.text,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Lock toggle: glass rounded square, gold when engaged (iOS `lockButton`). */
+@Composable
+fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val tint = if (locked) LiveDesign.accent else LiveDesign.text.copy(alpha = 0.86f)
+    Box(
+        modifier =
+            modifier
+                .glass(ChromeShape)
+                .then(
+                    if (locked) {
+                        Modifier.border(
+                            1.5.dp,
+                            LiveDesign.accent.copy(alpha = 0.75f),
+                            ChromeShape,
+                        )
+                    } else {
+                        Modifier
+                    },
+                )
+                .chromeClickable(onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        PadlockGlyph(tint = tint, filled = locked, modifier = Modifier.size(16.dp))
+    }
+}
+
+/** DISP pill: label over mode dashes, the active dash lit (iOS `displayButton`). */
+@Composable
+fun DispButton(
+    activeIndex: Int,
+    modeCount: Int,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    // iOS tints the whole control info-blue while the LIVE mode (index 0) is active.
+    val labelColor = if (activeIndex == 0) LiveDesign.info else LiveDesign.text
+    Column(
+        modifier = modifier.glass(ChromeShape).chromeClickable(onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("DISP", style = chromeStyle(12f, FontWeight.Bold), color = labelColor)
+        Row(
+            Modifier.padding(top = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            repeat(modeCount) { index ->
+                Box(
+                    Modifier.size(width = 14.dp, height = 3.dp)
+                        .background(
+                            if (index == activeIndex) LiveDesign.info
+                            else LiveDesign.hairlineStrong,
+                            CircleShape,
+                        ),
+                )
+            }
+        }
+    }
+}
+
+/** Round glass auxiliary button (iOS `AssetCircleButton`). */
+@Composable
+fun AuxCircleButton(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {},
+    glyph: @Composable (Modifier, Color) -> Unit,
+) {
+    Box(
+        modifier = modifier.glass(CircleShape).chromeClickable(onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        // iOS sizes the asset glyph at 44% of the circle diameter.
+        glyph(Modifier.fillMaxSize(0.44f), LiveDesign.text.copy(alpha = 0.86f))
+    }
+}
+
+/** Record control: red gradient disc, white ring, disc→stop square (iOS `RecordButton`). */
+@Composable
+fun RecordButton(recording: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Canvas(modifier.chromeClickable(onClick)) {
+        val d = size.minDimension
+        val center = Offset(size.width / 2, size.height / 2)
+        if (recording) {
+            // Approximation of the iOS recording glow shadow.
+            drawCircle(LiveDesign.rec.copy(alpha = 0.28f), radius = d * 0.56f, center = center)
+        }
+        drawCircle(
+            brush =
+                Brush.radialGradient(
+                    colors = listOf(Color(0.88f, 0.28f, 0.30f), LiveDesign.rec),
+                    center = Offset(center.x, center.y - d / 2),
+                    radius = d * (48f / 72f),
+                ),
+            radius = d / 2,
+            center = center,
+        )
+        drawCircle(
+            Color.White.copy(alpha = 0.17f),
+            radius = d / 2 - 1.5.dp.toPx(),
+            center = center,
+            style = Stroke(width = 3.dp.toPx()),
+        )
+        if (recording) {
+            val side = d * (25f / 72f)
+            drawRoundRect(
+                LiveDesign.rec,
+                topLeft = Offset(center.x - side / 2, center.y - side / 2),
+                size = Size(side, side),
+                cornerRadius = CornerRadius(8.dp.toPx()),
+            )
+        } else {
+            drawCircle(LiveDesign.rec, radius = d * (58f / 72f) / 2, center = center)
+        }
+    }
+}
+
+/** Battery glyph + percent + device glyph column (iOS `BatteryIndicator`, `.rail`). */
+@Composable
+fun BatteryIndicatorColumn(percent: Int, isCamera: Boolean, modifier: Modifier = Modifier) {
+    val low = if (isCamera) percent < 10 else percent <= 15
+    val tint =
+        when {
+            low -> Color.Red
+            isCamera -> LiveDesign.accent
+            else -> LiveDesign.text.copy(alpha = 0.85f)
+        }
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+    ) {
+        BatteryGlyph(percent = percent, tint = tint, modifier = Modifier.size(22.dp, 11.dp))
+        Text(
+            "$percent%",
+            style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
+            color = LiveDesign.text.copy(alpha = 0.72f),
+        )
+        if (isCamera) {
+            CameraGlyph(tint = LiveDesign.muted, modifier = Modifier.size(15.dp, 12.dp))
+        } else {
+            PhoneGlyph(tint = LiveDesign.muted, modifier = Modifier.size(9.dp, 14.dp))
+        }
+    }
+}
+
+// MARK: - Canvas glyphs (SF Symbol approximations)
+
+/** SF `battery.NNpercent` (horizontal body, quarter-bucket fill). */
+@Composable
+fun BatteryGlyph(percent: Int, tint: Color, modifier: Modifier = Modifier) {
+    // iOS buckets the fill at 0/25/50/75/100%.
+    val fill =
+        when {
+            percent < 13 -> 0f
+            percent < 38 -> 0.25f
+            percent < 63 -> 0.5f
+            percent < 88 -> 0.75f
+            else -> 1f
+        }
+    Canvas(modifier) {
+        val bodyWidth = size.width * 0.86f
+        val stroke = 1.2.dp.toPx()
+        drawRoundRect(
+            tint.copy(alpha = 0.6f),
+            topLeft = Offset(0f, 0f),
+            size = Size(bodyWidth, size.height),
+            cornerRadius = CornerRadius(size.height * 0.3f),
+            style = Stroke(stroke),
+        )
+        // Terminal nub.
+        drawRoundRect(
+            tint.copy(alpha = 0.6f),
+            topLeft = Offset(bodyWidth + stroke, size.height * 0.3f),
+            size = Size(size.width - bodyWidth - stroke, size.height * 0.4f),
+            cornerRadius = CornerRadius(1.dp.toPx()),
+        )
+        if (fill > 0f) {
+            val inset = stroke * 1.8f
+            drawRoundRect(
+                tint,
+                topLeft = Offset(inset, inset),
+                size = Size((bodyWidth - 2 * inset) * fill, size.height - 2 * inset),
+                cornerRadius = CornerRadius(size.height * 0.18f),
+            )
+        }
+    }
+}
+
+/** SF `iphone` outline. */
+@Composable
+fun PhoneGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        drawRoundRect(
+            tint,
+            topLeft = Offset.Zero,
+            size = size,
+            cornerRadius = CornerRadius(size.width * 0.25f),
+            style = Stroke(1.2.dp.toPx()),
+        )
+        drawLine(
+            tint,
+            start = Offset(size.width * 0.35f, size.height - 2.2.dp.toPx()),
+            end = Offset(size.width * 0.65f, size.height - 2.2.dp.toPx()),
+            strokeWidth = 1.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+/** SF `camera` outline. */
+@Composable
+fun CameraGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val stroke = 1.2.dp.toPx()
+        val bodyTop = size.height * 0.22f
+        drawRoundRect(
+            tint,
+            topLeft = Offset(0f, bodyTop),
+            size = Size(size.width, size.height - bodyTop),
+            cornerRadius = CornerRadius(size.height * 0.18f),
+            style = Stroke(stroke),
+        )
+        // Viewfinder hump.
+        drawLine(
+            tint,
+            start = Offset(size.width * 0.32f, bodyTop),
+            end = Offset(size.width * 0.42f, 0.5f * stroke),
+            strokeWidth = stroke,
+        )
+        drawLine(
+            tint,
+            start = Offset(size.width * 0.42f, 0.5f * stroke),
+            end = Offset(size.width * 0.58f, 0.5f * stroke),
+            strokeWidth = stroke,
+        )
+        drawLine(
+            tint,
+            start = Offset(size.width * 0.58f, 0.5f * stroke),
+            end = Offset(size.width * 0.68f, bodyTop),
+            strokeWidth = stroke,
+        )
+        drawCircle(
+            tint,
+            radius = size.height * 0.22f,
+            center = Offset(size.width / 2, bodyTop + (size.height - bodyTop) / 2),
+            style = Stroke(stroke),
+        )
+    }
+}
+
+/** SF `cellularbars` with `variableValue` (filled bars vs dim bars). */
+@Composable
+fun SignalBarsGlyph(bars: Int, tint: Color, modifier: Modifier = Modifier.size(16.dp, 12.dp)) {
+    Canvas(modifier) {
+        val barWidth = size.width / 4f * 0.68f
+        val gap = size.width / 4f * 0.32f
+        for (index in 0 until 4) {
+            val height = size.height * (0.35f + 0.65f * index / 3f)
+            drawRoundRect(
+                if (index < bars) tint else tint.copy(alpha = 0.3f),
+                topLeft = Offset(index * (barWidth + gap), size.height - height),
+                size = Size(barWidth, height),
+                cornerRadius = CornerRadius(barWidth * 0.35f),
+            )
+        }
+    }
+}
+
+/** SF `video` (camera body + lens flag). */
+@Composable
+fun VideoGlyph(tint: Color, modifier: Modifier = Modifier.size(14.dp, 10.dp)) {
+    Canvas(modifier) {
+        val bodyWidth = size.width * 0.68f
+        drawRoundRect(
+            tint,
+            topLeft = Offset.Zero,
+            size = Size(bodyWidth, size.height),
+            cornerRadius = CornerRadius(size.height * 0.28f),
+        )
+        val path =
+            Path().apply {
+                moveTo(bodyWidth + size.width * 0.06f, size.height * 0.5f)
+                lineTo(size.width, size.height * 0.12f)
+                lineTo(size.width, size.height * 0.88f)
+                close()
+            }
+        drawPath(path, tint)
+    }
+}
+
+/** SF `film` (frame + sprocket columns). */
+@Composable
+fun FilmGlyph(tint: Color, modifier: Modifier = Modifier.size(12.dp, 11.dp)) {
+    Canvas(modifier) {
+        val stroke = 1.1.dp.toPx()
+        drawRoundRect(
+            tint,
+            topLeft = Offset.Zero,
+            size = size,
+            cornerRadius = CornerRadius(size.height * 0.14f),
+            style = Stroke(stroke),
+        )
+        val inset = size.width * 0.22f
+        drawLine(tint, Offset(inset, 0f), Offset(inset, size.height), stroke)
+        drawLine(
+            tint,
+            Offset(size.width - inset, 0f),
+            Offset(size.width - inset, size.height),
+            stroke,
+        )
+        drawLine(
+            tint,
+            Offset(inset, size.height / 2),
+            Offset(size.width - inset, size.height / 2),
+            stroke * 0.8f,
+        )
+    }
+}
+
+/** SF `sdcard` (card outline with a clipped corner). */
+@Composable
+fun SdCardGlyph(tint: Color, modifier: Modifier = Modifier.size(9.dp, 12.dp)) {
+    Canvas(modifier) {
+        val cut = size.width * 0.34f
+        val r = size.width * 0.18f
+        val path =
+            Path().apply {
+                moveTo(cut, 0f)
+                lineTo(size.width - r, 0f)
+                quadraticTo(size.width, 0f, size.width, r)
+                lineTo(size.width, size.height - r)
+                quadraticTo(size.width, size.height, size.width - r, size.height)
+                lineTo(r, size.height)
+                quadraticTo(0f, size.height, 0f, size.height - r)
+                lineTo(0f, cut)
+                close()
+            }
+        drawPath(path, tint, style = Stroke(1.1.dp.toPx()))
+    }
+}
+
+/** SF `lock` / `lock.fill` (shackle + body). */
+@Composable
+fun PadlockGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val stroke = 1.4.dp.toPx()
+        val bodyTop = size.height * 0.44f
+        val shackleWidth = size.width * 0.52f
+        drawArc(
+            tint,
+            startAngle = 180f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset((size.width - shackleWidth) / 2, size.height * 0.06f),
+            size = Size(shackleWidth, bodyTop * 1.6f),
+            style = Stroke(stroke),
+        )
+        val bodyRect = Rect(0f, bodyTop, size.width, size.height)
+        if (filled) {
+            drawRoundRect(
+                tint,
+                topLeft = bodyRect.topLeft,
+                size = bodyRect.size,
+                cornerRadius = CornerRadius(size.width * 0.18f),
+            )
+        } else {
+            drawRoundRect(
+                tint,
+                topLeft = bodyRect.topLeft,
+                size = bodyRect.size,
+                cornerRadius = CornerRadius(size.width * 0.18f),
+                style = Stroke(stroke),
+            )
+        }
+    }
+}
+
+/** iOS `IconSettings` (gearshape) stand-in. */
+@Composable
+fun GearGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val stroke = 1.4.dp.toPx()
+        val center = Offset(size.width / 2, size.height / 2)
+        val outer = size.minDimension / 2 - stroke
+        val ring = outer * 0.72f
+        drawCircle(tint, radius = ring, center = center, style = Stroke(stroke))
+        drawCircle(tint, radius = ring * 0.42f, center = center, style = Stroke(stroke))
+        repeat(8) { index ->
+            val angle = Math.toRadians(index * 45.0)
+            val dir = Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat())
+            drawLine(
+                tint,
+                start = center + dir * ring,
+                end = center + dir * outer,
+                strokeWidth = stroke * 1.4f,
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+/** iOS `IconMedia` (rectangle.stack) stand-in. */
+@Composable
+fun MediaStackGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val stroke = 1.4.dp.toPx()
+        val cardHeight = size.height * 0.58f
+        val inset = size.width * 0.12f
+        drawRoundRect(
+            tint,
+            topLeft = Offset(inset, 0f),
+            size = Size(size.width - 2 * inset, size.height * 0.16f),
+            cornerRadius = CornerRadius(2.dp.toPx()),
+            style = Stroke(stroke * 0.9f),
+        )
+        drawRoundRect(
+            tint,
+            topLeft = Offset(inset / 2, size.height * 0.24f),
+            size = Size(size.width - inset, size.height * 0.14f),
+            cornerRadius = CornerRadius(2.dp.toPx()),
+            style = Stroke(stroke * 0.9f),
+        )
+        drawRoundRect(
+            tint,
+            topLeft = Offset(0f, size.height - cardHeight),
+            size = Size(size.width, cardHeight),
+            cornerRadius = CornerRadius(3.dp.toPx()),
+            style = Stroke(stroke),
+        )
+    }
+}
