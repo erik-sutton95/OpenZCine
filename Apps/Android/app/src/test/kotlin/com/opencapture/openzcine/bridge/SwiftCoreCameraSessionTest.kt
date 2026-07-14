@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraIdentity
+import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSessionState
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -86,9 +87,25 @@ class SwiftCoreCameraSessionTest {
         )
     }
 
+    @Test
+    fun `recording control uses the current Swift session after connection`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        session.setRecording(true)
+
+        assertEquals(listOf(true), bridge.recordingRequests)
+        assertEquals(CameraRecordingState.RECORDING, session.recordingState.value)
+    }
+
     private class FakeBridge : SwiftCoreSessionBridge {
         override val isAvailable: Boolean = true
         val listeners = mutableListOf<SwiftCore.SessionListener>()
+        val recordingRequests = mutableListOf<Boolean>()
         var disconnects = 0
 
         override fun connect(host: String, listener: SwiftCore.SessionListener) {
@@ -97,7 +114,10 @@ class SwiftCoreCameraSessionTest {
 
         override fun readProperty(code: Int): String? = null
 
-        override fun setRecording(recording: Boolean): Int = SwiftCore.RECORDING_COMMAND_ACCEPTED
+        override fun setRecording(recording: Boolean): Int {
+            recordingRequests += recording
+            return SwiftCore.RECORDING_COMMAND_ACCEPTED
+        }
 
         override fun disconnect() {
             disconnects++

@@ -131,6 +131,14 @@ public data class PairingScript(
     val autoConnect: Boolean = false,
 )
 
+/** A connected session together with the profile needed to reconnect after relaunch. */
+public data class PairedCamera(
+    /** The live, protocol-verified session handed to the monitor. */
+    val session: CameraSession,
+    /** Durable, non-secret connection metadata for the startup camera list. */
+    val savedCamera: SavedCameraRecord,
+)
+
 /** The runtime permission NSD/Wi-Fi discovery needs on this OS version. */
 public fun requiredPairingPermission(): String =
     if (Build.VERSION.SDK_INT >= 33) {
@@ -265,13 +273,13 @@ private sealed interface PairingPhase {
  * The first-pair wizard — Android port of the iOS `StartupFirstPairWizardView`
  * (ios/Runner/StartupDesign.swift): a two-column landscape layout with the
  * goal/progress intro card on the left and the current step card on the
- * right. Ends by handing a connected [CameraSession] to [onPaired].
+ * right. Ends by handing a connected [PairedCamera] to [onPaired].
  */
 @Composable
 public fun PairingExperience(
     environment: PairingEnvironment,
     script: PairingScript? = null,
-    onPaired: (CameraSession) -> Unit,
+    onPaired: (PairedCamera) -> Unit,
 ) {
     val context = LocalContext.current
     var permissionGranted by remember { mutableStateOf(isPairingPermissionGranted(context)) }
@@ -295,17 +303,49 @@ public fun PairingExperience(
     val keyWasRemembered = remember { keyField.isNotEmpty() }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     val scope = rememberCoroutineScope()
-    var work by remember { mutableStateOf<Job?>(null) }
+    val work = remember { mutableStateOf<Job?>(null) }
+    val handedOff = remember { mutableStateOf(false) }
+
+    DisposableEffect(environment) {
+        onDispose {
+            work.value?.cancel()
+            if (!handedOff.value) environment.releaseCameraAp()
+        }
+    }
 
     fun connect(host: String) {
         phase = PairingPhase.Connecting
-        work =
+        work.value =
             scope.launch {
                 val session = environment.createSession(host)
                 try {
                     session.connect()
-                    if (session.state.value is CameraSessionState.Connected) {
-                        onPaired(session)
+                    val connected = session.state.value as? CameraSessionState.Connected
+                    if (connected != null) {
+                        handedOff.value = true
+                        onPaired(
+                            PairedCamera(
+                                session = session,
+                                savedCamera =
+                                    SavedCameraRecord(
+                                        host = host,
+                                        cameraName = connected.identity.name,
+                                        transport =
+                                            if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
+                                                SavedCameraTransport.CAMERA_ACCESS_POINT
+                                            } else {
+                                                SavedCameraTransport.PHONE_HOTSPOT
+                                            },
+                                        lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                        wifiSsid =
+                                            if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
+                                                ssidField.trim().takeIf(String::isNotEmpty)
+                                            } else {
+                                                null
+                                            },
+                                    ),
+                            ),
+                        )
                     } else {
                         phase =
                             PairingPhase.Error(
@@ -326,7 +366,7 @@ public fun PairingExperience(
         val ssid = ssidField.trim()
         if (ssid.isEmpty()) return
         phase = PairingPhase.Joining
-        work =
+        work.value =
             scope.launch {
                 val joined = environment.joinCameraAp(ssid, keyField.ifEmpty { null })
                 if (joined) {
@@ -344,8 +384,8 @@ public fun PairingExperience(
     }
 
     fun cancelWork() {
-        work?.cancel()
-        work = null
+        work.value?.cancel()
+        work.value = null
         if (flow.path == PairingPath.CAMERA_ACCESS_POINT) environment.releaseCameraAp()
         phase = PairingPhase.Idle
     }
@@ -1014,7 +1054,7 @@ private fun DiscoverBody(
 // MARK: - Controls
 
 @Composable
-private fun StartupFilledButton(
+internal fun StartupFilledButton(
     text: String,
     enabled: Boolean,
     onClick: () -> Unit,
@@ -1042,7 +1082,7 @@ private fun StartupFilledButton(
 }
 
 @Composable
-private fun StartupOutlineButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun StartupOutlineButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier
             .height(40.dp)

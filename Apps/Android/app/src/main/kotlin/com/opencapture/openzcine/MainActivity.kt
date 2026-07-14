@@ -34,7 +34,11 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.media.MediaBrowseScreen
+import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
+import com.opencapture.openzcine.pairing.SavedCameraRecords
+import com.opencapture.openzcine.pairing.SavedCamerasExperience
+import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
@@ -49,11 +53,16 @@ private enum class MonitorOverlay {
     MEDIA,
 }
 
+private enum class StartupSurface {
+    SAVED_CAMERAS,
+    PAIRING,
+}
+
 /**
- * App entry point: the pairing wizard first (camera-AP and phone-hotspot
- * paths), handing a connected [CameraSession] to the monitor shell. Debug
- * hooks (demo feed, NSD transport probe) bypass pairing straight to the
- * monitor, preserving the existing capture workflows.
+ * App entry point: persisted cameras open the reconnect home; first-run and
+ * add-camera flows use the camera-AP / phone-hotspot pairing wizard, then
+ * hand the verified [CameraSession] to the monitor shell. Debug hooks (demo
+ * feed, NSD transport probe) bypass startup straight to the monitor.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,6 +88,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             OpenZCineTheme {
                 var monitorSession by remember { mutableStateOf(debugSession) }
+                val savedCameraStore =
+                    remember { SharedPreferencesSavedCameraStore(applicationContext) }
+                var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
                 // Keep the process-wide camera-AP binding alive while its
                 // handed-off session is active, then release it alongside the
                 // PTP slot when this activity or session leaves composition.
@@ -89,6 +101,31 @@ class MainActivity : ComponentActivity() {
                         pairingScript?.environment
                             ?: realPairingEnvironment(applicationContext)
                     }
+                var startupSurface by
+                    rememberSaveable {
+                        mutableStateOf(
+                            if (pairingScript != null || savedCameras.isEmpty()) {
+                                StartupSurface.PAIRING
+                            } else {
+                                StartupSurface.SAVED_CAMERAS
+                            },
+                        )
+                    }
+                fun acceptPairedCamera(paired: PairedCamera) {
+                    val saved = paired.savedCamera
+                    val updated =
+                        SavedCameraRecords.upserting(
+                            host = saved.host,
+                            cameraName = saved.cameraName,
+                            transport = saved.transport,
+                            lastSeenAtEpochMillis = saved.lastSeenAtEpochMillis,
+                            wifiSsid = saved.wifiSsid,
+                            records = savedCameras,
+                        )
+                    savedCameras = updated
+                    savedCameraStore.replace(updated)
+                    monitorSession = paired.session
+                }
                 // The monitor is immersive; the pairing screens keep the
                 // (transparent, dark-styled) system bars, like the iOS
                 // startup screens keep the status bar.
@@ -96,11 +133,34 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(immersive) { setSystemBarsHidden(immersive) }
                 val active = monitorSession
                 if (active == null) {
-                    PairingExperience(
-                        environment = pairingEnvironment,
-                        script = pairingScript,
-                        onPaired = { monitorSession = it },
-                    )
+                    BackHandler(
+                        enabled =
+                            startupSurface == StartupSurface.PAIRING && savedCameras.isNotEmpty(),
+                    ) {
+                        startupSurface = StartupSurface.SAVED_CAMERAS
+                    }
+                    when (startupSurface) {
+                        StartupSurface.SAVED_CAMERAS ->
+                            SavedCamerasExperience(
+                                cameras = savedCameras,
+                                environment = pairingEnvironment,
+                                onPaired = ::acceptPairedCamera,
+                                onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
+                                onRecordsChanged = { updated ->
+                                    savedCameras = updated
+                                    savedCameraStore.replace(updated)
+                                    if (updated.isEmpty()) {
+                                        startupSurface = StartupSurface.PAIRING
+                                    }
+                                },
+                            )
+                        StartupSurface.PAIRING ->
+                            PairingExperience(
+                                environment = pairingEnvironment,
+                                script = pairingScript,
+                                onPaired = ::acceptPairedCamera,
+                            )
+                    }
                 } else {
                     LaunchedEffect(active, pairingEnvironment) {
                         try {
