@@ -84,6 +84,9 @@ build/
 .gradle/
 **/android/.gradle/
 
+# Cross-compiled Swift core .so set staged by `just android-core` — build artifacts.
+Apps/Android/app/src/main/jniLibs/
+
 # ── Retired agent clients ──────────────────────────────────────────────────────
 # OpenZCine supports Claude Code and Codex only. Keep other client-specific
 # instructions and caches out of the public repository.

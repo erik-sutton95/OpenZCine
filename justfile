@@ -192,6 +192,43 @@ android-keystore:
     echo "  3. Local signed build: export ANDROID_KEYSTORE_PATH=\"\$PWD/$out\" plus the three vars above,"
     echo "     then: cd Apps/Android && ./gradlew bundleRelease"
 
+# Cross-compile the shared Swift core + JNI facade for Android (arm64) and stage the
+# .so set into Apps/Android/app/src/main/jniLibs/ (gitignored build artifacts — never
+# committed; APKs that need the Swift core must run this first, see Apps/Android/README.md).
+# Requires the swiftly 6.3.3 toolchain + swift-6.3.3-RELEASE_android artifactbundle
+# (setup + verified invocation: docs/investigations/android-core-feasibility.md addendum).
+# ponytail: arm64-only — no x86_64 device/emulator in play; add a second ABI loop when one is.
+android-core:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    TRIPLE=aarch64-unknown-linux-android28
+    BUNDLE="$HOME/Library/org.swift.swiftpm/swift-sdks/swift-6.3.3-RELEASE_android.artifactbundle/swift-android"
+    RUNTIME="$BUNDLE/swift-resources/usr/lib/swift-aarch64/android"
+    NDKLIB="$BUNDLE/ndk-sysroot/usr/lib/aarch64-linux-android"
+    TC="$HOME/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain/usr/bin"
+    OUT="Apps/Android/app/src/main/jniLibs/arm64-v8a"
+    swiftly run swift build +6.3.3 --swift-sdk "$TRIPLE" -c release --product OpenZCineAndroid
+    rm -rf "$OUT" && mkdir -p "$OUT"
+    "$TC/llvm-objcopy" --strip-all ".build/$TRIPLE/release/libOpenZCineAndroid.so" "$OUT/libOpenZCineAndroid.so"
+    # Stage the transitive NEEDED closure from the artifactbundle runtime; deps that
+    # resolve in neither directory are bionic system libs already on the device.
+    # ponytail: fixpoint rescan is O(n^2) over ~15 libs — fine at this scale.
+    changed=1
+    while [ "$changed" = 1 ]; do
+        changed=0
+        for lib in "$OUT"/*.so; do
+            for dep in $("$TC/llvm-objdump" -p "$lib" | awk '/NEEDED/{print $2}'); do
+                if [ ! -e "$OUT/$dep" ]; then
+                    if [ -e "$RUNTIME/$dep" ]; then cp "$RUNTIME/$dep" "$OUT/$dep"; changed=1
+                    elif [ -e "$NDKLIB/$dep" ]; then cp "$NDKLIB/$dep" "$OUT/$dep"; changed=1
+                    fi
+                fi
+            done
+        done
+    done
+    ls -l "$OUT" | awk 'NR>1 {printf "%8.1f MB  %s\n", $5/1048576, $9}'
+    echo "Staged $(ls "$OUT" | wc -l | tr -d ' ') libraries → $OUT"
+
 # Build and install the debug APK on a connected device/emulator, then launch it.
 # With several devices attached, pass the serial: `just android-install R58R92BL76K`.
 android-install serial="":

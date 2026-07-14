@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.FakeCameraSession
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
@@ -32,6 +33,7 @@ import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
         enableEdgeToEdge()
         // ponytail: fake backend by default until the real core lands behind
         // the seam; DI arrives with the first production implementation. Two
