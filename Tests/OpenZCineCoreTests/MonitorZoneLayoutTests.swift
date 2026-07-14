@@ -427,6 +427,29 @@ private enum PadViewport {
     #expect(media.midY == map.infoBar.frame.midY)
 }
 
+@Test func padLandscapeRecordAndDispFormABottomTrailingRowAndTheBarsShorten() throws {
+    let map = PadViewport.map()
+    let record = map.systemSlots.record
+    let disp = map.systemSlots.disp
+    let chromeTrailing = PadViewport.width - PadViewport.chromeInsets.trailing
+    let gap = MonitorLiveViewModuleLayout.bottomModuleSpacing
+    let barBottom = PadViewport.height - MonitorLiveViewModuleLayout.bottomBarBottomInset
+
+    // Record hugs the bottom-trailing chrome corner, bottom-aligned with the bars.
+    #expect(record.x + record.width == chromeTrailing)
+    #expect(record.y + record.height == barBottom)
+    // DISP sits inline on the record button's left, centered on it.
+    #expect(disp.x + disp.width == record.x - gap)
+    #expect(disp.midY == record.midY)
+
+    // The bottom bars shorten so they end clear of the DISP + record cluster.
+    let capture = try #require(map.captureStrip?.frame)
+    #expect(capture.x + capture.width <= disp.x - gap + 0.0001)
+    // And they still start at the chrome leading edge.
+    let assist = try #require(map.assistStrip?.frame)
+    #expect(assist.x == PadViewport.chromeInsets.leading)
+}
+
 @Test func phoneLandscapeBatteryClusterStaysALeadingRail() {
     let map = MonitorZoneLayout.map(
         viewportWidth: 874,

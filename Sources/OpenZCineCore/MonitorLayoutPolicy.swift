@@ -360,6 +360,15 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
     /// Diameter of the top-leading lock button.
     public static let lockButtonSize = 40.0
 
+    /// Trailing chrome width reserved on width-constrained (4:3 iPad) landscape layouts for the
+    /// inline bottom-corner record + DISP pair: both buttons plus a bar gap and the inter-button
+    /// gap, so the shortened bottom bars end clear of the cluster.
+    public static var constrainedBottomCornerReservedWidth: Double {
+        MonitorSideRailControlLayout.recordButtonSize
+            + MonitorSideRailControlLayout.displayButtonWidth
+            + 2 * bottomModuleSpacing
+    }
+
     /// Feed frame. This is the only module affected by feed safe-area cutout avoidance.
     public let feed: MonitorFeedFrame
 
@@ -426,14 +435,24 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
         let screen = MonitorLayoutRegion.viewport(width: viewportWidth, height: viewportHeight)
         let chrome = screen.inset(chromeInsets)
         let bottomBarHeight = max(0, bottomBarHeight)
-        let bottomModuleWidth = max(0, (chrome.width - bottomModuleSpacing) / 2)
+        // Width-constrained (4:3-ish iPad) landscape: the record + DISP pair sits inline in the
+        // bottom-trailing corner, so the bottom bars shorten to leave that corner free.
+        let constrained = MonitorFeedLayout.isWidthConstrained(
+            viewportWidth: viewportWidth,
+            viewportHeight: viewportHeight
+        )
+        let bottomBarsWidth =
+            constrained
+            ? max(0, chrome.width - Self.constrainedBottomCornerReservedWidth)
+            : chrome.width
+        let bottomModuleWidth = max(0, (bottomBarsWidth - bottomModuleSpacing) / 2)
         // The chrome viewport now spans the full screen height, so the screen edge is the true
         // bottom; hug the bars to it, tighter than the chrome inset.
         let bottomBarBottom = screen.maxY - bottomBarBottomInset
         let bottomRegion = MonitorLayoutRegion(
             x: chrome.x,
             y: max(chrome.y, bottomBarBottom - bottomBarHeight),
-            width: chrome.width,
+            width: bottomBarsWidth,
             height: bottomBarHeight
         )
         let bottomCaptureRegion = MonitorLayoutRegion(
@@ -460,13 +479,8 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
         let deckLeft = feed.x + topInfoDeckSideInset
         let deckRight = feed.x + feed.width - topInfoDeckSideInset
 
-        // Width-constrained (4:3-ish iPad) landscape: no side lanes exist, so the battery
-        // indicators sit inline beside the lock button in the top chrome band instead of
-        // stacking in a leading rail.
-        let constrained = MonitorFeedLayout.isWidthConstrained(
-            viewportWidth: viewportWidth,
-            viewportHeight: viewportHeight
-        )
+        // Width-constrained landscape also inlines the battery indicators beside the lock button
+        // in the top chrome band instead of stacking them in a leading rail (no side lanes exist).
         let batteryRail =
             constrained
             ? MonitorModuleFrame(

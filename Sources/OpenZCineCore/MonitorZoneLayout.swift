@@ -220,7 +220,6 @@ public enum MonitorZoneLayout {
             systemSlots: constrained
                 ? constrainedLandscapeSlots(
                     legacy: legacy,
-                    rail: rail,
                     viewportWidth: viewportWidth,
                     viewportHeight: viewportHeight,
                     chromeInsets: chromeInsets,
@@ -282,19 +281,18 @@ public enum MonitorZoneLayout {
 
     /// Corner slot frames for width-constrained (4:3 iPad) landscape: settings and media form a
     /// horizontal row tucked into the top-trailing chrome corner, vertically centered on the top
-    /// info bar band so they read as one line with it (settings outermost, media on its left).
-    /// The lock keeps its legacy top-leading frame; record and DISP keep their rail frames.
-    /// Frames are built in standard orientation and mirrored as a final step, matching
-    /// `MonitorLiveViewModuleLayout.mirroredChromeHorizontally`.
+    /// info bar band so they read as one line with it (settings outermost, media on its left);
+    /// record hugs the bottom-trailing corner (bottom-aligned with the shortened bottom bars)
+    /// with DISP inline on its left, vertically centered on the record button. The lock keeps
+    /// its legacy top-leading frame. Frames are built in standard orientation and mirrored as a
+    /// final step, matching `MonitorLiveViewModuleLayout.mirroredChromeHorizontally`.
     private static func constrainedLandscapeSlots(
         legacy: MonitorLiveViewModuleLayout,
-        rail: MonitorSideRailControlLayout,
         viewportWidth: Double,
         viewportHeight: Double,
         chromeInsets: MonitorEdgeInsets,
         horizontalDirection: MonitorHorizontalLayoutDirection
     ) -> MonitorSystemSlotFrames {
-        let railSlots = landscapeSlots(legacy: legacy, rail: rail)
         let chrome =
             MonitorLayoutRegion
             .viewport(width: viewportWidth, height: viewportHeight)
@@ -314,12 +312,31 @@ public enum MonitorZoneLayout {
             width: aux,
             height: aux
         )
+        // Bottom-aligned with the bottom bars' shared bottom edge (screen bottom minus the bar
+        // inset), keeping home-indicator clearance identical to the bars'.
+        let rec = MonitorSideRailControlLayout.recordButtonSize
+        let dispWidth = MonitorSideRailControlLayout.displayButtonWidth
+        let dispHeight = MonitorSideRailControlLayout.displayButtonHeight
+        let recordBottom = viewportHeight - MonitorLiveViewModuleLayout.bottomBarBottomInset
+        let record = MonitorModuleFrame(
+            x: chrome.maxX - rec,
+            y: recordBottom - rec,
+            width: rec,
+            height: rec
+        )
+        let disp = MonitorModuleFrame(
+            x: record.x - gap - dispWidth,
+            y: record.midY - dispHeight / 2,
+            width: dispWidth,
+            height: dispHeight
+        )
         let mirrored = horizontalDirection == .mirrored
 
         return MonitorSystemSlotFrames(
-            lock: railSlots.lock,
-            disp: railSlots.disp,
-            record: railSlots.record,
+            // The lock frame off `legacy` is already mirrored when the layout is.
+            lock: legacy.lockButton,
+            disp: mirrored ? disp.mirroredHorizontally(in: viewportWidth) : disp,
+            record: mirrored ? record.mirroredHorizontally(in: viewportWidth) : record,
             media: mirrored ? media.mirroredHorizontally(in: viewportWidth) : media,
             settings: mirrored ? settings.mirroredHorizontally(in: viewportWidth) : settings
         )
