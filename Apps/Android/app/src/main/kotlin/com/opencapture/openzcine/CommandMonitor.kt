@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -24,6 +25,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
@@ -166,6 +169,30 @@ internal data class CommandDashboardPresentation(
     val frameRateValue: Int?,
     val refreshSummary: String,
 )
+
+private const val COMMAND_GRID_COLUMNS = 3
+private const val COMMAND_GRID_SPACING_DP = 9
+private const val COMMAND_PORTRAIT_GRID_ROW_HEIGHT_DP = 76
+private val COMMAND_COMPACT_SIDE_TILE_HEIGHT = 36.dp
+private val COMMAND_PORTRAIT_SIDE_TILE_HEIGHT = 44.dp
+
+/** Returns the number of rows required for the dashboard's primary control grid. */
+internal fun commandPrimaryGridRows(
+    tileCount: Int,
+    columns: Int = COMMAND_GRID_COLUMNS,
+): Int {
+    require(columns > 0) { "Command dashboard grid needs at least one column." }
+    return (tileCount.coerceAtLeast(1) + columns - 1) / columns
+}
+
+/**
+ * The compact portrait grid height, leaving a scrollable region for Image,
+ * Focus, and Audio controls above the fixed monitor rail.
+ */
+internal fun portraitCommandGridHeightDp(tileCount: Int): Int {
+    val rows = commandPrimaryGridRows(tileCount)
+    return rows * COMMAND_PORTRAIT_GRID_ROW_HEIGHT_DP + (rows - 1) * COMMAND_GRID_SPACING_DP
+}
 
 /**
  * Projects the real Swift-core snapshot into the Android command dashboard.
@@ -626,6 +653,64 @@ internal fun CommandDashboard(
     }
 }
 
+/**
+ * The portrait command surface keeps the system rail outside its viewport and
+ * makes every secondary control reachable through one labeled scroll region.
+ */
+@Composable
+internal fun PortraitCommandDashboard(
+    presentation: CommandDashboardPresentation,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    onMoveTileLater: (CommandTileKind) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    CommandDashboardScrollContainer(
+        accessibilityLabel =
+            "Command dashboard. Swipe up to view Image, Focus, and Audio controls.",
+        modifier = modifier.background(LiveDesign.background),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                Modifier.fillMaxWidth().height(80.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CommandTimecode(
+                    // Android has no authoritative live-view timecode bridge yet.
+                    frameCount = null,
+                    frameRate = presentation.frameRateValue,
+                    sizeSp = 52f,
+                )
+            }
+            CommandGrid(
+                tiles = presentation.tiles,
+                controlsEnabled = controlsEnabled,
+                pendingControl = pendingControl,
+                onOpenControl = onOpenControl,
+                onMoveTileLater = onMoveTileLater,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(portraitCommandGridHeightDp(presentation.tiles.size).dp),
+            )
+            CommandSecondarySections(
+                sections = presentation.sideSections,
+                controlsEnabled = controlsEnabled,
+                pendingControl = pendingControl,
+                onOpenControl = onOpenControl,
+                compact = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
 /** Hero timecode with the accent frame field (iOS `CommandTimecodeReadout`). */
 @Composable
 internal fun CommandTimecode(
@@ -708,11 +793,11 @@ internal fun CommandGrid(
     onMoveTileLater: (CommandTileKind) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val columns = 3
-    val spacing = 9.dp
-    val rows = (tiles.size + columns - 1) / columns
+    val columns = COMMAND_GRID_COLUMNS
+    val spacing = COMMAND_GRID_SPACING_DP.dp
+    val rows = commandPrimaryGridRows(tiles.size, columns)
     BoxWithConstraints(modifier) {
-        val rowHeight = maxOf(44.dp, (maxHeight - spacing * (rows - 1)) / rows)
+        val rowHeight = maxOf(66.dp, (maxHeight - spacing * (rows - 1)) / rows)
         Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
             tiles.chunked(columns).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
@@ -789,7 +874,8 @@ private fun CommandTile(
             tile.title.uppercase(),
             style = chromeStyle(10f, FontWeight.Bold),
             color = LiveDesign.faint,
-            maxLines = 1,
+            maxLines = 2,
+            overflow = TextOverflow.Clip,
         )
         Text(
             tile.value,
@@ -810,9 +896,35 @@ private fun CommandSideColumn(
     onOpenControl: (CommandControlRequest) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    CommandDashboardScrollContainer(
+        accessibilityLabel =
+            "Image, Focus, and Audio controls. Swipe up to reveal more command controls.",
+        modifier = modifier,
+    ) {
+        CommandSecondarySections(
+            sections = sections,
+            controlsEnabled = controlsEnabled,
+            pendingControl = pendingControl,
+            onOpenControl = onOpenControl,
+            compact = true,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        )
+    }
+}
+
+/** The shared Image / Focus / Audio section stack for both dashboard orientations. */
+@Composable
+private fun CommandSecondarySections(
+    sections: List<CommandSideSectionPresentation>,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+) {
     Column(
-        modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier,
+        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
     ) {
         sections.forEach { section ->
             CommandSideSection(
@@ -820,6 +932,56 @@ private fun CommandSideColumn(
                 controlsEnabled = controlsEnabled,
                 pendingControl = pendingControl,
                 onOpenControl = onOpenControl,
+                compact = compact,
+            )
+        }
+    }
+}
+
+/**
+ * iOS-shaped vertical command scroller with an explicit visual and TalkBack
+ * affordance whenever more settings remain below the viewport.
+ */
+@Composable
+private fun CommandDashboardScrollContainer(
+    accessibilityLabel: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    Box(modifier.clipToBounds()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .semantics { contentDescription = accessibilityLabel },
+        ) {
+            content()
+        }
+        if (scrollState.canScrollForward) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, LiveDesign.background),
+                        ),
+                    ),
+            )
+            Text(
+                "MORE ↓",
+                style = chromeStyle(9f, FontWeight.Bold),
+                color = LiveDesign.muted,
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 3.dp)
+                        .semantics {
+                            contentDescription =
+                                "More command controls below. Swipe up to reveal them."
+                        },
             )
         }
     }
@@ -831,22 +993,30 @@ private fun CommandSideSection(
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
+    compact: Boolean,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
+    ) {
         Text(
             section.title.uppercase(),
-            style = chromeStyle(9.5f, FontWeight.Bold),
+            style = chromeStyle(if (compact) 8.5f else 9.5f, FontWeight.Bold),
             color = LiveDesign.faint,
             modifier = Modifier.padding(start = 2.dp),
         )
         section.cells.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 row.forEach { cell ->
                     CommandSmallTile(
                         cell = cell,
                         controlsEnabled = controlsEnabled,
                         pendingControl = pendingControl,
                         onOpenControl = onOpenControl,
+                        compact = compact,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -863,6 +1033,7 @@ private fun CommandSmallTile(
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val request = cell.request
@@ -884,6 +1055,9 @@ private fun CommandSmallTile(
         }
     Column(
         modifier
+            .height(
+                if (compact) COMMAND_COMPACT_SIDE_TILE_HEIGHT else COMMAND_PORTRAIT_SIDE_TILE_HEIGHT,
+            )
             .background(LiveDesign.surface, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .semantics(mergeDescendants = true) {
@@ -895,19 +1069,19 @@ private fun CommandSmallTile(
                 onClickLabel = "Change ${cell.title}",
                 onClick = { request?.let(onOpenControl) },
             )
-            .padding(horizontal = 8.dp, vertical = 7.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(horizontal = 8.dp, vertical = if (compact) 3.dp else 5.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 1.dp else 2.dp),
     ) {
         Text(
             cell.title.uppercase(),
-            style = chromeStyle(8.5f, FontWeight.Bold),
+            style = chromeStyle(if (compact) 7.5f else 8.5f, FontWeight.Bold),
             color = LiveDesign.muted,
             maxLines = 1,
             overflow = TextOverflow.Clip,
         )
         Text(
             cell.value,
-            style = chromeStyle(13f, FontWeight.Medium, mono = true),
+            style = chromeStyle(if (compact) 11.5f else 13f, FontWeight.Medium, mono = true),
             color = if (enabled) LiveDesign.text else LiveDesign.muted,
             maxLines = 1,
             overflow = TextOverflow.Clip,

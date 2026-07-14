@@ -286,6 +286,8 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
+        assertEquals(listOf("Image", "Focus", "Audio"), presentation.sideSections.map { it.title })
+        assertEquals(3, presentation.sideSections.first { it.title == "Image" }.cells.size)
         val focus = presentation.sideSections.first { it.title == "Focus" }.cells
         assertEquals(CameraControl.FOCUS_MODE, assertNotNull(focus[0].request).control)
         assertEquals(CameraControl.FOCUS_AREA, assertNotNull(focus[1].request).control)
@@ -300,6 +302,14 @@ class CommandMonitorTest {
         assertEquals(CameraControl.AUDIO_32_BIT_FLOAT, assertNotNull(audio[4].request).control)
         assertContains(assertNotNull(audio[0].request).options, "20")
         assertContains(assertNotNull(audio[1].request).options, "Microphone")
+    }
+
+    @Test
+    fun `portrait dashboard reserves a compact primary grid for its scrollable secondary controls`() {
+        assertEquals(1, commandPrimaryGridRows(tileCount = 1))
+        assertEquals(3, commandPrimaryGridRows(tileCount = CommandTileKind.entries.size))
+        assertEquals(76, portraitCommandGridHeightDp(tileCount = 1))
+        assertEquals(246, portraitCommandGridHeightDp(tileCount = CommandTileKind.entries.size))
     }
 
     @Test

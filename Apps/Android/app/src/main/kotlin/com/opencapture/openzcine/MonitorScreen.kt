@@ -874,43 +874,40 @@ private fun PortraitChrome(
         }
     }
 
-    // Controls zone: fit-mode live tiles, or the command hero-timecode band +
-    // grid (iOS reserves 80pt off the top of the tile region for it).
+    // Controls zone: fit-mode live tiles, or a command dashboard that keeps
+    // the system rail fixed while its primary and secondary settings scroll.
     zones.controlsGrid?.takeIf { it.height > 0 }?.let { grid ->
-        val tcBand = if (isCommand) 80f else 0f
         if (isCommand) {
-            Box(
-                Modifier.zone(ZoneFrame(grid.x, grid.y, grid.width, tcBand))
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                CommandTimecode(
-                    // See the landscape command dashboard: this is deliberately
-                    // neutral until live-view timecode is bridged from Swift.
-                    frameCount = null,
-                    frameRate = commandPresentation.frameRateValue,
-                    sizeSp = 52f,
-                )
-            }
-        }
-        CommandGrid(
-            tiles = commandPresentation.tiles,
-            controlsEnabled = commandControlsEnabled,
-            pendingControl = pendingCommandControl,
-            onOpenControl = onOpenCommandControl,
-            onMoveTileLater = onMoveCommandTileLater,
-            modifier =
-                Modifier.zone(
-                ZoneFrame(
-                    grid.x,
-                    grid.y + tcBand,
-                    grid.width,
-                    maxOf(0f, grid.height - tcBand - (if (isCommand) 0f else 8f)),
-                ),
+            PortraitCommandDashboard(
+                presentation = commandPresentation,
+                controlsEnabled = commandControlsEnabled,
+                pendingControl = pendingCommandControl,
+                onOpenControl = onOpenCommandControl,
+                onMoveTileLater = onMoveCommandTileLater,
+                modifier =
+                    Modifier.zone(grid)
+                        .alpha(if (locked) 0.4f else 1f),
             )
-                .padding(horizontal = 12.dp)
-                .alpha(if (locked) 0.4f else 1f),
-        )
+        } else {
+            CommandGrid(
+                tiles = commandPresentation.tiles,
+                controlsEnabled = commandControlsEnabled,
+                pendingControl = pendingCommandControl,
+                onOpenControl = onOpenCommandControl,
+                onMoveTileLater = onMoveCommandTileLater,
+                modifier =
+                    Modifier.zone(
+                        ZoneFrame(
+                            grid.x,
+                            grid.y,
+                            grid.width,
+                            maxOf(0f, grid.height - 8f),
+                        ),
+                    )
+                        .padding(horizontal = 12.dp)
+                        .alpha(if (locked) 0.4f else 1f),
+            )
+        }
     }
 
     // Opaque band behind the system controls through the physical bottom
