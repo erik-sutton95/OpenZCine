@@ -64,8 +64,13 @@ import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
+import com.opencapture.openzcine.transport.AndroidUsbPtpCameraSource
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
+import com.opencapture.openzcine.transport.UsbPtpCamera
+import com.opencapture.openzcine.transport.UsbPtpCameraAccess
+import com.opencapture.openzcine.transport.UsbPtpCameraSource
+import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -103,6 +108,10 @@ public class PairingEnvironment(
     public val hotspotCameras: Flow<List<DiscoveredCamera>>,
     /** Builds the control session once a camera host is known. */
     public val createSession: (host: String) -> CameraSession,
+    /** Android USB Host discovery and raw-byte ownership, when the device supports it. */
+    public val usbCameraSource: UsbPtpCameraSource?,
+    /** Builds a Swift-core-backed session over an already-open USB PTP transport. */
+    public val createUsbSession: (UsbPtpOpenResult.Opened) -> CameraSession,
     /** Remembered camera-AP credentials. */
     public val credentials: PairingCredentials,
 )
@@ -112,11 +121,20 @@ public fun realPairingEnvironment(context: Context): PairingEnvironment {
     val joiner = CameraApJoiner(context.getSystemService(ConnectivityManager::class.java))
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
+    val usbCameraSource = AndroidUsbPtpCameraSource(context)
     return PairingEnvironment(
         joinCameraAp = { ssid, passphrase -> joiner.join(ssid, passphrase) },
         releaseCameraAp = joiner::release,
         hotspotCameras = discovery.cameras(),
         createSession = { host -> SwiftCoreCameraSession(host) },
+        usbCameraSource = usbCameraSource,
+        createUsbSession = { opened ->
+            SwiftCoreCameraSession(
+                host = opened.hostKey,
+                cameraNameHint = opened.displayName,
+                usbTransport = opened.transport,
+            )
+        },
         credentials = CameraWifiCredentialStore(context),
     )
 }
@@ -186,12 +204,14 @@ internal object PairingCopy {
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> "Camera's Access Point"
             PairingPath.PHONE_HOTSPOT -> "Phone's Hotspot"
+            PairingPath.USB_C -> "USB-C cable"
         }
 
     fun pathBadge(path: PairingPath): String =
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> "Simplest"
             PairingPath.PHONE_HOTSPOT -> "Best wireless"
+            PairingPath.USB_C -> "Direct cable"
         }
 
     fun pathPros(path: PairingPath): List<String> =
@@ -199,12 +219,14 @@ internal object PairingCopy {
             PairingPath.CAMERA_ACCESS_POINT ->
                 listOf("Lightest battery use", "No phone setup needed")
             PairingPath.PHONE_HOTSPOT -> listOf("Best wireless quality", "Stable at high settings")
+            PairingPath.USB_C -> listOf("Direct wired connection", "No Wi‑Fi or network key")
         }
 
     fun pathCon(path: PairingPath): String =
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> "Softer link, lower quality"
             PairingPath.PHONE_HOTSPOT -> "Heavier battery drain"
+            PairingPath.USB_C -> "Requires a data-capable cable"
         }
 
     // [VERIFY-ON-HW] Confirm the ZR's exact menu wording for each path on hardware.
@@ -223,6 +245,12 @@ internal object PairingCopy {
                     "On the camera: Network menu → Connect to computer.",
                     "We'll walk through joining your hotspot in the next step.",
                 )
+            PairingPath.USB_C ->
+                listOf(
+                    "On the camera: turn on Connect to computer and keep the camera powered on.",
+                    "Use a data-capable USB-C cable — charging-only cables cannot carry PTP.",
+                    "Connect the camera directly to this phone, then approve Android's USB prompt.",
+                )
         }
 
     fun networkSubtitle(path: PairingPath, keyRemembered: Boolean): String =
@@ -235,6 +263,7 @@ internal object PairingCopy {
                         "we remember the key for next time."
                 }
             PairingPath.PHONE_HOTSPOT -> "Keep your phone's Wi‑Fi hotspot on. Then on the camera:"
+            PairingPath.USB_C -> "USB-C pairing does not use a Wi‑Fi network."
         }
 
     /** Camera-side instruction card lines for the hotspot network step. */
@@ -311,6 +340,7 @@ public fun PairingExperience(
     var cameraWifiScannerPresented by remember { mutableStateOf(false) }
     val keyWasRemembered = remember { keyField.isNotEmpty() }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
+    var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
     val handedOff = remember { mutableStateOf(false) }
@@ -329,11 +359,14 @@ public fun PairingExperience(
         }
     }
 
-    fun connect(host: String) {
+    fun connect(
+        session: CameraSession,
+        savedCamera: SavedCameraRecord,
+        unreachableMessage: String,
+    ) {
         phase = PairingPhase.Connecting
         work.value =
             scope.launch {
-                val session = environment.createSession(host)
                 try {
                     session.connect()
                     val connected = session.state.value as? CameraSessionState.Connected
@@ -343,30 +376,15 @@ public fun PairingExperience(
                             PairedCamera(
                                 session = session,
                                 savedCamera =
-                                    SavedCameraRecord(
-                                        host = host,
+                                    savedCamera.copy(
                                         cameraName = connected.identity.name,
-                                        transport =
-                                            if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
-                                                SavedCameraTransport.CAMERA_ACCESS_POINT
-                                            } else {
-                                                SavedCameraTransport.PHONE_HOTSPOT
-                                            },
                                         lastSeenAtEpochMillis = System.currentTimeMillis(),
-                                        wifiSsid =
-                                            if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
-                                                ssidField.trim().takeIf(String::isNotEmpty)
-                                            } else {
-                                                null
-                                            },
                                     ),
                             ),
                         )
                     } else {
-                        phase =
-                            PairingPhase.Error(
-                                "Couldn't reach the camera. Check Wi‑Fi and try again."
-                            )
+                        withContext(NonCancellable) { session.disconnect() }
+                        phase = PairingPhase.Error(unreachableMessage)
                     }
                 } catch (error: CancellationException) {
                     // `sessionConnect` begins native work asynchronously. A
@@ -374,8 +392,88 @@ public fun PairingExperience(
                     // can claim the process-wide PTP slot.
                     withContext(NonCancellable) { session.disconnect() }
                     throw error
+                } catch (_: Exception) {
+                    withContext(NonCancellable) { session.disconnect() }
+                    phase = PairingPhase.Error(unreachableMessage)
                 }
             }
+    }
+
+    fun connect(host: String) {
+        val transport =
+            if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
+                SavedCameraTransport.CAMERA_ACCESS_POINT
+            } else {
+                SavedCameraTransport.PHONE_HOTSPOT
+            }
+        connect(
+            session = environment.createSession(host),
+            savedCamera =
+                SavedCameraRecord(
+                    host = host,
+                    cameraName = "Nikon camera",
+                    transport = transport,
+                    lastSeenAtEpochMillis = null,
+                    wifiSsid =
+                        if (transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+                            ssidField.trim().takeIf(String::isNotEmpty)
+                        } else {
+                            null
+                        },
+                ),
+            unreachableMessage = "Couldn't reach the camera. Check Wi‑Fi and try again.",
+        )
+    }
+
+    fun connectUsb(camera: UsbPtpCamera) {
+        val source = environment.usbCameraSource
+        if (source == null) {
+            phase = PairingPhase.Error("USB-C camera support is unavailable on this device.")
+            return
+        }
+        when (camera.access) {
+            UsbPtpCameraAccess.NEEDS_PERMISSION,
+            UsbPtpCameraAccess.DENIED,
+            -> source.requestPermission(camera)
+            UsbPtpCameraAccess.IDENTITY_UNAVAILABLE ->
+                phase =
+                    PairingPhase.Error(
+                        "This camera did not expose a stable USB identity. Reconnect it or use Wi‑Fi pairing.",
+                    )
+            UsbPtpCameraAccess.READY ->
+                when (val opened = source.open(camera)) {
+                    is UsbPtpOpenResult.Opened -> {
+                        val session =
+                            try {
+                                environment.createUsbSession(opened)
+                            } catch (_: Exception) {
+                                // The source already claimed a physical
+                                // interface. Do not leave it claimed when the
+                                // Swift session wrapper cannot be created.
+                                opened.transport.close()
+                                phase =
+                                    PairingPhase.Error(
+                                        "Couldn't start the USB-C camera session. Reconnect the cable and try again.",
+                                    )
+                                return
+                            }
+                        connect(
+                            session = session,
+                            savedCamera =
+                                SavedCameraRecord(
+                                    host = opened.hostKey,
+                                    cameraName = opened.displayName,
+                                    transport = SavedCameraTransport.USB_C,
+                                    lastSeenAtEpochMillis = null,
+                                    wifiSsid = null,
+                                ),
+                            unreachableMessage =
+                                "Couldn't reach the USB-C camera. Check the cable and camera connection, then try again.",
+                        )
+                    }
+                    is UsbPtpOpenResult.Rejected -> phase = PairingPhase.Error(opened.message)
+                }
+        }
     }
 
     fun joinCameraAp() {
@@ -447,11 +545,22 @@ public fun PairingExperience(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Hotspot path ONLY: watch for the camera to join the phone's hotspot.
-    // The phone hosts — it never scans or joins networks on this path.
+    // Discovery is deliberately transport-specific: hotspot discovery never
+    // touches USB, and USB enumeration never scans or joins a network.
     if (flow.step == PairingStep.DISCOVER) {
-        LaunchedEffect(environment) {
-            environment.hotspotCameras.collect { cameras = it }
+        LaunchedEffect(environment, flow.path) {
+            if (flow.path == PairingPath.USB_C) {
+                cameras = emptyList()
+                val source = environment.usbCameraSource
+                if (source == null) {
+                    usbCameras = emptyList()
+                } else {
+                    source.cameras.collect { usbCameras = it }
+                }
+            } else {
+                usbCameras = emptyList()
+                environment.hotspotCameras.collect { cameras = it }
+            }
         }
     }
 
@@ -510,6 +619,7 @@ public fun PairingExperience(
                             keyCameFromScanner = keyCameFromScanner,
                             keyWasRemembered = keyWasRemembered,
                             cameras = cameras,
+                            usbCameras = usbCameras,
                             onRequestPermission = ::requestPairingPermission,
                             onScanCameraWifi = { cameraWifiScannerPresented = true },
                             onChoose = { flow = flow.choose(it) },
@@ -517,6 +627,7 @@ public fun PairingExperience(
                             onRetreat = ::retreat,
                             onJoin = ::joinCameraAp,
                             onConnectCamera = { connect(it.host) },
+                            onConnectUsbCamera = ::connectUsb,
                             onCancel = ::cancelWork,
                             compact = compactStep,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -546,6 +657,7 @@ public fun PairingExperience(
                             keyCameFromScanner = keyCameFromScanner,
                             keyWasRemembered = keyWasRemembered,
                             cameras = cameras,
+                            usbCameras = usbCameras,
                             onRequestPermission = ::requestPairingPermission,
                             onScanCameraWifi = { cameraWifiScannerPresented = true },
                             onChoose = { flow = flow.choose(it) },
@@ -553,6 +665,7 @@ public fun PairingExperience(
                             onRetreat = ::retreat,
                             onJoin = ::joinCameraAp,
                             onConnectCamera = { connect(it.host) },
+                            onConnectUsbCamera = ::connectUsb,
                             onCancel = ::cancelWork,
                             compact = viewportWidth < 480.dp,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -634,6 +747,7 @@ private fun StepCard(
     keyCameFromScanner: Boolean,
     keyWasRemembered: Boolean,
     cameras: List<DiscoveredCamera>,
+    usbCameras: List<UsbPtpCamera>,
     onRequestPermission: () -> Unit,
     onScanCameraWifi: () -> Unit,
     onChoose: (PairingPath) -> Unit,
@@ -641,6 +755,7 @@ private fun StepCard(
     onRetreat: () -> Unit,
     onJoin: () -> Unit,
     onConnectCamera: (DiscoveredCamera) -> Unit,
+    onConnectUsbCamera: (UsbPtpCamera) -> Unit,
     onCancel: () -> Unit,
     compact: Boolean,
     modifier: Modifier = Modifier,
@@ -683,7 +798,14 @@ private fun StepCard(
                             keyWasRemembered = keyWasRemembered,
                             onScanCameraWifi = onScanCameraWifi,
                         )
-                    PairingStep.DISCOVER -> DiscoverBody(cameras, onConnectCamera)
+                    PairingStep.DISCOVER ->
+                        DiscoverBody(
+                            path = flow.path,
+                            cameras = cameras,
+                            usbCameras = usbCameras,
+                            onConnectCamera = onConnectCamera,
+                            onConnectUsbCamera = onConnectUsbCamera,
+                        )
                 }
                 (phase as? PairingPhase.Error)?.let { error ->
                     Spacer(Modifier.height(10.dp))
@@ -1112,9 +1234,16 @@ private fun DeviceInstructionCard(label: String, steps: List<String>) {
 
 @Composable
 private fun DiscoverBody(
+    path: PairingPath,
     cameras: List<DiscoveredCamera>,
+    usbCameras: List<UsbPtpCamera>,
     onConnectCamera: (DiscoveredCamera) -> Unit,
+    onConnectUsbCamera: (UsbPtpCamera) -> Unit,
 ) {
+    if (path == PairingPath.USB_C) {
+        UsbDiscoverBody(usbCameras, onConnectUsbCamera)
+        return
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
             Column(
@@ -1174,6 +1303,117 @@ private fun DiscoverBody(
         }
     }
 }
+
+@Composable
+private fun UsbDiscoverBody(
+    cameras: List<UsbPtpCamera>,
+    onConnectCamera: (UsbPtpCamera) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (cameras.isEmpty()) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .startupInstructionCard()
+                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    "Waiting for a USB-C camera",
+                    color = StartupColors.ink,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "Connect a powered camera with a data-capable USB-C cable.",
+                    color = StartupColors.muted,
+                    fontSize = 11.sp,
+                )
+            }
+            StartupIndeterminateBar()
+        } else {
+            cameras.forEach { camera ->
+                val actionable =
+                    camera.access == UsbPtpCameraAccess.READY ||
+                        camera.access == UsbPtpCameraAccess.NEEDS_PERMISSION ||
+                        camera.access == UsbPtpCameraAccess.DENIED
+                Row(
+                    Modifier.fillMaxWidth()
+                        .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
+                        .clickable(enabled = actionable) { onConnectCamera(camera) }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            camera.displayName,
+                            color = StartupColors.ink,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (camera.isDebugFixture) {
+                            Text(
+                                USB_DEBUG_FIXTURE_LABEL,
+                                color = StartupColors.accent,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp,
+                            )
+                        }
+                        Text(
+                            usbCameraDetail(camera.access, camera.isDebugFixture),
+                            color = StartupColors.muted,
+                            fontSize = 11.sp,
+                        )
+                    }
+                    Text(
+                        usbCameraAction(camera.access),
+                        color = if (actionable) StartupColors.darkText else StartupColors.muted,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier =
+                            Modifier.clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (actionable) {
+                                        StartupColors.accent
+                                    } else {
+                                        StartupColors.control
+                                    },
+                                )
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal const val USB_DEBUG_FIXTURE_LABEL: String = "DEBUG FIXTURE — NOT USB HARDWARE"
+
+internal fun usbCameraDetail(access: UsbPtpCameraAccess, isDebugFixture: Boolean = false): String =
+    if (isDebugFixture) {
+        when (access) {
+            UsbPtpCameraAccess.NEEDS_PERMISSION -> "SIMULATED · permission needed"
+            UsbPtpCameraAccess.READY -> "SIMULATED · ready"
+            UsbPtpCameraAccess.DENIED -> "SIMULATED · access denied"
+            UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "SIMULATED · no stable identity"
+        }
+    } else {
+        when (access) {
+            UsbPtpCameraAccess.NEEDS_PERMISSION -> "USB-C · allow Android camera access"
+            UsbPtpCameraAccess.READY -> "USB-C · ready to connect"
+            UsbPtpCameraAccess.DENIED -> "USB-C · access was denied"
+            UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "USB-C · stable camera identity unavailable"
+        }
+    }
+
+private fun usbCameraAction(access: UsbPtpCameraAccess): String =
+    when (access) {
+        UsbPtpCameraAccess.NEEDS_PERMISSION -> "Allow"
+        UsbPtpCameraAccess.READY -> "Connect"
+        UsbPtpCameraAccess.DENIED -> "Allow"
+        UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "Unavailable"
+    }
 
 // MARK: - Controls
 

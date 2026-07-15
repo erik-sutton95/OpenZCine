@@ -8,6 +8,7 @@ import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.transport.UsbPtpTransport
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -97,6 +98,76 @@ class SwiftCoreCameraSessionTest {
         assertEquals(
             CameraSessionState.Connected(CameraIdentity("ZR", "NIKON ZR", "6001234")),
             session.state.value,
+        )
+    }
+
+    @Test
+    fun `USB connection hands only a raw transport to the Swift bridge and cancellation cleans it up`() =
+        runTest {
+            val bridge = FakeBridge()
+            val transport = FakeUsbTransport()
+            val session =
+                SwiftCoreCameraSession(
+                    host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                    phaseLogger = { _, _ -> },
+                    core = bridge,
+                    usbTransport = transport,
+                    cameraNameHint = "Nikon USB camera",
+                )
+
+            val connecting = async { session.connect() }
+            runCurrent()
+
+            assertEquals(emptyList(), bridge.hostConnects)
+            assertEquals(1, bridge.usbConnects.size)
+            assertTrue(bridge.usbConnects.single().transport === transport)
+            assertEquals("Nikon USB camera", bridge.usbConnects.single().cameraNameHint)
+
+            connecting.cancelAndJoin()
+
+            assertEquals(1, bridge.disconnects)
+            assertTrue(transport.isClosed())
+            assertEquals(CameraSessionState.Disconnected, session.state.value)
+        }
+
+    @Test
+    fun `cancelling USB attempt A cannot close newer retry B`() = runTest {
+        val bridge = FakeBridge()
+        val transportA = FakeUsbTransport()
+        val transportB = FakeUsbTransport()
+        val first = usbSession(bridge, transportA)
+        val second = usbSession(bridge, transportB)
+        val disconnectStarted = CountDownLatch(1)
+        val releaseDisconnect = CountDownLatch(1)
+
+        val connectingA = async { first.connect() }
+        runCurrent()
+        val ownerA = bridge.usbConnects.single().connectionOwner
+        bridge.disconnectHandler = { owner ->
+            if (owner == ownerA) {
+                disconnectStarted.countDown()
+                check(releaseDisconnect.await(5, TimeUnit.SECONDS))
+            }
+        }
+
+        connectingA.cancel()
+        runCurrent()
+        assertTrue(disconnectStarted.await(5, TimeUnit.SECONDS))
+
+        val connectingB = async { second.connect() }
+        runCurrent()
+        bridge.listeners.last().onConnected("ZR", "NIKON ZR", "6001234")
+        connectingB.await()
+
+        releaseDisconnect.countDown()
+        connectingA.cancelAndJoin()
+
+        assertEquals(listOf(ownerA), bridge.disconnectOwners)
+        assertTrue(transportA.isClosed())
+        assertFalse(transportB.isClosed())
+        assertEquals(
+            CameraSessionState.Connected(CameraIdentity("ZR", "NIKON ZR", "6001234")),
+            second.state.value,
         )
     }
 
@@ -528,6 +599,13 @@ class SwiftCoreCameraSessionTest {
     }
 
     private class FakeBridge : SwiftCoreSessionBridge {
+        data class UsbConnect(
+            val transport: UsbPtpTransport,
+            val host: String,
+            val cameraNameHint: String,
+            val connectionOwner: Long,
+        )
+
         data class PropertyRefreshRequest(
             val request: Int,
             val recording: Boolean,
@@ -536,20 +614,40 @@ class SwiftCoreCameraSessionTest {
 
         override val isAvailable: Boolean = true
         val listeners = mutableListOf<SwiftCore.SessionListener>()
+        val hostConnects = mutableListOf<String>()
+        val usbConnects = mutableListOf<UsbConnect>()
         val eventListeners = mutableListOf<SwiftCore.SessionEventListener>()
         val recordingRequests = mutableListOf<Boolean>()
         val controlRequests = mutableListOf<Pair<CameraControl, String>>()
+        val disconnectOwners = mutableListOf<Long>()
         private val refreshLock = Any()
         private val propertyRefreshRequests = mutableListOf<PropertyRefreshRequest>()
         private var activeRefreshes = 0
         private var maximumRefreshes = 0
         @Volatile var propertyRefreshPayload: String? = propertyPayload()
         @Volatile var propertyRefreshHandler: ((PropertyRefreshRequest) -> String?)? = null
+        @Volatile var disconnectHandler: ((Long) -> Unit)? = null
         var controlResult = SwiftCore.CONTROL_COMMAND_ACCEPTED
         var controlHandler: ((CameraControl, String) -> Int)? = null
         var disconnects = 0
 
-        override fun connect(host: String, listener: SwiftCore.SessionListener) {
+        override fun connect(
+            host: String,
+            connectionOwner: Long,
+            listener: SwiftCore.SessionListener,
+        ) {
+            hostConnects += host
+            listeners += listener
+        }
+
+        override fun connectUsb(
+            transport: UsbPtpTransport,
+            host: String,
+            cameraNameHint: String,
+            connectionOwner: Long,
+            listener: SwiftCore.SessionListener,
+        ) {
+            usbConnects += UsbConnect(transport, host, cameraNameHint, connectionOwner)
             listeners += listener
         }
 
@@ -598,10 +696,42 @@ class SwiftCoreCameraSessionTest {
             return controlHandler?.invoke(control, label) ?: controlResult
         }
 
-        override fun disconnect() {
+        override fun disconnect(connectionOwner: Long) {
             disconnects++
+            disconnectOwners += connectionOwner
+            disconnectHandler?.invoke(connectionOwner)
+            usbConnects.lastOrNull { it.connectionOwner == connectionOwner }?.transport?.close()
         }
     }
+
+    private class FakeUsbTransport : UsbPtpTransport {
+        private var closed = false
+
+        override fun writeBulk(bytes: ByteArray, timeoutMillis: Int): Int =
+            if (closed) -1 else bytes.size
+
+        override fun readBulk(maxBytes: Int, timeoutMillis: Int): ByteArray? = null
+
+        override fun readEvent(maxBytes: Int, timeoutMillis: Int): ByteArray? = null
+
+        override fun isClosed(): Boolean = closed
+
+        override fun close() {
+            closed = true
+        }
+    }
+
+    private fun usbSession(
+        bridge: FakeBridge,
+        transport: FakeUsbTransport,
+    ): SwiftCoreCameraSession =
+        SwiftCoreCameraSession(
+            host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+            phaseLogger = { _, _ -> },
+            core = bridge,
+            usbTransport = transport,
+            cameraNameHint = "Nikon USB camera",
+        )
 
     private suspend fun assertControlFailure(
         session: SwiftCoreCameraSession,

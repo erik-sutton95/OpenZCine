@@ -19,6 +19,10 @@ import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
+import com.opencapture.openzcine.transport.UsbPtpCamera
+import com.opencapture.openzcine.transport.UsbPtpCameraAccess
+import com.opencapture.openzcine.transport.UsbPtpCameraSource
+import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,7 +44,8 @@ import kotlinx.coroutines.flow.flow
  * ```
  * adb shell am start -n com.opencapture.openzcine/.MainActivity \
  *   --es zc.demo.pairing permissions|choose|prepare|network|discover|connecting \
- *   --es zc.demo.pairingPath ap|hotspot
+ *   --es zc.demo.pairingPath ap|hotspot|usb
+ *   --es zc.demo.usbState empty|needs-permission|denied|ready
  * ```
  *
  * Feed effects (needs API 33 + the staged Swift core; combine freely):
@@ -67,8 +72,14 @@ object DemoHarness {
     /** String intent extra selecting the pairing wizard state to script. */
     const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
 
-    /** String intent extra selecting the scripted pairing path (`ap` or `hotspot`). */
+    /** String intent extra selecting the scripted pairing path (`ap`, `hotspot`, or `usb`). */
     const val EXTRA_PAIRING_PATH = "zc.demo.pairingPath"
+
+    /**
+     * Debug-only USB discovery state for pairing screenshots. The fixture
+     * never asks Android for USB permission or opens a physical device.
+     */
+    const val EXTRA_USB_STATE = "zc.demo.usbState"
 
     /** String intent extra forcing a glass tier (`full`/`blur`/`flat`) for testing. */
     const val EXTRA_GLASS_TIER = "zc.glass.tier"
@@ -155,6 +166,13 @@ object DemoHarness {
     fun pairingScript(intent: Intent): PairingScript? {
         val raw = intent.getStringExtra(EXTRA_PAIRING_STEP) ?: return null
         val requestedHotspot = intent.getStringExtra(EXTRA_PAIRING_PATH) == "hotspot"
+        val requestedUsb = intent.getStringExtra(EXTRA_PAIRING_PATH) == "usb"
+        val usbState =
+            if (requestedUsb) {
+                ScriptedUsbState.parse(intent.getStringExtra(EXTRA_USB_STATE))
+            } else {
+                null
+            }
         val step =
             when (raw) {
                 "permissions" -> PairingStep.PERMISSIONS
@@ -165,19 +183,21 @@ object DemoHarness {
                 else -> PairingStep.CHOOSE_PATH
             }
         val path =
-            if (requestedHotspot || step == PairingStep.DISCOVER) {
+            if (requestedUsb) {
+                PairingPath.USB_C
+            } else if (requestedHotspot || step == PairingStep.DISCOVER) {
                 PairingPath.PHONE_HOTSPOT
             } else {
                 PairingPath.CAMERA_ACCESS_POINT
             }
         return PairingScript(
             start = PairingFlowState(step = step, path = path),
-            environment = scriptedEnvironment(),
+            environment = scriptedEnvironment(usbState),
             autoConnect = raw == "connecting",
         )
     }
 
-    private fun scriptedEnvironment(): PairingEnvironment {
+    private fun scriptedEnvironment(usbState: ScriptedUsbState?): PairingEnvironment {
         val credentials =
             object : PairingCredentials {
                 override var lastSsid: String? = null
@@ -208,10 +228,90 @@ object DemoHarness {
                             )
                         )
                     )
-                },
+            },
             createSession = { ScriptedPairingSession() },
+            usbCameraSource = usbState?.let(::ScriptedUsbCameraSource),
+            createUsbSession = { ScriptedPairingSession() },
             credentials = credentials,
         )
+    }
+
+    /** Debug-only USB discovery variants for screenshot verification. */
+    private enum class ScriptedUsbState {
+        EMPTY,
+        NEEDS_PERMISSION,
+        DENIED,
+        READY,
+        ;
+
+        companion object {
+            fun parse(raw: String?): ScriptedUsbState =
+                when (raw) {
+                    "empty" -> EMPTY
+                    "needs-permission" -> NEEDS_PERMISSION
+                    "denied" -> DENIED
+                    else -> READY
+                }
+        }
+    }
+
+    /**
+     * Debug-only USB discovery source for UI screenshots. It never reads a
+     * real device serial or opens a physical transport. Tapping Allow changes
+     * the synthetic card to Ready so the permission-recovery copy can be
+     * screenshot without invoking Android's actual USB permission dialog.
+     */
+    private class ScriptedUsbCameraSource(initialState: ScriptedUsbState) : UsbPtpCameraSource {
+        private val mutableCameras = MutableStateFlow(camerasFor(initialState))
+        override val cameras: StateFlow<List<UsbPtpCamera>> =
+            mutableCameras.asStateFlow()
+
+        override fun requestPermission(camera: UsbPtpCamera) {
+            if (camera.token == DEBUG_USB_TOKEN) {
+                mutableCameras.value = camerasFor(ScriptedUsbState.READY)
+            }
+        }
+
+        override fun open(camera: UsbPtpCamera): UsbPtpOpenResult =
+            UsbPtpOpenResult.Rejected("Debug USB camera cannot open a physical transport.")
+
+        override fun close() = Unit
+
+        private companion object {
+            const val DEBUG_USB_TOKEN = "debug-usb-zr"
+            const val DEBUG_USB_HOST_KEY = "usb:00000000000000000000000000000000"
+
+            fun camerasFor(state: ScriptedUsbState): List<UsbPtpCamera> =
+                if (state == ScriptedUsbState.EMPTY) {
+                    emptyList()
+                } else {
+                    listOf(
+                        UsbPtpCamera(
+                            token = DEBUG_USB_TOKEN,
+                            displayName = "Synthetic USB-C camera",
+                            access =
+                                when (state) {
+                                    ScriptedUsbState.NEEDS_PERMISSION ->
+                                        UsbPtpCameraAccess.NEEDS_PERMISSION
+                                    ScriptedUsbState.DENIED -> UsbPtpCameraAccess.DENIED
+                                    ScriptedUsbState.READY -> UsbPtpCameraAccess.READY
+                                    ScriptedUsbState.EMPTY -> error("Empty USB state has no camera")
+                                },
+                            // This never renders; it keeps the source-set
+                            // fixture structurally equivalent to a ready
+                            // production camera record without resembling a
+                            // real body identity.
+                            hostKey =
+                                if (state == ScriptedUsbState.READY) {
+                                    DEBUG_USB_HOST_KEY
+                                } else {
+                                    null
+                                },
+                            isDebugFixture = true,
+                        ),
+                    )
+                }
+        }
     }
 
     /** Connects slowly (8 s) so the connecting state can be screenshotted. */

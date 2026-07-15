@@ -21,11 +21,14 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
 - **Build:** `just android-build` from the repo root (or `just android-check` for build + tests + lint).
 - **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
   startup flow (`ios/Runner/StartupDesign.swift`) in its design language: permissions → choose
-  path → prepare → network (→ find and pair). Two hard-separated paths: **camera-AP** (the phone
+  path → prepare → network (→ find and pair). Three hard-separated paths: **camera-AP** (the phone
   joins the camera's `NIKON_ZR_…` network via `WifiNetworkSpecifier` + `bindProcessToNetwork`,
   key entered once and remembered in a Keystore-encrypted store) and **phone-hotspot** (the
   CAMERA joins the phone's hotspot — the phone hosts, never scans or joins; NSD discovery waits
-  for the camera). The camera-AP network step can scan the camera's Connection wizard with a
+  for the camera), plus **USB-C** (Android USB Host discovers a complete PTP interface, asks for
+  per-device consent, and hands raw bulk/interrupt bytes to Swift). USB saved profiles use a
+  local `usb:<digest>` reconnect key only — never the raw USB serial, display name, log value, or
+  network address. The camera-AP network step can scan the camera's Connection wizard with a
   temporary CameraX rear-camera preview and bundled, on-device ML Kit OCR; one ephemeral transcript
   crosses JNI to the shared Swift `CameraWiFiScreenParser`, which alone validates/corrects Nikon
   SSID/key text. The operator reviews the result before it stages the ordinary Join action; no
@@ -33,7 +36,11 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   Keystore-encrypted record. A connected session hands off to the monitor. Every wizard state is
   scriptable for screenshots: `adb shell am start -n com.opencapture.openzcine/.MainActivity
   --es zc.demo.pairing permissions|choose|prepare|network|discover|connecting
-  --es zc.demo.pairingPath ap|hotspot` (debug builds only).
+  --es zc.demo.pairingPath ap|hotspot|usb --es zc.demo.usbState
+  empty|needs-permission|denied|ready` (debug builds only). The USB fixture visibly says
+  `DEBUG FIXTURE — NOT USB HARDWARE`, never invokes Android USB permission, and never opens a
+  physical transport. **[VERIFY-ON-HW]** A supported Nikon body, data cable, Android consent,
+  `OpenSession` retry, and event flow still require a dedicated physical-camera pass.
   Android has its own stable PTP-IP initiator identity, so a camera previously paired only with
   iOS asks for a one-time Android pairing confirmation; later Android reconnects retain that
   profile without replacing the iOS pairing.
@@ -53,12 +60,16 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   `docs/investigations/android-core-feasibility.md`.
 - **Transport foundations:** `app/.../transport/` owns the platform byte layer — NSD/mDNS camera
   discovery (`CameraDiscovery` over an `NsdBrowser` seam, `_ptp._tcp`, plus the fixed camera-AP
-  host) and `PtpIpSocketTransport` (command + event TCP sockets, graceful half-close teardown,
-  settle-then-backoff reconnect). PTP-IP protocol/session logic arrives behind the JNI facade;
-  this layer is bytes only. Debug hook to try it live:
+  host), `PtpIpSocketTransport` (command + event TCP sockets, graceful half-close teardown,
+  settle-then-backoff reconnect), and `AndroidUsbPtpCameraSource` (USB attach/detach, per-device
+  permission, Still Image/PTP endpoint selection, interface claim, and raw bulk/interrupt I/O).
+  Kotlin owns no PTP framing or Nikon policy: the Swift facade receives only raw USB bytes and
+  performs generic-container transactions, session strategy, and event decoding. Detach and
+  cancellation close the raw transport before the UI publishes stale discovery state. Debug hook
+  to try the PTP-IP path live:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez openzcine.nsdTransport true`.
 - **Camera session (Swift core):** `bridge/SwiftCoreCameraSession` implements the `CameraSession`
-  seam over the Swift core's PTP-IP session layer
+  seam over the Swift core's PTP-IP and USB generic-container session layers
   (`Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift`): Init handshake, the Nikon
   open/pair/identify sequence, core-decoded property reads, live view, and graceful `CloseSession`
   teardown all run inside the `.so` — the facade owns the session sockets (decision record: the

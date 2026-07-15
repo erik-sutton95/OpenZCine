@@ -85,6 +85,33 @@ class SavedCameraRecordsTest {
     }
 
     @Test
+    fun `usb and wifi profiles for one named camera remain independently reconnectable`() {
+        val records =
+            SavedCameraRecords.canonicalized(
+                listOf(
+                    SavedCameraRecord(
+                        host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                        cameraName = "ZR_6001234",
+                        transport = SavedCameraTransport.USB_C,
+                        lastSeenAtEpochMillis = 20L,
+                        wifiSsid = null,
+                    ),
+                    SavedCameraRecord(
+                        host = "172.20.10.7",
+                        cameraName = "ZR_6001234",
+                        transport = SavedCameraTransport.PHONE_HOTSPOT,
+                        lastSeenAtEpochMillis = 10L,
+                        wifiSsid = null,
+                    ),
+                ),
+            )
+
+        assertEquals(2, records.size)
+        assertEquals(SavedCameraTransport.USB_C, records.first().transport)
+        assertEquals(SavedCameraTransport.PHONE_HOTSPOT, records.last().transport)
+    }
+
+    @Test
     fun `renaming and removal normalize their inputs`() {
         val record =
             SavedCameraRecord(

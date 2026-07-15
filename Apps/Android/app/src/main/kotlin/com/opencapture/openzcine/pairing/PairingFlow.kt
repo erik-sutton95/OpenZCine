@@ -3,8 +3,9 @@ package com.opencapture.openzcine.pairing
 /**
  * How the operator plans to reach the camera during first-time pairing — the
  * Android port of the iOS shell's `FirstPairTransportMethod`
- * (ios/Runner/NativeAppRoot.swift), minus USB-C which has no Android
- * transport yet.
+ * (ios/Runner/NativeAppRoot.swift). USB-C has no Wi-Fi join or scan step:
+ * Android discovers the physically attached PTP interface and requests its
+ * per-device USB permission at the final discovery step.
  *
  * The two paths are HARD-separated (this cost real bugs on iOS):
  * - [CAMERA_ACCESS_POINT]: the phone joins the camera's own network via
@@ -16,6 +17,7 @@ package com.opencapture.openzcine.pairing
 public enum class PairingPath {
     CAMERA_ACCESS_POINT,
     PHONE_HOTSPOT,
+    USB_C,
 }
 
 /**
@@ -51,7 +53,7 @@ public data class PairingFlowState(
             "The permissions step cannot be current while skipped"
         }
         require(!(path == PairingPath.CAMERA_ACCESS_POINT && step == PairingStep.DISCOVER)) {
-            "Camera-AP pairing ends at NETWORK; DISCOVER belongs to the hotspot path"
+            "Camera-AP pairing ends at NETWORK; DISCOVER belongs to hotspot or USB-C pairing"
         }
     }
 
@@ -60,8 +62,10 @@ public data class PairingFlowState(
             if (!skipsPermissions) add(PairingStep.PERMISSIONS)
             add(PairingStep.CHOOSE_PATH)
             add(PairingStep.PREPARE)
-            add(PairingStep.NETWORK)
-            if (path == PairingPath.PHONE_HOTSPOT) add(PairingStep.DISCOVER)
+            if (path != PairingPath.USB_C) add(PairingStep.NETWORK)
+            if (path == PairingPath.PHONE_HOTSPOT || path == PairingPath.USB_C) {
+                add(PairingStep.DISCOVER)
+            }
         }
 
     /** Total visible steps for the active path (iOS `stepCount(transport:skipsPermissions:)`). */

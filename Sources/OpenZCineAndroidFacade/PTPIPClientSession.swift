@@ -111,8 +111,13 @@ public struct PTPIPClientIdentity: Equatable, Sendable {
 // SAFETY: `@unchecked Sendable` — `nextTransactionID` and socket I/O are only
 // touched inside transactions serialized by `transactionLock`.
 public final class PTPIPClientSession: @unchecked Sendable {
-    private let command: PosixTCPSocket
-    private let event: PosixTCPSocket
+    private let command: PosixTCPSocket?
+    private let event: PosixTCPSocket?
+    #if os(Android)
+        /// USB owns the physical endpoints in Kotlin. Swift owns the generic
+        /// PTP containers and every session operation above this transport.
+        private let usbTransport: AndroidUSBPTPTransport?
+    #endif
     private let transactionLock = NSLock()
     /// Serializes high-level camera-changing command sequences with recording,
     /// media ownership transitions, and teardown. Individual wire transactions
@@ -159,8 +164,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private init(command: PosixTCPSocket, event: PosixTCPSocket, identity: PTPIPClientIdentity) {
         self.command = command
         self.event = event
+        #if os(Android)
+            usbTransport = nil
+        #endif
         self.identity = identity
     }
+
+    #if os(Android)
+        private init(usbTransport: AndroidUSBPTPTransport, identity: PTPIPClientIdentity) {
+            command = nil
+            event = nil
+            self.usbTransport = usbTransport
+            self.identity = identity
+        }
+    #endif
 
     // MARK: - Connect
 
@@ -220,6 +237,70 @@ public final class PTPIPClientSession: @unchecked Sendable {
             throw error
         }
     }
+
+    #if os(Android)
+        /// Establishes the same Nikon app-control session over a claimed USB
+        /// PTP transport. The platform layer vends raw endpoint bytes only;
+        /// generic containers, pairing, identity, and all camera operations
+        /// remain in Swift/shared core just like the PTP-IP path.
+        static func connectUSB(
+            transport: AndroidUSBPTPTransport,
+            host: String,
+            cameraNameHint: String,
+            onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
+        ) throws -> PTPIPClientSession {
+            onPhase(.handshaking, "")
+            let session = PTPIPClientSession(
+                usbTransport: transport,
+                identity: PTPIPClientIdentity(
+                    cameraName: cameraNameHint,
+                    manufacturer: "",
+                    model: "",
+                    deviceVersion: "",
+                    serialNumber: ""
+                )
+            )
+            // The privacy-safe USB key is a Kotlin-local saved-record lookup;
+            // PTP has no network host, so it is neither addressed nor sent here.
+            _ = host
+            do {
+                try session.openSession()
+                if try session.enableAppControl() {
+                    try session.identify()
+                    onPhase(.connected, session.identity.displayName)
+                    return session
+                }
+
+                // A new USB transport cannot be recreated by Swift, so reset
+                // the PTP session on this already-claimed interface before
+                // executing the same first-time pairing sequence as Wi-Fi.
+                // [VERIFY-ON-HW] Confirm the ZR accepts CloseSession followed
+                // by OpenSession on one claimed USB interface after app-mode
+                // refusal; the transaction sequence reset is covered below.
+                _ = try? transport.executeTransactionSynchronously(
+                    operationCode: .closeSession,
+                    deadline: .seconds(2)
+                )
+                try session.openSession()
+                onPhase(.pairing, "")
+                let challenge = try session.waitForPairingChallenge()
+                onPhase(.confirmOnCamera, challenge.pin ?? "")
+                try session.transactExpectingOK(
+                    .confirmPairing,
+                    parameters: [PTPIPSessionScript.pairingConfirmValue]
+                )
+                guard try session.enableAppControl() else {
+                    throw PTPIPClientSessionError.appControlUnavailable
+                }
+                try session.identify()
+                onPhase(.connected, session.identity.displayName)
+                return session
+            } catch {
+                session.disconnect()
+                throw error
+            }
+        }
+    #endif
 
     /// Opens both TCP channels and runs the PTP-IP Init handshake; returns a
     /// session whose identity carries only the handshake camera name so far.
@@ -620,14 +701,23 @@ public final class PTPIPClientSession: @unchecked Sendable {
         eventDrainStopRequested = true
         eventDrainCondition.unlock()
 
-        // Closing the event descriptor interrupts a blocked poll immediately;
-        // the bounded wait below is only a guard against a platform-level wake
-        // race, not a normal ten-second socket timeout.
-        event.close()
+        #if os(Android)
+            if usbTransport == nil {
+                // Closing the PTP-IP event descriptor interrupts a blocked
+                // poll immediately. USB interrupt reads are independently
+                // bounded to one second, so closing the whole claimed device
+                // here would incorrectly tear down command traffic.
+                event?.close()
+            }
+        #else
+            // Closing the event descriptor interrupts a blocked poll
+            // immediately; the bounded wait below is only a guard against a
+            // platform-level wake race, not a normal ten-second socket timeout.
+            event?.close()
+        #endif
 
         eventDrainCondition.lock()
-        let deadline = Date().addingTimeInterval(
-            Double(event.timeoutMilliseconds) / 1_000 + 2)
+        let deadline = Date().addingTimeInterval(eventDrainStopTimeout + 2)
         while eventDrainActive {
             guard eventDrainCondition.wait(until: deadline) else { break }
         }
@@ -638,6 +728,23 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onEvent: @escaping @Sendable (PTPEvent) -> Void,
         onEnded: @escaping @Sendable (String?) -> Void
     ) {
+        #if os(Android)
+            if let usbTransport {
+                runUSBEventDrain(
+                    transport: usbTransport,
+                    onEvent: onEvent,
+                    onEnded: onEnded
+                )
+                return
+            }
+        #endif
+        guard let event, let command else {
+            finishEventDrain(
+                onEnded: onEnded,
+                failure: PTPIPClientSessionError.connectionClosed.localizedDescription
+            )
+            return
+        }
         var failure: String?
         while !eventDrainStopIsRequested() {
             do {
@@ -672,9 +779,53 @@ public final class PTPIPClientSession: @unchecked Sendable {
             transactionLock.unlock()
         }
 
-        // Mark inactive before calling out: a Kotlin listener may respond to a
-        // terminal event by disconnecting, and that must never wait for this
-        // same Swift-owned reader thread.
+        finishEventDrain(onEnded: onEnded, failure: failure)
+    }
+
+    #if os(Android)
+        /// USB PTP events arrive through the claimed interrupt endpoint. A
+        /// short idle timeout is normal; any other failure closes the shared
+        /// transport so Kotlin cannot continue presenting stale camera state.
+        private func runUSBEventDrain(
+            transport: AndroidUSBPTPTransport,
+            onEvent: @escaping @Sendable (PTPEvent) -> Void,
+            onEnded: @escaping @Sendable (String?) -> Void
+        ) {
+            var failure: String?
+            while !eventDrainStopIsRequested() {
+                do {
+                    onEvent(try transport.nextEventSynchronously())
+                } catch let error as AndroidUSBPTPTransportError {
+                    if case .timeout = error { continue }
+                    if !eventDrainStopIsRequested() {
+                        failure = error.localizedDescription
+                    }
+                    break
+                } catch {
+                    if !eventDrainStopIsRequested() {
+                        failure = error.localizedDescription
+                    }
+                    break
+                }
+            }
+
+            if failure != nil {
+                transport.close()
+                transactionLock.lock()
+                isClosed = true
+                transactionLock.unlock()
+            }
+            finishEventDrain(onEnded: onEnded, failure: failure)
+        }
+    #endif
+
+    /// Marks the single event reader inactive before calling Kotlin back: a
+    /// listener may disconnect immediately, and must never wait for its own
+    /// Swift-owned reader thread.
+    private func finishEventDrain(
+        onEnded: @escaping @Sendable (String?) -> Void,
+        failure: String?
+    ) {
         eventDrainCondition.lock()
         eventDrainActive = false
         eventDrainStopRequested = false
@@ -687,6 +838,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
         eventDrainCondition.lock()
         defer { eventDrainCondition.unlock() }
         return eventDrainStopRequested
+    }
+
+    private var eventDrainStopTimeout: TimeInterval {
+        #if os(Android)
+            if usbTransport != nil { return 1 }
+        #endif
+        return Double(event?.timeoutMilliseconds ?? 1_000) / 1_000
     }
 
     // MARK: - Media ownership and transfer
@@ -793,7 +951,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard mediaTransferActive else { return }
         mediaTransferStopRequested = true
         let deadline = Date().addingTimeInterval(
-            Double(command.timeoutMilliseconds) / 1_000 + 2)
+            commandTransactionTimeout + 2)
         while mediaTransferActive {
             guard mediaTransferCondition.wait(until: deadline) else { return }
         }
@@ -921,7 +1079,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard liveViewPumpActive else { return }
         liveViewStopRequested = true
         let deadline = Date().addingTimeInterval(
-            Double(command.timeoutMilliseconds) / 1_000 + 2)
+            commandTransactionTimeout + 2)
         while liveViewPumpActive {
             guard liveViewCondition.wait(until: deadline) else { return }
         }
@@ -1029,10 +1187,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
         transactionLock.unlock()
         guard !alreadyClosed else { return }
 
-        command.timeoutMilliseconds = 2_000
+        #if os(Android)
+            if let usbTransport {
+                _ = try? usbTransport.executeTransactionSynchronously(
+                    operationCode: .closeSession,
+                    deadline: .seconds(2)
+                )
+                usbTransport.close()
+                return
+            }
+        #endif
+        command?.timeoutMilliseconds = 2_000
         _ = try? executeTransaction(.closeSession)
-        command.close()
-        event.close()
+        command?.close()
+        event?.close()
     }
 
     // MARK: - Transaction executor
@@ -1068,8 +1236,23 @@ public final class PTPIPClientSession: @unchecked Sendable {
         dataPhase: PTPDataPhase = .noDataOrDataIn,
         dataOut: Data? = nil
     ) throws -> PTPIPTransactionResult {
+        #if os(Android)
+            if let usbTransport {
+                return try usbTransport.executeTransactionSynchronously(
+                    operationCode: operationCode,
+                    transactionID: explicitTransactionID,
+                    parameters: parameters,
+                    dataPhase: dataPhase,
+                    dataOut: dataOut
+                )
+            }
+        #endif
         transactionLock.lock()
         defer { transactionLock.unlock() }
+
+        guard let command else {
+            throw PTPIPClientSessionError.connectionClosed
+        }
 
         let transactionID = explicitTransactionID ?? nextTransactionID
         if explicitTransactionID == nil {
@@ -1118,6 +1301,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// on Android — see the feasibility doc's ICU finding).
     static func hexString<Value: BinaryInteger>(_ value: Value) -> String {
         String(value, radix: 16, uppercase: true)
+    }
+
+    private var commandTransactionTimeout: TimeInterval {
+        #if os(Android)
+            if usbTransport != nil { return 10 }
+        #endif
+        return Double(command?.timeoutMilliseconds ?? 10_000) / 1_000
     }
 }
 

@@ -12,6 +12,7 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.transport.UsbPtpTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -33,12 +34,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 
 /** Injectable JNI seam for deterministic Android session lifecycle tests. */
 internal interface SwiftCoreSessionBridge {
     val isAvailable: Boolean
 
-    fun connect(host: String, listener: SwiftCore.SessionListener)
+    fun connect(host: String, connectionOwner: Long, listener: SwiftCore.SessionListener)
+
+    /** Starts the same Swift session layer over a platform-owned USB byte transport. */
+    fun connectUsb(
+        transport: UsbPtpTransport,
+        host: String,
+        cameraNameHint: String,
+        connectionOwner: Long,
+        listener: SwiftCore.SessionListener,
+    ) {
+        listener.onFailed("USB-C camera support is unavailable in this core build.")
+    }
 
     fun startEventStream(listener: SwiftCore.SessionEventListener)
 
@@ -50,14 +63,28 @@ internal interface SwiftCoreSessionBridge {
 
     fun applyControl(control: CameraControl, label: String): Int
 
-    fun disconnect()
+    fun disconnect(connectionOwner: Long)
 
     data object Production : SwiftCoreSessionBridge {
         override val isAvailable: Boolean
             get() = SwiftCore.isAvailable
 
-        override fun connect(host: String, listener: SwiftCore.SessionListener) {
-            SwiftCore.sessionConnect(host, listener)
+        override fun connect(
+            host: String,
+            connectionOwner: Long,
+            listener: SwiftCore.SessionListener,
+        ) {
+            SwiftCore.sessionConnect(host, connectionOwner, listener)
+        }
+
+        override fun connectUsb(
+            transport: UsbPtpTransport,
+            host: String,
+            cameraNameHint: String,
+            connectionOwner: Long,
+            listener: SwiftCore.SessionListener,
+        ) {
+            SwiftCore.sessionConnectUsb(transport, host, cameraNameHint, connectionOwner, listener)
         }
 
         override fun startEventStream(listener: SwiftCore.SessionEventListener) {
@@ -78,8 +105,8 @@ internal interface SwiftCoreSessionBridge {
         override fun applyControl(control: CameraControl, label: String): Int =
             SwiftCore.sessionApplyControl(control.nativeSelector, label)
 
-        override fun disconnect() {
-            SwiftCore.sessionDisconnect()
+        override fun disconnect(connectionOwner: Long) {
+            SwiftCore.sessionDisconnect(connectionOwner)
         }
     }
 }
@@ -111,7 +138,7 @@ private val CameraControl.nativeSelector: Int
  * protocol logic lives on the Kotlin side.
  *
  * @property host Numeric IPv4 camera address (from NSD discovery, the fixed
- *   camera-AP host, or a debug intent extra).
+ *   camera-AP host, or a debug intent extra), or a privacy-safe USB host key.
  * @property phaseLogger Optional sink for progress phases (name + detail),
  *   e.g. logcat in the debug probe. Called on a background thread.
  */
@@ -125,6 +152,8 @@ class SwiftCoreCameraSession internal constructor(
     private val propertyPollIntervalMillis: Long = PROPERTY_POLL_INTERVAL_MILLIS,
     private val propertyEventDebounceMillis: Long = PROPERTY_EVENT_DEBOUNCE_MILLIS,
     private val automaticallyRefreshProperties: Boolean = true,
+    private val usbTransport: UsbPtpTransport? = null,
+    private val cameraNameHint: String? = null,
 ) : CameraSession {
     /** Production session binding the Kotlin shell to the shared Swift facade. */
     public constructor(
@@ -132,11 +161,27 @@ class SwiftCoreCameraSession internal constructor(
         phaseLogger: (String, String) -> Unit = { _, _ -> },
     ) : this(host, phaseLogger, SwiftCoreSessionBridge.Production)
 
+    /** Production USB-C session using a claimed Android PTP byte transport. */
+    public constructor(
+        host: String,
+        cameraNameHint: String,
+        usbTransport: UsbPtpTransport,
+        phaseLogger: (String, String) -> Unit = { _, _ -> },
+    ) : this(
+        host = host,
+        phaseLogger = phaseLogger,
+        core = SwiftCoreSessionBridge.Production,
+        usbTransport = usbTransport,
+        cameraNameHint = cameraNameHint,
+    )
+
     private val _state = MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
     override val state: StateFlow<CameraSessionState> = _state.asStateFlow()
     private val attemptLock = Any()
     private var nextAttempt = 0L
     private var activeAttempt: Long? = null
+    /** Opaque native owner for [activeAttempt], unique across session instances. */
+    private var activeConnectionOwner: Long? = null
 
     private val _recordingState = MutableStateFlow(CameraRecordingState.STANDBY)
     override val recordingState: StateFlow<CameraRecordingState> = _recordingState.asStateFlow()
@@ -201,9 +246,9 @@ class SwiftCoreCameraSession internal constructor(
     override suspend fun connect() {
         if (!core.isAvailable) return
         val attempt = beginAttempt() ?: return
+        val connectionOwner = connectionOwnerFor(attempt) ?: return
         try {
-            core.connect(
-                host,
+            val listener =
                 object : SwiftCore.SessionListener {
                     override fun onPhase(phase: String, detail: String) {
                         if (isCurrentAttempt(attempt)) phaseLogger(phase, detail)
@@ -239,8 +284,18 @@ class SwiftCoreCameraSession internal constructor(
                             phaseLogger("failed", message)
                         }
                     }
-                },
-            )
+            }
+            if (usbTransport == null) {
+                core.connect(host, connectionOwner, listener)
+            } else {
+                core.connectUsb(
+                    transport = usbTransport,
+                    host = host,
+                    cameraNameHint = cameraNameHint.orEmpty(),
+                    connectionOwner = connectionOwner,
+                    listener = listener,
+                )
+            }
             _state.first { it !is CameraSessionState.Connecting || !isCurrentAttempt(attempt) }
             clearCompletedConnectionAttempt(attempt)
         } catch (error: CancellationException) {
@@ -382,12 +437,12 @@ class SwiftCoreCameraSession internal constructor(
         // clear state only after this mutex waits for any such JNI call. That
         // prevents its final readback from repopulating a disconnected session.
         stopPropertyRefresh(clearSnapshot = false)
+        val connectionOwner = invalidateAttempt()
         withContext(NonCancellable) {
             cameraCommandMutex.withLock {
-                invalidateAttempt()
                 try {
-                    if (core.isAvailable) {
-                        withContext(Dispatchers.IO) { core.disconnect() }
+                    if (core.isAvailable && connectionOwner != null) {
+                        withContext(Dispatchers.IO) { core.disconnect(connectionOwner) }
                     }
                 } finally {
                     ignoreLiveRecordingStateUntilNanos = 0L
@@ -444,6 +499,7 @@ class SwiftCoreCameraSession internal constructor(
             synchronized(attemptLock) {
                 if (activeAttempt != attempt) return@synchronized false
                 activeAttempt = null
+                activeConnectionOwner = null
                 _state.value = CameraSessionState.Disconnected
                 true
             }
@@ -705,6 +761,7 @@ class SwiftCoreCameraSession internal constructor(
     }
 
     private companion object {
+        val nextConnectionOwner = AtomicLong()
         const val RECORDING_READBACK_GRACE_NANOS: Long = 1_500_000_000L
         const val PROPERTY_POLL_INTERVAL_MILLIS: Long = 1_500L
         const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
@@ -724,6 +781,7 @@ class SwiftCoreCameraSession internal constructor(
                 if (_state.value !is CameraSessionState.Disconnected) return@synchronized null
                 nextAttempt += 1
                 activeAttempt = nextAttempt
+                activeConnectionOwner = nextConnectionOwner.incrementAndGet()
                 _state.value = CameraSessionState.Connecting
                 nextAttempt
             }
@@ -735,6 +793,12 @@ class SwiftCoreCameraSession internal constructor(
 
     private fun isCurrentAttempt(attempt: Long): Boolean =
         synchronized(attemptLock) { activeAttempt == attempt }
+
+    /** Returns the native ownership token only while [attempt] is still current. */
+    private fun connectionOwnerFor(attempt: Long): Long? =
+        synchronized(attemptLock) {
+            activeConnectionOwner?.takeIf { activeAttempt == attempt }
+        }
 
     private fun connectedAttempt(): Long? =
         synchronized(attemptLock) {
@@ -761,32 +825,38 @@ class SwiftCoreCameraSession internal constructor(
         synchronized(attemptLock) {
             if (activeAttempt == attempt && _state.value !is CameraSessionState.Connected) {
                 activeAttempt = null
+                activeConnectionOwner = null
             }
         }
     }
 
-    private fun invalidateAttempt() {
+    /** Invalidates the current attempt and returns its native teardown owner. */
+    private fun invalidateAttempt(): Long? =
         synchronized(attemptLock) {
+            val connectionOwner = activeConnectionOwner
             activeAttempt = null
+            activeConnectionOwner = null
             _state.value = CameraSessionState.Disconnected
+            connectionOwner
         }
-    }
 
     private suspend fun cancelAttempt(attempt: Long) {
-        val ownsAttempt =
+        val connectionOwner =
             synchronized(attemptLock) {
-                if (activeAttempt != attempt) return@synchronized false
+                if (activeAttempt != attempt) return@synchronized null
+                val owner = activeConnectionOwner
                 activeAttempt = null
+                activeConnectionOwner = null
                 _state.value = CameraSessionState.Disconnected
-                true
+                owner
             }
-        if (ownsAttempt) {
+        if (connectionOwner != null) {
             stopPropertyRefresh(clearSnapshot = true)
         }
-        if (ownsAttempt && core.isAvailable) {
+        if (connectionOwner != null && core.isAvailable) {
             withContext(NonCancellable) {
                 cameraCommandMutex.withLock {
-                    withContext(Dispatchers.IO) { core.disconnect() }
+                    withContext(Dispatchers.IO) { core.disconnect(connectionOwner) }
                 }
             }
         }

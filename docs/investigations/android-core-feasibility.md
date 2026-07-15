@@ -73,9 +73,13 @@ work list):
   UI half), preferences storage (DataStore), credential storage (Android Keystore /
   EncryptedSharedPreferences), OAuth browser flow (Custom Tabs), lifecycle/foreground-service
   handling.
-- USB host transport, if/when USB-C tethering ships on Android: `android.hardware.usb` bulk
-  transfers replacing ImageCaptureCore (the core's `PTPUSBContainer` framing is reusable either
-  way).
+- USB host transport is now implemented in `Apps/Android/app/.../transport/`: Kotlin owns
+  `UsbManager` attach/detach, Android's per-device consent, Still Image/PTP endpoint claim, and
+  raw bulk/interrupt bytes; `Sources/OpenZCineAndroidFacade/AndroidUSBPTPTransport.swift` owns
+  generic PTP container framing and session policy. A USB serial is read only after Android grants
+  access and becomes a local SHA-256 reconnect digest; the raw serial is never saved, shown,
+  logged, or sent over the network. **[VERIFY-ON-HW]** Nikon cable/session behavior remains a
+  physical-device validation item, not a claimed compatibility result.
 
 **What Kotlin would call in the core** (the reuse surface): session open/close +
 `CameraTransport` execution, `PTPIPHandshake` framing, `PTPCameraProperties`
@@ -243,6 +247,35 @@ a new target (e.g. `Sources/OpenZCineCoreAndroidFacade`) or `#if os(Android)` fi
 itself stays untouched. Sockets go Swift-side (shape 2 above) to keep the whole transaction
 machinery in one place — the iOS transport is already raw POSIX sockets, so the Android twin is a
 near-copy, not new design.
+
+### Implemented Android USB-host boundary
+
+USB has a deliberately different platform ownership split because Android exposes host endpoints
+through `UsbManager`, while the shared core's portable seam starts at a complete PTP transaction:
+
+```text
+Kotlin / Android APIs                         Swift Android facade + shared core
+----------------------------------------      -----------------------------------------
+UsbManager attach/detach + consent            PTP USB generic-container framing
+Still Image/PTP interface + endpoints   -->   transaction IDs + data-phase validation
+claim/release + raw bulk/interrupt I/O         OpenSession/pair/identify + event decoding
+local USB host-key digest only                 camera operations and CloseSession policy
+```
+
+`AndroidUsbPtpCameraSource` discovers only a complete USB Still Image interface with bulk IN,
+bulk OUT, and interrupt IN endpoints. It owns `UsbRequest` lifecycle and closes an active claim on
+detach; the JNI raw-handle close path is intentionally able to interrupt an in-flight endpoint read
+without waiting for that read's normal command timeout. Swift's `AndroidUSBPTPTransport` rejects
+ambiguous data phases, retains fragmented/concatenated containers safely, and treats an idle
+interrupt timeout as non-terminal so the next event can still arrive. Saved USB profiles store a
+privacy-safe local `usb:<digest>` key and display only connection state, never that key or a raw
+serial.
+
+**[VERIFY-ON-HW]** This boundary has automated Kotlin/Swift coverage and a debug-only visual
+fixture, but no supported Nikon body was attached for this implementation pass. Verify on a Nikon
+ZR (or supported body) with a data-capable cable: Android permission denial/retry, interface
+claim, event delivery through idle timeouts, detach during an active command/session, and the
+CloseSession → OpenSession retry after app-control refusal.
 
 ### Phased plan mapped to the board
 
