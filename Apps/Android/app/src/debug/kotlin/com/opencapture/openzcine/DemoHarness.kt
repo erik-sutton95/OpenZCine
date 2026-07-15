@@ -11,6 +11,7 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.FakeCameraSession
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingCredentials
 import com.opencapture.openzcine.pairing.PairingEnvironment
 import com.opencapture.openzcine.pairing.PairingFlowState
@@ -130,10 +131,21 @@ object DemoHarness {
     /** `browse` opens Media; `play` also opens its first playable proxy. */
     const val EXTRA_MEDIA = "zc.media"
 
+    /**
+     * Fails the first Gallery write after MediaStore insertion, then permits a
+     * retry. This exercises pending-row cleanup on hardware without touching
+     * unrelated device media: `--es zc.gallery.failOnce write`.
+     */
+    const val EXTRA_GALLERY_FAILURE = "zc.gallery.failOnce"
+
     fun opensMedia(intent: Intent): Boolean =
         intent.getStringExtra(EXTRA_MEDIA) in setOf("browse", "play")
 
     fun autoPlaysMedia(intent: Intent): Boolean = intent.getStringExtra(EXTRA_MEDIA) == "play"
+
+    /** Debug-only one-shot Gallery failure requested by [intent]. */
+    internal fun galleryFailureInjection(intent: Intent): MediaGalleryFailureInjection =
+        MediaGalleryFailureInjection.parse(intent.getStringExtra(EXTRA_GALLERY_FAILURE))
 
     /**
      * The debug session/feed override for [intent], or null in a normal

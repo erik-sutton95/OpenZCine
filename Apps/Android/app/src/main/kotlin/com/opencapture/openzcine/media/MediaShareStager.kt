@@ -32,6 +32,20 @@ class InvalidMediaShareSourceException(message: String) : MediaShareException(me
 /** The temporary share cache cannot safely make room for another completed clip. */
 class MediaShareCacheLimitException(message: String) : MediaShareException(message)
 
+/** Returns whether [filename] is safe to use as external media display metadata. */
+internal fun isSafeMediaDisplayName(filename: String): Boolean =
+    !(
+        filename.isBlank() ||
+            filename != filename.trim() ||
+            filename == "." ||
+            filename == ".." ||
+            filename.indexOf('\u0000') >= 0 ||
+            filename.contains('/') ||
+            filename.contains('\\') ||
+            filename.any { character -> character.code < 0x20 || character.code == 0x7F } ||
+            filename.substringBeforeLast('.', missingDelimiterValue = "").isBlank()
+    )
+
 /**
  * A fully copied share artifact held below app-owned `cacheDir/share/ready`.
  *
@@ -548,17 +562,7 @@ class MediaShareStager private constructor(
         }
 
     private fun validateFilename(filename: String) {
-        if (
-            filename.isBlank() ||
-                filename != filename.trim() ||
-                filename == "." ||
-                filename == ".." ||
-                filename.indexOf('\u0000') >= 0 ||
-                filename.contains('/') ||
-                filename.contains('\\') ||
-                filename.any { character -> character.code < 0x20 || character.code == 0x7F } ||
-                filename.substringBeforeLast('.', missingDelimiterValue = "").isBlank()
-        ) {
+        if (!isSafeMediaDisplayName(filename)) {
             throw UnsafeMediaShareFilenameException(filename)
         }
     }

@@ -408,6 +408,8 @@ class MainActivity : ComponentActivity() {
                                         operatorSettings = operatorSettings,
                                         frameioController = frameioController,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
+                                        galleryFailureInjection =
+                                            DemoHarness.galleryFailureInjection(intent),
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                             }

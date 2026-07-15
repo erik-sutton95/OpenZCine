@@ -114,12 +114,13 @@ private sealed interface PlaybackSessionAction {
  * size resolution, partial reads, and PTP command serialization.
  */
 @Composable
-fun MediaPlaybackScreen(
+internal fun MediaPlaybackScreen(
     initialClip: MediaClipRecord,
     filteredClips: List<MediaClipRecord>,
     cameraID: String,
     favoriteIDs: Set<String>,
     framingConfiguration: LocalFramingAssistConfiguration,
+    galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     onToggleFavorite: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
 ): Unit {
@@ -139,6 +140,7 @@ fun MediaPlaybackScreen(
             previous = previous,
             next = next,
             framingConfiguration = framingConfiguration,
+            galleryFailureInjection = galleryFailureInjection,
             onToggleFavorite = { onToggleFavorite(activeClip) },
             onNavigate = { target -> activeClip = target },
             onClose = onClose,
@@ -154,6 +156,7 @@ private fun PlaybackClipSession(
     previous: MediaClipRecord?,
     next: MediaClipRecord?,
     framingConfiguration: LocalFramingAssistConfiguration,
+    galleryFailureInjection: MediaGalleryFailureInjection,
     onToggleFavorite: () -> Unit,
     onNavigate: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
@@ -164,7 +167,11 @@ private fun PlaybackClipSession(
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
         }
     val shareCacheDirectory = remember(context) { context.cacheDir.toPath() }
-    val shareScope = rememberCoroutineScope()
+    val deliveryScope = rememberCoroutineScope()
+    val galleryGateway =
+        remember(context, galleryFailureInjection) {
+            AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
+        }
     val coordinator =
         remember(cacheStore, cameraID, clip) {
             MediaTransferCoordinator(
@@ -189,11 +196,12 @@ private fun PlaybackClipSession(
     var pendingAction by remember { mutableStateOf<PlaybackSessionAction?>(null) }
     var shareableEntry by remember(clip.handle) { mutableStateOf<MediaCacheEntry?>(null) }
     var shareState by remember(clip.handle) { mutableStateOf(PlaybackShareState.BUFFERING) }
-    var shareInProgress by remember(clip.handle) { mutableStateOf(false) }
-    var shareFailure by remember(clip.handle) { mutableStateOf<String?>(null) }
-    var shareJob by remember(clip.handle) { mutableStateOf<Job?>(null) }
+    var deliveryInProgress by remember(clip.handle) { mutableStateOf(false) }
+    var deliveryMessage by remember(clip.handle) { mutableStateOf<String?>(null) }
+    var deliveryJob by remember(clip.handle) { mutableStateOf<Job?>(null) }
+    var deliveryChooserPresented by remember(clip.handle) { mutableStateOf(false) }
     var activePlayer by remember(clip.handle) { mutableStateOf<Player?>(null) }
-    val latestShareJob = rememberUpdatedState(shareJob)
+    val latestDeliveryJob = rememberUpdatedState(deliveryJob)
     val actionInProgress = pendingAction != null
 
     fun requestClose() {
@@ -208,9 +216,9 @@ private fun PlaybackClipSession(
 
     fun beginShare() {
         val completedEntry = shareableEntry ?: return
-        if (shareInProgress || actionInProgress) return
+        if (deliveryInProgress || actionInProgress) return
         val job =
-            shareScope.launch(start = CoroutineStart.LAZY) {
+            deliveryScope.launch(start = CoroutineStart.LAZY) {
                 val stageContext = coroutineContext
                 val runningJob = stageContext[Job]
                 try {
@@ -232,17 +240,57 @@ private fun PlaybackClipSession(
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
-                    shareFailure = error.message ?: "Couldn't prepare this clip for sharing."
+                    deliveryMessage = error.message ?: "Couldn't prepare this clip for sharing."
                 } finally {
-                    if (shareJob === runningJob) {
-                        shareJob = null
-                        shareInProgress = false
+                    if (deliveryJob === runningJob) {
+                        deliveryJob = null
+                        deliveryInProgress = false
                     }
                 }
             }
-        shareJob = job
-        shareFailure = null
-        shareInProgress = true
+        deliveryJob = job
+        deliveryMessage = null
+        deliveryInProgress = true
+        job.start()
+    }
+
+    fun beginGallerySave() {
+        val completedEntry = shareableEntry ?: return
+        if (deliveryInProgress || actionInProgress) return
+        val resumeAfterSave = activePlayer?.isPlaying == true
+        activePlayer?.pause()
+        val job =
+            deliveryScope.launch(start = CoroutineStart.LAZY) {
+                val stageContext = coroutineContext
+                val runningJob = stageContext[Job]
+                try {
+                    val result =
+                        withContext(Dispatchers.IO) {
+                            val staged =
+                                MediaShareStager(shareCacheDirectory).stage(completedEntry, clip) {
+                                    stageContext.ensureActive()
+                                }
+                            val artifact = MediaGalleryArtifact.fromStagedShare(staged)
+                            MediaGallerySaver(galleryGateway).save(listOf(artifact)) {
+                                stageContext.ensureActive()
+                            }
+                        }
+                    deliveryMessage = result.operatorMessage()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    deliveryMessage = "Couldn't prepare ${clip.filename} for Gallery."
+                } finally {
+                    if (resumeAfterSave && pendingAction == null) activePlayer?.play()
+                    if (deliveryJob === runningJob) {
+                        deliveryJob = null
+                        deliveryInProgress = false
+                    }
+                }
+            }
+        deliveryJob = job
+        deliveryMessage = null
+        deliveryInProgress = true
         job.start()
     }
 
@@ -254,7 +302,7 @@ private fun PlaybackClipSession(
     // synchronized entry state: no partial `.part` can grow a share action.
     LaunchedEffect(preparation) {
         shareableEntry = null
-        shareFailure = null
+        deliveryMessage = null
         val entry = (preparation as? MediaTransferPreparation.Ready)?.entry ?: run {
             shareState = PlaybackShareState.UNAVAILABLE
             return@LaunchedEffect
@@ -281,7 +329,7 @@ private fun PlaybackClipSession(
     // one-session camera command boundary the Swift core enforces.
     LaunchedEffect(pendingAction, coordinator) {
         val action = pendingAction ?: return@LaunchedEffect
-        shareJob?.cancelAndJoin()
+        deliveryJob?.cancelAndJoin()
         coordinator.close()
         when (action) {
             PlaybackSessionAction.Close -> onClose()
@@ -294,11 +342,11 @@ private fun PlaybackClipSession(
     // Preserve the camera invariant by stopping from a bounded IO coroutine.
     DisposableEffect(coordinator) {
         onDispose {
-            val runningShareJob = latestShareJob.value
+            val runningDeliveryJob = latestDeliveryJob.value
             val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             cleanup.launch {
                 try {
-                    runningShareJob?.cancelAndJoin()
+                    runningDeliveryJob?.cancelAndJoin()
                     coordinator.close()
                 } finally {
                     cleanup.cancel()
@@ -373,17 +421,17 @@ private fun PlaybackClipSession(
                 )
                 if (shareState == PlaybackShareState.READY) {
                     PlaybackButton(
-                        if (shareInProgress) "…" else "SHARE",
-                        "Share ${clip.filename}",
-                        enabled = !shareInProgress && !actionInProgress,
-                        onClick = ::beginShare,
+                        if (deliveryInProgress) "…" else "DELIVER",
+                        "Choose delivery for ${clip.filename}",
+                        enabled = !deliveryInProgress && !actionInProgress,
+                        onClick = { deliveryChooserPresented = true },
                     )
                 }
             }
             when (shareState) {
                 PlaybackShareState.BUFFERING ->
                     Text(
-                        "Buffering camera proxy — sharing unlocks after the private cache completes.",
+                        "Buffering camera proxy. Delivery unlocks after the private cache completes.",
                         modifier = Modifier.padding(start = 54.dp, top = 5.dp, end = 8.dp),
                         style = chromeStyle(10.5f, FontWeight.Medium),
                         color = LiveDesign.muted,
@@ -394,9 +442,9 @@ private fun PlaybackClipSession(
                 PlaybackShareState.READY,
                 -> Unit
             }
-            shareFailure?.let { message ->
+            deliveryMessage?.let { message ->
                 Text(
-                    "Share unavailable: $message",
+                    message,
                     modifier = Modifier.padding(start = 54.dp, top = 5.dp, end = 8.dp),
                     style = chromeStyle(11f, FontWeight.Medium),
                     color = LiveDesign.accent,
@@ -404,6 +452,24 @@ private fun PlaybackClipSession(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+
+        if (deliveryChooserPresented) {
+            NativeMediaDeliveryDialog(
+                selectedCount = 1,
+                shareReadyCount = 1,
+                galleryReadyCount = 1,
+                busy = deliveryInProgress,
+                onDismiss = { deliveryChooserPresented = false },
+                onShare = {
+                    deliveryChooserPresented = false
+                    beginShare()
+                },
+                onSaveToGallery = {
+                    deliveryChooserPresented = false
+                    beginGallerySave()
+                },
+            )
         }
 
         if (actionInProgress) {
