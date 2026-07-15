@@ -525,7 +525,9 @@ class CommandMonitorTest {
                         ),
                     tileOrder = CommandTileKind.entries.toList(),
                 )
-            return presentation.sideSections.first { it.title == "Image" }.cells[2]
+            return presentation.sideSections.first { it.title == "Image" }.cells.first {
+                it.title == "e-VR"
+            }
         }
 
         assertEquals(null, electronicVr(null).request)
