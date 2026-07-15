@@ -5,12 +5,15 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.concurrent.CancellationException
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Host-side coverage for scoped MediaStore orchestration and failure cleanup. */
@@ -195,12 +198,14 @@ class MediaGallerySaverTest {
 
         assertEquals(
             "Saved 1 clip to Gallery; 1 clip couldn't be saved; 2 non-video items skipped; " +
-                "1 incomplete item wasn't ready; 3 items couldn't be prepared.",
+                "1 incomplete item wasn't ready; 3 items couldn't be prepared; " +
+                "1 temporary export wasn't removed.",
             result.operatorMessage(
                 MediaGalleryOmissions(
                     nonVideoCount = 2,
                     incompleteCount = 1,
                     preparationFailureCount = 3,
+                    temporaryCleanupFailureCount = 1,
                 ),
             ),
         )
@@ -218,6 +223,25 @@ class MediaGallerySaverTest {
         assertEquals("video/quicktime", galleryVideoMimeType("C0090.mov"))
         assertEquals(null, galleryVideoMimeType("C0090.R3D"))
     }
+
+    @Test
+    fun `requested camera capture metadata parses strictly and survives artifact conversion`() =
+        withRoot { root ->
+            val timestamp = mediaCaptureTimestampMillis("20260715T120000", ZoneOffset.UTC)
+            assertEquals(Instant.parse("2026-07-15T12:00:00Z").toEpochMilli(), timestamp)
+            assertNull(mediaCaptureTimestampMillis("2026-07-15", ZoneOffset.UTC))
+            assertNull(mediaCaptureTimestampMillis("20260230T120000", ZoneOffset.UTC))
+            val file = root.resolve("ready.mov")
+            Files.write(file, byteArrayOf(1, 2, 3))
+
+            val artifact =
+                MediaGalleryArtifact.fromStagedShare(
+                    StagedMediaShare(file, "C0091.MOV", "video/quicktime"),
+                    captureTimestampMillis = timestamp,
+                )
+
+            assertEquals(timestamp, artifact.captureTimestampMillis)
+        }
 
     private fun artifact(root: Path, name: String, bytes: ByteArray): MediaGalleryArtifact {
         val path = root.resolve(name.lowercase())

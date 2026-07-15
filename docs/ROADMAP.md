@@ -203,10 +203,19 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   and a transfer-backed
   Android still-photo viewer (JPEG/PNG progressive preview; explicit thumbnail fallback for
   unsupported HEIF/RAW decoders). Android playback-assist parity is tracked by OPE-69.
+- **Android media-library delivery parity** (OPE-87, in progress): the browser persists small,
+  medium, and large grid densities and composes container, resolution, Today, and camera-slot
+  filters from authoritative clip metadata. Native Share, Save to Gallery, and Frame.io use one
+  explicit non-destructive export configuration for an optional approved LUT bake, MOV/MP4 output,
+  and bounded metadata inclusion. Frame.io records confirmed uploads by stable clip identity,
+  skips completed clips by default, and offers an explicit re-upload override with accurate batch
+  counts. All delivery paths accept only finalized approved-cache artifacts and never mutate the
+  camera or cached original. **[VERIFY-ON-HW]** Exercise MOV and MP4 export, LUT baking, Android
+  chooser and MediaStore publication, and persisted Frame.io history with configured credentials.
 - **Android Frame.io delivery options and camera-AP hop parity** (OPE-64, in progress): Adobe IMS
   clip delivery
   accepts only finalized, approved cache artifacts; optionally bakes the selected approved monitor
-  LUT into a transient MP4 without changing the original; and records a bounded, secret-free
+  LUT into a transient MOV or MP4 without changing the original; and records a bounded, secret-free
   app-private metadata sidecar after confirmed upload. A real saved camera-AP session can leave only
   after a second explicit operator confirmation, retains the delivery context while waiting for
   validated internet, and rejoins the exact saved profile after completion, cancellation, or timeout.

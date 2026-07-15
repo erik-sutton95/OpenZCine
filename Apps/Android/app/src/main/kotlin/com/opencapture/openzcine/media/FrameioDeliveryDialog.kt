@@ -37,6 +37,7 @@ import com.opencapture.openzcine.frameio.FrameioNetworkState
 import com.opencapture.openzcine.frameio.FrameioProject
 import com.opencapture.openzcine.frameio.FrameioProjectState
 import com.opencapture.openzcine.frameio.FrameioReachabilityPolicy
+import com.opencapture.openzcine.frameio.MediaExportContainer
 import kotlinx.coroutines.launch
 
 /**
@@ -60,6 +61,8 @@ internal fun FrameioDeliveryDialog(
     var newProjectName by remember { mutableStateOf("") }
     var bakeLut by remember(selectedLut) { mutableStateOf(selectedLut != null) }
     var includeMetadata by remember { mutableStateOf(true) }
+    var exportContainer by remember { mutableStateOf(MediaExportContainer.MOV) }
+    var forceReupload by remember { mutableStateOf(false) }
     var showHopConfirmation by remember { mutableStateOf(false) }
     val eligibleProjects =
         controller.projectListing?.projects?.filter { project ->
@@ -125,9 +128,13 @@ internal fun FrameioDeliveryDialog(
                             FrameioExportOptions(
                                 bakeLut = bakeLut,
                                 includeMetadata = includeMetadata,
+                                exportContainer = exportContainer,
+                                forceReupload = forceReupload,
                                 selectedLutLabel = selectedLutLabel,
                                 onBakeLutChanged = { bakeLut = it },
                                 onIncludeMetadataChanged = { includeMetadata = it },
+                                onExportContainerChanged = { exportContainer = it },
+                                onForceReuploadChanged = { forceReupload = it },
                             )
                         }
                     }
@@ -138,7 +145,7 @@ internal fun FrameioDeliveryDialog(
                 controller.errorMessage?.let { message -> Text(message) }
                 if (!onCameraAp) {
                     Text(
-                        "Only complete cached media is sent. A LUT bake creates a temporary MP4 and never changes the camera original.",
+                        "Only complete cached media is sent. A LUT bake creates a temporary ${exportContainer.label} and never changes the camera original.",
                     )
                 }
             }
@@ -170,8 +177,10 @@ internal fun FrameioDeliveryDialog(
                                     onDeliver(
                                         FrameioDeliveryOptions(
                                             bakeLut = bakeLut,
+                                            exportContainer = exportContainer,
                                             includeMetadata = includeMetadata,
                                             selectedLut = selectedLut.takeIf { bakeLut },
+                                            forceFrameioReupload = forceReupload,
                                         ),
                                     )
                                 }
@@ -251,26 +260,45 @@ private fun FrameioHopGate(controller: FrameioDeliveryController, hopBusy: Boole
 private fun FrameioExportOptions(
     bakeLut: Boolean,
     includeMetadata: Boolean,
+    exportContainer: MediaExportContainer,
+    forceReupload: Boolean,
     selectedLutLabel: String?,
     onBakeLutChanged: (Boolean) -> Unit,
     onIncludeMetadataChanged: (Boolean) -> Unit,
+    onExportContainerChanged: (MediaExportContainer) -> Unit,
+    onForceReuploadChanged: (Boolean) -> Unit,
 ) {
     Text("EXPORT")
     FrameioOptionRow(
         title = "Bake selected LUT",
         detail =
-            selectedLutLabel?.let { name -> "$name, temporary MP4 copy" }
+            selectedLutLabel?.let { name -> "$name, temporary ${exportContainer.label} copy" }
                 ?: "Choose a monitor LUT before opening Media",
         checked = bakeLut,
         enabled = selectedLutLabel != null,
         onCheckedChange = onBakeLutChanged,
     )
+    Text("Container for baked exports")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MediaExportContainer.entries.forEach { container ->
+            TextButton(onClick = { onExportContainerChanged(container) }) {
+                Text(if (container == exportContainer) "${container.label} ✓" else container.label)
+            }
+        }
+    }
     FrameioOptionRow(
         title = "Include metadata",
         detail = "Keep a private local JSON sidecar after Frame.io confirms the upload",
         checked = includeMetadata,
         enabled = true,
         onCheckedChange = onIncludeMetadataChanged,
+    )
+    FrameioOptionRow(
+        title = "Re-upload completed clips",
+        detail = "Completed clips are skipped by default using app-private upload history",
+        checked = forceReupload,
+        enabled = true,
+        onCheckedChange = onForceReuploadChanged,
     )
 }
 
