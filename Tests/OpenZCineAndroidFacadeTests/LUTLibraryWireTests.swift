@@ -35,6 +35,20 @@ struct LUTLibraryWireTests {
                 fileName: "operator-look.cube") == nil)
     }
 
+    @Test("Android validation rejects duplicate size declarations and oversized sources")
+    func androidBoundaryLimits() {
+        #expect(
+            LUTLibraryWire.validatedImport(
+                utf8: Array("LUT_3D_SIZE 2\nLUT_3D_SIZE 2\n".utf8),
+                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
+                fileName: "duplicate.cube") == nil)
+        #expect(
+            LUTLibraryWire.validatedImport(
+                utf8: Array(repeating: 120, count: LUTLibraryWire.maximumSourceBytes + 1),
+                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
+                fileName: "oversized.cube") == nil)
+    }
+
     @Test("packed imported cubes use the feed renderer's existing 2D layout")
     func packedCubeUsesExistingRendererLayout() throws {
         let bytes = try #require(LUTLibraryWire.packedImportedLUT(utf8: Array(identityCube.utf8)))

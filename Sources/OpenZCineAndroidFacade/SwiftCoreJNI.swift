@@ -620,7 +620,7 @@
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?, category: jint,
         fileName: jstring?
     ) -> jstring? {
-        guard let utf8 = swiftBytes(env, utf8, maximumCount: CubeLUT.maximumSourceBytes),
+        guard let utf8 = swiftBytes(env, utf8, maximumCount: LUTLibraryWire.maximumSourceBytes),
             let fileName = swiftString(env, fileName),
             let record = LUTLibraryWire.validatedImport(
                 utf8: utf8, categoryOrdinal: Int(category), fileName: fileName)
@@ -635,7 +635,7 @@
     public func swiftCorePackImportedLut(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?
     ) -> jbyteArray? {
-        guard let utf8 = swiftBytes(env, utf8, maximumCount: CubeLUT.maximumSourceBytes),
+        guard let utf8 = swiftBytes(env, utf8, maximumCount: LUTLibraryWire.maximumSourceBytes),
             let bytes = LUTLibraryWire.packedImportedLUT(utf8: utf8)
         else { return nil }
         return javaByteArray(env, bytes)

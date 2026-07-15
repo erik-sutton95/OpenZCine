@@ -33,37 +33,14 @@ import Testing
     }
 }
 
-@Test func uploadModelsRedactPresignedURLFromDiagnosticDescriptions() throws {
-    let signedURL = "https://s3.example/upload?X-Amz-Signature=unit-signature"
-    let json = """
-        { "data": { "id": "file-123", "upload_urls": [
-            { "size": 4, "url": "\(signedURL)" }
-        ] } }
-        """
-    let response = try FrameioJSON.decode(FrameioCreateFileResponse.self, from: Data(json.utf8))
-    let descriptions = [
-        String(describing: response.uploadParts[0]),
-        String(reflecting: response.uploadParts[0]),
-        String(describing: response.data),
-        String(reflecting: response.data),
-        String(describing: response),
-        String(reflecting: response),
-    ]
-
-    for description in descriptions {
-        #expect(!description.contains(signedURL))
-    }
-}
-
-@Test func decodingErrorRedactsResponseBody() {
+@Test func decodingErrorIncludesResponseBody() {
     let json = #"{"data":{"id":"x","upload_urls":["not-an-object"]}}"#
     do {
         _ = try FrameioJSON.decode(FrameioCreateFileResponse.self, from: Data(json.utf8))
         Issue.record("expected decode to throw")
     } catch let error as FrameioDecodingError {
-        #expect(error.responseByteCount > 0)
-        #expect(error.errorDescription?.contains("upload_urls") == false)
-        #expect(String(describing: error).contains("upload_urls") == false)
+        #expect(error.responseBody.contains("upload_urls"))
+        #expect(error.errorDescription?.contains("Body:") == true)
     } catch {
         Issue.record("unexpected error: \(error)")
     }

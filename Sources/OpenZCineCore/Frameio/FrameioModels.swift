@@ -82,31 +82,19 @@ public struct FrameioCreateFileRequest: Codable, Equatable, Sendable {
 }
 
 /// One part of a Create File response — a pre-signed S3 URL and the byte size for that chunk.
-public struct FrameioUploadPart: Codable, Equatable, Sendable, CustomStringConvertible,
-    CustomDebugStringConvertible
-{
+public struct FrameioUploadPart: Codable, Equatable, Sendable {
     public let size: Int
     public let url: String
 
     public var uploadURL: URL? { URL(string: url) }
-
-    /// A pre-signed URL carries short-lived authorization query values.
-    public var description: String { "FrameioUploadPart(redacted)" }
-
-    /// A pre-signed URL carries short-lived authorization query values.
-    public var debugDescription: String { description }
 }
 
 /// Create File (local upload) response — the placeholder file id plus one or more pre-signed S3
 /// upload URLs (more than one when the file is large enough to be split into parts).
-public struct FrameioCreateFileResponse: Codable, Equatable, Sendable, CustomStringConvertible,
-    CustomDebugStringConvertible
-{
+public struct FrameioCreateFileResponse: Codable, Equatable, Sendable {
     public let data: Body
 
-    public struct Body: Codable, Equatable, Sendable, CustomStringConvertible,
-        CustomDebugStringConvertible
-    {
+    public struct Body: Codable, Equatable, Sendable {
         public let id: String
         public let uploadParts: [FrameioUploadPart]
         public let mediaType: String?
@@ -116,12 +104,6 @@ public struct FrameioCreateFileResponse: Codable, Equatable, Sendable, CustomStr
             case uploadParts = "upload_urls"
             case mediaType = "media_type"
         }
-
-        /// The nested upload parts can contain pre-signed authorization URLs.
-        public var description: String { "FrameioCreateFileResponse.Body(redacted)" }
-
-        /// The nested upload parts can contain pre-signed authorization URLs.
-        public var debugDescription: String { description }
     }
 
     public var fileID: String { data.id }
@@ -131,12 +113,6 @@ public struct FrameioCreateFileResponse: Codable, Equatable, Sendable, CustomStr
     public var uploadURLs: [URL] { data.uploadParts.compactMap(\.uploadURL) }
     /// Ordered upload parts — each `size` bytes go to the matching pre-signed URL.
     public var uploadParts: [FrameioUploadPart] { data.uploadParts }
-
-    /// The response can contain pre-signed authorization URLs.
-    public var description: String { "FrameioCreateFileResponse(redacted)" }
-
-    /// The response can contain pre-signed authorization URLs.
-    public var debugDescription: String { description }
 }
 
 /// `GET /files/{file_id}/status` — whether Frame.io has received every uploaded part.
@@ -168,37 +144,29 @@ public enum FrameioMediaType {
     }
 }
 
-/// Thrown when a Frame.io API response cannot be decoded; retains only its byte count.
-public struct FrameioDecodingError: LocalizedError, Sendable, CustomStringConvertible,
-    CustomDebugStringConvertible
-{
-    /// Byte count retained for diagnostics without retaining a possibly sensitive response body.
-    public let responseByteCount: Int
+/// Thrown when a Frame.io API response cannot be decoded; includes a response-body snippet.
+public struct FrameioDecodingError: LocalizedError, Sendable {
+    public let responseBody: String
     public let underlying: Error
 
-    public init(responseByteCount: Int, underlying: Error) {
-        self.responseByteCount = responseByteCount
+    public init(responseBody: String, underlying: Error) {
+        self.responseBody = responseBody
         self.underlying = underlying
     }
 
     public var errorDescription: String? {
-        "Frame.io returned an unexpected response."
+        "Frame.io response couldn't be parsed: \(underlying.localizedDescription). Body: \(responseBody)"
     }
-
-    /// The original response may contain OAuth or API material; never reflect it.
-    public var description: String { "FrameioDecodingError(redacted)" }
-
-    /// The original response may contain OAuth or API material; never reflect it.
-    public var debugDescription: String { description }
 }
 
-/// Decodes Frame.io JSON and retains only its byte count when decoding fails.
+/// Decodes Frame.io JSON and surfaces the response body when decoding fails.
 public enum FrameioJSON {
     public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
             return try JSONDecoder().decode(type, from: data)
         } catch {
-            throw FrameioDecodingError(responseByteCount: data.count, underlying: error)
+            let body = String(decoding: data.prefix(500), as: UTF8.self)
+            throw FrameioDecodingError(responseBody: body, underlying: error)
         }
     }
 }

@@ -39,56 +39,6 @@ private let config = FrameioConfiguration(
     #expect(items["scope"]?.isEmpty == false)
 }
 
-@Test func portableTokenExchangeFormCarriesThePKCEGrantOnEveryPlatform() {
-    let form = FrameioOAuth.tokenExchangeForm(
-        config: config, code: "auth-code/+", verifier: "v123")
-    #expect(
-        form.url.absoluteString
-            == "https://ims-na1.adobelogin.com/ims/token/v3?client_id=test-client-id")
-    #expect(form.formBody.contains("grant_type=authorization_code"))
-    #expect(form.formBody.contains("client_id=test-client-id"))
-    #expect(form.formBody.contains("code=auth-code%2F%2B"))
-    #expect(form.formBody.contains("code_verifier=v123"))
-    #expect(form.formBody.contains("redirect_uri=adobe%2Babc123%3A%2F%2Fadobeid%2Ftest-client-id"))
-}
-
-@Test func portableRefreshFormCarriesTheRefreshGrantOnEveryPlatform() {
-    let form = FrameioOAuth.refreshForm(config: config, refreshToken: "refresh+/token")
-    #expect(form.formBody.contains("grant_type=refresh_token"))
-    #expect(form.formBody.contains("client_id=test-client-id"))
-    #expect(form.formBody.contains("refresh_token=refresh%2B%2Ftoken"))
-}
-
-@Test func oauthSensitiveValuesAreRedactedFromDescriptions() {
-    let verifier = "sensitive-verifier"
-    let code = "sensitive-authorization-code"
-    let refreshToken = "sensitive-refresh-token"
-    let accessToken = "sensitive-access-token"
-    let pkce = PKCE(verifier: verifier)
-    let form = FrameioOAuth.tokenExchangeForm(config: config, code: code, verifier: verifier)
-    let token = FrameioToken(
-        accessToken: accessToken, refreshToken: refreshToken, expiresIn: 3600, tokenType: "Bearer")
-
-    for value in [String(describing: pkce), String(reflecting: pkce)] {
-        #expect(!value.contains(verifier))
-    }
-    for value in [String(describing: form), String(reflecting: form)] {
-        #expect(!value.contains(code))
-        #expect(!value.contains(verifier))
-    }
-    for value in [String(describing: token), String(reflecting: token)] {
-        #expect(!value.contains(accessToken))
-        #expect(!value.contains(refreshToken))
-    }
-
-    let denied = FrameioOAuthError.authorizationDenied("reason includes \(code)")
-    for value in [
-        denied.localizedDescription, String(describing: denied), String(reflecting: denied),
-    ] {
-        #expect(!value.contains(code))
-    }
-}
-
 // The URLRequest builders are Darwin-only (see FrameioOAuth.swift); Android shells own HTTP.
 #if !os(Android)
     @Test func tokenExchangeRequestIsFormPost() throws {

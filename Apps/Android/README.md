@@ -218,7 +218,8 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   nor persists a document URI, source path, provider identifier, or original file name. The
   persisted selection is only the generated category/file identity; a missing, oversized, or
   corrupt private copy fails closed to the plain feed until the operator removes or reimports it.
-  The 16 MiB limit is `CubeLUT.maximumSourceBytes`, shared with iOS and the JNI boundary.
+  The 16 MiB limit is enforced by `LUTLibraryWire.maximumSourceBytes` at the Android/JNI boundary,
+  without changing the existing iOS parser's accepted inputs.
 - **RED IPP2 LUTs:** no RED LUT asset, scraper, guessed endpoint, or demo download exists in the
   Android app. The View Assist status card evaluates the real process-bound camera-AP/internet
   route through the shared `RedLUTDownloadPolicy`, but delivery remains blocked until RED

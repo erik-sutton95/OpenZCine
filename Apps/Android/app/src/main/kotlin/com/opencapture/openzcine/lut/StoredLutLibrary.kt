@@ -24,7 +24,7 @@ import kotlinx.coroutines.withContext
 
 private const val LUT_READ_BUFFER_BYTES = 8 * 1024
 
-/** Must remain equal to the portable Swift `CubeLUT.maximumSourceBytes` contract (16 MiB). */
+/** Must remain equal to the Android Swift facade's `LUTLibraryWire.maximumSourceBytes`. */
 private const val SHARED_LUT_SOURCE_LIMIT_BYTES = 16 * 1024 * 1024
 
 /** App-private categories that map exactly onto the shared Swift `LUTCategory` cases. */

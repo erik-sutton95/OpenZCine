@@ -9,6 +9,10 @@ import OpenZCineCore
 /// packs the cube through the same `FeedEffectsWire` path as built-in looks. Kotlin never parses
 /// cube text, implements LUT sampling, or derives a second identity format.
 public enum LUTLibraryWire {
+    /// Maximum Android import size. This belongs at the Android trust boundary so adding the
+    /// platform guard does not change the existing iOS `.cube` parser's accepted inputs.
+    public static let maximumSourceBytes = 16 * 1024 * 1024
+
     /// Stable record version for `validateImportedLUT`. Fields are separated with ASCII Unit
     /// Separator so user-controlled file labels cannot be ambiguously split by a display delimiter.
     public static let validationRecordVersion = "1"
@@ -33,9 +37,7 @@ public enum LUTLibraryWire {
         utf8: [UInt8], categoryOrdinal: Int, fileName: String
     ) -> String? {
         guard let category = category(categoryOrdinal), isSafeStoredFileName(fileName),
-            utf8.count <= CubeLUT.maximumSourceBytes,
-            let text = String(bytes: utf8, encoding: .utf8),
-            let cube = try? CubeLUT.parse(text)
+            let cube = validatedCube(utf8)
         else { return nil }
         let selection = LUTSelection.stored(category: category, fileName: fileName)
         return [validationRecordVersion, String(cube.size), selection.cacheKey]
@@ -47,9 +49,7 @@ public enum LUTLibraryWire {
     /// than attempting a Kotlin fallback; that preserves the shared parser/colour pipeline as the
     /// sole implementation.
     public static func packedImportedLUT(utf8: [UInt8]) -> [UInt8]? {
-        guard utf8.count <= CubeLUT.maximumSourceBytes,
-            let text = String(bytes: utf8, encoding: .utf8),
-            let cube = try? CubeLUT.parse(text)
+        guard let cube = validatedCube(utf8)
         else { return nil }
         return FeedEffectsWire.packedRGBA(cube: cube)
     }
@@ -78,6 +78,46 @@ public enum LUTLibraryWire {
         case CategoryOrdinal.red: .red
         default: nil
         }
+    }
+
+    private static func validatedCube(_ utf8: [UInt8]) -> CubeLUT? {
+        guard utf8.count <= maximumSourceBytes,
+            let text = String(bytes: utf8, encoding: .utf8),
+            isStrictAndroidImport(text),
+            let cube = try? CubeLUT.parse(text)
+        else { return nil }
+        return cube
+    }
+
+    /// Android imports fail closed on duplicate declarations and unsafe numeric samples. Keeping
+    /// this preflight in the facade preserves the established shared parser behavior used by iOS.
+    private static func isStrictAndroidImport(_ text: String) -> Bool {
+        var foundSize = false
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if line.hasPrefix("LUT_3D_SIZE") {
+                guard !foundSize else { return false }
+                foundSize = true
+                continue
+            }
+            if line.hasPrefix("DOMAIN_MIN") || line.hasPrefix("DOMAIN_MAX") { continue }
+
+            guard let first = line.first else { continue }
+            let startsData =
+                ("0"..."9").contains(first) || first == "+" || first == "-" || first == "."
+            if !startsData { continue }
+
+            let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard fields.count >= 3,
+                let red = Float(fields[0]), let green = Float(fields[1]),
+                let blue = Float(fields[2])
+            else { continue }
+            guard red.isFinite, green.isFinite, blue.isFinite,
+                (0...1).contains(red), (0...1).contains(green), (0...1).contains(blue)
+            else { return false }
+        }
+        return true
     }
 
     /// Android generates this name after sanitising the picked display label. Keep this mirror at

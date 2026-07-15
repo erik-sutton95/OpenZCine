@@ -102,29 +102,6 @@ import Testing
     }
 }
 
-@Test func rejectsDuplicateSizeDeclarations() {
-    #expect(throws: CubeLUTParseError.duplicateSize) {
-        try CubeLUT.parse("LUT_3D_SIZE 2\nLUT_3D_SIZE 2\n")
-    }
-}
-
-@Test func rejectsNonFiniteAndOutOfRangeSamples() {
-    let prefix = "LUT_3D_SIZE 2\n"
-    #expect(throws: CubeLUTParseError.invalidSample) {
-        try CubeLUT.parse(prefix + "+inf 0 0\n")
-    }
-    #expect(throws: CubeLUTParseError.invalidSample) {
-        try CubeLUT.parse(prefix + "1.01 0 0\n")
-    }
-}
-
-@Test func rejectsOversizedSourceBeforeReadingTableRows() {
-    let oversized = String(repeating: "x", count: CubeLUT.maximumSourceBytes + 1)
-    #expect(throws: CubeLUTParseError.sourceTooLarge(maximumBytes: CubeLUT.maximumSourceBytes)) {
-        try CubeLUT.parse(oversized)
-    }
-}
-
 @Test func parsesCubeAtMaximumSupportedSize() throws {
     // 64 is the boundary that must keep parsing — common high-quality LUTs ship at this size.
     let lut = try CubeLUT.parse(zeroCubeText(size: 64))

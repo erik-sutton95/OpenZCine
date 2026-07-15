@@ -13,11 +13,6 @@ public struct CubeLUT: Equatable, Sendable {
     /// `.cube` declaring a huge `LUT_3D_SIZE` cannot exhaust memory.
     public static let supportedSizeRange = 2...64
 
-    /// Largest UTF-8 `.cube` source accepted by the portable parser. A 64³ table normally takes
-    /// well under this limit, while the cap keeps an import made mostly of comments or oversized
-    /// numeric tokens from allocating an unbounded `String`/sample buffer in a platform shell.
-    public static let maximumSourceBytes = 16 * 1024 * 1024
-
     /// Edge length of the cube (e.g. 33 for a 33×33×33 LUT).
     public let size: Int
 
@@ -32,24 +27,15 @@ public struct CubeLUT: Equatable, Sendable {
 
 /// Why a `.cube` payload could not be parsed.
 public enum CubeLUTParseError: LocalizedError, Equatable {
-    case sourceTooLarge(maximumBytes: Int)
     case missingSize
-    case duplicateSize
     case unsupportedSize(Int)
     case unsupportedDomain
-    case invalidSample
     case sampleCountMismatch(expected: Int, found: Int)
 
     public var errorDescription: String? {
         switch self {
-        case .sourceTooLarge(let maximumBytes):
-            return
-                "The .cube file is larger than the supported \(maximumBytes / 1024 / 1024) MB "
-                + "limit."
         case .missingSize:
             return "The .cube file is missing its LUT_3D_SIZE declaration."
-        case .duplicateSize:
-            return "The .cube file declares LUT_3D_SIZE more than once."
         case .unsupportedSize(let size):
             return
                 "The .cube file declares an unsupported LUT size of \(size). Supported sizes are "
@@ -58,8 +44,6 @@ public enum CubeLUTParseError: LocalizedError, Equatable {
             return
                 "The .cube file declares a non-default input domain (DOMAIN_MIN/MAX); only the "
                 + "standard 0–1 domain is supported."
-        case .invalidSample:
-            return "The .cube file contains a non-finite or out-of-range RGB sample."
         case .sampleCountMismatch(let expected, let found):
             return
                 "The .cube file declares \(expected / 3) table entries but contains \(found / 3)."
@@ -70,13 +54,9 @@ public enum CubeLUTParseError: LocalizedError, Equatable {
 extension CubeLUT {
     /// Parses a 3D `.cube` LUT: reads `LUT_3D_SIZE` and the RGB data triplets, skipping comments and
     /// metadata (`TITLE`, `LUT_1D_*`, …). A non-default `DOMAIN_MIN/MAX` is rejected (the renderer
-    /// assumes a 0–1 input domain). Throws ``CubeLUTParseError`` on an oversized source, a
-    /// missing/duplicate/oversized size, a non-default domain, a non-finite/out-of-range sample,
-    /// or a triplet count that doesn't match `size³`.
+    /// assumes a 0–1 input domain). Throws ``CubeLUTParseError`` on a missing/oversized size, a
+    /// non-default domain, or a triplet count that doesn't match `size³`.
     public static func parse(_ text: String) throws -> CubeLUT {
-        guard text.utf8.count <= CubeLUT.maximumSourceBytes else {
-            throw CubeLUTParseError.sourceTooLarge(maximumBytes: CubeLUT.maximumSourceBytes)
-        }
         var size: Int?
         var values: [Float] = []
 
@@ -85,7 +65,6 @@ extension CubeLUT {
             if line.isEmpty || line.hasPrefix("#") { continue }
 
             if line.hasPrefix("LUT_3D_SIZE") {
-                guard size == nil else { throw CubeLUTParseError.duplicateSize }
                 let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
                 if fields.count >= 2, let parsed = Int(fields[1]) {
                     // Validate the declared size *here*, before the data block is read, so a corrupt
@@ -122,9 +101,6 @@ extension CubeLUT {
             guard fields.count >= 3,
                 let r = Float(fields[0]), let g = Float(fields[1]), let b = Float(fields[2])
             else { continue }
-            guard r.isFinite, g.isFinite, b.isFinite,
-                (0...1).contains(r), (0...1).contains(g), (0...1).contains(b)
-            else { throw CubeLUTParseError.invalidSample }
             values.append(r)
             values.append(g)
             values.append(b)

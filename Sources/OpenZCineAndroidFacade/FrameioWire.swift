@@ -86,19 +86,33 @@ public enum AndroidFrameioWire {
         guard let config = configuration(clientID: clientID, redirectURI: redirectURI) else {
             return nil
         }
-        let form: FrameioFormRequest
+        let form: HTTPRequest?
         switch kind {
         case "exchange":
             guard let code, !code.isEmpty, let verifier, !verifier.isEmpty else { return nil }
-            form = FrameioOAuth.tokenExchangeForm(config: config, code: code, verifier: verifier)
+            form = tokenForm(
+                config: config,
+                fields: [
+                    ("grant_type", "authorization_code"),
+                    ("client_id", config.clientID),
+                    ("code", code),
+                    ("code_verifier", verifier),
+                    ("redirect_uri", config.redirectURI),
+                ])
         case "refresh":
             guard let refreshToken, !refreshToken.isEmpty else { return nil }
-            form = FrameioOAuth.refreshForm(config: config, refreshToken: refreshToken)
+            form = tokenForm(
+                config: config,
+                fields: [
+                    ("grant_type", "refresh_token"),
+                    ("client_id", config.clientID),
+                    ("refresh_token", refreshToken),
+                ])
         default:
             return nil
         }
-        return encode(
-            HTTPRequest(url: form.url.absoluteString, method: "POST", body: form.formBody))
+        guard let form else { return nil }
+        return encode(form)
     }
 
     /// Plans one core-owned Frame.io V4 request. The Android HTTPS adapter
@@ -192,6 +206,26 @@ public enum AndroidFrameioWire {
             validatedRedirectURI(redirectURI) != nil
         else { return nil }
         return FrameioConfiguration(clientID: clientID, redirectURI: redirectURI)
+    }
+
+    private static func tokenForm(
+        config: FrameioConfiguration, fields: [(String, String)]
+    ) -> HTTPRequest? {
+        guard
+            var components = URLComponents(
+                url: config.tokenEndpoint, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.queryItems = [URLQueryItem(name: "client_id", value: config.clientID)]
+        guard let url = components.url else { return nil }
+
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let body = fields.map { key, value in
+            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+            let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+            return "\(encodedKey)=\(encodedValue)"
+        }.joined(separator: "&")
+        return HTTPRequest(url: url.absoluteString, method: "POST", body: body)
     }
 
     private static func validatedRedirectURI(_ redirectURI: String) -> URL? {
