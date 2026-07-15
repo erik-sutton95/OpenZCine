@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +55,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -213,17 +216,20 @@ fun portraitDisplayedScopes(selected: Set<ScopeKind>, activationOrder: List<Scop
 }
 
 /** One floating panel's default physical size, mirroring the iOS base footprints. */
-fun scopePanelSize(
-    kind: ScopeKind,
-    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
-): Pair<Float, Float> {
-    val (width, height) =
-        when (kind) {
+internal fun scopePanelBaseSize(kind: ScopeKind): Pair<Float, Float> =
+    when (kind) {
         ScopeKind.WAVEFORM, ScopeKind.PARADE -> 250f to 153f
         ScopeKind.HISTOGRAM -> 250f to 77f
         ScopeKind.VECTORSCOPE -> 190f to 190f
         ScopeKind.TRAFFIC_LIGHTS -> 74f to 168f
     }
+
+/** One floating panel's current requested physical size. */
+fun scopePanelSize(
+    kind: ScopeKind,
+    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
+): Pair<Float, Float> {
+    val (width, height) = scopePanelBaseSize(kind)
     val scale =
         when (kind) {
             ScopeKind.WAVEFORM -> configuration.waveformScale
@@ -234,6 +240,28 @@ fun scopePanelSize(
         }
     return width * scale to height * scale
 }
+
+/** Uniform layout-only scale cap; applying it never rewrites the operator's stored scale. */
+internal fun scopePresentationScale(
+    kind: ScopeKind,
+    requestedScale: Float,
+    bounds: ZoneFrame,
+): Float {
+    val (baseWidth, baseHeight) = scopePanelBaseSize(kind)
+    return scopePresentationScale(baseWidth, baseHeight, requestedScale, bounds)
+}
+
+private fun scopePresentationScale(
+    baseWidth: Float,
+    baseHeight: Float,
+    requestedScale: Float,
+    bounds: ZoneFrame,
+): Float =
+    minOf(
+        ScopeAssistConfiguration.clampScale(requestedScale),
+        bounds.width / baseWidth,
+        bounds.height / baseHeight,
+    ).coerceAtLeast(0f)
 
 /** Current persisted scale for one scope kind. */
 internal fun ScopeAssistConfiguration.scaleFor(kind: ScopeKind): Float =
@@ -272,6 +300,17 @@ fun floatingScopeFrame(
     configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
 ): ZoneFrame {
     val (width, height) = scopePanelSize(kind, configuration)
+    return floatingScopeFrame(kind, feed, infoBar, viewport, width, height)
+}
+
+private fun floatingScopeFrame(
+    kind: ScopeKind,
+    feed: ZoneFrame,
+    infoBar: ZoneFrame,
+    viewport: ZoneFrame,
+    width: Float,
+    height: Float,
+): ZoneFrame {
     val top = max(feed.y, infoBar.y + infoBar.height) + SCOPE_PANEL_EDGE_GAP
     val bottomEdge =
         min(
@@ -430,7 +469,10 @@ internal fun ScopePanels(
     feed: ZoneFrame,
     infoBar: ZoneFrame,
     scopeZone: ZoneFrame?,
-    viewport: ZoneFrame,
+    panelLayout: MonitorAnalysisPanelLayout?,
+    placementStore: MonitorAnalysisPanelPlacementStore,
+    placementRevision: Int,
+    hapticsEnabled: Boolean,
 ) {
     val displayed =
         displayedScopeKinds(
@@ -487,16 +529,20 @@ internal fun ScopePanels(
             configuration,
         )
     } else {
+        val layout = requireNotNull(panelLayout)
         FloatingScopePanels(
             displayed,
             feed,
             infoBar,
-            if (portraitFloating) feed else viewport,
+            layout,
             anchors,
             snapshot,
             histogramTrafficLightsEnabled,
             configuration,
             onScaleChange,
+            placementStore = placementStore,
+            placementRevision = placementRevision,
+            hapticsEnabled = hapticsEnabled,
         )
     }
 }
@@ -566,7 +612,7 @@ internal fun PlaybackScopePanels(
         displayed = displayed,
         feed = feed,
         infoBar = infoBar,
-        viewport = viewport,
+        panelLayout = MonitorAnalysisPanelLayout(viewport = viewport, safeBounds = viewport),
         anchors = anchors,
         snapshot = snapshot,
         histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
@@ -632,46 +678,108 @@ private fun FloatingScopePanels(
     displayed: List<ScopeKind>,
     feed: ZoneFrame,
     infoBar: ZoneFrame,
-    viewport: ZoneFrame,
+    panelLayout: MonitorAnalysisPanelLayout,
     anchors: ScopeAnchors?,
     snapshot: ScopeDrawData?,
     histogramTrafficLightsEnabled: Boolean,
     configuration: ScopeAssistConfiguration,
     onScaleChange: (ScopeKind, Float) -> Unit,
     placementStoreName: String = "scopePanelPlacement",
+    placementStore: MonitorAnalysisPanelPlacementStore? = null,
+    placementRevision: Int = 0,
+    hapticsEnabled: Boolean = true,
 ) {
     val context = LocalContext.current.applicationContext
-    val store = remember(context, placementStoreName) { ScopePanelPlacementStore(context, placementStoreName) }
+    val legacyStore =
+        remember(context, placementStoreName, placementStore) {
+            placementStore?.let { null } ?: ScopePanelPlacementStore(context, placementStoreName)
+        }
+    val scopeLayout =
+        if (placementStore != null) {
+            panelLayout.withScopeGripClearance()
+        } else {
+            panelLayout
+        }
     Box(Modifier.fillMaxSize()) {
         displayed.forEach { kind ->
-            val default = floatingScopeFrame(kind, feed, infoBar, viewport, configuration)
-            val baseSize = scopePanelSize(kind)
-            FloatingScopePanel(
-                kind = kind,
-                default = default,
-                bounds = viewport,
-                scale = configuration.scaleFor(kind),
-                baseWidth = baseSize.first,
-                baseHeight = baseSize.second,
-                store = store,
-                onScaleChange = { onScaleChange(kind, it) },
-            ) { modifier ->
-                ScopePanel(
+            key(kind) {
+                val default =
+                    controlSafeScopeDefaultFrame(
+                        kind = kind,
+                        feed = feed,
+                        infoBar = infoBar,
+                        layout = scopeLayout,
+                        configuration = configuration,
+                    )
+                val baseSize = scopePanelBaseSize(kind)
+                FloatingScopePanel(
                     kind = kind,
-                    anchors = anchors,
-                    data = snapshot,
-                    histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
-                    configuration = configuration,
-                    fillsWidth = false,
-                    modifier = modifier,
-                )
+                    default = default,
+                    panelLayout = scopeLayout,
+                    scale = configuration.scaleFor(kind),
+                    baseWidth = baseSize.first,
+                    baseHeight = baseSize.second,
+                    placementStore = placementStore,
+                    legacyStore = legacyStore,
+                    placementRevision = placementRevision,
+                    hapticsEnabled = hapticsEnabled,
+                    onScaleChange = { onScaleChange(kind, it) },
+                ) { modifier ->
+                    ScopePanel(
+                        kind = kind,
+                        anchors = anchors,
+                        data = snapshot,
+                        histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
+                        configuration = configuration,
+                        fillsWidth = false,
+                        modifier = modifier,
+                    )
+                }
             }
         }
     }
 }
 
+/** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
+internal fun controlSafeScopeDefaultFrame(
+    kind: ScopeKind,
+    feed: ZoneFrame,
+    infoBar: ZoneFrame,
+    layout: MonitorAnalysisPanelLayout,
+    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
+): ZoneFrame =
+    scopePanelBaseSize(kind).let { (baseWidth, baseHeight) ->
+        val presentationScale =
+            scopePresentationScale(
+                kind = kind,
+                requestedScale = configuration.scaleFor(kind),
+                bounds = layout.safeBounds,
+            )
+        clampScopeFrame(
+            floatingScopeFrame(
+                kind = kind,
+                feed = feed,
+                infoBar = infoBar,
+                viewport = layout.viewport,
+                width = baseWidth * presentationScale,
+                height = baseHeight * presentationScale,
+            ),
+            layout.safeBounds,
+        )
+    }
+
+/** Leaves the exterior resize target inside the control-clear presentation frame. */
+internal fun MonitorAnalysisPanelLayout.withScopeGripClearance(): MonitorAnalysisPanelLayout =
+    copy(
+        safeBounds =
+            safeBounds.copy(
+                width = max(0f, safeBounds.width - SCOPE_RESIZE_GRIP_PAD),
+                height = max(0f, safeBounds.height - SCOPE_RESIZE_GRIP_PAD),
+            ),
+    )
+
 /** Current Android equivalent of iOS's persisted movable panel centre. */
-private class ScopePanelPlacementStore(context: Context, name: String) {
+internal class ScopePanelPlacementStore(context: Context, name: String) {
     private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
     fun resolve(kind: ScopeKind, default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
@@ -701,21 +809,49 @@ private class ScopePanelPlacementStore(context: Context, name: String) {
 
 /** Drag wrapper for a floating panel. The persisted state commits only after a completed drag. */
 @Composable
-private fun FloatingScopePanel(
+internal fun FloatingScopePanel(
     kind: ScopeKind,
     default: ZoneFrame,
-    bounds: ZoneFrame,
+    panelLayout: MonitorAnalysisPanelLayout,
     scale: Float,
     baseWidth: Float,
     baseHeight: Float,
-    store: ScopePanelPlacementStore,
+    placementStore: MonitorAnalysisPanelPlacementStore?,
+    legacyStore: ScopePanelPlacementStore?,
+    placementRevision: Int,
+    hapticsEnabled: Boolean,
     onScaleChange: (Float) -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
     val density = LocalDensity.current
     val view = LocalView.current
-    var frame by remember(kind, default, bounds) { mutableStateOf(store.resolve(kind, default, bounds)) }
-    var liveScale by remember(kind, scale) { mutableStateOf(scale) }
+    val panelID = kind.monitorAnalysisPanelID()
+    fun resolvedFrame(): ZoneFrame =
+        placementStore?.resolve(panelID, default, panelLayout)
+            ?: requireNotNull(legacyStore).resolve(kind, default, panelLayout.safeBounds)
+
+    fun saveFrame(frame: ZoneFrame) {
+        if (placementStore != null) {
+            placementStore.save(panelID, frame, panelLayout)
+        } else {
+            requireNotNull(legacyStore).save(kind, frame, panelLayout.safeBounds)
+        }
+    }
+    var frame by
+        remember(kind, default, panelLayout, placementRevision) {
+            mutableStateOf(resolvedFrame())
+        }
+    var liveScale by
+        remember(kind, scale, panelLayout, baseWidth, baseHeight) {
+            mutableStateOf(
+                scopePresentationScale(
+                    baseWidth = baseWidth,
+                    baseHeight = baseHeight,
+                    requestedScale = scale,
+                    bounds = panelLayout.safeBounds,
+                ),
+            )
+        }
     var isDragging by remember { mutableStateOf(false) }
     var isResizing by remember { mutableStateOf(false) }
     var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
@@ -737,15 +873,39 @@ private fun FloatingScopePanel(
         Box(
             Modifier
                 .size(frame.width.dp, frame.height.dp)
-                .pointerInput(kind, bounds, baseWidth, baseHeight) {
+                .semantics {
+                    contentDescription = "${kind.title} analysis panel, movable"
+                    if (placementStore != null) {
+                        customActions =
+                            listOf(
+                                CustomAccessibilityAction("Recenter ${kind.title} panel") {
+                                    placementStore.recenter(panelID)
+                                    frame = clampScopeFrame(default, panelLayout.safeBounds)
+                                    true
+                                },
+                            )
+                    }
+                }
+                .pointerInput(
+                    kind,
+                    default,
+                    panelLayout,
+                    baseWidth,
+                    baseHeight,
+                    scale,
+                    placementRevision,
+                    hapticsEnabled,
+                ) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
                         isDragging = true
-                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        if (hapticsEnabled) {
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        }
                     },
                     onDragEnd = {
                         isDragging = false
-                        store.save(kind, frame, bounds)
+                        saveFrame(frame)
                     },
                     onDragCancel = { isDragging = false },
                 ) { change, dragAmount ->
@@ -758,14 +918,16 @@ private fun FloatingScopePanel(
                                     y = frame.y + dragAmount.y / density.density,
                                 ),
                             ),
-                            bounds,
+                            panelLayout.safeBounds,
                         )
                     val cell =
                         ((snapped.x + snapped.width / 2f) / 22f).roundToInt() * 100_000 +
                             ((snapped.y + snapped.height / 2f) / 22f).roundToInt()
                     if (cell != hapticCell) {
                         hapticCell = cell
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        if (hapticsEnabled) {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        }
                     }
                     frame = snapped
                 }
@@ -781,7 +943,16 @@ private fun FloatingScopePanel(
                 )
                 .size(SCOPE_RESIZE_GRIP_HIT_SIZE.dp)
                 .semantics { contentDescription = "Resize ${kind.title} panel" }
-                .pointerInput(kind, bounds, baseWidth, baseHeight, scale) {
+                .pointerInput(
+                    kind,
+                    default,
+                    panelLayout,
+                    baseWidth,
+                    baseHeight,
+                    scale,
+                    placementRevision,
+                    hapticsEnabled,
+                ) {
                     var startScale = liveScale
                     var accumulated = 0f
                     detectDragGesturesAfterLongPress(
@@ -789,11 +960,13 @@ private fun FloatingScopePanel(
                             isResizing = true
                             startScale = liveScale
                             accumulated = 0f
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            if (hapticsEnabled) {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            }
                         },
                         onDragEnd = {
                             isResizing = false
-                            store.save(kind, frame, bounds)
+                            saveFrame(frame)
                             onScaleChange(liveScale)
                         },
                         onDragCancel = {
@@ -803,11 +976,24 @@ private fun FloatingScopePanel(
                     ) { change, dragAmount ->
                         change.consume()
                         accumulated += (dragAmount.x + dragAmount.y) / density.density
-                        val next =
+                        val requested =
                             ScopeAssistConfiguration.clampScale(
                                 startScale + accumulated / (baseWidth + baseHeight),
                             )
-                        val rounded = (next * 100).roundToInt() / 100f
+                        val fitted =
+                            scopePresentationScale(
+                                baseWidth = baseWidth,
+                                baseHeight = baseHeight,
+                                requestedScale = requested,
+                                bounds = panelLayout.safeBounds,
+                            )
+                        val rounded =
+                            scopePresentationScale(
+                                baseWidth = baseWidth,
+                                baseHeight = baseHeight,
+                                requestedScale = (fitted * 100).roundToInt() / 100f,
+                                bounds = panelLayout.safeBounds,
+                            )
                         val centerX = frame.x + frame.width / 2f
                         val centerY = frame.y + frame.height / 2f
                         liveScale = rounded
@@ -819,7 +1005,7 @@ private fun FloatingScopePanel(
                                     baseWidth * rounded,
                                     baseHeight * rounded,
                                 ),
-                                bounds,
+                                panelLayout.safeBounds,
                             )
                     }
                 },

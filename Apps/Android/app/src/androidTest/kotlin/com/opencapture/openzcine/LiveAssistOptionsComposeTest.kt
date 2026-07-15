@@ -8,10 +8,14 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.openzcine.media.LiveAssistOptionsOverlay
 import com.opencapture.openzcine.settings.OperatorSettings
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,6 +59,35 @@ class LiveAssistOptionsComposeTest {
             composeRule.onAllNodesWithText(tool.settingsTitle.uppercase())[0].assertIsDisplayed()
         }
 
+        preferences.edit().clear().commit()
+    }
+
+    @Test
+    fun liveMovablePanelOptionsExposeAnExplicitRecenterAction() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences =
+            context.getSharedPreferences("ope68-live-panel-recenter", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val settings = OperatorSettings(preferences)
+        var recenterCount = 0
+        composeRule.setContent {
+            OpenZCineTheme {
+                LiveAssistOptionsOverlay(
+                    tool = AssistTool.WAVE,
+                    anchorBounds = Rect(120f, 120f, 180f, 180f),
+                    assistState = AssistState(FeedEffects.NONE, ScopeKind.WAVEFORM),
+                    settings = settings,
+                    cameraInput = ExposureAssistCameraInput(),
+                    lutLibrary = null,
+                    onRecenterPanel = { recenterCount += 1 },
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Recenter panel").performScrollTo().performClick()
+
+        composeRule.runOnIdle { assertEquals(1, recenterCount) }
         preferences.edit().clear().commit()
     }
 }

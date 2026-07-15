@@ -151,6 +151,7 @@ private data class AssistOptionsActions(
     val selectStoredLut: (StoredLutSelection) -> Unit,
     val selectFalseColorScale: (FeedFalseColorScale) -> Unit,
     val resetFalseColorScale: () -> Unit,
+    val recenterPanel: (() -> Unit)?,
     val contextLabel: String,
 )
 
@@ -187,6 +188,7 @@ internal fun PlaybackAssistOptionsOverlay(
                 resetFalseColorScale = {
                     playbackState.resetSharedFalseColorScale(sharedAssistState)
                 },
+                recenterPanel = null,
                 contextLabel = "playback",
             ),
         settings = settings,
@@ -205,6 +207,7 @@ internal fun LiveAssistOptionsOverlay(
     settings: OperatorSettings,
     cameraInput: ExposureAssistCameraInput,
     lutLibrary: AndroidLutLibrary?,
+    onRecenterPanel: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val isOn: (AssistTool) -> Boolean = { candidate ->
@@ -233,6 +236,7 @@ internal fun LiveAssistOptionsOverlay(
                 selectStoredLut = assistState::selectStoredLut,
                 selectFalseColorScale = assistState::selectFalseColorScale,
                 resetFalseColorScale = assistState::resetFalseColorSelection,
+                recenterPanel = onRecenterPanel,
                 contextLabel = "live monitor",
             ),
         settings = settings,
@@ -365,6 +369,11 @@ private fun PlaybackAssistOptionsContent(
         AssistTool.DESQ -> DesqueezeOptions(actions, settings)
         AssistTool.AUDIO ->
             OptionCopy("Meters the playing clip's audio. iOS exposes this as a tap-only tool.")
+    }
+    actions.recenterPanel?.let { recenter ->
+        OptionSection("Panel position") {
+            SettingsQuietLink("Recenter panel", recenter)
+        }
     }
 }
 
