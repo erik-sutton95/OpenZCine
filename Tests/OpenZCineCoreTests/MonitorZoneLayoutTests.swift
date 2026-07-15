@@ -564,8 +564,7 @@ private enum PadMiniViewport {
 
     let lockRight = map.systemSlots.lock.x + map.systemSlots.lock.width
 
-    #expect(map.feed.x == 80)
-    #expect(abs(map.feed.x + map.feed.width / 2 - 448) < 0.001)
+    #expect(map.feed.x == 44)
     #expect(
         lockRight + MonitorLiveViewModuleLayout.topInfoDeckControlGap
             <= map.infoBar.frame.x)

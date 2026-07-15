@@ -837,6 +837,7 @@ struct MonitorScopes: View {
     var safeArea: MonitorEdgeInsets = .zero
     var viewportWidth: Double = 0
     var canvasOffsetX: Double = 0
+    var horizontalDirection: MonitorHorizontalLayoutDirection = .standard
 
     var body: some View {
         switch style {
@@ -845,6 +846,7 @@ struct MonitorScopes: View {
                 safeArea: safeArea,
                 viewportWidth: viewportWidth,
                 canvasOffsetX: canvasOffsetX,
+                horizontalDirection: horizontalDirection,
                 suppressFloatingScopes: false
             )
             .environment(model)
@@ -937,13 +939,15 @@ struct MonitorShell: View {
                 LiveFeedModule(
                     safeArea: context.feedSafeArea,
                     viewportWidth: context.viewportWidth,
-                    canvasOffsetX: context.canvasOffsetX
+                    canvasOffsetX: context.canvasOffsetX,
+                    horizontalDirection: context.horizontalDirection
                 )
                 MonitorScopes(
                     style: .scopesFloating,
                     safeArea: context.feedSafeArea,
                     viewportWidth: context.viewportWidth,
-                    canvasOffsetX: context.canvasOffsetX
+                    canvasOffsetX: context.canvasOffsetX,
+                    horizontalDirection: context.horizontalDirection
                 )
             }
 
@@ -979,9 +983,16 @@ struct MonitorShell: View {
                                     .environment(model)
                                     .monitorModuleFrame(battery.frame, alignment: .leading)
                             } else {
-                                BatteryRailModule(safeArea: context.feedSafeArea)
-                                    .environment(model)
-                                    .monitorModuleFrame(battery.frame)
+                                let phoneTopClearance =
+                                    map.systemSlots.lock.y + map.systemSlots.lock.height
+                                    - battery.frame.y
+                                    + MonitorBatteryRailLayout.lockButtonGap
+                                BatteryRailModule(
+                                    safeArea: context.feedSafeArea,
+                                    phoneTopClearance: phoneTopClearance
+                                )
+                                .environment(model)
+                                .monitorModuleFrame(battery.frame)
                             }
                         }
                         MonitorSystemCluster(slots: map.systemSlots, axis: .axisVertical)

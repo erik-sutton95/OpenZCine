@@ -212,7 +212,8 @@ public enum MonitorFeedLayout {
     public static func frame(
         viewportWidth: Double,
         viewportHeight: Double,
-        safeArea: MonitorEdgeInsets
+        safeArea: MonitorEdgeInsets,
+        horizontalDirection: MonitorHorizontalLayoutDirection = .standard
     ) -> MonitorFeedFrame {
         let leadingInset = leadingInset(for: safeArea)
         let viewportWidth = max(0, viewportWidth)
@@ -244,12 +245,18 @@ public enum MonitorFeedLayout {
         }
 
         let remainingWidth = max(0, viewportWidth - width)
-        // A classic landscape notch reports equal horizontal safe areas, so keep the image
-        // centered between the two side margins instead of anchoring it beneath either side.
-        let x =
-            MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea)
-            ? remainingWidth / 2
-            : min(remainingWidth, leadingInset)
+        let x: Double
+        if MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) {
+            // Classic iPhones report equal horizontal safe areas even though only one side has
+            // the notch. Use the physical orientation to spend the full notch-side safe lane
+            // without wasting an additional centered margin beside it.
+            x =
+                horizontalDirection == .mirrored
+                ? max(0, remainingWidth - safeArea.trailing)
+                : min(remainingWidth, safeArea.leading)
+        } else {
+            x = min(remainingWidth, leadingInset)
+        }
 
         return MonitorFeedFrame(x: x, y: 0, width: width, height: viewportHeight)
     }
@@ -258,12 +265,14 @@ public enum MonitorFeedLayout {
     public static func fullBleedFrame(
         viewportWidth: Double,
         viewportHeight: Double,
-        safeArea: MonitorEdgeInsets
+        safeArea: MonitorEdgeInsets,
+        horizontalDirection: MonitorHorizontalLayoutDirection = .standard
     ) -> MonitorFeedFrame {
         frame(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
-            safeArea: safeArea
+            safeArea: safeArea,
+            horizontalDirection: horizontalDirection
         )
     }
 }
@@ -472,7 +481,8 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
         let feed = MonitorFeedLayout.fullBleedFrame(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
-            safeArea: feedSafeArea
+            safeArea: feedSafeArea,
+            horizontalDirection: horizontalDirection
         )
         let rightRailLane = screen.trailingLane(after: feed)
         let rightRailControls = Self.rightRailFrame(
@@ -490,13 +500,19 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             height: lockButtonSize
         )
 
-        // Keep the deck centered over the feed while clearing the lock on compact classic-notch
-        // phones. Their symmetric 44pt landscape safe areas put the feed's usual 10pt inset just
-        // inside the lock frame; modern asymmetric cutouts already have enough feed clearance.
+        // Keep the deck centered over the feed while clearing the lock only on compact
+        // classic-notch phones. Every other device retains the established deck inset.
         let minimumDeckInset =
             lockButton.x + lockButton.width + topInfoDeckControlGap - feed.x
+        let usesClassicSideNotch = MonitorBatteryRailLayout.usesClassicSideNotch(
+            safeArea: feedSafeArea
+        )
         let deckInset =
-            constrained ? topInfoDeckSideInset : max(topInfoDeckSideInset, minimumDeckInset)
+            constrained
+            ? topInfoDeckSideInset
+            : usesClassicSideNotch
+                ? max(topInfoDeckSideInset, minimumDeckInset)
+                : topInfoDeckSideInset
         let deckLeft = feed.x + deckInset
         let deckRight = feed.x + feed.width - deckInset
 
@@ -679,6 +695,12 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// Battery indicator height in points (battery glyph + percentage + device icon).
     public static let indicatorHeight = 70.0
 
+    /// Compact phone-battery height used between the lock button and a classic side notch.
+    public static let compactPhoneIndicatorHeight = 26.0
+
+    /// Visual separation between the lock button and compact phone-battery readout.
+    public static let lockButtonGap = 4.0
+
     /// Reserved vertical span for the landscape Dynamic Island. Sized just over the physical
     /// island (~126pt black core on the Pro Max) so the indicators sit snug above and below it.
     public static let sideNotchHeight = 135.0
@@ -706,6 +728,7 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     // Indicator centers.
     public let phoneCenterX: Double
     public let phoneCenterY: Double
+    public let phoneIndicatorHeight: Double
     public let cameraCenterX: Double
     public let cameraCenterY: Double
 
@@ -713,27 +736,36 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     public let notchTop: Double
     public let notchBottom: Double
 
-    public var phoneBottom: Double { phoneCenterY + Self.indicatorHeight / 2 }
+    public var phoneTop: Double { phoneCenterY - phoneIndicatorHeight / 2 }
+    public var phoneBottom: Double { phoneCenterY + phoneIndicatorHeight / 2 }
     public var cameraTop: Double { cameraCenterY - Self.indicatorHeight / 2 }
 
     /// Fits the battery indicators to the side rail.
     public static func fit(
         railHeight: Double,
-        safeArea: MonitorEdgeInsets = .zero
+        safeArea: MonitorEdgeInsets = .zero,
+        phoneTopClearance: Double = 0
     ) -> MonitorBatteryRailLayout {
+        let usesCompactPhoneIndicator = usesClassicSideNotch(safeArea: safeArea)
+        let phoneIndicatorHeight =
+            usesCompactPhoneIndicator ? compactPhoneIndicatorHeight : indicatorHeight
         let requestedNotchHeight = sideNotchHeight(for: safeArea)
         let maximumNotchHeight = max(
-            0, railHeight - 2 * (indicatorHeight + notchPadding))
+            0,
+            railHeight - phoneIndicatorHeight - indicatorHeight - 2 * notchPadding
+        )
         let notchHeight = min(requestedNotchHeight, maximumNotchHeight)
         let notchCenterY = railHeight / 2
         let notchTop = notchCenterY - notchHeight / 2
         let notchBottom = notchCenterY + notchHeight / 2
         let indicatorCenterX = indicatorWidth / 2 - notchAlignmentInsetX
-        let minimumCenterY = indicatorHeight / 2
-        let maximumCenterY = max(minimumCenterY, railHeight - indicatorHeight / 2)
+        let minimumPhoneCenterY =
+            max(0, phoneTopClearance) + phoneIndicatorHeight / 2
+        let minimumCameraCenterY = indicatorHeight / 2
+        let maximumCenterY = max(minimumCameraCenterY, railHeight - indicatorHeight / 2)
         let phoneCenterY = max(
-            minimumCenterY,
-            notchTop - notchPadding - indicatorHeight / 2
+            minimumPhoneCenterY,
+            notchTop - notchPadding - phoneIndicatorHeight / 2
         )
         let cameraCenterY = min(
             maximumCenterY,
@@ -743,6 +775,7 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
         return MonitorBatteryRailLayout(
             phoneCenterX: indicatorCenterX,
             phoneCenterY: phoneCenterY,
+            phoneIndicatorHeight: phoneIndicatorHeight,
             cameraCenterX: indicatorCenterX,
             cameraCenterY: cameraCenterY,
             notchTop: notchTop,
@@ -754,11 +787,15 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
         usesClassicSideNotch(safeArea: safeArea) ? classicSideNotchHeight : sideNotchHeight
     }
 
-    /// Whether symmetric landscape safe areas identify the wider pre-Dynamic-Island notch.
+    /// Whether landscape safe-area geometry identifies a wider pre-Dynamic-Island notch.
+    /// Apple exposes no public notch-type API, so keep this deliberately narrow: classic-notch
+    /// phones occupy the 44–50pt band while Dynamic Island phones use larger side insets.
     public static func usesClassicSideNotch(safeArea: MonitorEdgeInsets) -> Bool {
         let leading = max(0, safeArea.leading)
         let trailing = max(0, safeArea.trailing)
-        return min(leading, trailing) >= 40 && abs(leading - trailing) < 4
+        let minimumInset = min(leading, trailing)
+        let maximumInset = max(leading, trailing)
+        return minimumInset >= 40 && maximumInset <= 50 && abs(leading - trailing) < 4
     }
 }
 

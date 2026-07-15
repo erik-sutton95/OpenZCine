@@ -211,6 +211,7 @@ struct LiveFeedModule: View {
     let safeArea: MonitorEdgeInsets
     let viewportWidth: Double
     let canvasOffsetX: Double
+    var horizontalDirection: MonitorHorizontalLayoutDirection = .standard
     /// Portrait mounts hand the module an exact zone-frame height. The measured height is only
     /// trustworthy in the landscape full-bleed canvas: inside a safe-area-inset context the
     /// module's own `.ignoresSafeArea()` re-expands the proposal, the reader reports the grown
@@ -231,7 +232,8 @@ struct LiveFeedModule: View {
                 let feedFrame = MonitorFeedLayout.fullBleedFrame(
                     viewportWidth: viewportWidth,
                     viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
-                    safeArea: safeArea
+                    safeArea: safeArea,
+                    horizontalDirection: horizontalDirection
                 )
                 let imageWidth = CGFloat(feedFrame.width)
                 let imageHeight = CGFloat(feedFrame.height)
@@ -741,16 +743,18 @@ extension View {
 struct BatteryRailModule: View {
     @Environment(NativeAppModel.self) private var model
     let safeArea: MonitorEdgeInsets
+    let phoneTopClearance: Double
 
     var body: some View {
         GeometryReader { proxy in
             let layout = MonitorBatteryRailLayout.fit(
                 railHeight: Double(proxy.size.height),
-                safeArea: safeArea
+                safeArea: safeArea,
+                phoneTopClearance: phoneTopClearance
             )
 
             ZStack {
-                phoneBatteryIndicator
+                phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
                     .position(x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
                 cameraBatteryIndicator
                     .position(x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
@@ -759,12 +763,13 @@ struct BatteryRailModule: View {
         }
     }
 
-    private var phoneBatteryIndicator: some View {
+    private func phoneBatteryIndicator(compact: Bool) -> some View {
         BatteryIndicator(
             percent: model.cameraState.phoneBatteryPercent,
             deviceSystemName: "iphone",
             isCamera: false,
-            isCharging: model.phoneBatteryCharging
+            isCharging: model.phoneBatteryCharging,
+            layout: compact ? .compactRail : .rail
         )
     }
 
@@ -1214,10 +1219,10 @@ struct RecordButton: View {
 }
 
 struct BatteryIndicator: View {
-    /// `.rail`: 3-row VStack for the landscape battery rail (default). `.inline`: single-row
-    /// HStack for the portrait top bar (R2).
+    /// `.rail`: 3-row landscape rail. `.compactRail`: battery + percentage between a classic
+    /// notch and lock button. `.inline`: single-row portrait/iPad presentation.
     enum Layout {
-        case rail, inline
+        case rail, compactRail, inline
     }
 
     let percent: Int
@@ -1257,6 +1262,7 @@ struct BatteryIndicator: View {
     var body: some View {
         switch layout {
         case .rail: railBody
+        case .compactRail: compactRailBody
         case .inline: inlineBody
         }
     }
@@ -1292,6 +1298,24 @@ struct BatteryIndicator: View {
             width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
             height: CGFloat(MonitorBatteryRailLayout.indicatorHeight)
         )
+    }
+
+    private var compactRailBody: some View {
+        VStack(spacing: 1) {
+            Image(systemName: batterySymbol)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(batteryTint)
+                .overlay { chargingOverlay }
+            Text(readout)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(LiveDesign.text.opacity(0.72))
+        }
+        .frame(
+            width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
+            height: CGFloat(MonitorBatteryRailLayout.compactPhoneIndicatorHeight)
+        )
+        .accessibilityLabel("iPhone battery")
+        .accessibilityValue(readout)
     }
 
     /// Portrait top-bar presentation (R2): one row, battery glyph / percent / device glyph,

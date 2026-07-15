@@ -39,7 +39,7 @@ import Testing
     #expect(MonitorFeedLayout.leadingInset(for: safeArea) == 0)
 }
 
-@Test func feedLayoutCentersInsideClassicNotchLandscapeViewport() {
+@Test func feedLayoutUsesTheFullClassicNotchSafeLane() {
     let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
     let frame = MonitorFeedLayout.fullBleedFrame(
         viewportWidth: 896,
@@ -47,10 +47,18 @@ import Testing
         safeArea: safeArea
     )
 
-    #expect(frame.x == 80)
+    #expect(frame.x == 44)
     #expect(frame.x >= safeArea.leading)
     #expect(frame.x + frame.width <= 896 - safeArea.trailing)
-    #expect(abs(frame.x + frame.width / 2 - 896 / 2) < 0.001)
+
+    let mirrored = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 896,
+        viewportHeight: 414,
+        safeArea: safeArea,
+        horizontalDirection: .mirrored
+    )
+    #expect(mirrored.x == 116)
+    #expect(mirrored.x + mirrored.width == 896 - safeArea.trailing)
 }
 
 @Test func horizontalLayoutDirectionUsesDeviceOrientationBeforeSafeAreaFallback() {
@@ -329,14 +337,14 @@ import Testing
     #expect(landscapeRight.feed.x == 0)
     #expect(landscapeLeft.feed.height == 390)
     #expect(landscapeLeft.batteryRail == landscapeRight.batteryRail)
-    // The top deck floats over the feed, so it tracks the feed's leading edge per orientation.
+    // Dynamic Island layouts retain the established fixed inset from the feed in either
+    // orientation. Only classic-notch geometry receives the lock-clearance adjustment.
     #expect(
         landscapeLeft.topInfoDeck.x
             == landscapeLeft.feed.x + MonitorLiveViewModuleLayout.topInfoDeckSideInset)
     #expect(
         landscapeRight.topInfoDeck.x
-            >= landscapeRight.lockButton.x + landscapeRight.lockButton.width
-            + MonitorLiveViewModuleLayout.topInfoDeckControlGap)
+            == landscapeRight.feed.x + MonitorLiveViewModuleLayout.topInfoDeckSideInset)
     #expect(landscapeLeft.bottomAssistTools == landscapeRight.bottomAssistTools)
     #expect(landscapeLeft.bottomCaptureSettings == landscapeRight.bottomCaptureSettings)
     #expect(landscapeLeft.rightRailControls.x > landscapeLeft.feed.x + landscapeLeft.feed.width)
@@ -471,8 +479,7 @@ import Testing
     let deckCenter = layout.topInfoDeck.x + layout.topInfoDeck.width / 2
     let feedCenter = layout.feed.x + layout.feed.width / 2
 
-    #expect(layout.feed.x == 80)
-    #expect(abs(layout.feed.x + layout.feed.width / 2 - 896 / 2) < 0.001)
+    #expect(layout.feed.x == 44)
     #expect(
         lockRight + MonitorLiveViewModuleLayout.topInfoDeckControlGap
             <= layout.topInfoDeck.x)
@@ -580,6 +587,8 @@ import Testing
 @Test func batteryRailReservesTheFullClassicIPhoneNotch() {
     let classicSafeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
     let dynamicIslandSafeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)
+    let symmetricDynamicIslandSafeArea = MonitorEdgeInsets(
+        top: 0, leading: 59, bottom: 21, trailing: 59)
     let classic = MonitorBatteryRailLayout.fit(
         railHeight: 414,
         safeArea: classicSafeArea
@@ -597,8 +606,48 @@ import Testing
             == MonitorBatteryRailLayout.sideNotchHeight)
     #expect(MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: classicSafeArea))
     #expect(!MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: dynamicIslandSafeArea))
+    #expect(
+        !MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: symmetricDynamicIslandSafeArea))
     #expect(classic.phoneBottom == classic.notchTop - MonitorBatteryRailLayout.notchPadding)
     #expect(classic.cameraTop == classic.notchBottom + MonitorBatteryRailLayout.notchPadding)
+}
+
+@Test func dynamicIslandGeometryKeepsTheEstablishedMonitorLayout() {
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 59)
+    let layout = MonitorLiveViewModuleLayout.fit(
+        viewportWidth: 874,
+        viewportHeight: 402,
+        feedSafeArea: safeArea,
+        chromeInsets: MonitorChromeLayout.insets(feedSafeArea: safeArea),
+        bottomBarHeight: 58,
+        horizontalDirection: .standard
+    )
+    let battery = MonitorBatteryRailLayout.fit(
+        railHeight: layout.batteryRail.height,
+        safeArea: safeArea,
+        phoneTopClearance: 47
+    )
+
+    #expect(layout.feed.x == safeArea.leading)
+    #expect(
+        layout.topInfoDeck.x
+            == layout.feed.x + MonitorLiveViewModuleLayout.topInfoDeckSideInset)
+    #expect(layout.bottomAssistTools.x == 16)
+    #expect(battery.phoneIndicatorHeight == MonitorBatteryRailLayout.indicatorHeight)
+}
+
+@Test func classicNotchPhoneBatterySeatsBelowTheLockCluster() {
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
+    let lockBottomWithGap = 47.0
+    let layout = MonitorBatteryRailLayout.fit(
+        railHeight: 386,
+        safeArea: safeArea,
+        phoneTopClearance: lockBottomWithGap
+    )
+
+    #expect(layout.phoneIndicatorHeight == MonitorBatteryRailLayout.compactPhoneIndicatorHeight)
+    #expect(layout.phoneTop >= lockBottomWithGap)
+    #expect(layout.phoneBottom <= layout.notchTop - MonitorBatteryRailLayout.notchPadding)
 }
 
 @Test func startupContentMarginsDoNotAddHorizontalSafeAreaGutters() {

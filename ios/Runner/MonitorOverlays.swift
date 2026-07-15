@@ -6,6 +6,7 @@ struct FeedAssistOverlayModule: View {
     let safeArea: MonitorEdgeInsets
     let viewportWidth: Double
     let canvasOffsetX: Double
+    var horizontalDirection: MonitorHorizontalLayoutDirection = .standard
     /// Suppresses the floating scope/false-colour `MovablePanel`s. Set by `MonitorShell`'s
     /// portrait branch: those panels bleed over the narrow portrait feed strip and are redundant
     /// there — `PortraitScopesStack` already shows scopes. Landscape never passes this.
@@ -17,7 +18,8 @@ struct FeedAssistOverlayModule: View {
             let feedFrame = MonitorFeedLayout.fullBleedFrame(
                 viewportWidth: viewportWidth,
                 viewportHeight: Double(proxy.size.height),
-                safeArea: safeArea
+                safeArea: safeArea,
+                horizontalDirection: horizontalDirection
             )
             let feedRect = CGRect(
                 x: CGFloat(feedFrame.x),
