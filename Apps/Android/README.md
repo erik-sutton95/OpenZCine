@@ -25,7 +25,12 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   joins the camera's `NIKON_ZR_…` network via `WifiNetworkSpecifier` + `bindProcessToNetwork`,
   key entered once and remembered in a Keystore-encrypted store) and **phone-hotspot** (the
   CAMERA joins the phone's hotspot — the phone hosts, never scans or joins; NSD discovery waits
-  for the camera). A connected session hands off to the monitor. Every wizard state is
+  for the camera). The camera-AP network step can scan the camera's Connection wizard with a
+  temporary CameraX rear-camera preview and bundled, on-device ML Kit OCR; one ephemeral transcript
+  crosses JNI to the shared Swift `CameraWiFiScreenParser`, which alone validates/corrects Nikon
+  SSID/key text. The operator reviews the result before it stages the ordinary Join action; no
+  frame, OCR text, or key is logged or persisted until a successful join writes the existing
+  Keystore-encrypted record. A connected session hands off to the monitor. Every wizard state is
   scriptable for screenshots: `adb shell am start -n com.opencapture.openzcine/.MainActivity
   --es zc.demo.pairing permissions|choose|prepare|network|discover|connecting
   --es zc.demo.pairingPath ap|hotspot` (debug builds only).

@@ -160,10 +160,16 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     implementation(libs.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui.compose)
+    // Bundled, on-device Latin OCR: the scanner must work without a Play
+    // Services model download or sending the camera's Wi-Fi key off-device.
+    implementation(libs.mlkit.text.recognition)
 
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
