@@ -920,6 +920,13 @@ fun MonitorScreen(
                 liveAudioLevels = frame.audioLevels
             }
         }
+        val railPlan =
+            landscapeSideRailPlan(
+                sideRailsVisible = sideRailsVisible,
+                recording = recording,
+                recordCommandPending = recordCommandPending,
+                recordConfirmationPending = pendingRecordTarget != null,
+            )
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
         val analysisChromeMounts =
             remember(
@@ -929,6 +936,7 @@ fun MonitorScreen(
                 isCommand,
                 assistToolbarVisible,
                 cameraValuesVisible,
+                railPlan,
             ) {
                 monitorAnalysisChromeMounts(
                     isPortrait = isPortrait,
@@ -937,6 +945,9 @@ fun MonitorScreen(
                     isCommand = isCommand,
                     assistToolbarVisible = assistToolbarVisible,
                     cameraValuesVisible = cameraValuesVisible,
+                    landscapeFullSideRails = railPlan.fullRailsVisible,
+                    landscapeSettingsRecovery = railPlan.settingsRecoveryVisible,
+                    landscapeRecordingSafety = railPlan.recordingSafetyVisible,
                 )
             }
         val analysisPanelLayout =
@@ -1256,13 +1267,6 @@ fun MonitorScreen(
                     }
                 }
 
-                val railPlan =
-                    landscapeSideRailPlan(
-                        sideRailsVisible = sideRailsVisible,
-                        recording = recording,
-                        recordCommandPending = recordCommandPending,
-                        recordConfirmationPending = pendingRecordTarget != null,
-                    )
                 if (railPlan.fullRailsVisible) {
                     // Persistent side rails: lock + authoritative batteries +
                     // record / configured DISP / media / settings.

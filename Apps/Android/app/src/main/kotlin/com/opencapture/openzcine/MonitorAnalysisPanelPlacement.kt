@@ -60,6 +60,9 @@ internal data class MonitorAnalysisChromeMounts(
     val assistStrip: Boolean,
     val assistRail: Boolean,
     val captureStrip: Boolean,
+    val landscapeFullSideRails: Boolean = false,
+    val landscapeSettingsRecovery: Boolean = false,
+    val landscapeRecordingSafety: Boolean = false,
 )
 
 /** Mirrors the landscape and portrait chrome mounting conditions without inferring from mode names. */
@@ -70,8 +73,20 @@ internal fun monitorAnalysisChromeMounts(
     isCommand: Boolean,
     assistToolbarVisible: Boolean,
     cameraValuesVisible: Boolean,
+    landscapeFullSideRails: Boolean = false,
+    landscapeSettingsRecovery: Boolean = false,
+    landscapeRecordingSafety: Boolean = false,
 ): MonitorAnalysisChromeMounts {
-    if (isCommand) return MonitorAnalysisChromeMounts(false, false, false)
+    val sideMounts =
+        MonitorAnalysisChromeMounts(
+            assistStrip = false,
+            assistRail = false,
+            captureStrip = false,
+            landscapeFullSideRails = !isPortrait && landscapeFullSideRails,
+            landscapeSettingsRecovery = !isPortrait && landscapeSettingsRecovery,
+            landscapeRecordingSafety = !isPortrait && landscapeRecordingSafety,
+        )
+    if (isCommand) return sideMounts
     if (isPortrait) {
         return if (isPortraitFill) {
             MonitorAnalysisChromeMounts(
@@ -91,6 +106,9 @@ internal fun monitorAnalysisChromeMounts(
         assistStrip = !isClean && assistToolbarVisible,
         assistRail = false,
         captureStrip = !isClean && cameraValuesVisible,
+        landscapeFullSideRails = sideMounts.landscapeFullSideRails,
+        landscapeSettingsRecovery = sideMounts.landscapeSettingsRecovery,
+        landscapeRecordingSafety = sideMounts.landscapeRecordingSafety,
     )
 }
 
@@ -180,18 +198,27 @@ internal fun monitorAnalysisPanelLayout(
         }
         bottom = min(bottom, zones.systemCluster.y - PANEL_CONTROL_CLEARANCE_DP)
     } else {
-        left =
-            maxOf(
-                left,
-                zones.lock.x + zones.lock.width + PANEL_CONTROL_CLEARANCE_DP,
-                zones.batteryCluster?.let { it.x + it.width + PANEL_CONTROL_CLEARANCE_DP }
-                    ?: left,
-            )
-        right =
-            listOf(zones.disp, zones.record, zones.media, zones.settings)
-                .minOfOrNull { it.x - PANEL_CONTROL_CLEARANCE_DP }
-                ?.let { min(right, it) }
-                ?: right
+        if (chromeMounts.landscapeFullSideRails) {
+            left =
+                maxOf(
+                    left,
+                    zones.lock.x + zones.lock.width + PANEL_CONTROL_CLEARANCE_DP,
+                    zones.batteryCluster?.let { it.x + it.width + PANEL_CONTROL_CLEARANCE_DP }
+                        ?: left,
+                )
+            right =
+                listOf(zones.disp, zones.record, zones.media, zones.settings)
+                    .minOfOrNull { it.x - PANEL_CONTROL_CLEARANCE_DP }
+                    ?.let { min(right, it) }
+                    ?: right
+        } else {
+            if (chromeMounts.landscapeSettingsRecovery) {
+                right = min(right, zones.settings.x - PANEL_CONTROL_CLEARANCE_DP)
+            }
+            if (chromeMounts.landscapeRecordingSafety) {
+                right = min(right, zones.record.x - PANEL_CONTROL_CLEARANCE_DP)
+            }
+        }
         if (chromeMounts.assistStrip) {
             zones.assistStrip?.let { strip ->
                 bottom = min(bottom, strip.y - PANEL_CONTROL_CLEARANCE_DP)

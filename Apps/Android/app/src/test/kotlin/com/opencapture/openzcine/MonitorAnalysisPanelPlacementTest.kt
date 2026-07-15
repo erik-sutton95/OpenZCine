@@ -38,6 +38,53 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
+    fun `hidden landscape rails release only space without mounted recovery controls`() {
+        val zones = landscapeZones()
+        val hiddenChrome =
+            monitorAnalysisChromeMounts(
+                isPortrait = false,
+                isPortraitFill = false,
+                isClean = false,
+                isCommand = false,
+                assistToolbarVisible = true,
+                cameraValuesVisible = true,
+                landscapeSettingsRecovery = true,
+            )
+        val hiddenRecordingChrome =
+            hiddenChrome.copy(landscapeRecordingSafety = true)
+        val hiddenLayout =
+            requireNotNull(
+                monitorAnalysisPanelLayout(
+                    zones = zones,
+                    physicalViewport = LANDSCAPE_VIEWPORT,
+                    isPortrait = false,
+                    isPortraitFill = false,
+                    statusBarVisible = true,
+                    chromeMounts = hiddenChrome,
+                ),
+            )
+        val hiddenRecordingLayout =
+            requireNotNull(
+                monitorAnalysisPanelLayout(
+                    zones = zones,
+                    physicalViewport = LANDSCAPE_VIEWPORT,
+                    isPortrait = false,
+                    isPortraitFill = false,
+                    statusBarVisible = true,
+                    chromeMounts = hiddenRecordingChrome,
+                ),
+            )
+
+        assertEquals(ZoneFrame(0f, 62f, 774f, 251f), hiddenLayout.safeBounds)
+        assertEquals(ZoneFrame(0f, 62f, 768f, 251f), hiddenRecordingLayout.safeBounds)
+        assertEquals(zones.settings.x - 8f, hiddenLayout.safeBounds.x + hiddenLayout.safeBounds.width)
+        assertEquals(
+            zones.record.x - 8f,
+            hiddenRecordingLayout.safeBounds.x + hiddenRecordingLayout.safeBounds.width,
+        )
+    }
+
+    @Test
     fun `portrait fill clears top capture system and worst case expanded assist rail`() {
         val zones = portraitZones()
         val layout =
@@ -618,7 +665,13 @@ class MonitorAnalysisPanelPlacementTest {
     private companion object {
         val LANDSCAPE_VIEWPORT = ZoneFrame(0f, 0f, 848f, 393f)
         val PORTRAIT_VIEWPORT = ZoneFrame(0f, 0f, 400f, 800f)
-        val LANDSCAPE_LIVE_CHROME = MonitorAnalysisChromeMounts(true, false, true)
+        val LANDSCAPE_LIVE_CHROME =
+            MonitorAnalysisChromeMounts(
+                assistStrip = true,
+                assistRail = false,
+                captureStrip = true,
+                landscapeFullSideRails = true,
+            )
         val PORTRAIT_FILL_CHROME = MonitorAnalysisChromeMounts(false, true, true)
         val PORTRAIT_FIT_CHROME = MonitorAnalysisChromeMounts(true, false, false)
     }
