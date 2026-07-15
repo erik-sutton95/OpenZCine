@@ -165,7 +165,16 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   and a transfer-backed
   Android still-photo viewer (JPEG/PNG progressive preview; explicit thumbnail fallback for
   unsupported HEIF/RAW decoders). Android playback-assist parity is tracked by OPE-69.
-- **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
+- **Android Frame.io delivery options and camera-AP hop parity** (OPE-64, in progress): Adobe IMS
+  clip delivery
+  accepts only finalized, approved cache artifacts; optionally bakes the selected approved monitor
+  LUT into a transient MP4 without changing the original; and records a bounded, secret-free
+  app-private metadata sidecar after confirmed upload. A real saved camera-AP session can leave only
+  after a second explicit operator confirmation, retains the delivery context while waiting for
+  validated internet, and rejoins the exact saved profile after completion, cancellation, or timeout.
+  Rejoin is claimed only after fresh protocol-connected evidence. Fixtures cannot use the hop.
+  **[VERIFY-ON-HW]** Adobe sign-in/upload, Media3 LUT export, all delivery-dialog edges, and the real
+  Nikon leave/rejoin path still require configured Android hardware validation.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
 - **Wear OS companion** (OPE-67, in progress) — foreground-only phone-mediated wrist monitor and
   guarded record relay. It shares the canonical iOS watch v1 payload contract, actual Android

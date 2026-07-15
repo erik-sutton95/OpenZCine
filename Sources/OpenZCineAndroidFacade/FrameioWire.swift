@@ -67,9 +67,12 @@ public enum AndroidFrameioWire {
         redirectURI: String, callbackURI: String, expectedState: String
     ) -> String? {
         guard
-            let expected = URL(string: redirectURI),
+            validatedRedirectURI(redirectURI) != nil,
             let callback = URL(string: callbackURI),
-            redirectMatches(expected: expected, callback: callback)
+            redirectMatches(
+                expectedURI: redirectURI,
+                callbackURI: callbackURI,
+                callback: callback)
         else { return nil }
         return try? FrameioOAuth.parseRedirect(callback, expectedState: expectedState)
     }
@@ -183,10 +186,17 @@ public enum AndroidFrameioWire {
         -> FrameioConfiguration?
     {
         let trimmedClientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedRedirect = redirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
         guard
             !trimmedClientID.isEmpty,
             trimmedClientID == clientID,
+            validatedRedirectURI(redirectURI) != nil
+        else { return nil }
+        return FrameioConfiguration(clientID: clientID, redirectURI: redirectURI)
+    }
+
+    private static func validatedRedirectURI(_ redirectURI: String) -> URL? {
+        let trimmedRedirect = redirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
             !trimmedRedirect.isEmpty,
             trimmedRedirect == redirectURI,
             let redirect = URL(string: redirectURI),
@@ -199,14 +209,21 @@ public enum AndroidFrameioWire {
             redirect.query == nil,
             redirect.fragment == nil
         else { return nil }
-        return FrameioConfiguration(clientID: clientID, redirectURI: redirectURI)
+        return redirect
     }
 
-    private static func redirectMatches(expected: URL, callback: URL) -> Bool {
-        expected.scheme?.caseInsensitiveCompare(callback.scheme ?? "") == .orderedSame
-            && expected.host?.caseInsensitiveCompare(callback.host ?? "") == .orderedSame
-            && expected.port == callback.port
-            && expected.path == callback.path
+    private static func redirectMatches(
+        expectedURI: String,
+        callbackURI: String,
+        callback: URL
+    ) -> Bool {
+        guard
+            callback.user == nil,
+            callback.password == nil,
+            callback.fragment == nil,
+            let queryStart = callbackURI.firstIndex(of: "?")
+        else { return false }
+        return callbackURI[..<queryStart] == expectedURI[...]
     }
 
     private static func canonical<Value: Codable & Sendable>(_ type: Value.Type, from data: Data)

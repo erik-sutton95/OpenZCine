@@ -1,5 +1,8 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
+import com.opencapture.openzcine.frameio.FrameioDeliveryState
+import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
@@ -9,9 +12,144 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.test.runTest
 
 /** JVM coverage for the persisted, core-authorized Android library state. */
 class MediaLibraryStateTest {
+    @Test
+    fun `intentional Frameio hop retains the camera library until rejoin resolves`() {
+        val retained =
+            listOf(
+                FrameioInternetHopState.LeavingCamera,
+                FrameioInternetHopState.WaitingForInternet,
+                FrameioInternetHopState.Online,
+                FrameioInternetHopState.RejoiningCamera,
+            )
+        retained.forEach { state ->
+            assertTrue(
+                frameioHopKeepsCameraLibraryMounted(
+                    state,
+                    rejoinedConnectionObserved = false,
+                ),
+            )
+        }
+
+        assertFalse(
+            frameioHopKeepsCameraLibraryMounted(
+                FrameioInternetHopState.Idle,
+                rejoinedConnectionObserved = false,
+            ),
+        )
+        assertTrue(
+            frameioHopKeepsCameraLibraryMounted(
+                rejoinedState(),
+                rejoinedConnectionObserved = false,
+            ),
+        )
+        assertFalse(
+            frameioHopKeepsCameraLibraryMounted(
+                rejoinedState(),
+                rejoinedConnectionObserved = true,
+            ),
+        )
+        assertFalse(
+            frameioHopKeepsCameraLibraryMounted(
+                FrameioInternetHopState.Failed("failed"),
+                rejoinedConnectionObserved = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `Frameio dialog cannot close while the camera network handoff is unsettled`() {
+        val blocked =
+            listOf(
+                FrameioInternetHopState.LeavingCamera,
+                FrameioInternetHopState.WaitingForInternet,
+                FrameioInternetHopState.RejoiningCamera,
+            )
+        blocked.forEach { state -> assertTrue(frameioHopBlocksDismissal(state)) }
+
+        assertFalse(frameioHopBlocksDismissal(FrameioInternetHopState.Idle))
+        assertFalse(frameioHopBlocksDismissal(FrameioInternetHopState.Online))
+        assertFalse(frameioHopBlocksDismissal(rejoinedState()))
+        assertFalse(frameioHopBlocksDismissal(FrameioInternetHopState.Failed("failed")))
+    }
+
+    @Test
+    fun `failed Frameio upload cannot hide a failed camera rejoin`() {
+        val summary =
+            frameioDeliverySummary(
+                state = FrameioDeliveryState.Failed("Upload failed"),
+                internetHopState = FrameioInternetHopState.Failed("Saved profile did not reconnect"),
+                errorMessage = null,
+                skippedBeforeUpload = 0,
+            )
+
+        assertTrue(summary.contains("Upload failed"))
+        assertTrue(summary.contains("camera rejoin not verified"))
+        assertTrue(summary.contains("Saved profile did not reconnect"))
+    }
+
+    @Test
+    fun `failed Frameio preparation cannot hide a later failed camera rejoin`() {
+        val summary =
+            frameioPreparationMessageAfterRejoin(
+                message = "Couldn't prepare selected media.",
+                internetHopState =
+                    FrameioInternetHopState.Failed("Saved profile did not reconnect"),
+            )
+
+        assertNotNull(summary)
+        assertTrue(summary.contains("Couldn't prepare selected media"))
+        assertTrue(summary.contains("Camera rejoin not verified"))
+        assertTrue(summary.contains("Saved profile did not reconnect"))
+    }
+
+    @Test
+    fun `confirmed Frameio delivery reports orphaned temporary exports without claiming failure`() {
+        val summary =
+            frameioDeliverySummary(
+                state =
+                    FrameioDeliveryState.Completed(
+                        uploadedCount = 1,
+                        failedCount = 0,
+                        cleanupFailureCount = 1,
+                    ),
+                internetHopState = rejoinedState(),
+                errorMessage = null,
+                skippedBeforeUpload = 0,
+            )
+
+        assertTrue(summary.contains("Delivered 1 cached item"))
+        assertTrue(summary.contains("1 temporary export not removed"))
+        assertTrue(summary.contains("camera rejoined"))
+    }
+
+    @Test
+    fun `Frameio media preparation cleanup ends an active hop before returning`() = runTest {
+        var ended = false
+
+        endActiveFrameioHopAfterMediaJob(
+            isActive = { true },
+            endHop = { ended = true },
+        )
+
+        assertTrue(ended)
+    }
+
+    @Test
+    fun `Frameio media preparation cleanup skips a hop already ended by delivery`() = runTest {
+        var calls = 0
+
+        endActiveFrameioHopAfterMediaJob(
+            isActive = { false },
+            endHop = { calls += 1 },
+        )
+
+        assertEquals(0, calls)
+    }
+
     @Test
     fun `camera listing persists core wire records without reclassifying filenames`() {
         val preferences = MemoryPreferences()
@@ -192,6 +330,11 @@ class MediaLibraryStateTest {
                 } else {
                     null
                 },
+        )
+
+    private fun rejoinedState(): FrameioInternetHopState.Rejoined =
+        FrameioInternetHopState.Rejoined(
+            FrameioCameraRejoinEvidence("Nikon ZR", "ZR", verifiedAtEpochMillis = 1L),
         )
 
     private fun withStore(block: (Path, MediaCacheStore) -> Unit) {

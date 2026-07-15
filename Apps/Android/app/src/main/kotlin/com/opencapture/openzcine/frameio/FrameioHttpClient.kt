@@ -2,7 +2,9 @@ package com.opencapture.openzcine.frameio
 
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -10,10 +12,18 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.HttpsURLConnection
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Bounded response returned by the Android HTTPS transport adapter. */
@@ -50,7 +60,17 @@ internal interface FrameioHttpClient {
  * HTTPS pre-signed upload URLs. It never logs authorization headers, form
  * data, callback codes, tokens, or media paths.
  */
-internal object AndroidFrameioHttpClient : FrameioHttpClient {
+internal object AndroidFrameioHttpClient : FrameioHttpClient by UrlConnectionFrameioHttpClient()
+
+/** Injectable production transport, including cancellation-safe upload write deadlines. */
+internal class UrlConnectionFrameioHttpClient(
+    private val connectionFactory: (String) -> HttpsURLConnection = ::openFrameioHTTPSConnection,
+    private val uploadWriteTimeoutMillis: Long = UPLOAD_WRITE_TIMEOUT_MILLIS,
+) : FrameioHttpClient {
+    init {
+        require(uploadWriteTimeoutMillis > 0) { "Upload write timeout must be positive." }
+    }
+
     override suspend fun execute(
         request: FrameioHttpRequest,
         bearerToken: String?,
@@ -59,26 +79,36 @@ internal object AndroidFrameioHttpClient : FrameioHttpClient {
         withContext(Dispatchers.IO) {
             val coroutineContext = currentCoroutineContext()
             coroutineContext.ensureActive()
-            val connection = openHTTPS(request.url)
+            val connection = connectionFactory(request.url)
             try {
-                connection.requestMethod = request.method
-                connection.setRequestProperty("Accept", "application/json")
-                bearerToken?.let { token ->
-                    require(token.isSafeHeaderValue()) { "Frame.io requires a safe bearer token." }
-                    connection.setRequestProperty("Authorization", "Bearer $token")
+                connection.disconnectOnCancellation {
+                    connection.instanceFollowRedirects = false
+                    connection.requestMethod = request.method
+                    connection.setRequestProperty("Accept", "application/json")
+                    bearerToken?.let { token ->
+                        require(token.isSafeHeaderValue()) { "Frame.io requires a safe bearer token." }
+                        connection.setRequestProperty("Authorization", "Bearer $token")
+                    }
+                    request.body?.let { body ->
+                        connection.doOutput = true
+                        connection.setRequestProperty(
+                            "Content-Type",
+                            contentType ?: "application/json; charset=utf-8",
+                        )
+                        val bytes = body.toByteArray(Charsets.UTF_8)
+                        connection.setFixedLengthStreamingMode(bytes.size)
+                        useOutputStreamWithDeadlines(connection) { stream ->
+                            runWithWriteDeadline(connection) {
+                                stream.write(bytes, 0, bytes.size)
+                            }
+                        }
+                    }
+                    coroutineContext.ensureActive()
+                    FrameioHttpResponse(connection.responseCode, connection.readBoundedResponse())
                 }
-                request.body?.let { body ->
-                    connection.doOutput = true
-                    connection.setRequestProperty(
-                        "Content-Type",
-                        contentType ?: "application/json; charset=utf-8",
-                    )
-                    val bytes = body.toByteArray(Charsets.UTF_8)
-                    connection.setFixedLengthStreamingMode(bytes.size)
-                    connection.outputStream.use { stream -> stream.write(bytes) }
-                }
-                coroutineContext.ensureActive()
-                FrameioHttpResponse(connection.responseCode, connection.readBoundedResponse())
+            } catch (error: IOException) {
+                currentCoroutineContext().ensureActive()
+                throw error
             } finally {
                 connection.disconnect()
             }
@@ -107,49 +137,107 @@ internal object AndroidFrameioHttpClient : FrameioHttpClient {
             }
             require(contentType.isSafeMediaType()) { "Frame.io requires a safe media type." }
 
-            val connection = openHTTPS(uploadURL)
+            val connection = connectionFactory(uploadURL)
             try {
-                connection.requestMethod = "PUT"
-                connection.doOutput = true
-                connection.setRequestProperty("x-amz-acl", "private")
-                connection.setRequestProperty("Content-Type", contentType)
-                connection.setFixedLengthStreamingMode(byteCount)
-                FileChannel.open(sourcePath, StandardOpenOption.READ).use { channel ->
-                    channel.position(offset)
-                    connection.outputStream.use { output ->
-                        val buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES)
-                        var remaining = byteCount
-                        var sent = 0L
-                        while (remaining > 0) {
-                            coroutineContext.ensureActive()
-                            buffer.clear()
-                            buffer.limit(minOf(buffer.capacity().toLong(), remaining).toInt())
-                            val count = channel.read(buffer)
-                            if (count <= 0) throw IOException("Approved upload source ended early.")
-                            output.write(buffer.array(), 0, count)
-                            remaining -= count.toLong()
-                            sent += count.toLong()
-                            onBytesSent(sent)
+                connection.disconnectOnCancellation {
+                    connection.instanceFollowRedirects = false
+                    connection.requestMethod = "PUT"
+                    connection.doOutput = true
+                    connection.setRequestProperty("x-amz-acl", "private")
+                    connection.setRequestProperty("Content-Type", contentType)
+                    connection.setFixedLengthStreamingMode(byteCount)
+                    FileChannel.open(
+                        sourcePath,
+                        StandardOpenOption.READ,
+                        LinkOption.NOFOLLOW_LINKS,
+                    ).use { channel ->
+                        channel.position(offset)
+                        useOutputStreamWithDeadlines(connection) { output ->
+                            val buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES)
+                            var remaining = byteCount
+                            var sent = 0L
+                            while (remaining > 0) {
+                                coroutineContext.ensureActive()
+                                buffer.clear()
+                                buffer.limit(minOf(buffer.capacity().toLong(), remaining).toInt())
+                                val count = channel.read(buffer)
+                                if (count <= 0) throw IOException("Approved upload source ended early.")
+                                runWithWriteDeadline(connection) {
+                                    output.write(buffer.array(), 0, count)
+                                }
+                                remaining -= count.toLong()
+                                sent += count.toLong()
+                                onBytesSent(sent)
+                            }
                         }
                     }
+                    coroutineContext.ensureActive()
+                    FrameioHttpResponse(connection.responseCode, connection.readBoundedResponse())
                 }
-                coroutineContext.ensureActive()
-                FrameioHttpResponse(connection.responseCode, connection.readBoundedResponse())
+            } catch (error: IOException) {
+                currentCoroutineContext().ensureActive()
+                throw error
             } finally {
                 connection.disconnect()
             }
         }
 
-    private fun openHTTPS(value: String): HttpsURLConnection {
-        require(value.isHTTPS()) { "Frame.io requires an absolute HTTPS URL without user info or fragments." }
-        val url = URI(value).toURL()
-        return (url.openConnection() as? HttpsURLConnection)
-            ?.apply {
-                connectTimeout = REQUEST_TIMEOUT_MILLIS
-                readTimeout = REQUEST_TIMEOUT_MILLIS
-                instanceFollowRedirects = false
+    private suspend fun useOutputStreamWithDeadlines(
+        connection: HttpsURLConnection,
+        block: suspend (OutputStream) -> Unit,
+    ) {
+        val output = connection.outputStream
+        var primaryFailure: Throwable? = null
+        try {
+            block(output)
+        } catch (error: Throwable) {
+            primaryFailure = error
+        }
+        val closeFailure =
+            try {
+                withContext(NonCancellable) {
+                    runWithWriteDeadline(connection) {
+                        if (primaryFailure !is kotlinx.coroutines.CancellationException) {
+                            output.flush()
+                        }
+                        output.close()
+                    }
+                }
+                null
+            } catch (error: Throwable) {
+                error
             }
-            ?: throw IOException("Frame.io URL did not open an HTTPS connection.")
+        primaryFailure?.let { failure ->
+            closeFailure?.let(failure::addSuppressed)
+            throw failure
+        }
+        closeFailure?.let { throw it }
+    }
+
+    private suspend fun runWithWriteDeadline(
+        connection: HttpsURLConnection,
+        block: () -> Unit,
+    ) = coroutineScope {
+        val timedOut = AtomicBoolean(false)
+        val timeoutJob =
+            launch(Dispatchers.Default) {
+                delay(uploadWriteTimeoutMillis)
+                timedOut.set(true)
+                connection.disconnect()
+            }
+        var writeFailure: Throwable? = null
+        try {
+            block()
+        } catch (error: Throwable) {
+            writeFailure = error
+        } finally {
+            withContext(NonCancellable) { timeoutJob.cancelAndJoin() }
+        }
+        currentCoroutineContext().ensureActive()
+        if (timedOut.get()) {
+            throw SocketTimeoutException("Frame.io stopped after a stalled network write.")
+        }
+        writeFailure?.let { error -> throw error }
     }
 
     private fun HttpURLConnection.readBoundedResponse(): String {
@@ -171,7 +259,42 @@ internal object AndroidFrameioHttpClient : FrameioHttpClient {
         return output.toString(Charsets.UTF_8.name())
     }
 
-    private const val REQUEST_TIMEOUT_MILLIS = 20_000
-    private const val COPY_BUFFER_BYTES = 128 * 1024
-    private const val MAXIMUM_RESPONSE_BYTES = 1_048_576
+    private companion object {
+        const val UPLOAD_WRITE_TIMEOUT_MILLIS = 20_000L
+        const val COPY_BUFFER_BYTES = 128 * 1024
+        const val MAXIMUM_RESPONSE_BYTES = 1_048_576
+    }
 }
+
+private suspend fun <T> HttpsURLConnection.disconnectOnCancellation(
+    block: suspend () -> T,
+): T = coroutineScope {
+    val completedNormally = AtomicBoolean(false)
+    val watcher =
+        launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                if (!completedNormally.get()) this@disconnectOnCancellation.disconnect()
+            }
+        }
+    try {
+        block().also { completedNormally.set(true) }
+    } finally {
+        withContext(NonCancellable) { watcher.cancelAndJoin() }
+    }
+}
+
+private fun openFrameioHTTPSConnection(value: String): HttpsURLConnection {
+    require(value.isHTTPS()) { "Frame.io requires an absolute HTTPS URL without user info or fragments." }
+    val url = URI(value).toURL()
+    return (url.openConnection() as? HttpsURLConnection)
+        ?.apply {
+            connectTimeout = REQUEST_TIMEOUT_MILLIS
+            readTimeout = REQUEST_TIMEOUT_MILLIS
+            instanceFollowRedirects = false
+        }
+        ?: throw IOException("Frame.io URL did not open an HTTPS connection.")
+}
+
+private const val REQUEST_TIMEOUT_MILLIS = 20_000

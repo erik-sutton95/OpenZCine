@@ -41,6 +41,7 @@ import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.media.MediaBrowseScreen
@@ -143,7 +144,8 @@ class MainActivity : ComponentActivity() {
                             applicationContext.noBackupFilesDir.resolve("media-cache").toPath(),
                         )
                     }
-                val frameioController = remember { frameioDeliveryController(applicationContext) }
+                val frameioController =
+                    remember { frameioDeliveryController(applicationContext, lutLibrary) }
                 val frameioRedirect by frameioRedirectCallback.collectAsState()
                 LaunchedEffect(frameioController, frameioRedirect) {
                     frameioRedirect?.let { callback ->
@@ -341,6 +343,20 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         val monitorLinkHealth = remember(active) { AndroidLinkHealthMonitor() }
+                        val frameioCameraHop =
+                            remember(active, activeSavedCamera, pairingEnvironment, pairingScript, demo) {
+                                AndroidFrameioCameraApHop(
+                                    activeSession = active,
+                                    savedCamera = activeSavedCamera,
+                                    environment = pairingEnvironment,
+                                    fixtureSession = pairingScript != null || demo?.second != null,
+                                    onReconnected = ::acceptPairedCamera,
+                                )
+                            }
+                        DisposableEffect(frameioController, frameioCameraHop) {
+                            frameioController.attachCameraHop(frameioCameraHop)
+                            onDispose { frameioController.attachCameraHop(null) }
+                        }
                         val disconnectToSavedCameraHome: (Boolean) -> Unit = { reconnect ->
                             val exitingSession = active
                             val reconnectID = activeSavedCamera?.id
@@ -367,15 +383,21 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+                        // Keep the library identity stable while a consented Frame.io hop
+                        // disconnects this exact session. Re-keying it to "camera" here would
+                        // discard the selected clips and project context before upload.
                         val cameraID =
-                            (currentSessionState as? CameraSessionState.Connected)
-                                ?.identity
-                                ?.let { identity ->
-                                    identity.serialNumber.ifBlank {
-                                        "${identity.model}:${identity.name}"
+                            remember(active, activeSavedCamera) {
+                                (active.state.value as? CameraSessionState.Connected)
+                                    ?.identity
+                                    ?.let { identity ->
+                                        identity.serialNumber.ifBlank {
+                                            "${identity.model}:${identity.name}"
+                                        }
                                     }
-                                }
-                                ?: "camera"
+                                    ?: activeSavedCamera?.host
+                                    ?: "camera"
+                            }
                         Box {
                             MonitorScreen(
                                 active,
@@ -435,6 +457,7 @@ class MainActivity : ComponentActivity() {
                                         operatorSettings = operatorSettings,
                                         lutLibrary = lutLibrary,
                                         frameioController = frameioController,
+                                        selectedLut = assist.selectedLut,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         galleryFailureInjection =
                                             DemoHarness.galleryFailureInjection(intent),

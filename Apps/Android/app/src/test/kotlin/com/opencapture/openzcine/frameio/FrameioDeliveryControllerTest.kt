@@ -9,12 +9,16 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 
@@ -265,6 +269,329 @@ class FrameioDeliveryControllerTest {
         }
     }
 
+    @Test
+    fun `delivery never leaves a camera access point without explicit hop consent`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("C0005.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val http = FakeHttp()
+            val hop = FakeCameraHop()
+            val controller =
+                connectedController(
+                    readyRoot = readyRoot,
+                    http = http,
+                    reachability = FixedReachability(FrameioNetworkState.CAMERA_ACCESS_POINT),
+                )
+            controller.attachCameraHop(hop)
+
+            controller.deliver(listOf(FrameioDeliveryArtifact(StagedMediaShare(source, "C0005.MOV", "video/*"), 4)))
+
+            assertIs<FrameioDeliveryState.Failed>(controller.deliveryState)
+            assertEquals(0, hop.leaveCalls)
+            assertEquals(0, http.uploadCalls)
+            assertContains(controller.errorMessage.orEmpty(), "without your approval")
+        }
+    }
+
+    @Test
+    fun `consented hop uploads then reports rejoin only with connected evidence`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("C0006.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val reachability = MutableReachability(FrameioNetworkState.CAMERA_ACCESS_POINT)
+            val evidence = FrameioCameraRejoinEvidence("Nikon ZR", "ZR", 123_000L)
+            val hop =
+                FakeCameraHop(
+                    onLeave = { reachability.value = FrameioNetworkState.ONLINE },
+                    onRejoin = {
+                        reachability.value = FrameioNetworkState.CAMERA_ACCESS_POINT
+                        evidence
+                    },
+                )
+            val controller = connectedController(readyRoot, reachability = reachability)
+            controller.attachCameraHop(hop)
+
+            assertTrue(controller.beginInternetHop())
+            assertIs<FrameioInternetHopState.Online>(controller.internetHopState)
+
+            controller.deliver(listOf(FrameioDeliveryArtifact(StagedMediaShare(source, "C0006.MOV", "video/*"), 4)))
+
+            assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            val rejoined = assertIs<FrameioInternetHopState.Rejoined>(controller.internetHopState)
+            assertEquals(evidence, rejoined.evidence)
+            assertEquals(1, hop.leaveCalls)
+            assertEquals(1, hop.rejoinCalls)
+            assertFalse(controller.isInternetHopActive)
+        }
+    }
+
+    @Test
+    fun `concurrent rejoin callers share one camera attempt and result`() = runTest {
+        withReadyRoot { readyRoot ->
+            val reachability = MutableReachability(FrameioNetworkState.CAMERA_ACCESS_POINT)
+            val rejoinStarted = CompletableDeferred<Unit>()
+            val allowRejoin = CompletableDeferred<Unit>()
+            val evidence = FrameioCameraRejoinEvidence("Nikon ZR", "ZR", 123_500L)
+            val hop =
+                FakeCameraHop(
+                    onLeave = { reachability.value = FrameioNetworkState.ONLINE },
+                    onRejoin = {
+                        rejoinStarted.complete(Unit)
+                        allowRejoin.await()
+                        reachability.value = FrameioNetworkState.CAMERA_ACCESS_POINT
+                        evidence
+                    },
+                )
+            val controller = connectedController(readyRoot, reachability = reachability)
+            controller.attachCameraHop(hop)
+
+            assertTrue(controller.beginInternetHop())
+            val first = async { controller.endInternetHop() }
+            rejoinStarted.await()
+            val second = async { controller.endInternetHop() }
+            assertTrue(controller.isInternetHopActive)
+            allowRejoin.complete(Unit)
+
+            assertTrue(first.await())
+            assertTrue(second.await())
+            assertEquals(1, hop.rejoinCalls)
+            assertEquals(
+                evidence,
+                assertIs<FrameioInternetHopState.Rejoined>(controller.internetHopState).evidence,
+            )
+            assertFalse(controller.isInternetHopActive)
+        }
+    }
+
+    @Test
+    fun `concurrent failed rejoin callers share one attempt and failed result`() = runTest {
+        withReadyRoot { readyRoot ->
+            val reachability = MutableReachability(FrameioNetworkState.CAMERA_ACCESS_POINT)
+            val rejoinStarted = CompletableDeferred<Unit>()
+            val allowRejoin = CompletableDeferred<Unit>()
+            val hop =
+                FakeCameraHop(
+                    onLeave = { reachability.value = FrameioNetworkState.ONLINE },
+                    onRejoin = {
+                        rejoinStarted.complete(Unit)
+                        allowRejoin.await()
+                        null
+                    },
+                )
+            val controller = connectedController(readyRoot, reachability = reachability)
+            controller.attachCameraHop(hop)
+
+            assertTrue(controller.beginInternetHop())
+            val first = async { controller.endInternetHop() }
+            rejoinStarted.await()
+            val second = async { controller.endInternetHop() }
+            allowRejoin.complete(Unit)
+
+            assertFalse(first.await())
+            assertFalse(second.await())
+            assertEquals(1, hop.rejoinCalls)
+            assertIs<FrameioInternetHopState.Failed>(controller.internetHopState)
+            assertFalse(controller.isInternetHopActive)
+        }
+    }
+
+    @Test
+    fun `internet timeout rejoins the camera and keeps the timeout truthful`() = runTest {
+        val reachability = MutableReachability(FrameioNetworkState.CAMERA_ACCESS_POINT)
+        val evidence = FrameioCameraRejoinEvidence("Nikon ZR", "ZR", 124_000L)
+        val hop =
+            FakeCameraHop(
+                onLeave = { reachability.value = FrameioNetworkState.OFFLINE },
+                onRejoin = {
+                    reachability.value = FrameioNetworkState.CAMERA_ACCESS_POINT
+                    evidence
+                },
+            )
+        val controller =
+            controller(
+                reachability = reachability,
+                internetWaitPoll = {},
+                internetWaitAttempts = 2,
+            )
+        controller.attachCameraHop(hop)
+
+        assertFalse(controller.beginInternetHop())
+
+        assertEquals(1, hop.leaveCalls)
+        assertEquals(1, hop.rejoinCalls)
+        assertFalse(controller.isInternetHopActive)
+        assertEquals(evidence, assertIs<FrameioInternetHopState.Rejoined>(controller.internetHopState).evidence)
+        assertContains(controller.errorMessage.orEmpty(), "validated internet route")
+    }
+
+    @Test
+    fun `cancelled internet wait still rejoins the camera`() = runTest {
+        val reachability = MutableReachability(FrameioNetworkState.CAMERA_ACCESS_POINT)
+        val hop =
+            FakeCameraHop(
+                onLeave = { reachability.value = FrameioNetworkState.OFFLINE },
+                onRejoin = {
+                    reachability.value = FrameioNetworkState.CAMERA_ACCESS_POINT
+                    FrameioCameraRejoinEvidence("Nikon ZR", "ZR", 125_000L)
+                },
+            )
+        val controller =
+            controller(
+                reachability = reachability,
+                internetWaitPoll = { throw kotlinx.coroutines.CancellationException("unit cancel") },
+            )
+        controller.attachCameraHop(hop)
+
+        assertFailsWith<kotlinx.coroutines.CancellationException> { controller.beginInternetHop() }
+
+        assertEquals(1, hop.leaveCalls)
+        assertEquals(1, hop.rejoinCalls)
+        assertFalse(controller.isInternetHopActive)
+        assertIs<FrameioInternetHopState.Rejoined>(controller.internetHopState)
+    }
+
+    @Test
+    fun `upload success does not claim a camera rejoin when evidence is absent`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("C0007.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val reachability = MutableReachability(FrameioNetworkState.CAMERA_ACCESS_POINT)
+            val hop =
+                FakeCameraHop(
+                    onLeave = { reachability.value = FrameioNetworkState.ONLINE },
+                    onRejoin = { null },
+                )
+            val controller = connectedController(readyRoot, reachability = reachability)
+            controller.attachCameraHop(hop)
+
+            assertTrue(controller.beginInternetHop())
+            controller.deliver(listOf(FrameioDeliveryArtifact(StagedMediaShare(source, "C0007.MOV", "video/*"), 4)))
+
+            assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertIs<FrameioInternetHopState.Failed>(controller.internetHopState)
+            assertContains(controller.errorMessage.orEmpty(), "could not verify")
+        }
+    }
+
+    @Test
+    fun `fixture hop is unavailable and never releases a network`() = runTest {
+        val controller =
+            controller(
+                reachability = FixedReachability(FrameioNetworkState.CAMERA_ACCESS_POINT),
+            )
+        val hop = FakeCameraHop(availability = FrameioHopAvailability.FIXTURE_UNAVAILABLE)
+        controller.attachCameraHop(hop)
+
+        assertFalse(controller.beginInternetHop())
+        assertEquals(0, hop.leaveCalls)
+        assertContains(controller.errorMessage.orEmpty(), "demo fixtures")
+    }
+
+    @Test
+    fun `baked output is uploaded from its approved root and metadata failure stays nonfatal`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("C0008.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val exportRoot = Files.createDirectories(readyRoot.resolve("exports"))
+            val core = FakeCore(uploadPlanSize = 6)
+            val http = FakeHttp()
+            val preparer = FakeArtifactPreparer(exportRoot)
+            val metadata = FailingMetadataWriter()
+            val controller =
+                connectedController(
+                    readyRoot = readyRoot,
+                    core = core,
+                    http = http,
+                    approvedUploadRoots = listOf(readyRoot, exportRoot),
+                    artifactPreparer = preparer,
+                    metadataSidecarWriter = metadata,
+                )
+
+            controller.deliver(
+                listOf(FrameioDeliveryArtifact(StagedMediaShare(source, "C0008.MOV", "video/*"), 4)),
+                FrameioDeliveryOptions(
+                    bakeLut = true,
+                    includeMetadata = true,
+                    selectedLut =
+                        com.opencapture.openzcine.FeedLutSelection.BuiltIn(
+                            com.opencapture.openzcine.FeedLut.MONO,
+                        ),
+                ),
+            )
+
+            val completed = assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertEquals(1, completed.uploadedCount)
+            assertEquals(1, completed.metadataFailureCount)
+            assertEquals(listOf("C0008.mp4"), core.createdNames)
+            assertEquals(listOf(6L), core.createdSizes)
+            assertEquals(1, metadata.calls)
+            assertTrue(preparer.released)
+            assertFalse(Files.exists(exportRoot.resolve("prepared.mp4")))
+        }
+    }
+
+    @Test
+    fun `confirmed upload remains successful when temporary export cleanup fails`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("C0009.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val exportRoot = Files.createDirectories(readyRoot.resolve("exports"))
+            val preparer = FakeArtifactPreparer(exportRoot, releaseFailure = true)
+            val controller =
+                connectedController(
+                    readyRoot = readyRoot,
+                    core = FakeCore(uploadPlanSize = 6),
+                    approvedUploadRoots = listOf(readyRoot, exportRoot),
+                    artifactPreparer = preparer,
+                )
+
+            controller.deliver(
+                listOf(FrameioDeliveryArtifact(StagedMediaShare(source, "C0009.MOV", "video/*"), 4)),
+            )
+
+            val completed = assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertEquals(1, completed.uploadedCount)
+            assertEquals(0, completed.failedCount)
+            assertEquals(1, completed.cleanupFailureCount)
+            assertTrue(preparer.released)
+        }
+    }
+
+    @Test
+    fun `temporary cleanup failure cannot override upload cancellation`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("C0010.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val exportRoot = Files.createDirectories(readyRoot.resolve("exports"))
+            val preparer = FakeArtifactPreparer(exportRoot, releaseFailure = true)
+            val controller =
+                connectedController(
+                    readyRoot = readyRoot,
+                    core = FakeCore(uploadPlanSize = 6),
+                    http =
+                        FakeHttp(
+                            uploadFailure = kotlinx.coroutines.CancellationException("unit cancel"),
+                        ),
+                    approvedUploadRoots = listOf(readyRoot, exportRoot),
+                    artifactPreparer = preparer,
+                )
+
+            assertFailsWith<kotlinx.coroutines.CancellationException> {
+                controller.deliver(
+                    listOf(
+                        FrameioDeliveryArtifact(
+                            StagedMediaShare(source, "C0010.MOV", "video/*"),
+                            4,
+                        ),
+                    ),
+                )
+            }
+
+            assertIs<FrameioDeliveryState.Idle>(controller.deliveryState)
+            assertTrue(preparer.released)
+        }
+    }
+
     private fun controller(
         configuration: () -> FrameioPublicConfiguration? = { CONFIGURATION },
         core: FakeCore = FakeCore(),
@@ -274,6 +601,11 @@ class FrameioDeliveryControllerTest {
         reachability: FrameioReachability = FixedReachability(FrameioNetworkState.ONLINE),
         shareReadyRoot: Path = Path.of(System.getProperty("java.io.tmpdir"), "frameio-ready"),
         uiDispatcher: CoroutineDispatcher = Dispatchers.Unconfined,
+        approvedUploadRoots: List<Path> = listOf(shareReadyRoot),
+        artifactPreparer: FrameioArtifactPreparer = PassthroughFrameioArtifactPreparer,
+        metadataSidecarWriter: FrameioMetadataSidecarWriter = NoFrameioMetadataSidecarWriter,
+        internetWaitPoll: suspend () -> Unit = {},
+        internetWaitAttempts: Int = 3,
     ): FrameioDeliveryController =
         FrameioDeliveryController(
             configuration = configuration,
@@ -283,8 +615,43 @@ class FrameioDeliveryControllerTest {
             destinationStore = destinations,
             reachability = reachability,
             shareReadyRoot = shareReadyRoot,
+            approvedUploadRoots = approvedUploadRoots,
+            artifactPreparer = artifactPreparer,
+            metadataSidecarWriter = metadataSidecarWriter,
             clock = { 100_000L },
             uiDispatcher = uiDispatcher,
+            internetWaitPoll = internetWaitPoll,
+            internetWaitAttempts = internetWaitAttempts,
+        )
+
+    private fun connectedController(
+        readyRoot: Path,
+        core: FakeCore = FakeCore(),
+        http: FakeHttp = FakeHttp(),
+        reachability: FrameioReachability = FixedReachability(FrameioNetworkState.ONLINE),
+        approvedUploadRoots: List<Path> = listOf(readyRoot),
+        artifactPreparer: FrameioArtifactPreparer = PassthroughFrameioArtifactPreparer,
+        metadataSidecarWriter: FrameioMetadataSidecarWriter = NoFrameioMetadataSidecarWriter,
+    ): FrameioDeliveryController =
+        controller(
+            core = core,
+            http = http,
+            secrets =
+                MemorySecretStore(
+                    FrameioSecretState(
+                        FrameioStoredToken("unit-access", "unit-refresh", 9_999_999L, "Bearer"),
+                        null,
+                    ),
+                ),
+            destinations =
+                MemoryDestinationStore(
+                    FrameioDestination("account", "workspace", "project", "Dailies", "folder"),
+                ),
+            reachability = reachability,
+            shareReadyRoot = readyRoot,
+            approvedUploadRoots = approvedUploadRoots,
+            artifactPreparer = artifactPreparer,
+            metadataSidecarWriter = metadataSidecarWriter,
         )
 
     private suspend fun withReadyRoot(block: suspend (Path) -> Unit) {
@@ -351,11 +718,13 @@ class FrameioDeliveryControllerTest {
         }
     }
 
-    private class FakeCore : FrameioCoreBridge {
+    private class FakeCore(private val uploadPlanSize: Long = 4) : FrameioCoreBridge {
         var authorizationStarts = 0
         var redirectParses = 0
         var tokenRequests = 0
         val apiOperations = mutableListOf<String>()
+        val createdNames = mutableListOf<String>()
+        val createdSizes = mutableListOf<Long>()
 
         override fun beginAuthorization(
             config: FrameioPublicConfiguration,
@@ -403,6 +772,10 @@ class FrameioDeliveryControllerTest {
             fileSize: Long,
         ): FrameioHttpRequest? {
             apiOperations += operation
+            if (operation == FrameioCoreOperation.CREATE_FILE) {
+                createdNames += name.orEmpty()
+                createdSizes += fileSize
+            }
             return FrameioHttpRequest("https://api.example.invalid/$operation", "GET", null)
         }
 
@@ -425,7 +798,7 @@ class FrameioDeliveryControllerTest {
             FrameioUploadPlan(
                 fileID = "file",
                 mediaType = "video/quicktime",
-                parts = listOf(FrameioUploadPart(4, "https://uploads.example.invalid/part")),
+                parts = listOf(FrameioUploadPart(uploadPlanSize, "https://uploads.example.invalid/part")),
             )
 
         override fun decodeUploadComplete(response: String): Boolean? = true
@@ -435,6 +808,7 @@ class FrameioDeliveryControllerTest {
 
     private class FakeHttp(
         private val progressFromIO: Boolean = false,
+        private val uploadFailure: Throwable? = null,
     ) : FrameioHttpClient {
         var executeCalls = 0
         var uploadCalls = 0
@@ -459,6 +833,7 @@ class FrameioDeliveryControllerTest {
         ): FrameioHttpResponse {
             uploadCalls += 1
             assertTrue(Files.isRegularFile(source))
+            uploadFailure?.let { throw it }
             if (progressFromIO) {
                 withContext(Dispatchers.IO) {
                     progressCallbackThreadName = Thread.currentThread().name
@@ -487,6 +862,75 @@ class FrameioDeliveryControllerTest {
 
         override fun close() {
             executor.shutdownNow()
+        }
+    }
+
+    private class MutableReachability(var value: FrameioNetworkState) : FrameioReachability {
+        override fun state(): FrameioNetworkState = value
+    }
+
+    private class FakeCameraHop(
+        override val availability: FrameioHopAvailability = FrameioHopAvailability.READY,
+        private val onLeave: suspend () -> Unit = {},
+        private val onRejoin: suspend () -> FrameioCameraRejoinEvidence? = {
+            FrameioCameraRejoinEvidence("Nikon ZR", "ZR", 123_000L)
+        },
+    ) : FrameioCameraHop {
+        var leaveCalls = 0
+        var rejoinCalls = 0
+
+        override suspend fun leaveCameraNetwork(): Boolean {
+            leaveCalls += 1
+            onLeave()
+            return true
+        }
+
+        override suspend fun rejoinCameraNetwork(): FrameioCameraRejoinEvidence? {
+            rejoinCalls += 1
+            return onRejoin()
+        }
+    }
+
+    private class FakeArtifactPreparer(
+        private val exportRoot: Path,
+        private val releaseFailure: Boolean = false,
+    ) : FrameioArtifactPreparer {
+        var released = false
+
+        override suspend fun prepare(
+            artifact: FrameioDeliveryArtifact,
+            options: FrameioDeliveryOptions,
+            onProgress: suspend (Double) -> Unit,
+        ): FrameioPreparedArtifact {
+            val target = exportRoot.resolve("prepared.mp4")
+            Files.write(target, byteArrayOf(1, 2, 3, 4, 5, 6))
+            onProgress(1.0)
+            return FrameioPreparedArtifact(
+                StagedMediaShare(target, "C0008.mp4", "video/mp4"),
+                6,
+                "MONO",
+                target,
+            )
+        }
+
+        override suspend fun release(prepared: FrameioPreparedArtifact) {
+            released = true
+            if (releaseFailure) throw java.io.IOException("unit cleanup failure")
+            prepared.transientExport?.let(Files::deleteIfExists)
+        }
+    }
+
+    private class FailingMetadataWriter : FrameioMetadataSidecarWriter {
+        var calls = 0
+
+        override suspend fun recordSuccessfulDelivery(
+            artifact: FrameioDeliveryArtifact,
+            prepared: FrameioPreparedArtifact,
+            destination: FrameioDestination,
+            options: FrameioDeliveryOptions,
+        ) {
+            calls += 1
+            throw java.io.IOException("unit metadata failure")
         }
     }
 

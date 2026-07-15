@@ -13,7 +13,10 @@ import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** Operator-visible Frame.io account state; never contains bearer material. */
@@ -47,6 +50,8 @@ internal sealed interface FrameioDeliveryState {
     data class Completed(
         val uploadedCount: Int,
         val failedCount: Int,
+        val metadataFailureCount: Int = 0,
+        val cleanupFailureCount: Int = 0,
     ) : FrameioDeliveryState
 
     data class Failed(val message: String) : FrameioDeliveryState
@@ -56,9 +61,20 @@ internal sealed interface FrameioDeliveryState {
 internal class FrameioDeliveryArtifact(
     val share: StagedMediaShare,
     val byteCount: Long,
+    val context: FrameioArtifactContext =
+        FrameioArtifactContext(
+            cameraID = "",
+            captureDate = "",
+            supportsLutBake = true,
+        ),
 ) {
     override fun toString(): String = "FrameioDeliveryArtifact(redacted)"
 }
+
+private data class FrameioArtifactUploadOutcome(
+    val metadataFailure: Boolean,
+    val cleanupFailure: Boolean,
+)
 
 /**
  * State holder for Android Frame.io sign-in, destination selection, and
@@ -75,8 +91,14 @@ internal class FrameioDeliveryController(
     private val destinationStore: FrameioDestinationStore,
     private val reachability: FrameioReachability,
     private val shareReadyRoot: Path,
+    private val approvedUploadRoots: List<Path> = listOf(shareReadyRoot),
+    private val artifactPreparer: FrameioArtifactPreparer = PassthroughFrameioArtifactPreparer,
+    private val metadataSidecarWriter: FrameioMetadataSidecarWriter =
+        NoFrameioMetadataSidecarWriter,
     private val clock: () -> Long = System::currentTimeMillis,
     private val uiDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val internetWaitPoll: suspend () -> Unit = { delay(INTERNET_WAIT_POLL_MILLIS) },
+    private val internetWaitAttempts: Int = DEFAULT_INTERNET_WAIT_ATTEMPTS,
 ) {
     var connectionState by mutableStateOf(initialConnectionState())
         private set
@@ -90,8 +112,17 @@ internal class FrameioDeliveryController(
         private set
     var deliveryState by mutableStateOf<FrameioDeliveryState>(FrameioDeliveryState.Idle)
         private set
+    var internetHopState by mutableStateOf<FrameioInternetHopState>(FrameioInternetHopState.Idle)
+        private set
+    var cameraHopAvailability by
+        mutableStateOf(FrameioHopAvailability.NOT_CAMERA_ACCESS_POINT)
+        private set
     var errorMessage by mutableStateOf<String?>(null)
         private set
+
+    private var cameraHop: FrameioCameraHop? = null
+    private var activeCameraHop: FrameioCameraHop? = null
+    private val cameraRejoinMutex = Mutex()
 
     /** Whether a production Adobe client registration is available in this build. */
     val isConfigured: Boolean
@@ -101,12 +132,140 @@ internal class FrameioDeliveryController(
     val isConnected: Boolean
         get() = connectionState == FrameioConnectionState.CONNECTED
 
+    /** True after the consented AP release and until a rejoin attempt finishes. */
+    val isInternetHopActive: Boolean
+        get() =
+            activeCameraHop != null ||
+                cameraRejoinMutex.isLocked ||
+                internetHopState is FrameioInternetHopState.LeavingCamera
+
+    init {
+        require(internetWaitAttempts > 0) { "internetWaitAttempts must be positive." }
+        require(approvedUploadRoots.isNotEmpty()) { "At least one approved upload root is required." }
+    }
+
+    /**
+     * Attaches the current monitor's camera lifecycle owner.
+     *
+     * Recomposition may replace this adapter, but an already-started hop retains its exact owner
+     * until rejoin finishes so it cannot return through a different saved profile.
+     */
+    fun attachCameraHop(hop: FrameioCameraHop?) {
+        cameraHop = hop
+        cameraHopAvailability = hop?.availability ?: FrameioHopAvailability.NOT_CAMERA_ACCESS_POINT
+    }
+
     /** Refreshes visible state after app resume or settings presentation. */
     fun refresh() {
         networkState = reachability.state()
         connectionState = initialConnectionState()
         selectedDestination = destinationStore.load()
+        cameraHopAvailability = cameraHop?.availability ?: FrameioHopAvailability.NOT_CAMERA_ACCESS_POINT
+        if (!isInternetHopActive && internetHopState !is FrameioInternetHopState.Idle) {
+            internetHopState = FrameioInternetHopState.Idle
+        }
     }
+
+    /**
+     * Performs only the operator-approved first half of a camera-AP internet hop.
+     *
+     * The active delivery sheet remains mounted while this waits for a validated route. No cloud
+     * request runs and no binding is released unless this explicit method is called.
+     */
+    suspend fun beginInternetHop(): Boolean {
+        networkState = reachability.state()
+        if (networkState != FrameioNetworkState.CAMERA_ACCESS_POINT) {
+            errorMessage =
+                if (networkState == FrameioNetworkState.ONLINE) {
+                    "This phone already has a validated internet route."
+                } else {
+                    FrameioReachabilityPolicy.operatorMessage(networkState)
+                }
+            return false
+        }
+        val hop = cameraHop
+        cameraHopAvailability = hop?.availability ?: FrameioHopAvailability.NOT_CAMERA_ACCESS_POINT
+        if (hop == null || cameraHopAvailability != FrameioHopAvailability.READY) {
+            errorMessage = cameraHopAvailability.operatorMessage
+            return false
+        }
+        if (isInternetHopActive) return internetHopState is FrameioInternetHopState.Online
+
+        errorMessage = null
+        internetHopState = FrameioInternetHopState.LeavingCamera
+        val leftCamera =
+            try {
+                // Consent has already been captured. Complete the session shutdown and binding
+                // release as one operation even if the delivery sheet is dismissed concurrently.
+                withContext(NonCancellable) { hop.leaveCameraNetwork() }
+            } catch (_: Exception) {
+                false
+            }
+        if (!leftCamera) {
+            internetHopState =
+                FrameioInternetHopState.Failed(
+                    "OpenZCine couldn't safely disconnect the camera, so its Wi-Fi binding was not released.",
+                )
+            errorMessage = (internetHopState as FrameioInternetHopState.Failed).message
+            return false
+        }
+        activeCameraHop = hop
+        internetHopState = FrameioInternetHopState.WaitingForInternet
+        try {
+            repeat(internetWaitAttempts) {
+                networkState = reachability.state()
+                if (networkState == FrameioNetworkState.ONLINE) {
+                    internetHopState = FrameioInternetHopState.Online
+                    errorMessage = null
+                    return true
+                }
+                internetWaitPoll()
+            }
+        } catch (error: CancellationException) {
+            endInternetHop()
+            throw error
+        }
+
+        val timeout = "A validated internet route did not become available."
+        errorMessage = timeout
+        withContext(NonCancellable) { endInternetHop() }
+        if (internetHopState is FrameioInternetHopState.Failed) {
+            errorMessage = "$timeout Camera rejoin could not be verified."
+        }
+        return false
+    }
+
+    /** Rejoins through the exact saved profile and records only a protocol-connected result. */
+    suspend fun endInternetHop(): Boolean =
+        withContext(NonCancellable) {
+            cameraRejoinMutex.withLock {
+                val hop = activeCameraHop
+                    ?: return@withLock internetHopState is FrameioInternetHopState.Rejoined
+                // Claim the exact owner before the first suspension. A second
+                // caller waits for this attempt, then observes its result
+                // instead of starting a competing Wi-Fi join/session connect.
+                activeCameraHop = null
+                internetHopState = FrameioInternetHopState.RejoiningCamera
+                val evidence =
+                    try {
+                        hop.rejoinCameraNetwork()
+                    } catch (_: Exception) {
+                        null
+                    }
+                networkState = reachability.state()
+                if (evidence != null) {
+                    internetHopState = FrameioInternetHopState.Rejoined(evidence)
+                    true
+                } else {
+                    val message =
+                        "Frame.io work finished, but OpenZCine could not verify a new camera session. " +
+                            "Reconnect from Your cameras."
+                    internetHopState = FrameioInternetHopState.Failed(message)
+                    errorMessage = message
+                    false
+                }
+            }
+        }
 
     /**
      * Starts an Adobe browser sign-in and persists only encrypted PKCE state.
@@ -306,21 +465,33 @@ internal class FrameioDeliveryController(
      * no progressive camera `.part` file or arbitrary filesystem path enters
      * this method.
      */
-    suspend fun deliver(artifacts: List<FrameioDeliveryArtifact>) {
-        if (artifacts.isEmpty()) {
-            deliveryState = FrameioDeliveryState.Failed("Only complete cached media can be delivered.")
-            return
-        }
-        val config = requireConfiguration() ?: return
-        if (!requireOnline()) return
-        val destination = selectedDestination ?: run {
-            deliveryState = FrameioDeliveryState.Failed("Pick a Frame.io project before uploading.")
-            return
-        }
-        var uploaded = 0
-        var failed = 0
-        var firstFailure: String? = null
+    suspend fun deliver(
+        artifacts: List<FrameioDeliveryArtifact>,
+        options: FrameioDeliveryOptions = FrameioDeliveryOptions(),
+    ) {
+        val rejoinAfterDelivery = isInternetHopActive
         try {
+            if (artifacts.isEmpty()) {
+                deliveryState = FrameioDeliveryState.Failed("Only complete cached media can be delivered.")
+                return
+            }
+            val config = requireConfiguration() ?: return
+            if (!requireOnline()) {
+                deliveryState =
+                    FrameioDeliveryState.Failed(
+                        errorMessage ?: "Frame.io needs a validated internet connection.",
+                    )
+                return
+            }
+            val destination = selectedDestination ?: run {
+                deliveryState = FrameioDeliveryState.Failed("Pick a Frame.io project before uploading.")
+                return
+            }
+            var uploaded = 0
+            var failed = 0
+            var metadataFailures = 0
+            var cleanupFailures = 0
+            var firstFailure: String? = null
             artifacts.forEachIndexed { index, artifact ->
                 deliveryState =
                     FrameioDeliveryState.Uploading(
@@ -330,7 +501,17 @@ internal class FrameioDeliveryController(
                         progress = 0.0,
                     )
                 try {
-                    uploadArtifact(config, destination, artifact, index + 1, artifacts.size)
+                    val outcome =
+                        uploadArtifact(
+                            config,
+                            destination,
+                            artifact,
+                            options,
+                            index + 1,
+                            artifacts.size,
+                        )
+                    if (outcome.metadataFailure) metadataFailures += 1
+                    if (outcome.cleanupFailure) cleanupFailures += 1
                     uploaded += 1
                 } catch (error: CancellationException) {
                     throw error
@@ -341,13 +522,22 @@ internal class FrameioDeliveryController(
             }
             deliveryState =
                 if (uploaded > 0) {
-                    FrameioDeliveryState.Completed(uploadedCount = uploaded, failedCount = failed)
+                    FrameioDeliveryState.Completed(
+                        uploadedCount = uploaded,
+                        failedCount = failed,
+                        metadataFailureCount = metadataFailures,
+                        cleanupFailureCount = cleanupFailures,
+                    )
                 } else {
                     FrameioDeliveryState.Failed(firstFailure ?: "Frame.io could not upload the selected media.")
                 }
         } catch (error: CancellationException) {
             deliveryState = FrameioDeliveryState.Idle
             throw error
+        } finally {
+            if (rejoinAfterDelivery) {
+                withContext(NonCancellable) { endInternetHop() }
+            }
         }
     }
 
@@ -360,76 +550,133 @@ internal class FrameioDeliveryController(
         config: FrameioPublicConfiguration,
         destination: FrameioDestination,
         artifact: FrameioDeliveryArtifact,
+        options: FrameioDeliveryOptions,
         itemIndex: Int,
         itemCount: Int,
-    ) {
+    ): FrameioArtifactUploadOutcome {
         validateApprovedArtifact(artifact)
         val accessToken = accessToken(config)
-        val filename = artifact.share.displayName
-        val response =
-            apiResponse(
-                operation = FrameioCoreOperation.CREATE_FILE,
-                accessToken = accessToken,
-                accountID = destination.accountID,
-                folderID = destination.folderID,
-                name = filename,
-                fileSize = artifact.byteCount,
-            )
-        val plan = core.decodeUploadPlan(response)
-            ?: throw FrameioDeliveryException("Frame.io returned an invalid upload plan.")
-        var plannedBytes = 0L
-        plan.parts.forEach { part ->
-            if (part.sizeBytes > artifact.byteCount - plannedBytes) {
+        val prepared =
+            artifactPreparer.prepare(artifact, options) { fraction ->
+                withContext(uiDispatcher) {
+                    deliveryState =
+                        FrameioDeliveryState.Uploading(
+                            itemIndex,
+                            itemCount,
+                            artifact.share.displayName,
+                            (fraction.coerceIn(0.0, 1.0) * PREPARATION_PROGRESS_SHARE),
+                        )
+                }
+            }
+        var metadataFailure = false
+        var primaryFailure: Throwable? = null
+        try {
+            validateApprovedArtifact(prepared.share, prepared.byteCount)
+            val filename = prepared.share.displayName
+            val response =
+                apiResponse(
+                    operation = FrameioCoreOperation.CREATE_FILE,
+                    accessToken = accessToken,
+                    accountID = destination.accountID,
+                    folderID = destination.folderID,
+                    name = filename,
+                    fileSize = prepared.byteCount,
+                )
+            val plan = core.decodeUploadPlan(response)
+                ?: throw FrameioDeliveryException("Frame.io returned an invalid upload plan.")
+            var plannedBytes = 0L
+            plan.parts.forEach { part ->
+                if (part.sizeBytes > prepared.byteCount - plannedBytes) {
+                    throw FrameioDeliveryException("Frame.io's upload plan did not match the approved media size.")
+                }
+                plannedBytes += part.sizeBytes
+            }
+            if (plannedBytes != prepared.byteCount) {
                 throw FrameioDeliveryException("Frame.io's upload plan did not match the approved media size.")
             }
-            plannedBytes += part.sizeBytes
-        }
-        if (plannedBytes != artifact.byteCount) {
-            throw FrameioDeliveryException("Frame.io's upload plan did not match the approved media size.")
-        }
-        val contentType = plan.mediaType ?: core.mediaTypeFor(filename)
-            ?: throw FrameioDeliveryException("Frame.io could not resolve a media type for this clip.")
-        if (!contentType.isSafeMediaType()) {
-            throw FrameioDeliveryException("Frame.io returned an unsafe media type for this clip.")
-        }
+            val contentType = plan.mediaType ?: core.mediaTypeFor(filename)
+                ?: throw FrameioDeliveryException("Frame.io could not resolve a media type for this clip.")
+            if (!contentType.isSafeMediaType()) {
+                throw FrameioDeliveryException("Frame.io returned an unsafe media type for this clip.")
+            }
 
-        var offset = 0L
-        plan.parts.forEach { part ->
-            requireOnlineOrThrow()
-            val sentBeforePart = offset
-            val result =
-                http.putUploadPart(
-                    uploadURL = part.url,
-                    source = artifact.share.file,
-                    offset = offset,
-                    byteCount = part.sizeBytes,
-                    contentType = contentType,
-                ) { sentInPart ->
-                    val sent = sentBeforePart + sentInPart
-                    val progress = 0.1 + 0.75 * sent.toDouble() / artifact.byteCount.toDouble()
-                    // putUploadPart writes on Dispatchers.IO. Compose state is
-                    // owned by the UI coroutine, so return to its dispatcher
-                    // before publishing incremental upload progress.
-                    withContext(uiDispatcher) {
-                        deliveryState =
-                            FrameioDeliveryState.Uploading(
-                                itemIndex,
-                                itemCount,
-                                filename,
-                                progress.coerceAtMost(0.85),
-                            )
+            var offset = 0L
+            val uploadProgressStart =
+                if (options.bakeLut) PREPARATION_PROGRESS_SHARE else DIRECT_UPLOAD_PROGRESS_START
+            plan.parts.forEach { part ->
+                requireOnlineOrThrow()
+                val sentBeforePart = offset
+                val result =
+                    http.putUploadPart(
+                        uploadURL = part.url,
+                        source = prepared.share.file,
+                        offset = offset,
+                        byteCount = part.sizeBytes,
+                        contentType = contentType,
+                    ) { sentInPart ->
+                        val sent = sentBeforePart + sentInPart
+                        val fraction = sent.toDouble() / prepared.byteCount.toDouble()
+                        val progress =
+                            uploadProgressStart +
+                                (UPLOAD_PROGRESS_END - uploadProgressStart) * fraction
+                        // putUploadPart writes on Dispatchers.IO. Compose state is
+                        // owned by the UI coroutine, so return to its dispatcher
+                        // before publishing incremental upload progress.
+                        withContext(uiDispatcher) {
+                            deliveryState =
+                                FrameioDeliveryState.Uploading(
+                                    itemIndex,
+                                    itemCount,
+                                    filename,
+                                    progress.coerceAtMost(UPLOAD_PROGRESS_END),
+                                )
+                        }
                     }
+                requireSuccess(result, "Frame.io upload")
+                offset += part.sizeBytes
+            }
+            waitForUploadComplete(
+                accountID = destination.accountID,
+                fileID = plan.fileID,
+                config = config,
+                itemIndex = itemIndex,
+                itemCount = itemCount,
+                filename = filename,
+            )
+            metadataFailure = if (options.includeMetadata) {
+                try {
+                    metadataSidecarWriter.recordSuccessfulDelivery(
+                        artifact,
+                        prepared,
+                        destination,
+                        options,
+                    )
+                    false
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    true
                 }
-            requireSuccess(result, "Frame.io upload")
-            offset += part.sizeBytes
+            } else {
+                false
+            }
+        } catch (error: Throwable) {
+            primaryFailure = error
         }
-        waitForUploadComplete(
-            accountID = destination.accountID,
-            fileID = plan.fileID,
-            config = config,
-            itemIndex = itemIndex,
-            itemCount = itemCount,
-            filename = filename,
+        val cleanupFailure =
+            try {
+                withContext(NonCancellable) { artifactPreparer.release(prepared) }
+                null
+            } catch (error: Throwable) {
+                error
+            }
+        primaryFailure?.let { failure ->
+            cleanupFailure?.let(failure::addSuppressed)
+            throw failure
+        }
+        return FrameioArtifactUploadOutcome(
+            metadataFailure = metadataFailure,
+            cleanupFailure = cleanupFailure != null,
         )
     }
 
@@ -533,15 +780,19 @@ internal class FrameioDeliveryController(
     }
 
     private fun validateApprovedArtifact(artifact: FrameioDeliveryArtifact) {
-        val root = shareReadyRoot.toAbsolutePath().normalize()
-        val source = artifact.share.file.toAbsolutePath().normalize()
+        validateApprovedArtifact(artifact.share, artifact.byteCount)
+    }
+
+    private fun validateApprovedArtifact(share: StagedMediaShare, byteCount: Long) {
+        val roots = approvedUploadRoots.map { root -> root.toAbsolutePath().normalize() }
+        val source = share.file.toAbsolutePath().normalize()
         if (
-            !source.startsWith(root) ||
+            roots.none(source::startsWith) ||
                 !Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS) ||
                 Files.isSymbolicLink(source) ||
-                artifact.byteCount <= 0 ||
-                Files.size(source) != artifact.byteCount ||
-                !safeDisplayName(artifact.share.displayName)
+                byteCount <= 0 ||
+                Files.size(source) != byteCount ||
+                !safeDisplayName(share.displayName)
         ) {
             throw FrameioDeliveryException("Only complete approved cache artifacts can be uploaded.")
         }
@@ -620,23 +871,45 @@ internal class FrameioDeliveryController(
         const val MAX_PENDING_AUTH_AGE_MILLIS = 10 * 60_000L
         const val MAX_UPLOAD_STATUS_POLLS = 45
         const val UPLOAD_STATUS_POLL_DELAY_MILLIS = 2_000L
+        const val PREPARATION_PROGRESS_SHARE = 0.35
+        const val DIRECT_UPLOAD_PROGRESS_START = 0.1
+        const val UPLOAD_PROGRESS_END = 0.85
+        const val INTERNET_WAIT_POLL_MILLIS = 500L
+        const val DEFAULT_INTERNET_WAIT_ATTEMPTS = 60
     }
 }
 
 /** Creates the production controller with Android-keystore and network adapters. */
-internal fun frameioDeliveryController(context: Context): FrameioDeliveryController =
-    FrameioDeliveryController(
+internal fun frameioDeliveryController(
+    context: Context,
+    lutLibrary: com.opencapture.openzcine.lut.AndroidLutLibrary,
+): FrameioDeliveryController {
+    val shareReadyRoot = context.cacheDir.resolve("share/ready").toPath()
+    val frameioExportRoot = context.cacheDir.resolve("frameio/exports").toPath()
+    return FrameioDeliveryController(
         configuration = FrameioBuildConfiguration::current,
         core = SwiftFrameioCoreBridge,
         http = AndroidFrameioHttpClient,
         secretStore = AndroidFrameioSecretStore(context),
         destinationStore = AndroidFrameioDestinationStore(context),
         reachability = AndroidFrameioReachability(context),
-        shareReadyRoot = context.cacheDir.resolve("share/ready").toPath(),
+        shareReadyRoot = shareReadyRoot,
+        approvedUploadRoots = listOf(shareReadyRoot, frameioExportRoot),
+        artifactPreparer =
+            AndroidFrameioArtifactPreparer(
+                exportRoot = frameioExportRoot,
+                lutProvider = AndroidFrameioLutProvider(lutLibrary),
+                exporter = AndroidMedia3FrameioLutVideoExporter(context),
+            ),
+        metadataSidecarWriter =
+            AndroidFrameioMetadataSidecarWriter(
+                context.filesDir.resolve("frameio-delivery/metadata").toPath(),
+            ),
     )
+}
 
 /** Internal failure whose text is intentionally free of response bodies/tokens. */
-private class FrameioDeliveryException(message: String) : IOException(message)
+internal class FrameioDeliveryException(message: String) : IOException(message)
 
 private fun Exception.operatorMessage(fallback: String): String =
     (this as? FrameioDeliveryException)?.message ?: fallback

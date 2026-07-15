@@ -56,6 +56,39 @@ private let androidRedirect = "adobe+android://adobeid/android-client"
     #expect(
         AndroidFrameioWire.parseRedirect(
             redirectURI: androidRedirect, callbackURI: callback, expectedState: "wrong") == nil)
+
+    let nonExactCallbacks = [
+        "adobe+android://attacker@adobeid/android-client?code=approved&state=state-1",
+        "adobe+android://attacker:password@adobeid/android-client?code=approved&state=state-1",
+        "adobe+android://%61dobeid/android-client?code=approved&state=state-1",
+        "adobe+android://adobeid:/android-client?code=approved&state=state-1",
+        "adobe+android://adobeid:8443/android-client?code=approved&state=state-1",
+        "adobe+android://adobeid/android-client/?code=approved&state=state-1",
+        "adobe+android://adobeid/%61ndroid-client?code=approved&state=state-1",
+        "adobe+android://adobeid/android%2Dclient?code=approved&state=state-1",
+        "adobe+android://adobeid/android-client?code=approved&state=state-1#fragment",
+    ]
+    for nonExactCallback in nonExactCallbacks {
+        #expect(
+            AndroidFrameioWire.parseRedirect(
+                redirectURI: androidRedirect,
+                callbackURI: nonExactCallback,
+                expectedState: "state-1") == nil)
+    }
+
+    let redirectWithPort = "adobe+android://adobeid:8443/android-client"
+    #expect(
+        AndroidFrameioWire.parseRedirect(
+            redirectURI: redirectWithPort,
+            callbackURI:
+                "adobe+android://adobeid:8443/android-client?code=approved&state=state-1",
+            expectedState: "state-1") == "approved")
+    #expect(
+        AndroidFrameioWire.parseRedirect(
+            redirectURI: redirectWithPort,
+            callbackURI:
+                "adobe+android://adobeid:08443/android-client?code=approved&state=state-1",
+            expectedState: "state-1") == nil)
 }
 
 @Test func androidFrameioWirePlansSharedTokenAndV4Requests() throws {

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
@@ -67,8 +68,13 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -78,13 +84,17 @@ import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FilmGlyph
+import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
+import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
+import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
+import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.settings.OperatorSettings
@@ -94,6 +104,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -118,6 +129,7 @@ private sealed interface BrowseState {
 /** Outcome of staging the safe subset of a multi-selection for Android sharing. */
 private data class BatchShareResult(
     val staged: List<StagedMediaShare>,
+    val stagedClips: List<MediaClipRecord>,
     val incompleteCount: Int,
     val failedCount: Int,
     val firstFailure: String?,
@@ -143,6 +155,7 @@ private fun stageSelectedMedia(
 ): BatchShareResult {
     val stager = MediaShareStager(context.cacheDir.toPath())
     val staged = mutableListOf<StagedMediaShare>()
+    val stagedClips = mutableListOf<MediaClipRecord>()
     var incomplete = 0
     var failed = 0
     var firstFailure: String? = null
@@ -162,6 +175,7 @@ private fun stageSelectedMedia(
         }
         try {
             staged += stager.stage(entry, clip, cancellationCheck)
+            stagedClips += clip
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -169,11 +183,12 @@ private fun stageSelectedMedia(
             if (firstFailure == null) firstFailure = error.message
         }
     }
-    return BatchShareResult(staged, incomplete, failed, firstFailure)
+    return BatchShareResult(staged, stagedClips, incomplete, failed, firstFailure)
 }
 
-private fun frameioDeliverySummary(
+internal fun frameioDeliverySummary(
     state: FrameioDeliveryState,
+    internetHopState: FrameioInternetHopState,
     errorMessage: String?,
     skippedBeforeUpload: Int,
 ): String =
@@ -185,13 +200,75 @@ private fun frameioDeliverySummary(
                 if (state.failedCount > 0) {
                     append("; ${state.failedCount} failed")
                 }
+                if (state.metadataFailureCount > 0) {
+                    append("; ${state.metadataFailureCount} metadata sidecar")
+                    if (state.metadataFailureCount != 1) append('s')
+                    append(" not saved")
+                }
+                if (state.cleanupFailureCount > 0) {
+                    append("; ${state.cleanupFailureCount} temporary export")
+                    if (state.cleanupFailureCount != 1) append('s')
+                    append(" not removed")
+                }
                 if (skippedBeforeUpload > 0) {
                     append("; $skippedBeforeUpload not prepared")
                 }
+                when (internetHopState) {
+                    is FrameioInternetHopState.Rejoined -> append("; camera rejoined")
+                    is FrameioInternetHopState.Failed -> append("; camera rejoin not verified")
+                    else -> Unit
+                }
             }
-        is FrameioDeliveryState.Failed -> state.message
+        is FrameioDeliveryState.Failed ->
+            buildString {
+                append(state.message)
+                if (internetHopState is FrameioInternetHopState.Failed) {
+                    append("; camera rejoin not verified")
+                    if (internetHopState.message.isNotBlank()) {
+                        append(": ${internetHopState.message}")
+                    }
+                }
+            }
         FrameioDeliveryState.Idle -> errorMessage ?: "Frame.io delivery didn't start."
         is FrameioDeliveryState.Uploading -> "Frame.io delivery is still in progress."
+    }
+
+/** Rejoins a consented camera-AP hop even when local preparation never reaches upload. */
+internal suspend fun endActiveFrameioHopAfterMediaJob(
+    isActive: () -> Boolean,
+    endHop: suspend () -> Unit,
+) {
+    if (isActive()) withContext(NonCancellable) { endHop() }
+}
+
+/** Preserves a preparation error while making a later camera-rejoin failure explicit. */
+internal fun frameioPreparationMessageAfterRejoin(
+    message: String?,
+    internetHopState: FrameioInternetHopState,
+): String? {
+    if (message == null || internetHopState !is FrameioInternetHopState.Failed) return message
+    return buildString {
+        append(message)
+        append(" Camera rejoin not verified")
+        if (internetHopState.message.isNotBlank()) append(": ${internetHopState.message}")
+    }
+}
+
+/** Keeps the loaded camera library stable during the one consented network round trip. */
+internal fun frameioHopKeepsCameraLibraryMounted(
+    state: FrameioInternetHopState,
+    rejoinedConnectionObserved: Boolean,
+): Boolean =
+    when (state) {
+        FrameioInternetHopState.LeavingCamera,
+        FrameioInternetHopState.WaitingForInternet,
+        FrameioInternetHopState.Online,
+        FrameioInternetHopState.RejoiningCamera,
+        -> true
+        is FrameioInternetHopState.Rejoined -> !rejoinedConnectionObserved
+        FrameioInternetHopState.Idle,
+        is FrameioInternetHopState.Failed,
+        -> false
     }
 
 /**
@@ -210,8 +287,9 @@ internal fun MediaBrowseScreen(
     liveAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
-    lutLibrary: AndroidLutLibrary? = null,
+    lutLibrary: AndroidLutLibrary,
     frameioController: FrameioDeliveryController,
+    selectedLut: FeedLutSelection,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     onClose: () -> Unit,
@@ -221,7 +299,7 @@ internal fun MediaBrowseScreen(
     val playbackAssistState =
         remember(context, lutLibrary) {
             PlaybackAssistState.restore(context, liveAssistState) { selection ->
-                lutLibrary?.contains(selection) == true
+                lutLibrary.contains(selection)
             }
         }
     val cacheStore =
@@ -236,12 +314,39 @@ internal fun MediaBrowseScreen(
         remember(context, galleryFailureInjection) {
             AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
         }
-    val defaultSource = if (cameraConnected) MediaLibrarySource.CAMERA else MediaLibrarySource.LOCAL
+    val internetHopState = frameioController.internetHopState
+    var rejoinedConnectionObserved by remember(cameraID) { mutableStateOf(false) }
+    LaunchedEffect(internetHopState, cameraConnected) {
+        when (internetHopState) {
+            is FrameioInternetHopState.Rejoined -> {
+                if (cameraConnected) rejoinedConnectionObserved = true
+            }
+            FrameioInternetHopState.LeavingCamera,
+            FrameioInternetHopState.WaitingForInternet,
+            FrameioInternetHopState.Online,
+            FrameioInternetHopState.RejoiningCamera,
+            FrameioInternetHopState.Idle,
+            is FrameioInternetHopState.Failed,
+            -> rejoinedConnectionObserved = false
+        }
+    }
+    val effectiveCameraConnected =
+        cameraConnected ||
+            frameioHopKeepsCameraLibraryMounted(
+                internetHopState,
+                rejoinedConnectionObserved,
+            )
+    val defaultSource =
+        if (effectiveCameraConnected) MediaLibrarySource.CAMERA else MediaLibrarySource.LOCAL
     var options by
         remember(cameraID) {
             val restored = libraryIndex.viewOptions(defaultSource)
             mutableStateOf(
-                if (cameraConnected) restored else restored.copy(source = MediaLibrarySource.LOCAL),
+                if (effectiveCameraConnected) {
+                    restored
+                } else {
+                    restored.copy(source = MediaLibrarySource.LOCAL)
+                },
             )
         }
     var favorites by remember(cameraID) { mutableStateOf(emptySet<String>()) }
@@ -262,6 +367,7 @@ internal fun MediaBrowseScreen(
     var nativeDeliveryPresented by remember { mutableStateOf(false) }
 
     fun updateOptions(updated: MediaLibraryViewOptions) {
+        if (shareInProgress) return
         options = updated
         libraryIndex.saveViewOptions(updated)
         isSelecting = false
@@ -278,17 +384,26 @@ internal fun MediaBrowseScreen(
         nativeDeliveryPresented = false
     }
 
+    fun cancelActiveShareOrExitSelection() {
+        val activeShare = shareJob
+        if (!shareInProgress || activeShare == null) {
+            exitSelection()
+            return
+        }
+        activeShare.cancel()
+    }
+
     LaunchedEffect(cameraID) {
         favorites = withContext(Dispatchers.IO) { libraryIndex.favoriteIDs(cameraID) }
     }
 
-    LaunchedEffect(cameraID, options.source, cameraConnected, reloadKey) {
+    LaunchedEffect(cameraID, options.source, effectiveCameraConnected, reloadKey) {
         state = BrowseState.Loading
         val nextState =
             withContext(Dispatchers.IO) {
                 when (options.source) {
                     MediaLibrarySource.CAMERA -> {
-                        if (!cameraConnected) {
+                        if (!effectiveCameraConnected) {
                             BrowseState.Failed("Reconnect the camera or choose On device media.")
                         } else if (!SwiftCore.isAvailable) {
                             BrowseState.Failed("Camera core is not bundled in this build.")
@@ -371,6 +486,11 @@ internal fun MediaBrowseScreen(
             clip.contentKind == MediaContentKind.PLAYABLE_PROXY &&
                 clip.libraryKey(cameraID) in readySelectionIDs
         }
+    val selectedLutLabel =
+        when (selectedLut) {
+            is FeedLutSelection.BuiltIn -> selectedLut.value.label
+            is FeedLutSelection.Stored -> lutLibrary.displayName(selectedLut.value)
+        }
 
     fun toggleFavorite(clip: MediaClipRecord) {
         favorites = libraryIndex.toggleFavorite(cameraID, clip)
@@ -388,12 +508,14 @@ internal fun MediaBrowseScreen(
     }
 
     fun beginSelection(clip: MediaClipRecord) {
+        if (shareInProgress) return
         isSelecting = true
         selectedIDs = MediaLibrarySelection.begin(clip.libraryKey(cameraID))
         shareMessage = null
     }
 
     fun toggleSelection(clip: MediaClipRecord) {
+        if (shareInProgress) return
         selectedIDs = MediaLibrarySelection.toggle(selectedIDs, clip.libraryKey(cameraID))
     }
 
@@ -525,7 +647,7 @@ internal fun MediaBrowseScreen(
         frameioDeliveryPresented = true
     }
 
-    fun beginFrameioDelivery() {
+    fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedClips
         frameioDeliveryPresented = false
@@ -535,6 +657,9 @@ internal fun MediaBrowseScreen(
         shareJob =
             scope.launch {
                 val stageContext = coroutineContext
+                var skippedBeforeUpload: Int? = null
+                var completedWithoutFailures = false
+                var cancelled = false
                 try {
                     val result =
                         withContext(Dispatchers.IO) {
@@ -553,24 +678,50 @@ internal fun MediaBrowseScreen(
                     }
                     val artifacts =
                         withContext(Dispatchers.IO) {
-                            result.staged.map { share ->
-                                FrameioDeliveryArtifact(share, Files.size(share.file))
+                            result.staged.zip(result.stagedClips).map { (share, clip) ->
+                                FrameioDeliveryArtifact(
+                                    share = share,
+                                    byteCount = Files.size(share.file),
+                                    context =
+                                        FrameioArtifactContext(
+                                            cameraID = cameraID,
+                                            captureDate = clip.captureDate,
+                                            supportsLutBake =
+                                                clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
+                                        ),
+                                )
                             }
                         }
-                    frameioController.deliver(artifacts)
-                    shareMessage =
-                        frameioDeliverySummary(
-                            state = frameioController.deliveryState,
-                            errorMessage = frameioController.errorMessage,
-                            skippedBeforeUpload = result.incompleteCount + result.failedCount,
-                        )
+                    skippedBeforeUpload = result.incompleteCount + result.failedCount
+                    frameioController.deliver(artifacts, options)
                     val completed = frameioController.deliveryState as? FrameioDeliveryState.Completed
-                    if (completed != null && completed.failedCount == 0) exitSelection()
+                    completedWithoutFailures = completed != null && completed.failedCount == 0
                 } catch (error: CancellationException) {
+                    cancelled = true
+                    shareMessage = "Frame.io delivery cancelled."
                     throw error
                 } catch (_: Exception) {
                     shareMessage = "Couldn't prepare the selected media for Frame.io delivery."
                 } finally {
+                    endActiveFrameioHopAfterMediaJob(
+                        isActive = { frameioController.isInternetHopActive },
+                        endHop = { frameioController.endInternetHop() },
+                    )
+                    shareMessage =
+                        if (skippedBeforeUpload != null && !cancelled) {
+                            frameioDeliverySummary(
+                                state = frameioController.deliveryState,
+                                internetHopState = frameioController.internetHopState,
+                                errorMessage = frameioController.errorMessage,
+                                skippedBeforeUpload = skippedBeforeUpload,
+                            )
+                        } else {
+                            frameioPreparationMessageAfterRejoin(
+                                shareMessage,
+                                frameioController.internetHopState,
+                            )
+                        }
+                    if (completedWithoutFailures && !cancelled) exitSelection()
                     frameioPreparationInProgress = false
                     shareInProgress = false
                     shareJob = null
@@ -581,11 +732,14 @@ internal fun MediaBrowseScreen(
     LaunchedEffect(closeRequested) {
         if (!closeRequested) return@LaunchedEffect
         shareJob?.cancelAndJoin()
+        if (frameioController.isInternetHopActive) {
+            withContext(NonCancellable) { frameioController.endInternetHop() }
+        }
         withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode() }
         onClose()
     }
     BackHandler(enabled = playingClip == null && viewingPhoto == null) {
-        if (isSelecting) exitSelection() else closeRequested = true
+        if (isSelecting) cancelActiveShareOrExitSelection() else closeRequested = true
     }
 
     val density = LocalDensity.current
@@ -637,9 +791,10 @@ internal fun MediaBrowseScreen(
                         shareInProgress = shareInProgress,
                         frameioPreparationInProgress = frameioPreparationInProgress,
                         frameioDeliveryState = frameioController.deliveryState,
+                        frameioInternetHopState = internetHopState,
                         layout = options.layout,
                         sortOrder = options.sortOrder,
-                        onExitSelection = ::exitSelection,
+                        onExitSelection = ::cancelActiveShareOrExitSelection,
                         onShare = ::presentNativeDelivery,
                         onFrameioDelivery = ::presentFrameioDelivery,
                         onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
@@ -657,10 +812,16 @@ internal fun MediaBrowseScreen(
                         isSelecting = isSelecting,
                         selectedIDs = selectedIDs,
                         onOpen = ::open,
-                        onBeginSelection = ::beginSelection,
-                        onToggleSelection = ::toggleSelection,
+                        onBeginSelection = { identity ->
+                            if (!shareInProgress) beginSelection(identity)
+                        },
+                        onToggleSelection = { identity ->
+                            if (!shareInProgress) toggleSelection(identity)
+                        },
                         onSweepSelection = { identities ->
-                            selectedIDs = MediaLibrarySelection.addSweep(selectedIDs, identities)
+                            if (!shareInProgress) {
+                                selectedIDs = MediaLibrarySelection.addSweep(selectedIDs, identities)
+                            }
                         },
                         onToggleFavorite = ::toggleFavorite,
                         onRetry = { reloadKey += 1 },
@@ -690,9 +851,10 @@ internal fun MediaBrowseScreen(
                             shareInProgress = shareInProgress,
                             frameioPreparationInProgress = frameioPreparationInProgress,
                             frameioDeliveryState = frameioController.deliveryState,
+                            frameioInternetHopState = internetHopState,
                             layout = options.layout,
                             sortOrder = options.sortOrder,
-                            onExitSelection = ::exitSelection,
+                            onExitSelection = ::cancelActiveShareOrExitSelection,
                             onShare = ::presentNativeDelivery,
                             onFrameioDelivery = ::presentFrameioDelivery,
                             onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
@@ -710,10 +872,16 @@ internal fun MediaBrowseScreen(
                             isSelecting = isSelecting,
                             selectedIDs = selectedIDs,
                             onOpen = ::open,
-                            onBeginSelection = ::beginSelection,
-                            onToggleSelection = ::toggleSelection,
+                            onBeginSelection = { identity ->
+                                if (!shareInProgress) beginSelection(identity)
+                            },
+                            onToggleSelection = { identity ->
+                                if (!shareInProgress) toggleSelection(identity)
+                            },
                             onSweepSelection = { identities ->
-                                selectedIDs = MediaLibrarySelection.addSweep(selectedIDs, identities)
+                                if (!shareInProgress) {
+                                    selectedIDs = MediaLibrarySelection.addSweep(selectedIDs, identities)
+                                }
                             },
                             onToggleFavorite = ::toggleFavorite,
                             onRetry = { reloadKey += 1 },
@@ -755,7 +923,16 @@ internal fun MediaBrowseScreen(
             FrameioDeliveryDialog(
                 controller = frameioController,
                 readyCount = readySelectionIDs.size,
-                onDismiss = { frameioDeliveryPresented = false },
+                selectedLut = selectedLut.takeIf { selectedLutLabel != null },
+                selectedLutLabel = selectedLutLabel,
+                onDismiss = {
+                    frameioDeliveryPresented = false
+                    if (frameioController.isInternetHopActive) {
+                        scope.launch {
+                            withContext(NonCancellable) { frameioController.endInternetHop() }
+                        }
+                    }
+                },
                 onDeliver = ::beginFrameioDelivery,
             )
         }
@@ -926,6 +1103,7 @@ private fun MediaLibraryHeader(
     shareInProgress: Boolean,
     frameioPreparationInProgress: Boolean,
     frameioDeliveryState: FrameioDeliveryState,
+    frameioInternetHopState: FrameioInternetHopState,
     layout: MediaLibraryLayout,
     sortOrder: MediaLibrarySortOrder,
     onExitSelection: () -> Unit,
@@ -941,6 +1119,7 @@ private fun MediaLibraryHeader(
             shareInProgress = shareInProgress,
             frameioPreparationInProgress = frameioPreparationInProgress,
             frameioDeliveryState = frameioDeliveryState,
+            frameioInternetHopState = frameioInternetHopState,
             onExit = onExitSelection,
             onShare = onShare,
             onFrameioDelivery = onFrameioDelivery,
@@ -992,23 +1171,33 @@ private fun SelectionHeader(
     shareInProgress: Boolean,
     frameioPreparationInProgress: Boolean,
     frameioDeliveryState: FrameioDeliveryState,
+    frameioInternetHopState: FrameioInternetHopState,
     onExit: () -> Unit,
     onShare: () -> Unit,
     onFrameioDelivery: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    val rejoiningCamera = frameioInternetHopState is FrameioInternetHopState.RejoiningCamera
+    val enabled = readyCount > 0 && !shareInProgress
+    val upload = frameioDeliveryState as? FrameioDeliveryState.Uploading
+    val identity: @Composable RowScope.() -> Unit = {
         Text(
-            "Cancel",
+            if (rejoiningCamera) "Rejoining" else if (shareInProgress) "Stop" else "Cancel",
             style = chromeStyle(13f, FontWeight.SemiBold),
-            color = LiveDesign.muted,
+            color = if (shareInProgress && !rejoiningCamera) LiveDesign.accent else LiveDesign.muted,
             modifier =
                 Modifier.glass(CircleShape)
-                    .semantics { contentDescription = "Exit media selection" }
-                    .chromeClickable(onExit)
+                    .semantics {
+                        contentDescription =
+                            if (rejoiningCamera) {
+                                "Rejoining saved camera Wi-Fi network"
+                            } else if (shareInProgress) {
+                                "Cancel active media delivery"
+                            } else {
+                                "Exit media selection"
+                            }
+                        if (rejoiningCamera) disabled() else role = Role.Button
+                    }
+                    .chromeClickable(enabled = !rejoiningCamera, onClick = onExit)
                     .padding(horizontal = 12.dp, vertical = 9.dp),
         )
         Text(
@@ -1017,46 +1206,153 @@ private fun SelectionHeader(
             style = chromeStyle(20f, FontWeight.SemiBold),
             color = LiveDesign.text,
             maxLines = 1,
-        )
-        val enabled = readyCount > 0 && !shareInProgress
-        val upload = frameioDeliveryState as? FrameioDeliveryState.Uploading
-        val frameioLabel =
-            upload?.let { state ->
-                "UP ${state.itemIndex}/${state.itemCount} ${(state.progress * 100).roundToInt()}%"
-            } ?: if (frameioPreparationInProgress) "PREPARING…" else "FRAME.IO $readyCount"
-        Text(
-            frameioLabel,
-            style = chromeStyle(11f, FontWeight.Bold, mono = true),
-            color = if (enabled || upload != null) LiveDesign.accent else LiveDesign.faint,
-            modifier =
-                Modifier.glass(CapsuleShape)
-                    .semantics {
-                        contentDescription =
-                            upload?.let { state ->
-                                "Uploading Frame.io clip ${state.itemIndex} of ${state.itemCount}: ${(state.progress * 100).roundToInt()} percent"
-                            } ?: "Deliver $readyCount complete cached media items to Frame.io"
-                        role = Role.Button
-                    }.chromeClickable(enabled) { onFrameioDelivery() }
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-        )
-        Text(
-            if (shareInProgress && !frameioPreparationInProgress && upload == null) {
-                "WORKING…"
-            } else {
-                "DELIVER"
-            },
-            style = chromeStyle(11f, FontWeight.Bold, mono = true),
-            color = if (enabled) LiveDesign.accent else LiveDesign.faint,
-            modifier =
-                Modifier.glass(CapsuleShape)
-                    .semantics {
-                        contentDescription =
-                            "Choose delivery for $readyCount complete cached media items"
-                        role = Role.Button
-                    }.chromeClickable(enabled) { onShare() }
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
+            overflow = TextOverflow.Ellipsis,
         )
     }
+    val actions: @Composable RowScope.() -> Unit = {
+        FrameioSelectionAction(
+            readyCount = readyCount,
+            enabled = enabled,
+            preparationInProgress = frameioPreparationInProgress,
+            upload = upload,
+            rejoiningCamera = rejoiningCamera,
+            onClick = onFrameioDelivery,
+        )
+        DeliverySelectionAction(
+            readyCount = readyCount,
+            enabled = enabled,
+            shareInProgress = shareInProgress,
+            frameioPreparationInProgress = frameioPreparationInProgress,
+            uploadInProgress = upload != null,
+            onClick = onShare,
+        )
+    }
+
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 560.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    content = identity,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                    content = actions,
+                )
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                identity()
+                actions()
+            }
+        }
+    }
+}
+
+@Composable
+private fun FrameioSelectionAction(
+    readyCount: Int,
+    enabled: Boolean,
+    preparationInProgress: Boolean,
+    upload: FrameioDeliveryState.Uploading?,
+    rejoiningCamera: Boolean,
+    onClick: () -> Unit,
+) {
+    val label =
+        when {
+            rejoiningCamera -> "REJOINING CAMERA"
+            upload != null ->
+                "UP ${upload.itemIndex}/${upload.itemCount} ${(upload.progress * 100).roundToInt()}%"
+            preparationInProgress -> "PREPARING…"
+            else -> "FRAME.IO $readyCount"
+        }
+    Text(
+        label,
+        style = chromeStyle(11f, FontWeight.Bold, mono = true),
+        color =
+            if (enabled || preparationInProgress || upload != null || rejoiningCamera) {
+                LiveDesign.accent
+            } else {
+                LiveDesign.faint
+            },
+        maxLines = 1,
+        modifier =
+            Modifier.glass(CapsuleShape)
+                .semantics {
+                    when {
+                        rejoiningCamera -> {
+                            contentDescription = "Rejoining saved camera Wi-Fi network"
+                            liveRegion = LiveRegionMode.Polite
+                            disabled()
+                        }
+                        upload != null -> {
+                            contentDescription =
+                                "Uploading Frame.io clip ${upload.itemIndex} of ${upload.itemCount}: ${(upload.progress * 100).roundToInt()} percent"
+                            progressBarRangeInfo =
+                                ProgressBarRangeInfo(
+                                    upload.progress.toFloat().coerceIn(0f, 1f),
+                                    0f..1f,
+                                )
+                            liveRegion = LiveRegionMode.Polite
+                            disabled()
+                        }
+                        preparationInProgress -> {
+                            contentDescription = "Preparing selected media for Frame.io delivery"
+                            progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate
+                            liveRegion = LiveRegionMode.Polite
+                            disabled()
+                        }
+                        else -> {
+                            contentDescription =
+                                "Deliver $readyCount complete cached media items to Frame.io"
+                            role = Role.Button
+                            if (!enabled) disabled()
+                        }
+                    }
+                }.chromeClickable(enabled) { onClick() }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+    )
+}
+
+@Composable
+private fun DeliverySelectionAction(
+    readyCount: Int,
+    enabled: Boolean,
+    shareInProgress: Boolean,
+    frameioPreparationInProgress: Boolean,
+    uploadInProgress: Boolean,
+    onClick: () -> Unit,
+) {
+    Text(
+        if (shareInProgress && !frameioPreparationInProgress && !uploadInProgress) {
+            "WORKING…"
+        } else {
+            "DELIVER"
+        },
+        style = chromeStyle(11f, FontWeight.Bold, mono = true),
+        color = if (enabled) LiveDesign.accent else LiveDesign.faint,
+        maxLines = 1,
+        modifier =
+            Modifier.glass(CapsuleShape)
+                .semantics {
+                    contentDescription =
+                        if (shareInProgress) {
+                            "Media delivery in progress"
+                        } else {
+                            "Choose delivery for $readyCount complete cached media items"
+                        }
+                    if (enabled) role = Role.Button else disabled()
+                }.chromeClickable(enabled) { onClick() }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+    )
 }
 
 /** Sort popup uses explicit menu choices rather than cycling a hidden state. */

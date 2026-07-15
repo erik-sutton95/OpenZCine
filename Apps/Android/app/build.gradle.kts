@@ -226,6 +226,7 @@ dependencies {
     implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
+    implementation(libs.media3.transformer)
     // The phone relay is a foreground-only Data Layer endpoint. It carries
     // preview/state messages to a same-signed Wear OS companion; it never
     // opens a camera transport or routes a command directly to Nikon.
