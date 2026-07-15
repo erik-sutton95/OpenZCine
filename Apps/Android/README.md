@@ -258,6 +258,16 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), run
   `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForDevice` at the repo root, forward the
   port with `adb reverse tcp:15740 tcp:15740`, and use host `127.0.0.1`.
+- **Beta support diagnostics and live guide:** the System tab can create an explicit local text
+  report from a bounded allowlist of app transitions plus Android 11+ historical exit reasons.
+  Reports omit process names, exit descriptions and traces, camera/network/media/account identity,
+  paths, credentials, exception text, and user input. Nothing is uploaded; a dedicated
+  cache-only FileProvider grants read access only after the operator chooses Share. The same tab
+  opens the established support, GitHub bug/discussion, source, privacy, and terms destinations and
+  can replay the three-step monitor guide now or on the next real frame. Automatic onboarding waits
+  for a successfully decoded Swift-camera frame, never the synthetic feed. While visible it blocks
+  camera controls on the touchscreen, media remote, and Wear relay. The screenshot-only debug
+  override is `--es zc.liveGuide camera|assist|system`; it cannot auto-complete the production gate.
 - **Media browse + playback + stills:** the monitor's media button opens
   `media/MediaBrowseScreen`, an iOS-look dark media library with Camera and On device sources,
   All/Videos/Photos/Favorites filters, Newest/Oldest/Name sorting, persisted favorites, grid/list

@@ -162,6 +162,15 @@ object DemoHarness {
     const val EXTRA_MEDIA = "zc.media"
 
     /**
+     * Explicit screenshot-only guide card. Synthetic frames never trigger the
+     * automatic guide; this isolated debug override mirrors iOS's harness.
+     */
+    const val EXTRA_LIVE_GUIDE_STEP = "zc.liveGuide"
+
+    internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? =
+        LiveViewGuideStep.debugValue(intent.getStringExtra(EXTRA_LIVE_GUIDE_STEP))
+
+    /**
      * Fails the first Gallery write after MediaStore insertion, then permits a
      * retry. This exercises pending-row cleanup on hardware without touching
      * unrelated device media: `--es zc.gallery.failOnce write`.

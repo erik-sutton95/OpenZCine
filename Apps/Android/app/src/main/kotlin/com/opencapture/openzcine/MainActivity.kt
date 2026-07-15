@@ -44,6 +44,9 @@ import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
+import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
+import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -87,6 +90,9 @@ private enum class StartupSurface {
  */
 class MainActivity : ComponentActivity() {
     private lateinit var mediaRemoteShutter: AndroidMediaRemoteShutter
+    private val diagnostics: AndroidAppDiagnostics by lazy {
+        AndroidAppDiagnostics.create(applicationContext)
+    }
 
     // A replayable activity-local callback is enough for both a cold launch and
     // an existing singleTop task. The controller validates the exact URI and
@@ -97,6 +103,7 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
+        diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
         publishFrameioRedirect(intent)
         if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
         // Camera-monitor chrome owns the whole panel, like the iOS shell:
@@ -116,6 +123,7 @@ class MainActivity : ComponentActivity() {
         val debugAssistEffects = DemoHarness.assistEffects(intent)
         val debugScopes = DemoHarness.scopeKinds(intent)
         val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
+        val debugLiveGuideStep = DemoHarness.liveGuideStep(intent)
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
@@ -146,6 +154,17 @@ class MainActivity : ComponentActivity() {
                     }
                 val frameioController =
                     remember { frameioDeliveryController(applicationContext, lutLibrary) }
+                val liveViewGuide =
+                    remember {
+                        LiveViewGuideController(applicationContext, diagnostics::record)
+                    }
+                val systemSettingsActions =
+                    remember {
+                        AndroidSystemSettingsActions(this@MainActivity, diagnostics)
+                    }
+                LaunchedEffect(debugLiveGuideStep) {
+                    debugLiveGuideStep?.let(liveViewGuide::forceForDebug)
+                }
                 val frameioRedirect by frameioRedirectCallback.collectAsState()
                 LaunchedEffect(frameioController, frameioRedirect) {
                     frameioRedirect?.let { callback ->
@@ -287,6 +306,10 @@ class MainActivity : ComponentActivity() {
                                 frameioController = frameioController,
                                 lutLibrary = lutLibrary,
                                 initialTab = OperatorSettingsTab.STORAGE,
+                                systemSettingsActions = systemSettingsActions,
+                                liveViewGuideController = liveViewGuide,
+                                onShowGuideOnNextRealFrame =
+                                    liveViewGuide::replayOnNextRealFrame,
                                 onClose = { standaloneSettingsPresented = false },
                             )
                         }
@@ -330,6 +353,25 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(assist) { assist.activateEffectsMirror() }
                         val currentSessionState by active.state.collectAsState()
                         val currentCameraProperties by active.cameraProperties.collectAsState()
+                        LaunchedEffect(currentSessionState) {
+                            diagnostics.record(
+                                when (currentSessionState) {
+                                    is CameraSessionState.Connected ->
+                                        AndroidDiagnosticEvent.CONNECTION_CONNECTED
+                                    CameraSessionState.Connecting ->
+                                        AndroidDiagnosticEvent.CONNECTION_CONNECTING
+                                    CameraSessionState.Disconnected ->
+                                        AndroidDiagnosticEvent.CONNECTION_DISCONNECTED
+                                },
+                            )
+                        }
+                        DisposableEffect(active) {
+                            diagnostics.record(AndroidDiagnosticEvent.MONITOR_PRESENTED)
+                            onDispose {
+                                liveViewGuide.onRealFrameUnavailable()
+                                diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED)
+                            }
+                        }
                         val playbackExposureAssistCameraInput =
                             remember(
                                 currentCameraProperties.codec,
@@ -413,6 +455,7 @@ class MainActivity : ComponentActivity() {
                                 activeTransportIsUsb =
                                     activeSavedCamera?.transport == SavedCameraTransport.USB_C,
                                 isDemoSession = pairingScript != null || demo?.second != null,
+                                liveViewGuideController = liveViewGuide,
                                 onOpenSettings = {
                                     mediaRemoteShutter.disarm()
                                     overlay = MonitorOverlay.SETTINGS
@@ -445,6 +488,16 @@ class MainActivity : ComponentActivity() {
                                             activeSavedCamera?.let {
                                                 { disconnectToSavedCameraHome(true) }
                                             },
+                                        systemSettingsActions = systemSettingsActions,
+                                        liveViewGuideController = liveViewGuide,
+                                        onShowGuideNow = {
+                                            liveViewGuide.replayNow()
+                                            overlay = MonitorOverlay.NONE
+                                        },
+                                        onShowGuideOnNextRealFrame = {
+                                            liveViewGuide.replayOnNextRealFrame()
+                                            overlay = MonitorOverlay.NONE
+                                        },
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                                 MonitorOverlay.MEDIA ->
@@ -493,6 +546,16 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         if (::mediaRemoteShutter.isInitialized) mediaRemoteShutter.disarm()
         super.onPause()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        diagnostics.record(AndroidDiagnosticEvent.APP_FOREGROUND)
+    }
+
+    override fun onStop() {
+        diagnostics.record(AndroidDiagnosticEvent.APP_BACKGROUND)
+        super.onStop()
     }
 
     override fun onDestroy() {
