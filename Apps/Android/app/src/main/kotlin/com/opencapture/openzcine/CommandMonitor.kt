@@ -327,13 +327,6 @@ internal fun commandDashboardPresentation(
                 "Waiting for the active base-ISO circuit."
             else -> "This camera did not provide ISO values for the active circuit."
         }
-    val electronicVrWritable = codec != null && !isRawCameraCodec(codec)
-    val electronicVrBlockedReason =
-        when {
-            codec == null -> "Waiting for camera codec readback before enabling electronic VR."
-            isRawCameraCodec(codec) -> "Electronic VR is unavailable in RAW codecs."
-            else -> "This camera did not advertise electronic VR."
-        }
     // The active descriptor changes with the camera's shutter circuit. Never
     // surface the inactive circuit or a local fallback ladder.
     val shutterOptions = capabilities.options(CameraControl.SHUTTER)
@@ -612,8 +605,8 @@ internal fun commandDashboardPresentation(
                             title = "e-VR",
                             value = snapshot.electronicVr,
                             control = CameraControl.ELECTRONIC_VR,
-                            blockedReason = electronicVrBlockedReason,
-                            writable = electronicVrWritable,
+                            blockedReason =
+                                "Electronic VR is unavailable for this camera or active codec.",
                         ),
                     ),
                 ),
@@ -714,12 +707,6 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.VIBRATION_REDUCTION -> snapshot.vibrationReduction == label
         CameraControl.ELECTRONIC_VR -> snapshot.electronicVr == label
     }
-
-/** Mirrors the shared core's RAW-family gate without moving codec parsing into Compose. */
-internal fun isRawCameraCodec(codec: String): Boolean {
-    val normalized = codec.uppercase()
-    return normalized.contains("RAW") || normalized.contains("R3D")
-}
 
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
 private const val COLOR_TEMPERATURE_MODE = "Color temp"

@@ -507,16 +507,16 @@ class CommandMonitorTest {
     }
 
     @Test
-    fun `electronic VR fails closed for unknown and RAW codecs`() {
-        fun electronicVr(codec: String?): CommandTilePresentation {
+    fun `electronic VR consumes only the Swift authorized capability`() {
+        fun electronicVr(options: List<String>): CommandTilePresentation {
             val presentation =
                 commandDashboardPresentation(
                     snapshot =
                         CameraPropertySnapshot(
-                            codec = codec,
+                            codec = "N-RAW",
                             electronicVr = "OFF",
                             controlCapabilities =
-                                CameraControlCapabilities(electronicVr = listOf("OFF", "ON")),
+                                CameraControlCapabilities(electronicVr = options),
                         ),
                     refreshStatus = CameraPropertyRefreshStatus.Ready,
                     sessionState =
@@ -530,16 +530,12 @@ class CommandMonitorTest {
             }
         }
 
-        assertEquals(null, electronicVr(null).request)
-        assertContains(electronicVr(null).unavailableReason.orEmpty(), "codec readback")
-        assertEquals(null, electronicVr("N-RAW").request)
-        assertEquals(null, electronicVr("R3D NE").request)
-        assertEquals(null, electronicVr("ProRes RAW HQ").request)
-        assertEquals(CameraControl.ELECTRONIC_VR, assertNotNull(electronicVr("H.265").request).control)
-        assertTrue(isRawCameraCodec("N-RAW"))
-        assertTrue(isRawCameraCodec("R3D NE"))
-        assertTrue(isRawCameraCodec("ProRes RAW HQ"))
-        assertFalse(isRawCameraCodec("H.265"))
+        val unavailable = electronicVr(emptyList())
+        assertEquals(null, unavailable.request)
+        assertContains(unavailable.unavailableReason.orEmpty(), "active codec")
+        val authorized = assertNotNull(electronicVr(listOf("OFF", "ON")).request)
+        assertEquals(CameraControl.ELECTRONIC_VR, authorized.control)
+        assertEquals(listOf("OFF", "ON"), authorized.options)
     }
 
     @Test

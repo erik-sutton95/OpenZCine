@@ -52,6 +52,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case unsupportedControl(PTPCameraControl, String)
     case unsupportedAndroidControl(String, String)
     case controlReadbackMismatch(String, String)
+    case invalidPropertyDescriptor(UInt32)
+    case unwritablePropertyDescriptor(UInt32)
     case liveViewAlreadyActive
     case mediaModeActive
     case mediaModeRequired
@@ -88,6 +90,12 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
         case .controlReadbackMismatch(let control, let label):
             return
                 "The camera accepted \(control) \(label), but its readback did not change. Check the active camera mode and try again."
+        case .invalidPropertyDescriptor(let code):
+            return
+                "Property 0x\(PTPIPClientSession.hexString(code)) returned an invalid descriptor."
+        case .unwritablePropertyDescriptor(let code):
+            return
+                "Property 0x\(PTPIPClientSession.hexString(code)) did not advertise a writable value domain."
         case .liveViewAlreadyActive:
             return "Live view is already streaming on this session."
         case .mediaModeActive:
@@ -123,6 +131,11 @@ public struct PTPIPClientIdentity: Equatable, Sendable {
 private struct AndroidRawControlMode<Value: FixedWidthInteger & Sendable>: Sendable {
     let label: String
     let raw: Value
+}
+
+private enum AndroidWritableDescriptorForm: Sendable {
+    case enumeration([[UInt8]])
+    case range(minimum: [UInt8], maximum: [UInt8], step: [UInt8])
 }
 
 /// Nikon ZR controls whose settable domain is stable even when the body omits or temporarily
@@ -188,6 +201,7 @@ private enum AndroidNikonZRControlFallback {
 
 /// Exact camera-advertised values retained inside the Swift session.
 private struct AndroidRawControlCatalog: Sendable {
+    var isComplete = false
     var screenSizes: [PTPCameraScreenSizeMode] = []
     var fileTypes: [PTPCameraFileTypeMode] = []
     var apertures: [AndroidRawControlMode<UInt16>] = []
@@ -209,12 +223,16 @@ private struct AndroidRawControlCatalog: Sendable {
     var whiteBalanceTints: [(label: String, amberBlue: Int, greenMagenta: Int)] = []
     var vibrationReduction: [AndroidRawControlMode<UInt8>] = []
     var electronicVR: [AndroidRawControlMode<UInt8>] = []
+    var allowsApertureFallback = false
 
     func capabilities(
         properties: PTPCameraPropertySnapshot,
         whiteBalanceTint: String?,
         usesNikonZRFallbacks: Bool
     ) -> AndroidCameraControlCapabilities {
+        guard isComplete else { return .empty }
+        let currentCodec = recognizedCurrentCodec(properties.fileType)
+        let showsDualBaseCircuits = currentCodec.map(ISOPickerPolicy.showsDualBaseCircuits) ?? false
         let activeShutterValues: [String] =
             switch properties.shutterMode {
             case .angle: shutterAngles.map(\.label)
@@ -222,14 +240,14 @@ private struct AndroidRawControlCatalog: Sendable {
             case nil: []
             }
         let irisValues: [String]
-        if apertures.isEmpty, usesNikonZRFallbacks, properties.lens != nil {
+        if apertures.isEmpty, allowsApertureFallback, properties.lens != nil {
             irisValues = PTPCameraPropertyDecoders.availableApertures(forLens: properties.lens)
         } else {
             irisValues = apertures.map(\.label)
         }
         let isoValues: [String]
-        if usesNikonZRFallbacks, let codec = properties.fileType {
-            if ISOPickerPolicy.showsDualBaseCircuits(codec: codec) {
+        if usesNikonZRFallbacks, currentCodec != nil {
+            if showsDualBaseCircuits {
                 switch properties.baseISO {
                 case "Low": isoValues = ISOPickerPolicy.lowBaseOptions
                 case "High": isoValues = ISOPickerPolicy.highBaseOptions
@@ -265,15 +283,23 @@ private struct AndroidRawControlCatalog: Sendable {
             windFilters: windFilters.map(\.label),
             attenuators: attenuators.map(\.label),
             audio32BitFloat: audio32BitFloat.map(\.label),
-            baseISO: baseISO.map(\.label),
+            baseISO: showsDualBaseCircuits ? baseISO.map(\.label) : [],
             shutterModes: shutterModes.map(\.label),
             shutterLocks: shutterLocks.map(\.label),
             whiteBalanceTints: whiteBalanceTints.map(\.label),
             resolutionFrameRates: screenSizes.map(\.label),
             codecs: fileTypes.map(\.label),
             vibrationReduction: vibrationReduction.map(\.label),
-            electronicVR: electronicVR.map(\.label)
+            electronicVR:
+                currentCodec.map(MonitorTextFormat.isRawCodec) == false
+                ? electronicVR.map(\.label) : []
         )
+    }
+
+    private func recognizedCurrentCodec(_ codec: String?) -> String? {
+        guard let codec else { return nil }
+        let label = MonitorTextFormat.codecShortLabel(codec)
+        return fileTypes.contains(where: { $0.label == label }) ? label : nil
     }
 
     private func uniqueLabels(_ values: [String]) -> [String] {
@@ -642,10 +668,99 @@ public final class PTPIPClientSession: @unchecked Sendable {
         _ property: PTPPropertyCode,
         valueByteCount: Int
     ) throws -> [UInt32] {
-        PTPCameraPropertyDecoders.devicePropDescEnumValues(
-            data: try readPropertyDescriptor(property),
-            valueByteCount: valueByteCount
-        )
+        let values = try descriptorEnumBytes(property, valueByteCount: valueByteCount)
+        return values.map { bytes in
+            switch valueByteCount {
+            case 1: UInt32(bytes[0])
+            case 2: UInt32(ByteCoding.readUInt16LE(bytes, at: 0))
+            default: ByteCoding.readUInt32LE(bytes, at: 0)
+            }
+        }
+    }
+
+    private func descriptorEnumBytes(
+        _ property: PTPPropertyCode,
+        valueByteCount: Int
+    ) throws -> [[UInt8]] {
+        let form = try writableDescriptorForm(property, valueByteCount: valueByteCount)
+        guard case .enumeration(let values) = form else {
+            throw PTPIPClientSessionError.unwritablePropertyDescriptor(property.rawValue)
+        }
+        return values
+    }
+
+    private func writableDescriptorForm(
+        _ property: PTPPropertyCode,
+        valueByteCount: Int
+    ) throws -> AndroidWritableDescriptorForm {
+        let descriptor = try readPropertyDescriptor(property)
+        return try Self.writableDescriptorForm(
+            descriptor,
+            property: property,
+            valueByteCount: valueByteCount)
+    }
+
+    /// Validates the complete Nikon extended-property descriptor before any value becomes a write
+    /// capability. The descriptor must name the requested property, match its expected value width,
+    /// be writable, and carry one exact enum or range form flush to the end of the dataset.
+    private static func writableDescriptorForm(
+        _ descriptor: Data,
+        property: PTPPropertyCode,
+        valueByteCount: Int
+    ) throws -> AndroidWritableDescriptorForm {
+        let bytes = [UInt8](descriptor)
+        let expectedDataType: UInt16 =
+            switch valueByteCount {
+            case 1: 0x0002  // UINT8
+            case 2: 0x0004  // UINT16
+            case 4: 0x0006  // UINT32
+            case 8: 0x0008  // UINT64
+            default: 0
+            }
+        let formIndex = 7 + valueByteCount * 2
+        guard expectedDataType != 0,
+            bytes.count > formIndex,
+            ByteCoding.readUInt32LE(bytes, at: 0) == property.rawValue,
+            ByteCoding.readUInt16LE(bytes, at: 4) == expectedDataType,
+            bytes[6] == 0 || bytes[6] == 1
+        else {
+            throw PTPIPClientSessionError.invalidPropertyDescriptor(property.rawValue)
+        }
+        guard bytes[6] == 1 else {
+            throw PTPIPClientSessionError.unwritablePropertyDescriptor(property.rawValue)
+        }
+
+        switch bytes[formIndex] {
+        case 0:
+            throw PTPIPClientSessionError.unwritablePropertyDescriptor(property.rawValue)
+        case 1:
+            let valuesStart = formIndex + 1
+            guard valuesStart + valueByteCount * 3 == bytes.count else {
+                throw PTPIPClientSessionError.invalidPropertyDescriptor(property.rawValue)
+            }
+            return .range(
+                minimum: Array(bytes[valuesStart..<(valuesStart + valueByteCount)]),
+                maximum: Array(
+                    bytes[(valuesStart + valueByteCount)..<(valuesStart + valueByteCount * 2)]),
+                step: Array(
+                    bytes[(valuesStart + valueByteCount * 2)..<(valuesStart + valueByteCount * 3)]))
+        case 2:
+            guard formIndex + 3 <= bytes.count else {
+                throw PTPIPClientSessionError.invalidPropertyDescriptor(property.rawValue)
+            }
+            let count = Int(ByteCoding.readUInt16LE(bytes, at: formIndex + 1))
+            let valuesStart = formIndex + 3
+            guard valuesStart + count * valueByteCount == bytes.count else {
+                throw PTPIPClientSessionError.invalidPropertyDescriptor(property.rawValue)
+            }
+            return .enumeration(
+                (0..<count).map { item in
+                    let start = valuesStart + item * valueByteCount
+                    return Array(bytes[start..<(start + valueByteCount)])
+                })
+        default:
+            throw PTPIPClientSessionError.invalidPropertyDescriptor(property.rawValue)
+        }
     }
 
     /// Reads a property and decodes it through the core: battery level comes
@@ -792,6 +907,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// advertise only a subset; one unsupported descriptor must not hide the
     /// valid controls that follow it.
     private func refreshAndroidControlDescriptors() -> AndroidCameraPropertyRefreshResult {
+        // Build one new capability generation under commandLifecycleLock. No previous descriptor
+        // value survives a failed pass, and callers cannot observe the partially populated catalog.
+        androidControlCatalog = AndroidRawControlCatalog()
+        androidWhiteBalanceTint = nil
         let refreshers: [() throws -> Void] = [
             refreshAndroidScreenSizeDescriptor,
             refreshAndroidFileTypeDescriptor,
@@ -827,14 +946,32 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
             if result == .transportFailed { break }
         }
-        if result != .transportFailed { androidLastDescriptorRefreshAt = Date() }
+        if result == .transportFailed || result == .mediaBusy {
+            androidControlCatalog = AndroidRawControlCatalog()
+            androidWhiteBalanceTint = nil
+        } else {
+            androidControlCatalog.isComplete = true
+            androidLastDescriptorRefreshAt = Date()
+        }
         return result
     }
 
     private func refreshAndroidScreenSizeDescriptor() throws {
         androidControlCatalog.screenSizes = []
-        androidControlCatalog.screenSizes = PTPCameraPropertyDecoders.screenSizeModes(
-            fromDescriptor: try readPropertyDescriptor(.movieRecordScreenSize))
+        let values = try descriptorEnumBytes(.movieRecordScreenSize, valueByteCount: 8)
+        androidControlCatalog.screenSizes = values.compactMap { bytes in
+            let raw = ByteCoding.readUInt64LE(bytes, at: 0)
+            let size = PTPCameraPropertyDecoders.screenSize(raw)
+            guard size.width >= 640, size.width <= 8_192, size.height >= 360,
+                size.height <= 5_000, size.fps >= 1, size.fps <= 240
+            else { return nil }
+            return PTPCameraScreenSizeMode(
+                raw: raw,
+                label: MonitorTextFormat.resolutionLabel(
+                    pixelWidth: size.width,
+                    pixelHeight: size.height,
+                    frameRate: Double(size.fps)))
+        }
     }
 
     private func refreshAndroidFileTypeDescriptor() throws {
@@ -845,12 +982,22 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     private func refreshAndroidApertureDescriptor() throws {
         androidControlCatalog.apertures = []
-        androidControlCatalog.apertures = try descriptorModesWithZRFallback(fallback: []) {
+        androidControlCatalog.allowsApertureFallback = false
+        do {
             let raw = try descriptorEnumValues(.movieFNumber, valueByteCount: 2)
-            return uniqueUInt16Modes(raw) { value in
+            let modes = uniqueUInt16Modes(raw) { value in
                 let label = PTPCameraPropertyDecoders.irisFNumber(value)
                 return label == "—" ? nil : label
             }
+            guard raw.isEmpty || !modes.isEmpty else {
+                throw PTPIPClientSessionError.unwritablePropertyDescriptor(
+                    PTPPropertyCode.movieFNumber.rawValue)
+            }
+            androidControlCatalog.apertures = modes
+            androidControlCatalog.allowsApertureFallback = raw.isEmpty && usesNikonZRFallbacks
+        } catch let error as PTPIPClientSessionError {
+            guard usesNikonZRFallbacks, isDescriptorFallbackEligible(error) else { throw error }
+            androidControlCatalog.allowsApertureFallback = true
         }
     }
 
@@ -1038,7 +1185,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         else {
             return
         }
-        let descriptor = try readPropertyDescriptor(property)
+        let descriptor = try writableDescriptorForm(property, valueByteCount: 2)
         androidControlCatalog.whiteBalanceTints = Self.whiteBalanceTintModes(
             fromDescriptor: descriptor)
         let data = try readProperty(property)
@@ -1081,7 +1228,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) -> AndroidCameraPropertyRefreshResult {
         switch error {
         case .mediaModeActive, .mediaModeRequired: .mediaBusy
-        case .operationRejected, .unsupportedProperty: .unsupported
+        case .operationRejected, .unsupportedProperty, .unwritablePropertyDescriptor: .unsupported
         default: .transportFailed
         }
     }
@@ -1098,10 +1245,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
             if !advertised.isEmpty || !usesNikonZRFallbacks { return advertised }
             return fallback
         } catch let error as PTPIPClientSessionError {
-            guard usesNikonZRFallbacks, androidDescriptorResult(for: error) == .unsupported else {
+            guard usesNikonZRFallbacks, isDescriptorFallbackEligible(error) else {
                 throw error
             }
             return fallback
+        }
+    }
+
+    private func isDescriptorFallbackEligible(_ error: PTPIPClientSessionError) -> Bool {
+        switch error {
+        case .operationRejected, .unsupportedProperty: true
+        default: false
         }
     }
 
@@ -1172,13 +1326,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Enumeration descriptors retain their exact cells; range descriptors
     /// constrain the shared Nikon grid by the camera's min/max/step tuple.
     private static func whiteBalanceTintModes(
-        fromDescriptor descriptor: Data
+        fromDescriptor descriptor: AndroidWritableDescriptorForm
     ) -> [(label: String, amberBlue: Int, greenMagenta: Int)] {
-        let enumerated = PTPCameraPropertyDecoders.devicePropDescEnumValues(
-            data: descriptor, valueByteCount: 2)
-        if !enumerated.isEmpty {
-            return enumerated.compactMap { raw in
-                guard let value = UInt16(exactly: raw),
+        switch descriptor {
+        case .enumeration(let enumerated):
+            return enumerated.compactMap { bytes in
+                let value = ByteCoding.readUInt16LE(bytes, at: 0)
+                guard
                     let cells = WhiteBalanceTint.cells(fromPropertyValue: value)
                 else { return nil }
                 return (
@@ -1189,33 +1343,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     cells.greenMagenta
                 )
             }
+        case .range(let minimumBytes, let maximumBytes, let stepBytes):
+            let minimum = ByteCoding.readUInt16LE(minimumBytes, at: 0)
+            let maximum = ByteCoding.readUInt16LE(maximumBytes, at: 0)
+            let step = ByteCoding.readUInt16LE(stepBytes, at: 0)
+            guard minimum <= maximum, step > 0 else { return [] }
+            return whiteBalanceTintGrid.filter { mode in
+                let value = WhiteBalanceTint.propertyValue(
+                    amberBlueCell: mode.amberBlue,
+                    greenMagentaCell: mode.greenMagenta)
+                return value >= minimum && value <= maximum
+                    && (value - minimum).isMultiple(of: step)
+            }
         }
-        guard let range = uint16DescriptorRange(descriptor), range.step > 0 else { return [] }
-        return whiteBalanceTintGrid.filter { mode in
-            let value = WhiteBalanceTint.propertyValue(
-                amberBlueCell: mode.amberBlue,
-                greenMagentaCell: mode.greenMagenta)
-            return value >= range.minimum && value <= range.maximum
-                && (value - range.minimum).isMultiple(of: range.step)
-        }
-    }
-
-    /// DevicePropDesc range forms end in `flag + min + max + step` for a
-    /// UINT16 property. Exact tail anchoring avoids mistaking header bytes for
-    /// a range declaration.
-    private static func uint16DescriptorRange(
-        _ descriptor: Data
-    ) -> (minimum: UInt16, maximum: UInt16, step: UInt16)? {
-        let bytes = [UInt8](descriptor)
-        let byteCount = 7
-        guard bytes.count >= byteCount else { return nil }
-        let index = bytes.count - byteCount
-        guard bytes[index] == 1 else { return nil }
-        let minimum = ByteCoding.readUInt16LE(bytes, at: index + 1)
-        let maximum = ByteCoding.readUInt16LE(bytes, at: index + 3)
-        let step = ByteCoding.readUInt16LE(bytes, at: index + 5)
-        guard minimum <= maximum else { return nil }
-        return (minimum, maximum, step)
     }
 
     /// Packages the accumulated snapshot without allowing a transient failed
@@ -1455,6 +1595,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 modes: androidControlCatalog.audio32BitFloat,
                 property: .movie32BitFloatAudioRecording)
         case .baseISO:
+            guard let codec = androidPropertySnapshot.fileType,
+                ISOPickerPolicy.showsDualBaseCircuits(codec: codec)
+            else { return [] }
             return uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.baseISO,
@@ -1483,9 +1626,6 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 modes: androidControlCatalog.vibrationReduction,
                 property: .movieVibrationReduction)
         case .electronicVR:
-            guard let codec = androidPropertySnapshot.fileType,
-                !MonitorTextFormat.isRawCodec(codec)
-            else { return [] }
             return uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.electronicVR,

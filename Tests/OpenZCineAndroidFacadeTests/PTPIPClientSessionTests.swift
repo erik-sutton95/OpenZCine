@@ -237,7 +237,7 @@ struct PTPIPClientSessionTests {
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
         #expect(bootstrap.controls.codecs == ["R3D NE", "H.265"])
         #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
-        #expect(bootstrap.controls.electronicVR == ["OFF", "ON"])
+        #expect(bootstrap.controls.electronicVR.isEmpty)
         #expect(bootstrap.controls.whiteBalanceTints.contains("A1 · G0.5"))
 
         let writeBaseline = server.receivedPropertyWrites().count
@@ -471,7 +471,7 @@ struct PTPIPClientSessionTests {
         #expect(!zr.audioSensitivities.isEmpty)
         #expect(zr.audioInputs == ["Microphone", "Line"])
         #expect(zr.vibrationReduction == ["OFF", "ON", "SPORT"])
-        #expect(zr.electronicVR == ["OFF", "ON"])
+        #expect(zr.electronicVR.isEmpty)
 
         let z8 = try controls(model: "Z8")
         #expect(z8.isoValues.isEmpty)
@@ -542,6 +542,114 @@ struct PTPIPClientSessionTests {
             try unknownSession.applyAndroidControl(.electronicVR, label: "ON")
         }
         #expect(unknownServer.receivedPropertyWrites().isEmpty)
+
+        var encodedUnknownOptions = FakeZRServer.Options()
+        encodedUnknownOptions.movieFileTypeRaw = 0x007F_0A01
+        encodedUnknownOptions.descriptorEnumOverrides[.movieFileType] = [
+            0x007F_0A01, 0x0001_0A01,
+        ]
+        let encodedUnknownServer = try FakeZRServer(options: encodedUnknownOptions)
+        defer { encodedUnknownServer.stop() }
+        let encodedUnknownSession = try connect(to: encodedUnknownServer)
+        defer { encodedUnknownSession.disconnect() }
+        let encodedUnknown = encodedUnknownSession.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(encodedUnknown.controls.electronicVR.isEmpty)
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("electronicVR", "ON")
+        ) {
+            try encodedUnknownSession.applyAndroidControl(.electronicVR, label: "ON")
+        }
+        #expect(encodedUnknownServer.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func baseISOIsUnavailableOutsideTheSharedDualBaseCodecPolicy() throws {
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = 0x0001_0A01  // H.265
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.isoValues == ISOPickerPolicy.unifiedOptions)
+        #expect(bootstrap.controls.baseISO.isEmpty)
+        #expect(bootstrap.controls.electronicVR == ["OFF", "ON"])
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("baseISO", "Low")) {
+            try session.applyAndroidControl(.baseISO, label: "Low")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func readOnlyDescriptorNeverAuthorizesItsFallbackWrite() throws {
+        var options = FakeZRServer.Options()
+        options.readOnlyDescriptorCodes = [PTPPropertyCode.movieFNumber.rawValue]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.result == .unsupported)
+        for property in [
+            PTPPropertyCode.focalLength, .lensFocalMin, .lensFocalMax, .lensApertureMin,
+        ] {
+            _ = session.refreshAndroidPropertySnapshot(.propertyChanged(property.rawValue))
+        }
+        let readback = session.refreshAndroidPropertySnapshot(.propertyChanged(0xDEAD))
+        #expect(readback.properties.lens == "24-70mm f/2.8")
+        #expect(readback.controls.irisValues.isEmpty)
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iris", "f/2.8")) {
+            try session.applyAndroidControl(.iris, label: "f/2.8")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func descriptorIdentityAndDataTypeMismatchesFailClosed() throws {
+        func bootstrap(_ options: FakeZRServer.Options) throws -> AndroidCameraPropertyReadback {
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            return session.refreshAndroidPropertySnapshot(.bootstrap)
+        }
+
+        var identityOptions = FakeZRServer.Options()
+        identityOptions.descriptorIdentityOverrides[
+            PTPPropertyCode.movieRecordScreenSize.rawValue
+        ] = PTPPropertyCode.movieFileType.rawValue
+        let invalidIdentity = try bootstrap(identityOptions)
+        #expect(invalidIdentity.result == .transportFailed)
+        #expect(invalidIdentity.controls == .empty)
+
+        var typeOptions = FakeZRServer.Options()
+        typeOptions.descriptorDataTypeOverrides[PTPPropertyCode.movieFileType.rawValue] = 0x0004
+        let invalidType = try bootstrap(typeOptions)
+        #expect(invalidType.result == .transportFailed)
+        #expect(invalidType.controls == .empty)
+    }
+
+    @Test func partialDescriptorTransportFailureClearsTheWholeCapabilityGeneration() throws {
+        var options = FakeZRServer.Options()
+        options.malformedDescriptorCodesAfterFirstRead = [
+            PTPPropertyCode.movieAudioInputSensitivity.rawValue
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let first = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(first.result == .accepted)
+        #expect(!first.controls.codecs.isEmpty)
+        #expect(!first.controls.audioSensitivities.isEmpty)
+
+        let failed = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(failed.result == .transportFailed)
+        #expect(failed.controls == .empty)
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("codec", "H.265")) {
+            try session.applyAndroidControl(.codec, label: "H.265")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
     }
 
     @Test func kelvinOptionsRequireAnAdvertisedColorTemperatureMode() throws {
@@ -595,7 +703,7 @@ struct PTPIPClientSessionTests {
         let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
         #expect(bootstrap.result == .unsupported)
         #expect(bootstrap.controls.codecs.isEmpty)
-        #expect(bootstrap.controls.electronicVR == ["OFF", "ON"])
+        #expect(bootstrap.controls.electronicVR.isEmpty)
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
         #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
         #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])

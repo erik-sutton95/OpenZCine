@@ -81,6 +81,14 @@ final class FakeZRServer: @unchecked Sendable {
         /// Per-property descriptor enums used to prove the app never exposes values outside the
         /// connected body's current advertised domain.
         var descriptorEnumOverrides: [PTPPropertyCode: [UInt32]] = [:]
+        /// Descriptor properties reported as readable but not writable.
+        var readOnlyDescriptorCodes: Set<UInt32> = []
+        /// Per-property wire identity overrides used to exercise descriptor validation.
+        var descriptorIdentityOverrides: [UInt32: UInt32] = [:]
+        /// Per-property PTP data-type overrides used to exercise descriptor validation.
+        var descriptorDataTypeOverrides: [UInt32: UInt16] = [:]
+        /// Descriptor properties that return an accepted malformed payload after their first read.
+        var malformedDescriptorCodesAfterFirstRead: Set<UInt32> = []
         /// Properties that return valid bytes once, then an accepted short payload.
         var shortPropertyCodesAfterFirstRead: Set<UInt32> = []
         /// Deterministic command-response latency used to prove RTT is measured, not synthesized.
@@ -136,6 +144,8 @@ final class FakeZRServer: @unchecked Sendable {
         var focusModeRaw: UInt8 = 1  // AF-C
         var focusAreaRaw: UInt16 = 0x8033  // Subject
         var focusSubjectRaw: UInt8 = 2  // People
+        /// Current packed movie-file-type value returned by property readback.
+        var movieFileTypeRaw: UInt32 = 0x0031_0A03
     }
 
     let port: UInt16
@@ -155,6 +165,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var requestLog: [FakeZRRequest] = []
     private var propertyWriteLog: [FakeZRPropertyWrite] = []
     private var propertyReadCounts: [UInt32: Int] = [:]
+    private var descriptorReadCounts: [UInt32: Int] = [:]
     private var propertyValueOverrides: [UInt32: Data] = [:]
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
@@ -690,7 +701,17 @@ final class FakeZRServer: @unchecked Sendable {
                 sendResponse(connection, code: 0x2002, transactionID: transactionID)
                 return
             }
-            sendDataIn(connection, data: descriptor, transactionID: transactionID)
+            lock.lock()
+            let readCount = (descriptorReadCounts[propertyCode] ?? 0) + 1
+            descriptorReadCounts[propertyCode] = readCount
+            let sendsMalformedPayload =
+                readCount > 1
+                && options.malformedDescriptorCodesAfterFirstRead.contains(propertyCode)
+            lock.unlock()
+            sendDataIn(
+                connection,
+                data: sendsMalformedPayload ? Data() : descriptor,
+                transactionID: transactionID)
         case .setDevicePropValue, .setDevicePropValueEx:
             guard let property = parameters.first, let dataOut else {
                 sendResponse(connection, code: 0x2005, transactionID: transactionID)
@@ -798,7 +819,7 @@ final class FakeZRServer: @unchecked Sendable {
         case .movieRecordScreenSize:
             return Data(ByteCoding.uint64LE(0x1770_0D08_0019_0000))
         case .movieFileType:
-            return Data(ByteCoding.uint32LE(0x0031_0A03))
+            return Data(ByteCoding.uint32LE(options.movieFileTypeRaw))
         case .batteryLevel:
             return Data([options.batteryPercent])
         case .acPower:
@@ -981,9 +1002,12 @@ final class FakeZRServer: @unchecked Sendable {
         valueByteCount: Int,
         values: [[UInt8]]
     ) -> Data {
-        var bytes = ByteCoding.uint32LE(property.rawValue)
-        bytes += ByteCoding.uint16LE(UInt16(valueByteCount))
-        bytes.append(1)  // Get/Set
+        var bytes = ByteCoding.uint32LE(
+            options.descriptorIdentityOverrides[property.rawValue] ?? property.rawValue)
+        bytes += ByteCoding.uint16LE(
+            options.descriptorDataTypeOverrides[property.rawValue]
+                ?? unsignedDataType(for: valueByteCount))
+        bytes.append(options.readOnlyDescriptorCodes.contains(property.rawValue) ? 0 : 1)
         bytes += [UInt8](repeating: 0, count: valueByteCount * 2)
         bytes.append(2)  // Enumeration form
         bytes += ByteCoding.uint16LE(UInt16(values.count))
@@ -994,15 +1018,28 @@ final class FakeZRServer: @unchecked Sendable {
     }
 
     private func rangeDescriptor(property: PTPPropertyCode, valueByteCount: Int) -> Data {
-        var bytes = ByteCoding.uint32LE(property.rawValue)
-        bytes += ByteCoding.uint16LE(UInt16(valueByteCount))
-        bytes.append(1)
+        var bytes = ByteCoding.uint32LE(
+            options.descriptorIdentityOverrides[property.rawValue] ?? property.rawValue)
+        bytes += ByteCoding.uint16LE(
+            options.descriptorDataTypeOverrides[property.rawValue]
+                ?? unsignedDataType(for: valueByteCount))
+        bytes.append(options.readOnlyDescriptorCodes.contains(property.rawValue) ? 0 : 1)
         bytes += [UInt8](repeating: 0, count: valueByteCount * 2)
         bytes.append(1)  // Range form; the facade uses shared WhiteBalanceTint grid policy.
         bytes += ByteCoding.uint16LE(options.whiteBalanceTintMinimum)
         bytes += ByteCoding.uint16LE(options.whiteBalanceTintMaximum)
         bytes += ByteCoding.uint16LE(options.whiteBalanceTintStep)
         return Data(bytes)
+    }
+
+    private func unsignedDataType(for valueByteCount: Int) -> UInt16 {
+        switch valueByteCount {
+        case 1: 0x0002
+        case 2: 0x0004
+        case 4: 0x0006
+        case 8: 0x0008
+        default: 0
+        }
     }
 
     /// Minimal PIMA `StorageInfo` record: three UINT16 headers followed by
