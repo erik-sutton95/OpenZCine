@@ -22,7 +22,7 @@ Xcode Cloud replaces most of the GitHub workflow with managed equivalents:
 | ASC API key + `altool` upload | Native TestFlight post-action |
 | `ios-ci-version.sh` build number | Xcode Cloud's own build counter (stamped automatically) |
 | Frame.io xcconfig injection | [`ios/ci_scripts/ci_post_clone.sh`](../ios/ci_scripts/ci_post_clone.sh) + secret env vars |
-| Release-notes summary | [`ios/ci_scripts/ci_post_xcodebuild.sh`](../ios/ci_scripts/ci_post_xcodebuild.sh) → TestFlight "What to Test" |
+| Reviewed tester notes | [`ios/TestFlight/WhatToTest.en-US.txt`](../ios/TestFlight/WhatToTest.en-US.txt) → TestFlight "What to Test" |
 
 ### One-time setup (App Store Connect / Xcode)
 
@@ -51,9 +51,39 @@ Xcode Cloud replaces most of the GitHub workflow with managed equivalents:
 
 - `ci_post_clone.sh` — writes `ios/Runner/Frameio.local.xcconfig` from the secret env vars
   (empty-safe, mirrors the GitHub step).
-- `ci_post_xcodebuild.sh` — runs `scripts/ios-release-notes.sh` and writes
-  `ios/TestFlight/WhatToTest.en-US.txt`, which Xcode Cloud attaches to the TestFlight build. It
-  deepens the shallow clone first so the last 25 commits are available.
+- `ci_post_xcodebuild.sh` — validates and prints the tracked
+  `ios/TestFlight/WhatToTest.en-US.txt`, which Xcode Cloud attaches to the TestFlight build.
+
+### Tester-facing release notes
+
+TestFlight notes are reviewed product copy, not a transformed Git commit log. Any pull request that
+can trigger a TestFlight build must replace `ios/TestFlight/WhatToTest.en-US.txt`. The required
+format is:
+
+```text
+What's changed
+
+- Find and pair no longer gets stuck while looking for cameras through Personal Hotspot.
+
+Please test
+
+- Connect your Nikon camera to your iPhone's Personal Hotspot, then open Find and pair.
+- Confirm the camera appears and completes pairing.
+```
+
+Write for non-developer camera operators:
+
+- Include only behavior visible in the iPhone, iPad, or Apple Watch app.
+- Say what changed for the tester, not how it was implemented.
+- Use the names testers see in the app, such as **Find and pair**, **Personal Hotspot**, and
+  **live preview**.
+- Keep **What's changed** to 1-5 bullets and **Please test** to 1-4 concrete actions.
+- Exclude Android, website, CI, architecture, identifiers, issue numbers, and source-file details.
+
+For a build with no tester-facing app behavior, write that plainly and ask testers to continue
+their normal camera workflow. `scripts/ios-release-notes-check.sh` enforces the format, character
+limit, and a small denylist of implementation jargon. Pull-request CI also verifies that the notes
+file changed whenever the TestFlight build paths changed.
 
 ## GitHub Actions (fallback)
 
@@ -193,13 +223,12 @@ Or open `build/ios/OpenZCine.xcarchive` in Xcode Organizer after `just ios-expor
 | `No Apple Distribution signing identity found` | Wrong `.p12` exported, or expired certificate |
 | Upload succeeds but no TestFlight build | Wait for App Store processing; check email for compliance prompts |
 
-Release notes are generated in the workflow summary (`scripts/ios-release-notes.sh`). The script
-rewrites recent git history into plain-language **What's new** and **Please test** sections for
-TestFlight testers (internal CI/build commits are omitted). Paste the output into App Store Connect
+Release notes come from the reviewed `ios/TestFlight/WhatToTest.en-US.txt`. The fallback workflow
+validates the file and includes it in the workflow summary. Paste that output into App Store Connect
 **What to Test** if needed — automated ASC localization API integration can be added later.
 
 Preview locally:
 
 ```bash
-./scripts/ios-release-notes.sh 25
+./scripts/ios-release-notes.sh
 ```
