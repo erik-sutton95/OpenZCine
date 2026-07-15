@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.lut.StoredLutCategory
+import com.opencapture.openzcine.lut.StoredLutSelection
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +13,7 @@ class AssistStateTest {
     fun `lut toggles on with the default look and off again`() {
         val state = AssistState(FeedEffects.NONE, null)
         state.toggle(AssistTool.LUT)
-        assertEquals(FeedLut.LOG3G10_709, state.effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709), state.effects.lut)
         assertTrue(state.isOn(AssistTool.LUT))
         state.toggle(AssistTool.LUT)
         assertNull(state.effects.lut)
@@ -20,13 +22,13 @@ class AssistStateTest {
 
     @Test
     fun `false colour replaces the lut and restores the selected look`() {
-        val state = AssistState(FeedEffects(lut = FeedLut.MONO), null)
+        val state = AssistState(FeedEffects(lut = FeedLutSelection.BuiltIn(FeedLut.MONO)), null)
         state.toggle(AssistTool.FALSE)
         assertNull(state.effects.lut)
         assertEquals(FeedFalseColorScale.STOPS, state.effects.falseColor)
         state.toggle(AssistTool.LUT)
         assertNull(state.effects.falseColor)
-        assertEquals(FeedLut.MONO, state.effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), state.effects.lut)
     }
 
     @Test
@@ -100,7 +102,11 @@ class AssistStateTest {
 
         // The persisted form is the zc.assist token grammar — parse restores it.
         val effects = savedEffects!!
-        val restored = AssistState.tokens(effects).let { FeedEffects.parse(it, effects.lut?.id, effects.falseColor?.id) }
+        val selectedBuiltIn = (effects.lut as? FeedLutSelection.BuiltIn)?.value
+        val restored =
+            AssistState.tokens(effects).let {
+                FeedEffects.parse(it, selectedBuiltIn?.id, effects.falseColor?.id)
+            }
         assertEquals(effects, restored)
     }
 
@@ -115,11 +121,11 @@ class AssistStateTest {
 
         val state = AssistState.restore(preferences, FeedEffects.NONE, null)
         assertTrue(state.effects.zebra)
-        assertEquals(FeedLut.MONO, state.selectedLut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), state.selectedLut)
         assertEquals(FeedFalseColorScale.IRE, state.selectedFalseColorScale)
 
         state.toggle(AssistTool.LUT)
-        assertEquals(FeedLut.MONO, state.effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), state.effects.lut)
         state.toggle(AssistTool.FALSE)
         assertEquals(FeedFalseColorScale.IRE, state.effects.falseColor)
     }
@@ -133,10 +139,53 @@ class AssistStateTest {
         state.selectFalseColorScale(FeedFalseColorScale.IRE)
 
         val restored = AssistState.restore(preferences, FeedEffects.NONE, null)
-        assertEquals(FeedLut.NLOG_709, restored.selectedLut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.NLOG_709), restored.selectedLut)
         assertEquals(FeedFalseColorScale.IRE, restored.selectedFalseColorScale)
         restored.toggle(AssistTool.LUT)
-        assertEquals(FeedLut.NLOG_709, restored.effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.NLOG_709), restored.effects.lut)
+    }
+
+    @Test
+    fun `validated app private stored selection survives restart and missing files fall back safely`() {
+        val preferences = TestSharedPreferences()
+        val selection =
+            requireNotNull(
+                StoredLutSelection.fromPersisted(
+                    StoredLutCategory.CUSTOM.name,
+                    "operator-look-a1b2c3d4e5f6.cube",
+                ),
+            )
+        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+
+        state.selectStoredLut(selection)
+        state.toggle(AssistTool.LUT)
+
+        val restored =
+            AssistState.restore(
+                preferences,
+                FeedEffects.NONE,
+                null,
+                availableStoredLut = { it == selection },
+            )
+        assertEquals(FeedLutSelection.Stored(selection), restored.selectedLut)
+        assertEquals(FeedLutSelection.Stored(selection), restored.effects.lut)
+        assertEquals(StoredLutCategory.CUSTOM.name, preferences.getString("lut.selection.category.v1", null))
+        assertEquals(selection.fileName, preferences.getString("lut.selection.file.v1", null))
+        assertFalse(
+            preferences.all.keys.any { key ->
+                key.contains("uri", ignoreCase = true) || key.contains("path", ignoreCase = true)
+            },
+        )
+
+        val unavailable =
+            AssistState.restore(
+                preferences,
+                FeedEffects.NONE,
+                null,
+                availableStoredLut = { false },
+            )
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709), unavailable.selectedLut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709), unavailable.effects.lut)
     }
 
     @Test

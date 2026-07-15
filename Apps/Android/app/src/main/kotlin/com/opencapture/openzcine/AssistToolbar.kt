@@ -43,6 +43,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.opencapture.openzcine.lut.StoredLutSelection
 
 /**
  * The assist-toolbar tools, mirroring the iOS bottom-left strip
@@ -86,11 +87,12 @@ class AssistState(
     initialScope: ScopeKind?,
     initialScopes: Set<ScopeKind> = initialScope?.let(::setOf) ?: emptySet(),
     initialScopeActivationOrder: List<ScopeKind> = ScopeKind.canonical.filter(initialScopes::contains),
-    initialLut: FeedLut = initialEffects.lut ?: FeedLut.LOG3G10_709,
+    initialLut: FeedLutSelection =
+        initialEffects.lut ?: FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709),
     initialFalseColorScale: FeedFalseColorScale =
         initialEffects.falseColor ?: FeedFalseColorScale.STOPS,
     initialAudioMetersEnabled: Boolean = false,
-    private val persistSelections: (FeedLut, FeedFalseColorScale) -> Unit = { _, _ -> },
+    private val persistSelections: (FeedLutSelection, FeedFalseColorScale) -> Unit = { _, _ -> },
     private val persistScopeSelections: (Set<ScopeKind>, List<ScopeKind>) -> Unit = { _, _ -> },
     private val persistAudioMeters: (Boolean) -> Unit = {},
     private val persist: (FeedEffects, ScopeKind?) -> Unit = { _, _ -> },
@@ -119,7 +121,7 @@ class AssistState(
         get() = portraitDisplayedScopes(selectedScopes, scopeActivationOrder)
 
     /** The LUT that will be enabled next, retained even while LUT is off. */
-    var selectedLut: FeedLut by mutableStateOf(initialLut)
+    var selectedLut: FeedLutSelection by mutableStateOf(initialLut)
         private set
 
     /** The false-colour scale that will be enabled next, retained while off. */
@@ -188,6 +190,15 @@ class AssistState(
 
     /** Selects the LUT used the next time (or currently while) LUT is enabled. */
     fun selectLut(lut: FeedLut) {
+        selectLutSelection(FeedLutSelection.BuiltIn(lut))
+    }
+
+    /** Selects a validated app-private LUT; the caller must have resolved it through the library. */
+    fun selectStoredLut(lut: StoredLutSelection) {
+        selectLutSelection(FeedLutSelection.Stored(lut))
+    }
+
+    private fun selectLutSelection(lut: FeedLutSelection) {
         selectedLut = lut
         if (effects.lut != null) {
             update(effects.copy(lut = lut))
@@ -239,6 +250,11 @@ class AssistState(
         private const val SCOPES_KEY = "scopes"
         private const val SCOPE_ACTIVATION_ORDER_KEY = "scopeActivationOrder"
         private const val AUDIO_METERS_KEY = "audioMeters"
+        private const val LUT_SELECTION_KIND_KEY = "lut.selection.kind.v1"
+        private const val LUT_SELECTION_CATEGORY_KEY = "lut.selection.category.v1"
+        private const val LUT_SELECTION_FILE_KEY = "lut.selection.file.v1"
+        private const val LUT_SELECTION_BUILT_IN = "builtIn"
+        private const val LUT_SELECTION_STORED = "stored"
 
         /** Serializes [effects] back into the `zc.assist` token grammar. */
         fun tokens(effects: FeedEffects): String =
@@ -260,9 +276,10 @@ class AssistState(
             intentEffects: FeedEffects,
             intentScope: ScopeKind?,
             intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
+            availableStoredLut: (StoredLutSelection) -> Boolean = { true },
         ): AssistState {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            return restore(prefs, intentEffects, intentScope, intentScopes)
+            return restore(prefs, intentEffects, intentScope, intentScopes, availableStoredLut)
         }
 
         /** Restores local assist state from [preferences]; exposed to JVM tests through `internal`. */
@@ -271,17 +288,23 @@ class AssistState(
             intentEffects: FeedEffects,
             intentScope: ScopeKind?,
             intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
+            availableStoredLut: (StoredLutSelection) -> Boolean = { true },
         ): AssistState {
             val fromIntent = !intentEffects.isIdentity || intentScopes != null
-            val storedLut =
+            val legacyBuiltIn =
                 preferences.getString("lut", null)
                     ?.let(FeedLut::fromId)
                     ?: FeedLut.LOG3G10_709
+            val storedLut =
+                persistedStoredLut(preferences)
+                    ?.takeIf(availableStoredLut)
+                    ?.let(FeedLutSelection::Stored)
+                    ?: FeedLutSelection.BuiltIn(legacyBuiltIn)
             val storedFalseColorScale =
                 preferences.getString("fcScale", null)
                     ?.let(FeedFalseColorScale::fromId)
                     ?: FeedFalseColorScale.STOPS
-            val effects =
+            val parsedEffects =
                 if (fromIntent) {
                     intentEffects
                 } else {
@@ -290,6 +313,12 @@ class AssistState(
                         preferences.getString("lut", null),
                         preferences.getString("fcScale", null),
                     )
+                }
+            val effects =
+                if (!fromIntent && parsedEffects.lut != null) {
+                    parsedEffects.copy(lut = storedLut)
+                } else {
+                    parsedEffects
                 }
             val storedScopes =
                 ScopeKind.parseTokens(preferences.getString(SCOPES_KEY, null))
@@ -331,14 +360,36 @@ class AssistState(
                 initialFalseColorScale = effects.falseColor ?: storedFalseColorScale,
                 initialAudioMetersEnabled = preferences.getBoolean(AUDIO_METERS_KEY, false),
                 persistSelections = { lut, falseColorScale ->
-                    preferences.edit()
-                        .putString("lut", lut.id)
-                        .putString("fcScale", falseColorScale.id)
-                        .apply()
+                    val editor = preferences.edit().putString("fcScale", falseColorScale.id)
+                    when (lut) {
+                        is FeedLutSelection.BuiltIn ->
+                            editor
+                                .putString("lut", lut.value.id)
+                                .putString(LUT_SELECTION_KIND_KEY, LUT_SELECTION_BUILT_IN)
+                                .remove(LUT_SELECTION_CATEGORY_KEY)
+                                .remove(LUT_SELECTION_FILE_KEY)
+                        is FeedLutSelection.Stored ->
+                            // Keep a legacy built-in fallback for an older app build, but only this
+                            // version reads the category/file pair. No external URI/path is stored.
+                            editor
+                                .putString("lut", FeedLut.LOG3G10_709.id)
+                                .putString(LUT_SELECTION_KIND_KEY, LUT_SELECTION_STORED)
+                                .putString(LUT_SELECTION_CATEGORY_KEY, lut.value.category.name)
+                                .putString(LUT_SELECTION_FILE_KEY, lut.value.fileName)
+                    }
+                    editor.apply()
                 },
                 persistAudioMeters = { enabled ->
                     preferences.edit().putBoolean(AUDIO_METERS_KEY, enabled).apply()
                 },
+            )
+        }
+
+        private fun persistedStoredLut(preferences: SharedPreferences): StoredLutSelection? {
+            if (preferences.getString(LUT_SELECTION_KIND_KEY, null) != LUT_SELECTION_STORED) return null
+            return StoredLutSelection.fromPersisted(
+                preferences.getString(LUT_SELECTION_CATEGORY_KEY, null),
+                preferences.getString(LUT_SELECTION_FILE_KEY, null),
             )
         }
     }

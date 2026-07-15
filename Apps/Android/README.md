@@ -134,6 +134,22 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
   --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
   with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).
+- **Custom LUT library:** Operator Setup → View Assist opens a one-document Android picker for
+  operator-selected `.cube` files. The picker URI is used only for that read: Android bounds it to
+  16 MiB, asks the shared Swift core to enforce strict UTF-8/`.cube` validation and pack the
+  existing renderer texture, then atomically writes an app-private copy below
+  `noBackupFilesDir/lut-library-v1/` with a generated safe name. It neither scans shared storage
+  nor persists a document URI, source path, provider identifier, or original file name. The
+  persisted selection is only the generated category/file identity; a missing, oversized, or
+  corrupt private copy fails closed to the plain feed until the operator removes or reimports it.
+  The 16 MiB limit is `CubeLUT.maximumSourceBytes`, shared with iOS and the JNI boundary.
+- **RED IPP2 LUTs:** no RED LUT asset, scraper, guessed endpoint, or demo download exists in the
+  Android app. The View Assist status card evaluates the real process-bound camera-AP/internet
+  route through the shared `RedLUTDownloadPolicy`, but delivery remains blocked until RED
+  authorizes an Android HTTPS endpoint and terms flow (including a terms revision and operator
+  acknowledgement). **[VERIFY-ON-HW]** Before enabling that integration, validate authorization,
+  terms acknowledgement, authenticated download, camera-AP blocking, and imported-LUT rendering
+  on an arm64 Android device; do not substitute fixture assets or a guessed RED URL.
 - **Live audio meters:** the trailing `AUDIO` assist toggle persists independently from image
   assists and scopes. In landscape it opens a draggable, normalized-placement stereo dBFS panel
   with the camera's peak markers and microphone-sensitivity readback; an absent camera sound

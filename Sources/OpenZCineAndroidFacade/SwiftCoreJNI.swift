@@ -44,11 +44,12 @@
 
     /// Copies a `jbyteArray` into a Swift `[UInt8]`.
     private func swiftBytes(
-        _ env: UnsafeMutablePointer<JNIEnv?>, _ value: jbyteArray?
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ value: jbyteArray?, maximumCount: Int? = nil
     ) -> [UInt8]? {
         guard let value else { return nil }
         let fns = table(env)
         let length = Int(fns.GetArrayLength!(env, value))
+        guard maximumCount.map({ length <= $0 }) ?? true else { return nil }
         guard length > 0 else { return [] }
         var out = [UInt8](repeating: 0, count: length)
         out.withUnsafeMutableBytes { raw in
@@ -438,6 +439,53 @@
                 zebraMidtoneIRE: Double(zebraMidtoneIre))
         else { return nil }
         return javaFloatArray(env, values)
+    }
+
+    // MARK: - Stored LUT library
+
+    /// `SwiftCore.validateImportedLut(bytes, category, fileName): String?` — validates strict
+    /// UTF-8 through the shared `CubeLUT` parser before Android copies a SAF document into
+    /// app-private storage. The compact result is versioned by `LUTLibraryWire`; nil is a
+    /// fail-closed import rejection.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_validateImportedLut")
+    public func swiftCoreValidateImportedLut(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?, category: jint,
+        fileName: jstring?
+    ) -> jstring? {
+        guard let utf8 = swiftBytes(env, utf8, maximumCount: CubeLUT.maximumSourceBytes),
+            let fileName = swiftString(env, fileName),
+            let record = LUTLibraryWire.validatedImport(
+                utf8: utf8, categoryOrdinal: Int(category), fileName: fileName)
+        else { return nil }
+        return javaString(env, record)
+    }
+
+    /// `SwiftCore.packImportedLut(bytes): ByteArray?` — reparses an app-private cube and packs it
+    /// into the existing feed-effects texture layout. Kotlin must render nil as unavailable rather
+    /// than reimplementing cube parsing, interpolation, or colour math.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_packImportedLut")
+    public func swiftCorePackImportedLut(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?
+    ) -> jbyteArray? {
+        guard let utf8 = swiftBytes(env, utf8, maximumCount: CubeLUT.maximumSourceBytes),
+            let bytes = LUTLibraryWire.packedImportedLUT(utf8: utf8)
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.redLutDownloadAvailability(hasInternetPath, isOnCameraAccessPoint): String?` —
+    /// the versioned shared RED network guard. The Android shell supplies reachability and current
+    /// camera-AP state; `RedLUTDownloadPolicy` remains the single decision owner.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_redLutDownloadAvailability")
+    public func swiftCoreRedLutDownloadAvailability(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, hasInternetPath: jboolean,
+        isOnCameraAccessPoint: jboolean
+    ) -> jstring? {
+        javaString(
+            env,
+            LUTLibraryWire.redDownloadAvailability(
+                hasInternetPath: hasInternetPath != 0,
+                isOnCameraAccessPoint: isOnCameraAccessPoint != 0))
     }
 
     // MARK: - Callback / streaming shape

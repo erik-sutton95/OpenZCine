@@ -40,6 +40,7 @@ import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.media.MediaCacheStore
+import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
 import com.opencapture.openzcine.pairing.SavedCameraRecords
@@ -110,6 +111,9 @@ class MainActivity : ComponentActivity() {
                 val savedCameraStore =
                     remember { SharedPreferencesSavedCameraStore(applicationContext) }
                 val operatorSettings = remember { OperatorSettings(applicationContext) }
+                // The app-private LUT library owns transient SAF import and Swift-packed render
+                // payloads. It is deliberately process-local; only generated selections persist.
+                val lutLibrary = remember { AndroidLutLibrary(applicationContext) }
                 val mediaCacheStore =
                     remember {
                         MediaCacheStore(
@@ -226,6 +230,7 @@ class MainActivity : ComponentActivity() {
                                         applicationContext,
                                         FeedEffects.NONE,
                                         intentScope = null,
+                                        availableStoredLut = lutLibrary::contains,
                                     )
                                 }
                             OperatorSettingsScreen(
@@ -234,6 +239,7 @@ class MainActivity : ComponentActivity() {
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
+                                lutLibrary = lutLibrary,
                                 initialTab = OperatorSettingsTab.STORAGE,
                                 onClose = { standaloneSettingsPresented = false },
                             )
@@ -271,7 +277,8 @@ class MainActivity : ComponentActivity() {
                                 applicationContext,
                                 FeedEffectsState.current,
                                 DemoHarness.scopeKind(intent),
-                                DemoHarness.scopeKinds(intent),
+                                intentScopes = DemoHarness.scopeKinds(intent),
+                                availableStoredLut = lutLibrary::contains,
                             )
                         }
                         val currentSessionState by active.state.collectAsState()
@@ -290,6 +297,7 @@ class MainActivity : ComponentActivity() {
                                 frameSource = demo?.second,
                                 assist = assist,
                                 operatorSettings = operatorSettings,
+                                lutLibrary = lutLibrary,
                                 liveViewEnabled = overlay != MonitorOverlay.MEDIA,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
@@ -312,6 +320,7 @@ class MainActivity : ComponentActivity() {
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
+                                        lutLibrary = lutLibrary,
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                                 MonitorOverlay.MEDIA ->

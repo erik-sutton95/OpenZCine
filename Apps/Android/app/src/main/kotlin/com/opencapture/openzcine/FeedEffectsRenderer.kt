@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.lut.AndroidLutLibrary
 import java.nio.ByteBuffer
 
 private const val TAG = "ZCFeedEffects"
@@ -96,14 +97,17 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
          * core isn't staged — callers fall back to the plain feed. Callers
          * own the API 33 (AGSL) gate, per the class annotation.
          */
-        fun create(effects: FeedEffects): FeedEffectsRenderer? {
+        fun create(
+            effects: FeedEffects,
+            lutLibrary: AndroidLutLibrary? = null,
+        ): FeedEffectsRenderer? {
             if (effects.isIdentity) return null
             if (!SwiftCore.isAvailable) {
                 Log.w(TAG, "feed effects need the Swift core (just android-core); rendering plain")
                 return null
             }
             return try {
-                build(effects)
+                build(effects, lutLibrary)
             } catch (e: RuntimeException) {
                 Log.e(TAG, "feed-effects pipeline setup failed; rendering the plain feed", e)
                 null
@@ -111,19 +115,31 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
         }
 
         /** Bakes once per selection: cube upload + threshold uniforms, never per frame. */
-        private fun build(effects: FeedEffects): FeedEffectsRenderer {
+        private fun build(
+            effects: FeedEffects,
+            lutLibrary: AndroidLutLibrary?,
+        ): FeedEffectsRenderer {
             val shader = RuntimeShader(EFFECTS_AGSL)
 
             val cube: ByteArray?
             val cubeSize: Int
+            val lutSelection = effects.lut
             when {
                 effects.falseColor != null -> {
                     cube = SwiftCore.bakeFalseColorCube(effects.falseColor.wireOrdinal, CURVE_LOG3G10)
                     cubeSize = 64
                 }
-                effects.lut != null -> {
-                    cube = SwiftCore.bakeLut(effects.lut.wireOrdinal, LUT_SIZE)
+                lutSelection is FeedLutSelection.BuiltIn -> {
+                    cube = SwiftCore.bakeLut(lutSelection.value.wireOrdinal, LUT_SIZE)
                     cubeSize = LUT_SIZE
+                }
+                lutSelection is FeedLutSelection.Stored -> {
+                    // A stored selection is only usable after Android's bounded app-private store
+                    // has revalidated it through Swift and cached the existing packed-cube payload.
+                    // There is intentionally no Kotlin parser/sample fallback on a cold/corrupt file.
+                    val packed = lutLibrary?.packedCube(lutSelection.value)
+                    cube = packed?.rgba
+                    cubeSize = packed?.cubeSize ?: 0
                 }
                 else -> {
                     cube = null
