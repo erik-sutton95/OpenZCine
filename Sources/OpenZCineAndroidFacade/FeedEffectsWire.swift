@@ -24,7 +24,7 @@ public enum FeedEffectsWire {
     /// Stable field count for ``renderConfiguration``. Kotlin validates this
     /// exact record before it uploads a shader uniform, so a newer facade
     /// cannot be silently misread by an older APK.
-    public static let renderConfigurationFieldCount = 19
+    public static let renderConfigurationFieldCount = 22
 
     /// Built-in look ordinals, mirroring `FeedLut` in Kotlin:
     /// 0 = Log3G10→709, 1 = N-Log→709, 2 = Mono.
@@ -160,25 +160,88 @@ public enum FeedEffectsWire {
         return packedRGBA(cube: FalseColorMap.limitsWeightCube(mapping: mapping))
     }
 
-    /// Compact false-colour reference strip: `[count, red, green, blue ×
-    /// count]`, derived from the same scale bands that bake the displayed cube.
-    /// Android displays these returned colours only; it never recreates the
-    /// exposure palette.
+    /// Renderer-ready false-colour reference geometry:
+    /// `[version, curveOrdinal, segmentCount, markerCount,
+    /// (lowerFraction, upperFraction, red, green, blue) × segmentCount,
+    /// stopMarkerFraction × markerCount]`.
+    ///
+    /// Segment and marker placement use the exact camera-aware scale domain as
+    /// the iOS reference panel. Android only lays out this returned geometry;
+    /// it never recreates exposure bands or curve policy.
     public static func falseColorReference(
         scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double
     ) -> [Float]? {
         guard let scale = falseColorScale(scaleOrdinal),
             let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative)
         else { return nil }
-        let bands = scale.bands(mapping: mapping)
-        var result = [Float(bands.count)]
-        result.reserveCapacity(1 + bands.count * 3)
-        for band in bands {
+        let segments = falseColorReferenceSegments(scale: scale, mapping: mapping)
+        let markers = falseColorReferenceMarkers(scale: scale, mapping: mapping)
+        var result: [Float] = [
+            1, Float(Self.curveOrdinal(mapping.curve)), Float(segments.count),
+            Float(markers.count),
+        ]
+        result.reserveCapacity(4 + segments.count * 5 + markers.count)
+        for segment in segments {
+            result.append(Float(segment.lower))
+            result.append(Float(segment.upper))
+            let band = segment.band
             result.append(Float(band.red))
             result.append(Float(band.green))
             result.append(Float(band.blue))
         }
+        result.append(contentsOf: markers.map(Float.init))
         return result
+    }
+
+    private static func falseColorReferenceSegments(
+        scale: FalseColorScale, mapping: ExposureSignalMapping
+    ) -> [(lower: Double, upper: Double, band: FalseColorBand)] {
+        let bands = scale.bands(mapping: mapping)
+        switch scale {
+        case .stops:
+            let domain = falseColorStopReferenceDomain(mapping: mapping)
+            return bands.map { band in
+                (
+                    falseColorStopFraction(band.lowerBound, domain: domain, infiniteFallback: 0),
+                    falseColorStopFraction(band.upperBound, domain: domain, infiniteFallback: 1),
+                    band
+                )
+            }
+        case .ire, .limits:
+            return bands.map { band in
+                (
+                    min(1, max(0, band.lowerBound / 100)),
+                    band.upperBound.isFinite ? min(1, max(0, band.upperBound / 100)) : 1,
+                    band
+                )
+            }
+        }
+    }
+
+    private static func falseColorReferenceMarkers(
+        scale: FalseColorScale, mapping: ExposureSignalMapping
+    ) -> [Double] {
+        guard scale == .stops else { return [] }
+        let domain = falseColorStopReferenceDomain(mapping: mapping)
+        let maximum = FalseColorMap.maximumSceneStop(mapping: mapping)
+        return [FalseColorMap.minimumSceneStop, -3, 0, 1, 2, maximum].map {
+            falseColorStopFraction($0, domain: domain, infiniteFallback: 0)
+        }
+    }
+
+    private static func falseColorStopReferenceDomain(
+        mapping: ExposureSignalMapping
+    ) -> ClosedRange<Double> {
+        let lower = FalseColorMap.minimumSceneStop - 1.0 / 6
+        let upper = max(6, FalseColorMap.maximumSceneStop(mapping: mapping) + 1.0 / 6)
+        return lower...upper
+    }
+
+    private static func falseColorStopFraction(
+        _ value: Double, domain: ClosedRange<Double>, infiniteFallback: Double
+    ) -> Double {
+        guard value.isFinite else { return infiniteFallback }
+        return min(1, max(0, (value - domain.lowerBound) / (domain.upperBound - domain.lowerBound)))
     }
 
     /// Assist thresholds on the normalized 0–1 code axis, for shader uniforms:
@@ -205,10 +268,11 @@ public enum FeedEffectsWire {
     /// Complete renderer configuration, resolved exclusively from shared-core
     /// camera mapping and iOS-matched operator choices. The flat payload is:
     ///
-    /// `[curveOrdinal, clipNative, deLogBlack, deLogClip, peakingThreshold,
+    /// `[curveOrdinal, clipNative, deLog0...deLog4, peakingThreshold,
     /// peakingRamp, peakR, peakG, peakB, highlightOn, highlightCode,
     /// highlightR, highlightG, highlightB, midtoneOn, midtoneCode, midtoneR,
-    /// midtoneG, midtoneB]`.
+    /// midtoneG, midtoneB]`. The five de-log values are the same quarter-axis
+    /// tone-curve samples used by iOS's peaking compositor.
     public static func renderConfiguration(
         codec: String?, iso: Int64, baseISO: String?, peakingSensitivityOrdinal: Int,
         peakingColorOrdinal: Int, highlightEnabled: Bool, highlightIRE: Double,
@@ -227,11 +291,13 @@ public enum FeedEffectsWire {
         let peak = peakingColor.rgb
         let highlight = zebraRGB(highlightColor)
         let midtone = zebraRGB(midtoneColor)
+        let deLog = (0...4).map { index in
+            Float(mapping.monitorPercent(signalNative: Double(index) / 4 * 255) / 100)
+        }
         return [
             Float(curveOrdinal(mapping.curve)),
             Float(mapping.clipNative),
-            Float(mapping.blackNative / 255),
-            Float(mapping.clipNative / 255),
+        ] + deLog + [
             Float(sensitivity * 0.06),
             160,
             Float(peak.0), Float(peak.1), Float(peak.2),

@@ -110,13 +110,13 @@ struct FeedEffectsWireTests {
         #expect(render.count == FeedEffectsWire.renderConfigurationFieldCount)
         #expect(render[0] == 1)
         #expect(render[1] == 200)
-        #expect(render[4] == Float(0.022 * 0.06))
-        #expect(render[9] == 0)
-        #expect(render[14] == 1)
-        #expect(render[10] == Float(mapping.signalNative(monitorPercent: 96) / 255))
-        #expect(render[15] == Float(mapping.signalNative(monitorPercent: 42) / 255))
+        #expect(render[7] == Float(0.022 * 0.06))
+        #expect(render[12] == 0)
+        #expect(render[17] == 1)
+        #expect(render[13] == Float(mapping.signalNative(monitorPercent: 96) / 255))
+        #expect(render[18] == Float(mapping.signalNative(monitorPercent: 42) / 255))
         let blue = Peaking.Color.blue.rgb
-        #expect(Array(render[6...8]) == [Float(blue.0), Float(blue.1), Float(blue.2)])
+        #expect(Array(render[9...11]) == [Float(blue.0), Float(blue.1), Float(blue.2)])
     }
 
     @Test("Limits cubes preserve a separate paint and mask while reference bands stay core-owned")
@@ -129,8 +129,11 @@ struct FeedEffectsWireTests {
         #expect(weight.count == paint.count)
         let reference = try #require(
             FeedEffectsWire.falseColorReference(scaleOrdinal: 2, curveOrdinal: 0, clipNative: 180))
-        #expect(Int(reference[0]) == 4)
-        #expect(reference.count == 1 + Int(reference[0]) * 3)
+        #expect(reference[0] == 1)
+        #expect(reference[1] == 0)
+        #expect(reference[2] == 4)
+        #expect(reference[3] == 0)
+        #expect(reference.count == 4 + Int(reference[2]) * 5)
     }
 
     @Test("Unknown ordinals and unsupported sizes are rejected")

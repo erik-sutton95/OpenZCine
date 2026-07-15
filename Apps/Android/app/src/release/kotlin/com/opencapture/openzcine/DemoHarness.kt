@@ -43,6 +43,10 @@ object DemoHarness {
     @Suppress("UNUSED_PARAMETER")
     fun glassTierOverride(intent: Intent): String? = null
 
+    /** Release builds never provide a debug image-assist override. */
+    @Suppress("UNUSED_PARAMETER")
+    fun assistEffects(intent: Intent): FeedEffects? = null
+
     /** Always null: the debug scope toggle does not exist in release builds. */
     @Suppress("UNUSED_PARAMETER")
     fun scopeKind(intent: Intent): ScopeKind? = null

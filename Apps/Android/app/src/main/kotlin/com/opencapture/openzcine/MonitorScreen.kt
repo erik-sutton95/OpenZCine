@@ -55,9 +55,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
+import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
+import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
+import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
@@ -67,6 +71,7 @@ import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -79,6 +84,7 @@ import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -200,6 +206,9 @@ fun MonitorScreen(
     glassTierOverride: String? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
     isMonitorFront: Boolean = true,
+    linkHealth: AndroidLinkHealthMonitor? = null,
+    activeTransportIsUsb: Boolean = false,
+    isDemoSession: Boolean = false,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
 ) {
@@ -222,6 +231,18 @@ fun MonitorScreen(
                 baseIso = cameraProperties.baseIso,
             )
         }
+    val thermalTier = rememberAndroidThermalTier()
+    val actualLinkHealth = linkHealth ?: remember(session) { AndroidLinkHealthMonitor() }
+    val swiftLiveFrameSource =
+        (session as? SwiftCoreCameraSession)?.liveFrames as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+    val liveViewController =
+        remember(swiftLiveFrameSource) {
+            swiftLiveFrameSource?.let(::AndroidLiveViewController)
+        }
+    val noPreviewApplication =
+        remember { MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle) }
+    val previewApplication by
+        (swiftLiveFrameSource?.previewState ?: noPreviewApplication).collectAsState()
     LaunchedEffect(session) { session.connect() }
 
     // Shared glass state: the active tier plus the one blurred backdrop
@@ -252,6 +273,31 @@ fun MonitorScreen(
     val recording =
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.RECORDING
+    val previewPolicyRecording = previewPolicyRecordingActive(recordingState)
+    // The Android shell stores operator intent only. Swift resolves that
+    // intent against the portable stream/thermal policy, then the active
+    // source restarts just its preview pump when the approved request moves.
+    // A camera warning becomes an overheating input only for the explicit HOT
+    // state; WARNING remains informational until Nikon hardware proves it is
+    // safe to treat as a thermal stop signal.
+    LaunchedEffect(
+        liveViewController,
+        operatorSettings.streamPreset,
+        operatorSettings.qualityBias,
+        thermalTier,
+        previewPolicyRecording,
+        cameraProperties.temperatureStatus,
+    ) {
+        liveViewController?.apply(
+            SwiftLiveViewPolicyInput(
+                streamPreset = operatorSettings.streamPreset.wireValue,
+                qualityBias = operatorSettings.qualityBias.wireValue,
+                thermalTier = thermalTier.wireValue,
+                isRecording = previewPolicyRecording,
+                cameraOverheating = cameraProperties.temperatureStatus == CameraTemperatureStatus.HOT,
+            ),
+        )
+    }
     val recordCommandPending =
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.STOPPING
@@ -613,17 +659,68 @@ fun MonitorScreen(
                                 lifecycleState.isAtLeast(Lifecycle.State.STARTED)
                         }
             }
+        // Every preview consumer takes this monitor-only path. In DISP 3 it
+        // becomes null before feed, audio, scope, or health effects can hold
+        // the shared Swift source open, so its final collector ends live view.
+        val monitorFrameSource = monitorPreviewFrameSource(activeFrameSource, isCommand)
+        // Health collection deliberately owns no demo or command-dashboard
+        // subscription: only the real Swift live source is evidence of a
+        // camera stream, and DISP 3 must still send EndLiveView when it loses
+        // the final preview consumer.
+        val healthFrameSource =
+            monitorFrameSource?.takeIf { it === swiftLiveFrameSource }
+        val appliedPreviewRequest =
+            if (previewApplication is SwiftLiveViewPreviewState.Idle) {
+                null
+            } else {
+                swiftLiveFrameSource?.appliedPreviewRequest
+            }
+        val healthTargetFramesPerSecond =
+            appliedPreviewRequest?.targetFramesPerSecond ?: 30.0
+        LaunchedEffect(
+            actualLinkHealth,
+            sessionState,
+            healthFrameSource,
+            frameSource,
+            isDemoSession,
+            activeTransportIsUsb,
+            healthTargetFramesPerSecond,
+        ) {
+            actualLinkHealth.updateSession(
+                state = sessionState,
+                streamRequested = healthFrameSource != null,
+                transportIsUsb = activeTransportIsUsb,
+                targetFramesPerSecond = healthTargetFramesPerSecond,
+                isDemoSession = isDemoSession || frameSource != null,
+            )
+        }
+        LaunchedEffect(actualLinkHealth, healthFrameSource) {
+            (healthFrameSource as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource)
+                ?.currentStreamFrames
+                ?.collect(actualLinkHealth::recordFrame)
+        }
+        LaunchedEffect(actualLinkHealth, propertyRefreshStatus) {
+            actualLinkHealth.reportPropertyRefresh(propertyRefreshStatus)
+        }
+        LaunchedEffect(actualLinkHealth, healthFrameSource) {
+            while (true) {
+                delay(1_000)
+                actualLinkHealth.refresh()
+            }
+        }
         val liveFeedPresentation =
-            remember(activeFrameSource) { LiveFeedPresentationState() }
+            remember(monitorFrameSource) { LiveFeedPresentationState() }
+        val liveFeedEffectsPresentation =
+            remember(monitorFrameSource) { LiveFeedEffectsPresentationState() }
         val audioMetersEnabled = assist.audioMetersEnabled
         var liveAudioLevels by
-            remember(activeFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
-        LaunchedEffect(activeFrameSource, audioMetersEnabled) {
-            if (!audioMetersEnabled || activeFrameSource == null) {
+            remember(monitorFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
+        LaunchedEffect(monitorFrameSource, audioMetersEnabled) {
+            if (!audioMetersEnabled || monitorFrameSource == null) {
                 liveAudioLevels = null
                 return@LaunchedEffect
             }
-            activeFrameSource.frames.collect { frame ->
+            monitorFrameSource.frames.collect { frame ->
                 liveAudioLevels = frame.audioLevels
             }
         }
@@ -660,15 +757,16 @@ fun MonitorScreen(
                     // stable, descriptive region for TalkBack and UI tests.
                     .semantics {
                         contentDescription =
-                            if (activeFrameSource == null) "Live view unavailable" else "Live view active"
+                            if (monitorFrameSource == null) "Live view unavailable" else "Live view active"
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                if (activeFrameSource != null) {
+                if (monitorFrameSource != null) {
                     LiveFeedView(
-                        activeFrameSource,
+                        monitorFrameSource,
                         Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = localFraming.desqueezePresentation.horizontalPresentationScale
+                            scaleX = localFraming.horizontalPresentationScale
+                            scaleY = localFraming.verticalPresentationScale
                         },
                         onFrame = glass::submit,
                         presentationState = liveFeedPresentation,
@@ -676,6 +774,7 @@ fun MonitorScreen(
                         configuration = operatorSettings.feedEffectsConfiguration,
                         cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
+                        effectsPresentationState = liveFeedEffectsPresentation,
                     )
                 } else {
                     Text(
@@ -692,6 +791,7 @@ fun MonitorScreen(
                 LocalFramingAssistOverlay(
                     configuration = localFraming,
                     cleanMode = isClean,
+                    presentationState = liveFeedPresentation,
                 )
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,
@@ -702,7 +802,6 @@ fun MonitorScreen(
                 )
             }
         }
-
         CompositionLocalProvider(LocalMonitorGlass provides glass) {
             if (isPortrait) {
                 PortraitChrome(
@@ -776,6 +875,7 @@ fun MonitorScreen(
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
                                     fpsReadoutVisible = operatorSettings.fpsReadoutVisible.value,
+                                    signalBars = actualLinkHealth.presentation.signalBars,
                                 )
                             }
                         }
@@ -792,7 +892,10 @@ fun MonitorScreen(
                                     assist,
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     visibleTools = operatorSettings.visibleAssistToolbarTools,
+                                    framingConfiguration = localFraming,
+                                    onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                                    enabled = !locked,
                                 )
                             }
                         }
@@ -856,7 +959,7 @@ fun MonitorScreen(
         // One monitor-owned sampler serves every toolbar-selected scope. In
         // landscape all selected panels float independently; portrait mounts
         // only its recency-selected ≤2 panels in the shared zone-map frame.
-        if (!isCommand && assist.selectedScopes.isNotEmpty() && activeFrameSource != null) {
+        if (!isCommand && assist.selectedScopes.isNotEmpty() && monitorFrameSource != null) {
             ScopePanels(
                 selectedScopes = assist.selectedScopes,
                 portraitScopes = portraitScopes,
@@ -864,7 +967,14 @@ fun MonitorScreen(
                 histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
                 configuration = operatorSettings.scopeAssistConfiguration,
                 cameraInput = exposureAssistCameraInput,
-                source = activeFrameSource,
+                lutSelection = assist.effects.lut,
+                lutLibrary = lutLibrary,
+                onScaleChange = { kind, scale ->
+                    operatorSettings.scopeAssistConfiguration =
+                        operatorSettings.scopeAssistConfiguration.withScale(kind, scale)
+                },
+                thermalTier = thermalTier,
+                source = monitorFrameSource,
                 isPortrait = isPortrait,
                 feed = zones.feed,
                 infoBar = zones.infoBar,
@@ -879,6 +989,17 @@ fun MonitorScreen(
                 feed = zones.feed,
                 viewport = physicalViewport,
             )
+        }
+        // Match iOS z-order: the false-colour key is mounted after floating
+        // scopes and audio so nothing can obscure or intercept its drag target.
+        if (!isCommand && !isPortrait) {
+            CompositionLocalProvider(LocalMonitorGlass provides glass) {
+                FalseColorReferenceOverlay(
+                    effectsState = liveFeedEffectsPresentation,
+                    feed = zones.feed,
+                    viewport = physicalViewport,
+                )
+            }
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).
@@ -941,6 +1062,7 @@ private fun InfoPill(
     codecReadoutVisible: Boolean,
     mediaReadoutVisible: Boolean,
     fpsReadoutVisible: Boolean,
+    signalBars: Int,
 ) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -963,7 +1085,7 @@ private fun InfoPill(
             }
         }
         if (fpsReadoutVisible) {
-            FpsChip(DemoMonitorState.SIGNAL_BARS, DemoMonitorState.FPS)
+            FpsChip(signalBars, DemoMonitorState.FPS)
         }
     }
 }
@@ -998,6 +1120,7 @@ private fun PortraitChrome(
     onOpenCommandControl: (CommandControlRequest) -> Unit,
     onMoveCommandTileLater: (CommandTileKind) -> Unit,
 ) {
+    val context = LocalContext.current
     if (operatorSettings.statusBarVisible.value) {
         PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
     }
@@ -1013,7 +1136,18 @@ private fun PortraitChrome(
                     ZoneFrame(strip.x + 12f, strip.y + 4f, strip.width - 24f, strip.height - 8f),
                 ).alpha(if (locked) 0.4f else 1f),
                 visibleTools = operatorSettings.visibleAssistToolbarTools,
+                framingConfiguration = operatorSettings.localFramingAssistConfiguration,
+                onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                 hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                enabled = !locked,
+                maximumActiveScopes = 2,
+                onScopeLimitReached = {
+                    Toast.makeText(
+                        context,
+                        "2 scopes max in fit view. Close one or rotate to landscape.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
             )
         }
     }

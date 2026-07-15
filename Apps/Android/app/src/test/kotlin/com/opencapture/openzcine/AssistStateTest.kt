@@ -80,6 +80,18 @@ class AssistStateTest {
     }
 
     @Test
+    fun `portrait fit refuses a third scope but still allows deactivation`() {
+        val state = AssistState(FeedEffects.NONE, null)
+        assertTrue(state.toggle(AssistTool.WAVE, maximumActiveScopes = 2))
+        assertTrue(state.toggle(AssistTool.VECTOR, maximumActiveScopes = 2))
+
+        assertFalse(state.toggle(AssistTool.HISTO, maximumActiveScopes = 2))
+        assertEquals(setOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE), state.selectedScopes)
+        assertTrue(state.toggle(AssistTool.WAVE, maximumActiveScopes = 2))
+        assertEquals(setOf(ScopeKind.VECTORSCOPE), state.selectedScopes)
+    }
+
+    @Test
     fun `effects state feeds the engine input`() {
         val state = AssistState(FeedEffects.NONE, null)
         state.toggle(AssistTool.PEAK)
@@ -92,14 +104,14 @@ class AssistStateTest {
     @Test
     fun `audio meter toggle persists independently of image assists and scopes`() {
         val preferences = TestSharedPreferences()
-        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+        val state = AssistState.restore(preferences, null, null)
 
         assertFalse(state.isOn(AssistTool.AUDIO))
         state.toggle(AssistTool.AUDIO)
 
         assertTrue(state.isOn(AssistTool.AUDIO))
         assertTrue(preferences.getBoolean("audioMeters", false))
-        assertTrue(AssistState.restore(preferences, FeedEffects.NONE, null).isOn(AssistTool.AUDIO))
+        assertTrue(AssistState.restore(preferences, null, null).isOn(AssistTool.AUDIO))
 
         state.toggle(AssistTool.AUDIO)
         assertFalse(preferences.getBoolean("audioMeters", true))
@@ -139,7 +151,7 @@ class AssistStateTest {
             .putString("fcScale", FeedFalseColorScale.IRE.id)
             .apply()
 
-        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+        val state = AssistState.restore(preferences, null, null)
         assertTrue(state.effects.zebra)
         assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), state.selectedLut)
         assertEquals(FeedFalseColorScale.IRE, state.selectedFalseColorScale)
@@ -153,12 +165,12 @@ class AssistStateTest {
     @Test
     fun `changing a stored look persists even while that assist is off`() {
         val preferences = TestSharedPreferences()
-        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+        val state = AssistState.restore(preferences, null, null)
 
         state.selectLut(FeedLut.NLOG_709)
         state.selectFalseColorScale(FeedFalseColorScale.IRE)
 
-        val restored = AssistState.restore(preferences, FeedEffects.NONE, null)
+        val restored = AssistState.restore(preferences, null, null)
         assertEquals(FeedLutSelection.BuiltIn(FeedLut.NLOG_709), restored.selectedLut)
         assertEquals(FeedFalseColorScale.IRE, restored.selectedFalseColorScale)
         restored.toggle(AssistTool.LUT)
@@ -175,7 +187,7 @@ class AssistStateTest {
                     "operator-look-a1b2c3d4e5f6.cube",
                 ),
             )
-        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+        val state = AssistState.restore(preferences, null, null)
 
         state.selectStoredLut(selection)
         state.toggle(AssistTool.LUT)
@@ -183,7 +195,7 @@ class AssistStateTest {
         val restored =
             AssistState.restore(
                 preferences,
-                FeedEffects.NONE,
+                null,
                 null,
                 availableStoredLut = { it == selection },
             )
@@ -200,7 +212,7 @@ class AssistStateTest {
         val unavailable =
             AssistState.restore(
                 preferences,
-                FeedEffects.NONE,
+                null,
                 null,
                 availableStoredLut = { false },
             )
@@ -213,7 +225,7 @@ class AssistStateTest {
         val preferences = TestSharedPreferences()
         preferences.edit().putString("scope", "vector").apply()
 
-        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+        val state = AssistState.restore(preferences, null, null)
 
         assertEquals(setOf(ScopeKind.VECTORSCOPE), state.selectedScopes)
         assertEquals(emptyList(), state.scopeActivationOrder)
@@ -228,7 +240,7 @@ class AssistStateTest {
             .putString("scopeActivationOrder", "wave,parade,histo,lights")
             .apply()
 
-        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+        val state = AssistState.restore(preferences, null, null)
 
         assertEquals(
             setOf(
@@ -248,5 +260,39 @@ class AssistStateTest {
         assertEquals("parade,histo,lights", preferences.getString("scopes", null))
         assertEquals("parade,histo,lights", preferences.getString("scopeActivationOrder", null))
         assertEquals("lights", preferences.getString("scope", null))
+    }
+
+    @Test
+    fun `reconnecting after a runtime effect toggle restores scopes instead of treating state as an intent`() {
+        val preferences = TestSharedPreferences()
+        preferences.edit()
+            .putString("tokens", "zebra")
+            .putString("scopes", "wave,vector")
+            .putString("scopeActivationOrder", "wave,vector")
+            .apply()
+        val firstSession = AssistState.restore(preferences, null, null)
+        firstSession.toggle(AssistTool.PEAK)
+        assertTrue(FeedEffectsState.current.peaking)
+
+        val reconnected = AssistState.restore(preferences, null, null)
+
+        assertTrue(reconnected.effects.peaking)
+        assertTrue(reconnected.effects.zebra)
+        assertEquals(setOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE), reconnected.selectedScopes)
+        assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE), reconnected.scopeActivationOrder)
+    }
+
+    @Test
+    fun `explicit empty debug effect override stays distinct from a normal restore`() {
+        val preferences = TestSharedPreferences()
+        preferences.edit()
+            .putString("tokens", "zebra")
+            .putString("scopes", "wave")
+            .apply()
+
+        val overridden = AssistState.restore(preferences, FeedEffects.NONE, null)
+
+        assertTrue(overridden.effects.isIdentity)
+        assertTrue(overridden.selectedScopes.isEmpty())
     }
 }

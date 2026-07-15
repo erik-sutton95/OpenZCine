@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -44,12 +45,15 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.lut.StoredLutSelection
+import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 
 /**
  * The assist-toolbar tools, mirroring the iOS bottom-left strip
  * (`MonitorAssistTool` in the shared core): four feed effects, five scopes,
- * and camera-derived audio meters. The iOS-only framing aids
- * (guides/grid/crosshair/level/de-sq) land with their engines.
+ * and camera-derived audio meters, plus the Android-owned framing controls.
+ * Camera horizon remains a separate OPE-58 concern; framing commands only
+ * change local monitor composition and never Nikon camera state.
  */
 enum class AssistTool(val label: String, val settingsTitle: String) {
     LUT("LUT", "LUT"),
@@ -61,11 +65,18 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     HISTO("HISTO", "Histogram"),
     VECTOR("VECTOR", "Vectorscope"),
     LIGHTS("LIGHTS", "Traffic Lights"),
+    GUIDES("GUIDES", "Frame Guides"),
+    GRID("GRID", "Composition Grid"),
+    CROSS("CROSS", "Centre Crosshair"),
+    DESQ("DE-SQ", "Desqueeze"),
     AUDIO("AUDIO", "Audio Levels"),
 
     ;
 
     companion object {
+        /** Local framing tools rendered from [OperatorSettings], never camera state. */
+        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, DESQ)
+
         /** Decodes a persisted enum name while safely ignoring retired or malformed values. */
         internal fun fromStoredName(value: String): AssistTool? =
             entries.firstOrNull { it.name == value }
@@ -149,6 +160,15 @@ class AssistState(
             AssistTool.VECTOR -> ScopeKind.VECTORSCOPE in selectedScopes
             AssistTool.LIGHTS -> ScopeKind.TRAFFIC_LIGHTS in selectedScopes
             AssistTool.AUDIO -> audioMetersEnabled
+            // Framing tools are persisted by OperatorSettings instead of this
+            // feed-effects state. AssistToolbar routes them through its local
+            // framing callback; keeping this fallback false prevents an
+            // accidental settings caller from treating them as image effects.
+            AssistTool.GUIDES,
+            AssistTool.GRID,
+            AssistTool.CROSS,
+            AssistTool.DESQ,
+            -> false
         }
 
     /**
@@ -158,31 +178,49 @@ class AssistState(
      * Scopes are independent: tapping another scope leaves an existing scope
      * visible and records the recency Android's portrait layout needs.
      */
-    fun toggle(tool: AssistTool) {
-        when (tool) {
+    fun toggle(tool: AssistTool, maximumActiveScopes: Int? = null): Boolean {
+        return when (tool) {
             AssistTool.LUT ->
                 if (effects.lut == null) {
                     update(effects.copy(lut = selectedLut))
+                    true
                 } else {
                     update(effects.copy(lut = null))
+                    true
                 }
             AssistTool.FALSE ->
                 if (effects.falseColor != null) {
                     update(effects.copy(falseColor = null))
+                    true
                 } else {
                     update(effects.copy(falseColor = selectedFalseColorScale))
+                    true
                 }
-            AssistTool.PEAK -> update(effects.copy(peaking = !effects.peaking))
-            AssistTool.ZEBRA -> update(effects.copy(zebra = !effects.zebra))
-            AssistTool.WAVE -> toggleScope(ScopeKind.WAVEFORM)
-            AssistTool.PARADE -> toggleScope(ScopeKind.PARADE)
-            AssistTool.HISTO -> toggleScope(ScopeKind.HISTOGRAM)
-            AssistTool.VECTOR -> toggleScope(ScopeKind.VECTORSCOPE)
-            AssistTool.LIGHTS -> toggleScope(ScopeKind.TRAFFIC_LIGHTS)
+            AssistTool.PEAK -> {
+                update(effects.copy(peaking = !effects.peaking))
+                true
+            }
+            AssistTool.ZEBRA -> {
+                update(effects.copy(zebra = !effects.zebra))
+                true
+            }
+            AssistTool.WAVE -> toggleScope(ScopeKind.WAVEFORM, maximumActiveScopes)
+            AssistTool.PARADE -> toggleScope(ScopeKind.PARADE, maximumActiveScopes)
+            AssistTool.HISTO -> toggleScope(ScopeKind.HISTOGRAM, maximumActiveScopes)
+            AssistTool.VECTOR -> toggleScope(ScopeKind.VECTORSCOPE, maximumActiveScopes)
+            AssistTool.LIGHTS -> toggleScope(ScopeKind.TRAFFIC_LIGHTS, maximumActiveScopes)
             AssistTool.AUDIO -> {
                 audioMetersEnabled = !audioMetersEnabled
                 persistState()
+                true
             }
+            // See isOn: monitor and settings framing controls are routed to
+            // OperatorSettings so they cannot mutate camera or effect state.
+            AssistTool.GUIDES,
+            AssistTool.GRID,
+            AssistTool.CROSS,
+            AssistTool.DESQ,
+            -> false
         }
     }
 
@@ -215,7 +253,10 @@ class AssistState(
         }
     }
 
-    private fun toggleScope(kind: ScopeKind) {
+    private fun toggleScope(kind: ScopeKind, maximumActiveScopes: Int?): Boolean {
+        if (kind !in selectedScopes && maximumActiveScopes != null && selectedScopes.size >= maximumActiveScopes) {
+            return false
+        }
         val next = selectedScopes.toMutableSet()
         val nextOrder = scopeActivationOrder.toMutableList()
         if (next.add(kind)) {
@@ -228,6 +269,12 @@ class AssistState(
         selectedScopes = ScopeKind.canonical.filter(next::contains).toSet()
         scopeActivationOrder = normalizeScopeOrder(nextOrder, selectedScopes)
         persistState()
+        return true
+    }
+
+    /** Restores the iOS False Color card's default scale without changing activation. */
+    fun resetFalseColorSelection() {
+        selectFalseColorScale(FeedFalseColorScale.STOPS)
     }
 
     private fun update(next: FeedEffects) {
@@ -265,13 +312,15 @@ class AssistState(
 
         /**
          * Restores the persisted toggles from SharedPreferences — unless the
-         * launch intent specified a selection ([intentEffects] non-identity or
-         * [intentScopes] non-null), which then IS the session state. [intentScope]
+         * launch intent specified a selection ([intentEffects] non-null or
+         * [intentScopes] non-null), which then IS the session state. A non-null
+         * identity effect record explicitly means every image effect is off;
+         * null means restore preferences. [intentScope]
          * remains the source-compatible single-scope bridge for existing callers.
          */
         fun restore(
             context: Context,
-            intentEffects: FeedEffects,
+            intentEffects: FeedEffects?,
             intentScope: ScopeKind?,
             intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
             availableStoredLut: (StoredLutSelection) -> Boolean = { true },
@@ -283,12 +332,12 @@ class AssistState(
         /** Restores local assist state from [preferences]; exposed to JVM tests through `internal`. */
         internal fun restore(
             preferences: SharedPreferences,
-            intentEffects: FeedEffects,
+            intentEffects: FeedEffects?,
             intentScope: ScopeKind?,
             intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
             availableStoredLut: (StoredLutSelection) -> Boolean = { true },
         ): AssistState {
-            val fromIntent = !intentEffects.isIdentity || intentScopes != null
+            val fromIntent = intentEffects != null || intentScopes != null
             val legacyBuiltIn =
                 preferences.getString("lut", null)
                     ?.let(FeedLut::fromId)
@@ -304,7 +353,7 @@ class AssistState(
                     ?: FeedFalseColorScale.STOPS
             val parsedEffects =
                 if (fromIntent) {
-                    intentEffects
+                    intentEffects ?: FeedEffects.NONE
                 } else {
                     FeedEffects.parse(
                         preferences.getString("tokens", null),
@@ -405,8 +454,19 @@ fun AssistToolbar(
     state: AssistState,
     modifier: Modifier = Modifier,
     visibleTools: List<AssistTool> = AssistTool.entries.toList(),
+    framingConfiguration: LocalFramingAssistConfiguration? = null,
+    onToggleFramingTool: (AssistTool) -> Unit = {},
     hapticsEnabled: Boolean = true,
+    enabled: Boolean = true,
+    maximumActiveScopes: Int? = null,
+    onScopeLimitReached: () -> Unit = {},
 ) {
+    val supportedTools =
+        if (Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable) {
+            visibleTools
+        } else {
+            visibleTools.filterNot { it in imageEffectTools }
+        }
     val scroll = rememberScrollState()
     val view = LocalView.current
     val leadingFade = scroll.canScrollBackward
@@ -446,7 +506,7 @@ fun AssistToolbar(
                 .horizontalScroll(scroll),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            visibleTools.forEachIndexed { index, tool ->
+            supportedTools.forEachIndexed { index, tool ->
                 if (index > 0 && index % 3 == 0) {
                     Box(
                         Modifier.padding(horizontal = 4.dp)
@@ -454,8 +514,24 @@ fun AssistToolbar(
                             .background(LiveDesign.hairlineStrong),
                     )
                 }
-                AssistToolCell(tool, state.isOn(tool)) {
-                    state.toggle(tool)
+                val isFramingTool = tool in AssistTool.framingTools
+                val isOn =
+                    if (isFramingTool) {
+                        framingConfiguration?.isToolEnabled(tool) ?: false
+                    } else {
+                        state.isOn(tool)
+                    }
+                AssistToolCell(tool, isOn, enabled) {
+                    var changed = true
+                    if (isFramingTool) {
+                        onToggleFramingTool(tool)
+                    } else {
+                        changed = state.toggle(tool, maximumActiveScopes)
+                    }
+                    if (!changed) {
+                        onScopeLimitReached()
+                        return@AssistToolCell
+                    }
                     if (hapticsEnabled) {
                         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                     }
@@ -466,6 +542,20 @@ fun AssistToolbar(
         ScrollChevron(leading = false, visible = trailingFade, Modifier.align(Alignment.CenterEnd))
     }
 }
+
+/** Feed effects need Android 13 AGSL plus the staged Swift renderer policy. */
+private val imageEffectTools: Set<AssistTool> =
+    setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
+
+/** Maps local framing configuration to the four toolbar toggles without a camera-control seam. */
+private fun LocalFramingAssistConfiguration.isToolEnabled(tool: AssistTool): Boolean =
+    when (tool) {
+        AssistTool.GUIDES -> drawsGuides
+        AssistTool.GRID -> drawsGrid
+        AssistTool.CROSS -> centerCrosshairEnabled
+        AssistTool.DESQ -> desqueezeEnabled
+        else -> false
+    }
 
 /** Gold edge chevron hinting at off-screen tools (iOS `scrollChevron`). */
 @Composable
@@ -501,13 +591,13 @@ private fun ScrollChevron(leading: Boolean, visible: Boolean, modifier: Modifier
  * `AssistToolButton`, the mockup `.tool` box model with its 52pt floor).
  */
 @Composable
-private fun AssistToolCell(tool: AssistTool, isOn: Boolean, onClick: () -> Unit) {
+private fun AssistToolCell(tool: AssistTool, isOn: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val tint = if (isOn) LiveDesign.accent else LiveDesign.muted
     Column(
         modifier =
             Modifier
                 .background(if (isOn) LiveDesign.accentDim else Color.Transparent, ChromeShape)
-                .chromeClickable(onClick)
+                .chromeClickable(enabled, onClick)
                 .semantics {
                     contentDescription = tool.settingsTitle
                     stateDescription = if (isOn) "On" else "Off"
@@ -655,6 +745,51 @@ private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = 
                     drawLine(tint, Offset(x - size.width * 0.10f, centre), Offset(x + size.width * 0.10f, centre), 1.2.dp.toPx())
                     drawCircle(tint, size.minDimension * 0.075f, Offset(x, bottom))
                 }
+            }
+            // SF `rectangle.dashed`: delivery frame guides.
+            AssistTool.GUIDES -> {
+                val inset = size.minDimension * 0.16f
+                val dash = size.minDimension * 0.16f
+                val top = inset
+                val bottom = size.height - inset
+                val left = inset * 0.58f
+                val right = size.width - left
+                drawLine(tint, Offset(left, top), Offset(left + dash, top), 1.5.dp.toPx())
+                drawLine(tint, Offset(right - dash, top), Offset(right, top), 1.5.dp.toPx())
+                drawLine(tint, Offset(left, bottom), Offset(left + dash, bottom), 1.5.dp.toPx())
+                drawLine(tint, Offset(right - dash, bottom), Offset(right, bottom), 1.5.dp.toPx())
+                drawLine(tint, Offset(left, top), Offset(left, top + dash), 1.5.dp.toPx())
+                drawLine(tint, Offset(right, top), Offset(right, top + dash), 1.5.dp.toPx())
+                drawLine(tint, Offset(left, bottom - dash), Offset(left, bottom), 1.5.dp.toPx())
+                drawLine(tint, Offset(right, bottom - dash), Offset(right, bottom), 1.5.dp.toPx())
+            }
+            // SF `grid`: thirds and phi composition lines.
+            AssistTool.GRID -> {
+                val fractions = listOf(1f / 3f, 2f / 3f)
+                fractions.forEach { fraction ->
+                    val x = size.width * fraction
+                    val y = size.height * fraction
+                    drawLine(tint, Offset(x, 1.dp.toPx()), Offset(x, size.height - 1.dp.toPx()), 1.3.dp.toPx())
+                    drawLine(tint, Offset(1.dp.toPx(), y), Offset(size.width - 1.dp.toPx(), y), 1.3.dp.toPx())
+                }
+            }
+            // SF `plus`: centre crosshair.
+            AssistTool.CROSS -> {
+                val centre = Offset(size.width / 2, size.height / 2)
+                val arm = size.minDimension * 0.42f
+                drawLine(tint, Offset(centre.x - arm, centre.y), Offset(centre.x + arm, centre.y), 1.7.dp.toPx())
+                drawLine(tint, Offset(centre.x, centre.y - arm), Offset(centre.x, centre.y + arm), 1.7.dp.toPx())
+            }
+            // SF `arrow.left.and.right`: local anamorphic de-squeeze.
+            AssistTool.DESQ -> {
+                val y = size.height / 2
+                val inset = size.width * 0.12f
+                val head = size.minDimension * 0.20f
+                drawLine(tint, Offset(inset, y), Offset(size.width - inset, y), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(inset, y), Offset(inset + head, y - head), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(inset, y), Offset(inset + head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y - head), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
             }
             // SF `slider.vertical.3`: three compact audio level bars.
             AssistTool.AUDIO -> {

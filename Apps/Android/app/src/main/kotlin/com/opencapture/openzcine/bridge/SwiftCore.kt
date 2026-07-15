@@ -170,6 +170,9 @@ object SwiftCore {
      * and zebras. [crushClipCompensationRaw] is the persisted raw value for
      * Swift's `AssistConfiguration.CrushClipCompensation`; Swift alone
      * applies it when measuring the additive Traffic Lights trailer.
+     * [includePoints] is false for histogram/Traffic-Lights-only demand so
+     * Swift skips point allocation and the JNI payload carries only bins and
+     * the derived meter record.
      * Blocking (one CPU sampling pass); call from a background dispatcher.
      */
     external fun scopeTraces(
@@ -180,15 +183,21 @@ object SwiftCore {
         curve: Int,
         clipNative: Float,
         crushClipCompensationRaw: Int,
+        includePoints: Boolean,
     ): FloatArray
 
     /**
      * Samples one downsampled RGBA frame for the vectorscope: a 128×128
-     * premultiplied-RGBA density image of the BT.709 chroma plane, computed
-     * from the clean points pushed through the core's built-in display tone
-     * map (`ScopeFrameWire.vectorPixels`). [zoom] is the stable Swift-owned
-     * trace-gain ordinal (0 = 1×, 1 = 2×, 2 = 4×). Empty when the frame yields
-     * no samples. Blocking; call from a background dispatcher.
+     * consecutive 128×128 premultiplied-RGBA density images of the BT.709
+     * chroma plane (1.1-bin Gaussian soft pass, then crisp source), computed
+     * from the clean points pushed through the active registered monitor LUT
+     * (`ScopeFrameWire.vectorPixels`). [lutHandle] comes from
+     * [registerScopeVectorLut] and avoids copying a 33–64³ cube on each tick.
+     * [zoom] is the stable Swift-owned
+     * trace-gain ordinal (0 = 1×, 1 = 2×, 2 = 4×); [brightness] is the
+     * persisted 0…200 trace percentage and is applied while Swift produces
+     * premultiplied pixels. Empty when the frame yields no samples. Blocking;
+     * call from a background dispatcher.
      */
     external fun scopeVector(
         rgba: ByteArray,
@@ -197,7 +206,25 @@ object SwiftCore {
         bytesPerRow: Int,
         curve: Int,
         zoom: Int,
+        brightness: Int,
+        lutHandle: Long,
     ): ByteArray
+
+    /**
+     * Registers the vectorscope's active monitor look once per selection.
+     * [lookOrdinal] uses [com.opencapture.openzcine.FeedLut.wireOrdinal]; a
+     * negative value decodes [packedRgba] as a [cubeSize]³ stored cube. Returns
+     * a positive handle or `-1` for a malformed record. Blocking; call off the
+     * main dispatcher.
+     */
+    external fun registerScopeVectorLut(
+        lookOrdinal: Int,
+        packedRgba: ByteArray?,
+        cubeSize: Int,
+    ): Long
+
+    /** Releases a positive handle returned by [registerScopeVectorLut]. */
+    external fun unregisterScopeVectorLut(handle: Long)
 
     // ── Feed effects (colour math baked in the core, uploaded by Kotlin) ──
 
@@ -283,8 +310,8 @@ object SwiftCore {
     external fun bakeFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Float): ByteArray?
 
     /**
-     * Compact reference palette `[count, r, g, b × count]`, taken from the
-     * exact false-colour scale/mapping that produced the GPU cube.
+     * Versioned reference-panel segments and stop-marker geometry, taken from
+     * the exact false-colour scale/mapping that produced the GPU cube.
      */
     external fun falseColorReference(
         scaleOrdinal: Int,
@@ -339,6 +366,48 @@ object SwiftCore {
     external fun redLutDownloadAvailability(
         hasInternetPath: Boolean,
         isOnCameraAccessPoint: Boolean,
+    ): String?
+
+    // ── Link health and preview policy (Swift owns the policy) ──
+
+    /**
+     * Resolves Android's persisted stream choices through the shared Swift
+     * preview policy. The result is `imageSize<TAB>compression<TAB>intervalNanos`;
+     * Kotlin stores/presents the choices but never maps them to Nikon bytes or
+     * applies thermal caps itself. Null rejects an unknown wire value.
+     *
+     * This affects only the live-view JPEG preview. It never changes camera
+     * recording format, codec, frame rate, or an active card write.
+     */
+    external fun resolveLiveViewRequest(
+        streamPreset: Int,
+        qualityBias: Int,
+        thermalTier: Int,
+        isRecording: Boolean,
+        cameraOverheating: Boolean,
+    ): String?
+
+    /**
+     * Scores current Android link observations through `CameraLinkHealthScorer`
+     * and the shared `LinkSignalBars` hysteresis filter. Optional floating
+     * values use an explicit presence flag, so an unavailable transport
+     * measurement is never fabricated as zero. Returns
+     * `score<TAB>bars<TAB>detail`, or null for an invalid phase.
+     */
+    external fun linkHealthSnapshot(
+        phase: Int,
+        roundTripMilliseconds: Double,
+        hasRoundTrip: Boolean,
+        liveViewFps: Double,
+        hasLiveViewFps: Boolean,
+        targetLiveViewFps: Double,
+        secondsSinceLastGoodFrame: Double,
+        hasLastGoodFrame: Boolean,
+        consecutiveBadFrames: Int,
+        recentCommandFailures: Int,
+        isRecoveringStream: Boolean,
+        isUsbTransport: Boolean,
+        resetSignalBars: Boolean,
     ): String?
 
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
@@ -484,6 +553,19 @@ object SwiftCore {
         recording: Boolean,
         propertyCode: Long,
     ): String?
+
+    /**
+     * Configures the next Android live-view run with a Swift-policy-approved
+     * preview request. It writes only Nikon live-view JPEG properties and the
+     * preview-pull cadence; it cannot change recording settings. Call before
+     * [sessionStartLiveView] on an IO dispatcher. Returns false when no active
+     * session accepts the request.
+     */
+    external fun sessionConfigureLiveView(
+        imageSize: Int,
+        compression: Int,
+        frameIntervalNanoseconds: Long,
+    ): Boolean
 
     /**
      * Starts (`true`) or stops (`false`) movie recording on the active camera

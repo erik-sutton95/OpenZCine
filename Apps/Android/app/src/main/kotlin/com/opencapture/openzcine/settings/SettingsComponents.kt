@@ -165,15 +165,31 @@ public fun SettingsQuietLink(title: String, onClick: () -> Unit) {
     )
 }
 
-/** Titled glass card with a caption over free-form content (iOS `SettingsGroupCard`). */
+/** Titled glass card with an optional per-tool reset and free-form content. */
 @Composable
-public fun SettingsGroupCard(title: String, caption: String, content: @Composable () -> Unit) {
+public fun SettingsGroupCard(
+    title: String,
+    caption: String,
+    onReset: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth().glass(ChromeShape).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(11.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = chromeStyle(13f, FontWeight.SemiBold), color = LiveDesign.text)
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    title,
+                    style = chromeStyle(13f, FontWeight.SemiBold),
+                    color = LiveDesign.text,
+                )
+                Spacer(Modifier.weight(1f))
+                if (onReset != null) SettingsQuietLink("Reset", onReset)
+            }
             Text(
                 caption,
                 style = chromeStyle(11.5f, FontWeight.Normal),

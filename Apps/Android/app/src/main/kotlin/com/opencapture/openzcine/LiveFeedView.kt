@@ -1,32 +1,46 @@
 package com.opencapture.openzcine
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaCodecList
 import android.os.Build
 import android.util.Log
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.LiveCameraLevel
 import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFrame
@@ -38,6 +52,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val TAG = "ZCLiveFeed"
+private const val FALSE_COLOR_REFERENCE_WIDTH = 264f
+private const val FALSE_COLOR_REFERENCE_HEIGHT = 52f
+private const val FALSE_COLOR_REFERENCE_GAP = 10f
+private const val FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE = 14f + LiveDesign.CONTROL_HEIGHT_DP
 
 /** The exact integer destination rectangle used by the aspect-fit feed Canvas. */
 internal data class LiveFeedContentRect(
@@ -129,6 +147,27 @@ public class LiveFeedPresentationState {
     }
 }
 
+@Immutable
+internal data class FalseColorReferencePresentation(
+    val scale: FeedFalseColorScale,
+    val reference: FeedFalseColorReference,
+)
+
+/** Render-success state consumed by the unscaled sibling reference overlay. */
+@Stable
+public class LiveFeedEffectsPresentationState {
+    internal var falseColorReference: FalseColorReferencePresentation? by mutableStateOf(null)
+        private set
+
+    internal fun present(scale: FeedFalseColorScale, reference: FeedFalseColorReference) {
+        falseColorReference = FalseColorReferencePresentation(scale, reference)
+    }
+
+    internal fun clear() {
+        falseColorReference = null
+    }
+}
+
 /**
  * Decodes the live-view JPEG stream into a small ring of reused [Bitmap]s.
  *
@@ -208,6 +247,7 @@ fun LiveFeedView(
     configuration: FeedEffectsConfiguration = FeedEffectsConfiguration(),
     cameraInput: ExposureAssistCameraInput = ExposureAssistCameraInput(),
     lutLibrary: AndroidLutLibrary? = null,
+    effectsPresentationState: LiveFeedEffectsPresentationState? = null,
 ) {
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
     // Stored selections are prepared off the UI thread. Until the shared Swift parser has produced
@@ -217,30 +257,40 @@ fun LiveFeedView(
         val stored = (effects.lut as? FeedLutSelection.Stored)?.value
         if (stored != null) lutLibrary?.prepare(stored)
     }
-    val renderer =
-        remember(effects, configuration, cameraInput, lutLibrary, lutRenderGeneration) {
+    var renderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
+    LaunchedEffect(effects, configuration, cameraInput, lutLibrary, lutRenderGeneration) {
+        // Never retain a renderer for a superseded selection while its
+        // replacement is prepared. Cube baking and bitmap upload are native/
+        // CPU work, so keep the Compose thread responsive during configuration
+        // changes such as repeated zebra threshold taps.
+        renderer = null
+        renderer =
             when {
                 effects.isIdentity -> null
                 Build.VERSION.SDK_INT >= 33 ->
-                    FeedEffectsRenderer.create(effects, configuration, cameraInput, lutLibrary)
+                    withContext(Dispatchers.Default) {
+                        FeedEffectsRenderer.create(effects, configuration, cameraInput, lutLibrary)
+                    }
                 else -> {
                     Log.w(TAG, "feed effects need Android 13+ (AGSL); rendering the plain feed")
                     null
                 }
             }
+    }
+    LaunchedEffect(
+        renderer,
+        effects.falseColor,
+        configuration.falseColorReferenceEnabled,
+        cameraInput,
+        effectsPresentationState,
+    ) {
+        effectsPresentationState?.clear()
+        val scale = effects.falseColor?.takeIf { configuration.falseColorReferenceEnabled }
+        if (renderer?.falseColorReady == true && scale != null) {
+            val reference = withContext(Dispatchers.Default) { resolveFalseColorReference(scale, cameraInput) }
+            if (reference != null) effectsPresentationState?.present(scale, reference)
         }
-    val falseColorReference =
-        remember(renderer, effects.falseColor, configuration.falseColorReferenceEnabled, cameraInput) {
-            // Do not show a palette for an effect that failed closed (for
-            // example below API 33 or if the Swift payload was rejected).
-            if (renderer == null) {
-                null
-            } else {
-                effects.falseColor
-                    ?.takeIf { configuration.falseColorReferenceEnabled }
-                    ?.let { scale -> resolveFalseColorReference(scale, cameraInput) }
-            }
-        }
+    }
 
     LaunchedEffect(source, presentationState) {
         presentationState?.clear()
@@ -280,8 +330,9 @@ fun LiveFeedView(
             ) ?: return@Canvas
         val dstSize = IntSize(content.width, content.height)
         val dstOffset = IntOffset(content.left, content.top)
-        if (Build.VERSION.SDK_INT >= 33 && renderer != null) {
-            renderer.draw(
+        val activeRenderer = renderer
+        if (Build.VERSION.SDK_INT >= 33 && activeRenderer != null) {
+            activeRenderer.draw(
                 canvas = drawContext.canvas.nativeCanvas,
                 frame = image.asAndroidBitmap(),
                 dstLeft = dstOffset.x.toFloat(),
@@ -292,39 +343,208 @@ fun LiveFeedView(
         } else {
             drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
         }
-        falseColorReference?.let { reference ->
-            drawFalseColorReference(reference, content.left.toFloat(), content.top.toFloat(), content.width.toFloat())
-        }
     }
 }
 
-/** Draws the Swift-derived palette key only while false colour is actively rendered. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorReference(
-    reference: FeedFalseColorReference,
-    feedLeft: Float,
-    feedTop: Float,
-    feedWidth: Float,
+/**
+ * Unscaled sibling of [LiveFeedView]. Keeping the reference outside the feed's
+ * de-squeeze graphics layer preserves its 264×52 iOS footprint and typography.
+ */
+@Composable
+fun FalseColorReferenceOverlay(
+    effectsState: LiveFeedEffectsPresentationState,
+    feed: ZoneFrame,
+    viewport: ZoneFrame,
+    modifier: Modifier = Modifier,
 ) {
-    if (reference.colors.isEmpty()) return
-    val block = 8.dp.toPx()
-    val gap = 2.dp.toPx()
-    val padding = 5.dp.toPx()
-    val keyWidth = padding * 2 + reference.colors.size * block + (reference.colors.size - 1) * gap
-    val left = (feedLeft + feedWidth - keyWidth - 8.dp.toPx()).coerceAtLeast(feedLeft + 4.dp.toPx())
-    val top = feedTop + 8.dp.toPx()
-    drawRoundRect(
-        color = Color(0.025f, 0.036f, 0.03f, 0.82f),
-        topLeft = Offset(left, top),
-        size = Size(keyWidth, block + padding * 2),
-        cornerRadius = CornerRadius(4.dp.toPx()),
+    val presentation = effectsState.falseColorReference ?: return
+    val default =
+        remember(feed, viewport) {
+            falseColorReferenceDefaultFrame(feed, viewport)
+        }
+    val context = LocalContext.current.applicationContext
+    val store = remember(context) { FalseColorReferencePlacementStore(context) }
+    var frame by remember(default, viewport) { mutableStateOf(store.resolve(default, viewport)) }
+    var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
+    val density = LocalDensity.current
+    val view = LocalView.current
+    Canvas(
+        modifier
+            .zone(frame)
+            .glass(ChromeShape)
+            .semantics { contentDescription = "False color reference, movable panel" }
+            .pointerInput(default, viewport) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    },
+                    onDragEnd = { store.save(frame, viewport) },
+                ) { change, dragAmount ->
+                    change.consume()
+                    val snapped =
+                        clampScopeFrame(
+                            snapFalseColorReferenceFrame(
+                                frame.copy(
+                                    x = frame.x + dragAmount.x / density.density,
+                                    y = frame.y + dragAmount.y / density.density,
+                                ),
+                            ),
+                            viewport,
+                        )
+                    val cell =
+                        ((snapped.x + snapped.width / 2f) / 22f).roundToInt() * 100_000 +
+                            ((snapped.y + snapped.height / 2f) / 22f).roundToInt()
+                    if (cell != hapticCell) {
+                        hapticCell = cell
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                    frame = snapped
+                }
+            },
+    ) {
+        drawFalseColorReference(presentation)
+    }
+}
+
+/** iOS `feedOutsideCenter(.bottomLeading)` translated into the Android zone map. */
+internal fun falseColorReferenceDefaultFrame(
+    feed: ZoneFrame,
+    viewport: ZoneFrame,
+): ZoneFrame {
+    val feedBottom = feed.y + feed.height
+    val outsideTop = feedBottom + FALSE_COLOR_REFERENCE_GAP
+    val viewportBottom = viewport.y + viewport.height
+    val top =
+        if (outsideTop + FALSE_COLOR_REFERENCE_HEIGHT <= viewportBottom) {
+            outsideTop
+        } else {
+            min(
+                feedBottom,
+                viewportBottom - FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
+            ) - FALSE_COLOR_REFERENCE_GAP - FALSE_COLOR_REFERENCE_HEIGHT
+        }
+    return clampScopeFrame(
+        ZoneFrame(
+            x = feed.x,
+            y = top,
+            width = min(FALSE_COLOR_REFERENCE_WIDTH, feed.width),
+            height = FALSE_COLOR_REFERENCE_HEIGHT,
+        ),
+        viewport,
     )
-    reference.colors.forEachIndexed { index, rgb ->
-        drawRoundRect(
-            color = Color(rgb[0], rgb[1], rgb[2]),
-            topLeft = Offset(left + padding + index * (block + gap), top + padding),
-            size = Size(block, block),
-            cornerRadius = CornerRadius(1.dp.toPx()),
+}
+
+/** Mirrors iOS `MovablePanel`'s fine 4-point position grid. */
+internal fun snapFalseColorReferenceFrame(frame: ZoneFrame): ZoneFrame =
+    frame.copy(
+        x = (frame.x / 4f).roundToInt() * 4f,
+        y = (frame.y / 4f).roundToInt() * 4f,
+    )
+
+/** Persists the normalized centre used by iOS's `MovablePanel(id: "fcref")`. */
+private class FalseColorReferencePlacementStore(context: Context) {
+    private val preferences = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+
+    fun resolve(default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
+        if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
+        val normalizedX = preferences.getFloat(CENTER_X_KEY, 0.5f)
+        val normalizedY = preferences.getFloat(CENTER_Y_KEY, 0.5f)
+        if (!normalizedX.isFinite() || !normalizedY.isFinite()) return default
+        return clampScopeFrame(
+            default.copy(
+                x = bounds.x + normalizedX * bounds.width - default.width / 2f,
+                y = bounds.y + normalizedY * bounds.height - default.height / 2f,
+            ),
+            bounds,
         )
+    }
+
+    fun save(frame: ZoneFrame, bounds: ZoneFrame) {
+        val centerX = (frame.x + frame.width / 2f - bounds.x) / maxOf(1f, bounds.width)
+        val centerY = (frame.y + frame.height / 2f - bounds.y) / maxOf(1f, bounds.height)
+        preferences.edit()
+            .putFloat(CENTER_X_KEY, centerX.coerceIn(0f, 1f))
+            .putFloat(CENTER_Y_KEY, centerY.coerceIn(0f, 1f))
+            .apply()
+    }
+
+    private companion object {
+        const val STORE_NAME = "falseColorReferencePlacement"
+        const val CENTER_X_KEY = "fcref.centerX"
+        const val CENTER_Y_KEY = "fcref.centerY"
+    }
+}
+
+/** Draws the Swift-derived palette geometry and camera-aware reference axis. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorReference(
+    presentation: FalseColorReferencePresentation,
+) {
+    val reference = presentation.reference
+    if (reference.segments.isEmpty()) return
+    val panelWidth = size.width
+    val panelHeight = size.height
+    if (panelWidth < 120.dp.toPx() || panelHeight < 38.dp.toPx()) return
+    val left = 0f
+    val top = 0f
+    val padding = 7.dp.toPx()
+    val barLeft = left + padding
+    val barTop = top + 21.dp.toPx()
+    val barWidth = panelWidth - padding * 2
+    val barHeight = 8.dp.toPx()
+    val neutral =
+        if (presentation.scale == FeedFalseColorScale.STOPS) {
+            listOf(Color(0.04f, 0.04f, 0.04f), Color(0.86f, 0.86f, 0.86f))
+        } else {
+            listOf(Color(0.54f, 0.54f, 0.54f), Color(0.75f, 0.75f, 0.75f))
+        }
+    clipRect(barLeft, barTop, barLeft + barWidth, barTop + barHeight) {
+        drawRect(
+            brush = Brush.horizontalGradient(neutral, startX = barLeft, endX = barLeft + barWidth),
+            topLeft = Offset(barLeft, barTop),
+            size = Size(barWidth, barHeight),
+        )
+        reference.segments.forEach { segment ->
+            drawRect(
+                color = Color(segment.color[0], segment.color[1], segment.color[2]),
+                topLeft = Offset(barLeft + barWidth * segment.lowerFraction, barTop),
+                size = Size(maxOf(1f, barWidth * (segment.upperFraction - segment.lowerFraction)), barHeight),
+            )
+        }
+    }
+    drawIntoCanvas { canvas ->
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
+        }
+        paint.color = LiveDesign.text.toArgb()
+        paint.textSize = 8.5.dp.toPx()
+        paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+        paint.textAlign = android.graphics.Paint.Align.LEFT
+        canvas.nativeCanvas.drawText("False Color", barLeft, top + 13.dp.toPx(), paint)
+        paint.color = LiveDesign.muted.toArgb()
+        paint.textSize = 7.5.dp.toPx()
+        paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
+        paint.textAlign = android.graphics.Paint.Align.RIGHT
+        val curve = if (reference.curveOrdinal == 0) "L3G10" else "N-Log"
+        canvas.nativeCanvas.drawText("${presentation.scale.label} · $curve", left + panelWidth - padding, top + 13.dp.toPx(), paint)
+
+        paint.textSize = 5.5.dp.toPx()
+        paint.textAlign = android.graphics.Paint.Align.CENTER
+        val labels: List<Pair<String, Float>> =
+            if (presentation.scale == FeedFalseColorScale.STOPS) {
+                listOf("Min", "−3", "18%", "Skin", "+2", "Max").zip(reference.stopMarkerFractions.toList())
+            } else {
+                val axis =
+                    if (presentation.scale == FeedFalseColorScale.IRE) {
+                        listOf("clip / shadows", "18%", "skin hi", "highlights → clip")
+                    } else {
+                        listOf("crushed", "midtones untouched", "clipped")
+                    }
+                axis.mapIndexed { index, label -> label to index.toFloat() / (axis.size - 1) }
+            }
+        labels.forEach { (label, fraction) ->
+            val x = (barLeft + barWidth * fraction).coerceIn(barLeft + 8.dp.toPx(), barLeft + barWidth - 8.dp.toPx())
+            canvas.nativeCanvas.drawText(label, x, top + 44.dp.toPx(), paint)
+        }
     }
 }
 

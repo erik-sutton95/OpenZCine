@@ -23,8 +23,10 @@ data class ExposureAssistMapping(
             val curve = values[0].toInt()
             require(values[0] == curve.toFloat() && curve in 0..1) { "invalid exposure curve ${values[0]}" }
             require(values[1] in 0f..255f) { "invalid exposure black ${values[1]}" }
-            require(values[2] in 0f..255f) { "invalid exposure middle gray ${values[2]}" }
             require(values[3] in values[1]..255f) { "invalid exposure clip ${values[3]}" }
+            require(values[2] in values[1]..values[3]) {
+                "invalid exposure middle gray ${values[2]}"
+            }
             return ExposureAssistMapping(curve, values[1], values[2], values[3])
         }
     }
@@ -38,8 +40,7 @@ data class ExposureAssistMapping(
 data class FeedEffectsRenderConfiguration(
     val curveOrdinal: Int,
     val clipNative: Float,
-    val deLogBlack: Float,
-    val deLogClip: Float,
+    val deLogCurve: FloatArray,
     val peakingThreshold: Float,
     val peakingRamp: Float,
     val peakingColor: FloatArray,
@@ -52,7 +53,7 @@ data class FeedEffectsRenderConfiguration(
 ) {
     companion object {
         /** Mirrors `FeedEffectsWire.renderConfigurationFieldCount`. */
-        const val FIELD_COUNT = 19
+        const val FIELD_COUNT = 22
 
         /** Decodes one strict Swift record and refuses malformed uniform data. */
         fun parse(values: FloatArray): FeedEffectsRenderConfiguration {
@@ -63,31 +64,39 @@ data class FeedEffectsRenderConfiguration(
                 "invalid feed effects curve ${values[0]}"
             }
             require(values[1] in 0f..255f) { "invalid feed effects clip ${values[1]}" }
-            require(values[2] in 0f..1f && values[3] in 0f..1f && values[3] > values[2]) {
-                "invalid de-log range"
+            val deLogCurve = values.copyOfRange(2, 7)
+            require(
+                deLogCurve.all { it in 0f..1f } &&
+                    deLogCurve.indices.drop(1).all { index ->
+                        deLogCurve[index] >= deLogCurve[index - 1]
+                    } &&
+                    deLogCurve.first() < deLogCurve.last(),
+            ) {
+                "invalid de-log curve"
             }
-            require(values[4] >= 0f && values[5] >= 0f) { "invalid peaking controls" }
-            requireFlag(values[9], "highlight enabled")
-            requireFlag(values[14], "midtone enabled")
-            requireCode(values[10], "highlight")
-            requireCode(values[15], "midtone")
-            requireRgb(values, 6, "peaking")
-            requireRgb(values, 11, "highlight")
-            requireRgb(values, 16, "midtone")
+            require(values[7] in 0f..1f && values[8] > 0f && values[8] <= 10_000f) {
+                "invalid peaking controls"
+            }
+            requireFlag(values[12], "highlight enabled")
+            requireFlag(values[17], "midtone enabled")
+            requireCode(values[13], "highlight")
+            requireCode(values[18], "midtone")
+            requireRgb(values, 9, "peaking")
+            requireRgb(values, 14, "highlight")
+            requireRgb(values, 19, "midtone")
             return FeedEffectsRenderConfiguration(
                 curveOrdinal = curveOrdinal,
                 clipNative = values[1],
-                deLogBlack = values[2],
-                deLogClip = values[3],
-                peakingThreshold = values[4],
-                peakingRamp = values[5],
-                peakingColor = values.copyOfRange(6, 9),
-                highlightEnabled = values[9] == 1f,
-                highlightCode = values[10],
-                highlightColor = values.copyOfRange(11, 14),
-                midtoneEnabled = values[14] == 1f,
-                midtoneCode = values[15],
-                midtoneColor = values.copyOfRange(16, FIELD_COUNT),
+                deLogCurve = deLogCurve,
+                peakingThreshold = values[7],
+                peakingRamp = values[8],
+                peakingColor = values.copyOfRange(9, 12),
+                highlightEnabled = values[12] == 1f,
+                highlightCode = values[13],
+                highlightColor = values.copyOfRange(14, 17),
+                midtoneEnabled = values[17] == 1f,
+                midtoneCode = values[18],
+                midtoneColor = values.copyOfRange(19, FIELD_COUNT),
             )
         }
 
@@ -107,26 +116,80 @@ data class FeedEffectsRenderConfiguration(
     }
 }
 
-/** Compact core-derived palette used only for the optional false-colour key. */
-data class FeedFalseColorReference(val colors: List<FloatArray>) {
+/** One core-derived colored interval in the optional false-colour key. */
+data class FeedFalseColorReferenceSegment(
+    val lowerFraction: Float,
+    val upperFraction: Float,
+    val color: FloatArray,
+)
+
+/** Camera-aware palette geometry used only for the optional false-colour key. */
+data class FeedFalseColorReference(
+    val curveOrdinal: Int,
+    val segments: List<FeedFalseColorReferenceSegment>,
+    val stopMarkerFractions: FloatArray,
+) {
     companion object {
-        /** Decodes `[count, r, g, b × count]` and rejects incomplete data. */
-        fun parse(values: FloatArray): FeedFalseColorReference {
-            require(values.isNotEmpty() && values[0].isFinite()) { "invalid false-color reference" }
-            val count = values[0].toInt()
-            require(values[0] == count.toFloat() && count >= 0 && values.size == 1 + count * 3) {
+        private const val VERSION = 1
+        private const val HEADER_COUNT = 4
+        private const val SEGMENT_STRIDE = 5
+
+        /** Decodes the strict renderer-ready geometry returned by Swift. */
+        fun parse(
+            values: FloatArray,
+            scale: FeedFalseColorScale,
+            expectedCurveOrdinal: Int,
+        ): FeedFalseColorReference {
+            require(values.size >= HEADER_COUNT && values.all(Float::isFinite)) {
+                "invalid false-color reference"
+            }
+            val version = values[0].toInt()
+            val curve = values[1].toInt()
+            val segmentCount = values[2].toInt()
+            val markerCount = values[3].toInt()
+            require(values[0] == version.toFloat() && version == VERSION) { "invalid false-color version" }
+            require(values[1] == curve.toFloat() && curve in 0..1) { "invalid false-color curve" }
+            require(curve == expectedCurveOrdinal) { "mismatched false-color curve" }
+            val expectedSegmentCount =
+                when (scale) {
+                    FeedFalseColorScale.STOPS -> 8
+                    FeedFalseColorScale.IRE -> 9
+                    FeedFalseColorScale.LIMITS -> 4
+                }
+            val expectedMarkerCount = if (scale == FeedFalseColorScale.STOPS) 6 else 0
+            require(values[2] == segmentCount.toFloat() && segmentCount == expectedSegmentCount) {
+                "invalid false-color segment count"
+            }
+            require(values[3] == markerCount.toFloat() && markerCount == expectedMarkerCount) {
+                "invalid false-color marker count"
+            }
+            require(values.size == HEADER_COUNT + segmentCount * SEGMENT_STRIDE + markerCount) {
                 "invalid false-color reference length ${values.size}"
             }
-            val colors =
-                (0 until count).map { index ->
-                    val start = 1 + index * 3
-                    values.copyOfRange(start, start + 3).also { color ->
-                        require(color.all { it.isFinite() && it in 0f..1f }) {
-                            "invalid false-color reference colour"
-                        }
+            var previousUpper = 0f
+            val segments =
+                (0 until segmentCount).map { index ->
+                    val start = HEADER_COUNT + index * SEGMENT_STRIDE
+                    val lower = values[start]
+                    val upper = values[start + 1]
+                    require(lower in 0f..1f && upper in lower..1f) {
+                        "invalid false-color segment geometry"
                     }
+                    require(index == 0 || lower >= previousUpper) {
+                        "non-monotonic false-color segments"
+                    }
+                    previousUpper = upper
+                    val color = values.copyOfRange(start + 2, start + SEGMENT_STRIDE)
+                    require(color.all { it in 0f..1f }) { "invalid false-color reference colour" }
+                    FeedFalseColorReferenceSegment(lower, upper, color)
                 }
-            return FeedFalseColorReference(colors)
+            val markerStart = HEADER_COUNT + segmentCount * SEGMENT_STRIDE
+            val markers = values.copyOfRange(markerStart, values.size)
+            require(markers.all { it in 0f..1f }) { "invalid false-color marker geometry" }
+            require(markers.asList().zipWithNext().all { (lower, upper) -> lower <= upper }) {
+                "non-monotonic false-color markers"
+            }
+            return FeedFalseColorReference(curve, segments, markers)
         }
     }
 }
@@ -152,7 +215,7 @@ fun resolveFalseColorReference(
             requireNotNull(
                 SwiftCore.falseColorReference(scale.wireOrdinal, mapping.curveOrdinal, mapping.clipNative),
             ) { "missing false-color reference" }
-        FeedFalseColorReference.parse(payload)
+        FeedFalseColorReference.parse(payload, scale, mapping.curveOrdinal)
     }.getOrNull()
 }
 
@@ -163,13 +226,15 @@ fun zebraEditorValue(
     monitorPercent: Float,
 ): Float? {
     if (!SwiftCore.isAvailable) return null
-    return SwiftCore.zebraEditorValue(
+    val value = SwiftCore.zebraEditorValue(
         input.codec,
         input.isoWireValue,
         input.baseIso,
         unit.wireOrdinal,
         monitorPercent,
-    ).takeIf(Float::isFinite)
+    )
+    val maximum = if (unit == FeedZebraUnit.NATIVE) 255f else 100f
+    return value.takeIf { it.isFinite() && it in 0f..maximum }
 }
 
 /** Converts a user editor value through Swift without locally duplicating its mapping policy. */

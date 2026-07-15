@@ -33,13 +33,13 @@ sealed interface FeedLutSelection {
 
 /** False-colour scales. [wireOrdinal] mirrors `FeedEffectsWire.bakedFalseColor`. */
 enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int, val label: String) {
-    STOPS("stops", 0, "STOPS"),
+    STOPS("stops", 0, "ZC Stops"),
     IRE("ire", 1, "IRE"),
     /**
      * Crush/clip-only false colour. Unlike STOPS/IRE it composites over the
      * selected monitor look, matching iOS `FalseColorScale.limits`.
      */
-    LIMITS("limits", 2, "LIMITS");
+    LIMITS("limits", 2, "Limits");
 
     companion object {
         fun fromId(id: String): FeedFalseColorScale? = entries.firstOrNull { it.id == id }
@@ -113,8 +113,10 @@ data class FeedEffectsConfiguration(
     /** Keeps corruption or a stale preference from producing an invalid core request. */
     fun normalized(): FeedEffectsConfiguration =
         copy(
-            zebraHighlightIre = zebraHighlightIre.coerceIn(0f, 100f),
-            zebraMidtoneIre = zebraMidtoneIre.coerceIn(0f, 100f),
+            zebraHighlightIre =
+                zebraHighlightIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 100f,
+            zebraMidtoneIre =
+                zebraMidtoneIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 55f,
         )
 }
 

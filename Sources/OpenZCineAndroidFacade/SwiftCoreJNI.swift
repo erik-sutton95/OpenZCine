@@ -357,7 +357,7 @@
         javaFloatArray(env, ScopeFrameWire.anchors(curveOrdinal: Int(curve)))
     }
 
-    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve, clip, compensation): FloatArray`
+    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve, clip, compensation, points): FloatArray`
     /// — one scope tick's waveform/parade/histogram payload plus the additive
     /// Swift-owned Traffic Lights trailer described by `ScopeFrameWire.traces`.
     /// `compensation` is a persisted core enum raw value; Swift decodes and
@@ -368,7 +368,7 @@
     public func swiftCoreScopeTraces(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
         width: jint, height: jint, bytesPerRow: jint, curve: jint, clipNative: jfloat,
-        compensation: jint
+        compensation: jint, includePoints: jboolean
     ) -> jfloatArray? {
         guard let buffer = swiftBytes(env, rgba) else { return nil }
         return javaFloatArray(
@@ -377,23 +377,49 @@
                 rgba: buffer, width: Int(width), height: Int(height),
                 bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve),
                 clipNative: Double(clipNative),
-                crushClipCompensationRaw: Int(compensation)))
+                crushClipCompensationRaw: Int(compensation),
+                includePoints: includePoints != 0))
     }
 
-    /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve, zoom): ByteArray`
-    /// — one scope tick's 128×128 premultiplied-RGBA vectorscope density image
-    /// per `ScopeFrameWire.vectorPixels`. Empty for a frame with no samples.
+    /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve, zoom, brightness, lut): ByteArray`
+    /// — one scope tick's soft + crisp 128×128 premultiplied-RGBA vectorscope
+    /// images per `ScopeFrameWire.vectorDisplayPixels`. Empty without samples.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeVector")
     public func swiftCoreScopeVector(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
-        width: jint, height: jint, bytesPerRow: jint, curve: jint, zoom: jint
+        width: jint, height: jint, bytesPerRow: jint, curve: jint, zoom: jint,
+        brightness: jint, lutHandle: jlong
     ) -> jbyteArray? {
         guard let buffer = swiftBytes(env, rgba) else { return nil }
         return javaByteArray(
             env,
-            ScopeFrameWire.vectorPixels(
+            ScopeFrameWire.vectorDisplayPixels(
                 rgba: buffer, width: Int(width), height: Int(height),
-                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve), zoomOrdinal: Int(zoom)))
+                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve), zoomOrdinal: Int(zoom),
+                brightnessPercent: Int(brightness), lutHandle: Int64(lutHandle)))
+    }
+
+    /// `SwiftCore.registerScopeVectorLut(lookOrdinal, packedRgba, cubeSize): Long`
+    /// — one bounded configuration update when the active operator LUT changes.
+    /// Built-ins carry no byte payload; stored cubes arrive in the existing
+    /// Swift-validated packed layout and are unpacked exactly once per handle.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_registerScopeVectorLut")
+    public func swiftCoreRegisterScopeVectorLut(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, lookOrdinal: jint,
+        packedRGBA: jbyteArray?, cubeSize: jint
+    ) -> jlong {
+        let maximumBytes = 64 * 64 * 64 * 4
+        let packed = swiftBytes(env, packedRGBA, maximumCount: maximumBytes)
+        return ScopeFrameWire.registerVectorCube(
+            lookOrdinal: Int(lookOrdinal), packedRGBA: packed, size: Int(cubeSize)) ?? -1
+    }
+
+    /// Releases a vectorscope LUT registration after its Compose sampler is cancelled.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_unregisterScopeVectorLut")
+    public func swiftCoreUnregisterScopeVectorLut(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jlong
+    ) {
+        ScopeFrameWire.unregisterVectorCube(handle: Int64(handle))
     }
 
     // MARK: - Feed effects (baked in the core, uploaded by Kotlin)
@@ -592,6 +618,60 @@
             LUTLibraryWire.redDownloadAvailability(
                 hasInternetPath: hasInternetPath != 0,
                 isOnCameraAccessPoint: isOnCameraAccessPoint != 0))
+    }
+
+    // MARK: - Link health and preview policy
+
+    /// `SwiftCore.resolveLiveViewRequest(...)` — resolves persisted Android
+    /// stream choices through `OperatorPreferences` plus
+    /// `LiveViewLoadPolicy`. Kotlin receives a validated preview request but
+    /// never maps choices to Nikon properties itself.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_resolveLiveViewRequest")
+    public func swiftCoreResolveLiveViewRequest(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, streamPreset: jint,
+        qualityBias: jint, thermalTier: jint, isRecording: jboolean,
+        cameraOverheating: jboolean
+    ) -> jstring? {
+        guard
+            let request = AndroidLiveViewPolicyWire.resolve(
+                streamPresetRaw: Int(streamPreset),
+                qualityBiasRaw: Int(qualityBias),
+                thermalTierRaw: Int(thermalTier),
+                isRecording: isRecording != 0,
+                cameraOverheating: cameraOverheating != 0)
+        else { return nil }
+        return javaString(env, AndroidLiveViewPolicyWire.encode(request))
+    }
+
+    /// `SwiftCore.linkHealthSnapshot(...)` — scores actual Android connection
+    /// and frame-delivery observations through the portable health scorer and
+    /// its hysteretic signal bars. Presence booleans keep unknown values
+    /// distinct from a fabricated zero.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_linkHealthSnapshot")
+    public func swiftCoreLinkHealthSnapshot(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, phase: jint,
+        roundTripMilliseconds: jdouble, hasRoundTrip: jboolean, liveViewFPS: jdouble,
+        hasLiveViewFPS: jboolean, targetLiveViewFPS: jdouble,
+        secondsSinceLastGoodFrame: jdouble, hasLastGoodFrame: jboolean,
+        consecutiveBadFrames: jint, recentCommandFailures: jint,
+        isRecoveringStream: jboolean, isUSBTransport: jboolean, resetSignalBars: jboolean
+    ) -> jstring? {
+        guard
+            let snapshot = AndroidLinkHealthWire.snapshot(
+                phaseRaw: Int(phase),
+                roundTripMilliseconds: hasRoundTrip != 0 ? Double(roundTripMilliseconds) : nil,
+                liveViewFPS: hasLiveViewFPS != 0 ? Double(liveViewFPS) : nil,
+                targetLiveViewFPS: Double(targetLiveViewFPS),
+                secondsSinceLastGoodFrame:
+                    hasLastGoodFrame != 0 ? Double(secondsSinceLastGoodFrame) : nil,
+                consecutiveBadFrames: Int(consecutiveBadFrames),
+                recentCommandFailures: Int(recentCommandFailures),
+                isRecoveringStream: isRecoveringStream != 0,
+                isUSBTransport: isUSBTransport != 0,
+                resetSignalBars: resetSignalBars != 0),
+            let encoded = AndroidLinkHealthWire.encode(snapshot)
+        else { return nil }
+        return javaString(env, encoded)
     }
 
     // MARK: - Callback / streaming shape
@@ -1051,6 +1131,28 @@
             env,
             AndroidCameraPropertyReadbackWire.encode(
                 session.refreshAndroidPropertySnapshot(refreshRequest)))
+    }
+
+    /// `SwiftCore.sessionConfigureLiveView(...)` — applies a shared-policy
+    /// request before the Android live-view pump starts. The PTP writes are
+    /// limited to preview size/compression and the interval only paces preview
+    /// pulls, so no recording setting can change through this entry point.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConfigureLiveView")
+    public func swiftCoreSessionConfigureLiveView(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, imageSize: jint,
+        compression: jint, frameIntervalNanoseconds: jlong
+    ) -> jboolean {
+        guard
+            let size = UInt8(exactly: imageSize),
+            let compression = UInt8(exactly: compression),
+            frameIntervalNanoseconds >= 0
+        else { return 0 }
+        let applied =
+            ActiveSessionSlot.shared.current()?.configureLiveView(
+                imageSize: size,
+                compression: compression,
+                frameIntervalNanoseconds: UInt64(frameIntervalNanoseconds)) ?? false
+        return applied ? 1 : 0
     }
 
     /// `SwiftCore.sessionStartEventStream(listener)` — starts the active
