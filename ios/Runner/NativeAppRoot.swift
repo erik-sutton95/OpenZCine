@@ -790,11 +790,17 @@ final class NativeAppModel {
     }
 
     var pairingDiscoveryCandidates: [DiscoveredCamera] {
-        CameraStartupPolicy.pairingDiscoveryCandidates(
-            discoveredCameras: discoveredCameras,
-            savedCameras: savedCameras
+        let transportCandidates = discoveredCameras.filter {
+            discoveryTransportFilter == .usbC ? $0.isUSB : !$0.isUSB
+        }
+        return CameraStartupPolicy.pairingDiscoveryCandidates(
+            discoveredCameras: transportCandidates,
+            savedCameras: savedCameras,
+            // A wire-identity migration can leave the app record present while the camera-side
+            // profile needs pairing again. In the explicit Pair new flow, surface that known
+            // camera only when no genuinely new camera was found so the screen cannot look stuck.
+            allowSavedCameraRecovery: isPairingNewCamera
         )
-        .filter { discoveryTransportFilter == .usbC ? $0.isUSB : !$0.isUSB }
     }
 
     /// True when discovery found no Wi‑Fi cameras and the phone is not on a camera AP.

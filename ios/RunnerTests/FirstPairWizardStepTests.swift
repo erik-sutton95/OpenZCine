@@ -69,4 +69,34 @@ struct FirstPairWizardStepTests {
                     skipsPermissions: true) == 4)
         }
     }
+
+    @MainActor
+    @Test("Phone Hotspot pairing surfaces a saved camera when it is the only repair candidate")
+    func phoneHotspotSavedCameraRepairFallback() {
+        let model = NativeAppModel()
+        model.isPairingNewCamera = true
+        model.firstPairTransportMethod = .phoneHotspot
+        model.discoveryTransportFilter = .wiFi
+        model.savedCameras = [
+            PTPIPSavedCameraRecord(
+                host: "172.20.10.8",
+                displayName: "ZR_6001234",
+                transport: "iPhone hotspot",
+                lastSeenAt: nil
+            )
+        ]
+        let rediscovered = DiscoveredCamera(
+            ip: "172.20.10.15",
+            name: "ZR_6001234",
+            source: .bonjour
+        )
+        let unrelatedUSB = DiscoveredCamera(
+            ip: "usb:TEST",
+            name: "ZR_7000000",
+            source: .usb
+        )
+        model.discoveredCameras = [rediscovered, unrelatedUSB]
+
+        #expect(model.pairingDiscoveryCandidates == [rediscovered])
+    }
 }

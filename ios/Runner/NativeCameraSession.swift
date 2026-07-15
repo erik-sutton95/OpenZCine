@@ -120,11 +120,13 @@ final class NativeCameraConnectionStore {
     }
 
     func guid() -> Data {
-        let appGUID = PTPIPInitiator.appGUID
-        if UserDefaults.standard.data(forKey: guidKey) != appGUID {
-            UserDefaults.standard.set(appGUID, forKey: guidKey)
+        let defaults = UserDefaults.standard
+        let persistedGUID = defaults.data(forKey: guidKey)
+        let resolvedGUID = PTPIPInitiator.resolvedAppGUID(persistedGUID: persistedGUID)
+        if persistedGUID != resolvedGUID {
+            defaults.set(resolvedGUID, forKey: guidKey)
         }
-        return appGUID
+        return resolvedGUID
     }
 
     func pairedHosts() -> [String] {
