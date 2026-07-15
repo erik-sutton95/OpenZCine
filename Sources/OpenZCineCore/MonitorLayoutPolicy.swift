@@ -353,6 +353,9 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
     /// Horizontal inset that floats the top information deck over the feed, clear of the side lanes.
     public static let topInfoDeckSideInset = 10.0
 
+    /// Horizontal breathing room between the lock control and the information deck.
+    public static let topInfoDeckControlGap = 12.0
+
     /// Diameter of the top-leading lock button.
     public static let lockButtonSize = 40.0
 
@@ -470,10 +473,24 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             railWidth: rightRailWidth
         )
 
-        // The deck spans the feed (minus symmetric insets) so its center is the feed center.
-        // The rail offset is tuned to keep the controls clear of the centered deck.
-        let deckLeft = feed.x + topInfoDeckSideInset
-        let deckRight = feed.x + feed.width - topInfoDeckSideInset
+        let lockButton = MonitorModuleFrame(
+            // Vertically centered in the top deck's band so its top edge lines up with the
+            // top bar pill (which is centered in that same band), rather than the chrome top.
+            x: chrome.x,
+            y: chrome.y + (topInfoDeckHeight - lockButtonSize) / 2,
+            width: lockButtonSize,
+            height: lockButtonSize
+        )
+
+        // Keep the deck centered over the feed while clearing the lock on compact classic-notch
+        // phones. Their symmetric 44pt landscape safe areas put the feed's usual 10pt inset just
+        // inside the lock frame; modern asymmetric cutouts already have enough feed clearance.
+        let minimumDeckInset =
+            lockButton.x + lockButton.width + topInfoDeckControlGap - feed.x
+        let deckInset =
+            constrained ? topInfoDeckSideInset : max(topInfoDeckSideInset, minimumDeckInset)
+        let deckLeft = feed.x + deckInset
+        let deckRight = feed.x + feed.width - deckInset
 
         // Width-constrained landscape also inlines the battery indicators beside the lock button
         // in the top chrome band instead of stacking them in a leading rail (no side lanes exist).
@@ -516,14 +533,7 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
                 lane: rightRailLane,
                 viewportHeight: viewportHeight
             ),
-            lockButton: MonitorModuleFrame(
-                // Vertically centered in the top deck's band so its top edge lines up with the
-                // top bar pill (which is centered in that same band), rather than the chrome top.
-                x: chrome.x,
-                y: chrome.y + (topInfoDeckHeight - lockButtonSize) / 2,
-                width: lockButtonSize,
-                height: lockButtonSize
-            )
+            lockButton: lockButton
         )
 
         return horizontalDirection == .mirrored
@@ -638,6 +648,9 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// island (~126pt black core on the Pro Max) so the indicators sit snug above and below it.
     public static let sideNotchHeight = 135.0
 
+    /// Reserved vertical span for the wider classic notch used by iPhone 11-era displays.
+    public static let classicSideNotchHeight = 232.0
+
     /// Clearance between the battery indicators and the side notch reservation. Kept small so the
     /// indicators tuck in close to the Dynamic Island (the reservation already clears the physical
     /// island by a few points, so this stays off it).
@@ -669,10 +682,17 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     public var cameraTop: Double { cameraCenterY - Self.indicatorHeight / 2 }
 
     /// Fits the battery indicators to the side rail.
-    public static func fit(railHeight: Double) -> MonitorBatteryRailLayout {
+    public static func fit(
+        railHeight: Double,
+        safeArea: MonitorEdgeInsets = .zero
+    ) -> MonitorBatteryRailLayout {
+        let requestedNotchHeight = sideNotchHeight(for: safeArea)
+        let maximumNotchHeight = max(
+            0, railHeight - 2 * (indicatorHeight + notchPadding))
+        let notchHeight = min(requestedNotchHeight, maximumNotchHeight)
         let notchCenterY = railHeight / 2
-        let notchTop = notchCenterY - sideNotchHeight / 2
-        let notchBottom = notchCenterY + sideNotchHeight / 2
+        let notchTop = notchCenterY - notchHeight / 2
+        let notchBottom = notchCenterY + notchHeight / 2
         let indicatorCenterX = indicatorWidth / 2 - notchAlignmentInsetX
         let minimumCenterY = indicatorHeight / 2
         let maximumCenterY = max(minimumCenterY, railHeight - indicatorHeight / 2)
@@ -693,6 +713,15 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
             notchTop: notchTop,
             notchBottom: notchBottom
         )
+    }
+
+    private static func sideNotchHeight(for safeArea: MonitorEdgeInsets) -> Double {
+        let leading = max(0, safeArea.leading)
+        let trailing = max(0, safeArea.trailing)
+        let hasSymmetricClassicNotch =
+            min(leading, trailing) >= 40 && abs(leading - trailing) < 4
+
+        return hasSymmetricClassicNotch ? classicSideNotchHeight : sideNotchHeight
     }
 }
 

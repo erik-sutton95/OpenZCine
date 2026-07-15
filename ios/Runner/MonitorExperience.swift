@@ -740,10 +740,14 @@ extension View {
 
 struct BatteryRailModule: View {
     @Environment(NativeAppModel.self) private var model
+    let safeArea: MonitorEdgeInsets
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = MonitorBatteryRailLayout.fit(railHeight: Double(proxy.size.height))
+            let layout = MonitorBatteryRailLayout.fit(
+                railHeight: Double(proxy.size.height),
+                safeArea: safeArea
+            )
 
             ZStack {
                 phoneBatteryIndicator

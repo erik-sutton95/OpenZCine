@@ -321,7 +321,8 @@ import Testing
             == landscapeLeft.feed.x + MonitorLiveViewModuleLayout.topInfoDeckSideInset)
     #expect(
         landscapeRight.topInfoDeck.x
-            == landscapeRight.feed.x + MonitorLiveViewModuleLayout.topInfoDeckSideInset)
+            >= landscapeRight.lockButton.x + landscapeRight.lockButton.width
+            + MonitorLiveViewModuleLayout.topInfoDeckControlGap)
     #expect(landscapeLeft.bottomAssistTools == landscapeRight.bottomAssistTools)
     #expect(landscapeLeft.bottomCaptureSettings == landscapeRight.bottomCaptureSettings)
     #expect(landscapeLeft.rightRailControls.x > landscapeLeft.feed.x + landscapeLeft.feed.width)
@@ -442,6 +443,28 @@ import Testing
     #expect(abs(deckCenter - feedCenter) < 0.001)
 }
 
+@Test func iphone11LandscapeInfoDeckClearsLockButtonAndStaysCentered() {
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
+    let layout = MonitorLiveViewModuleLayout.fit(
+        viewportWidth: 896,
+        viewportHeight: 414,
+        feedSafeArea: safeArea,
+        chromeInsets: MonitorChromeLayout.insets(feedSafeArea: safeArea),
+        bottomBarHeight: 58
+    )
+
+    let lockRight = layout.lockButton.x + layout.lockButton.width
+    let deckCenter = layout.topInfoDeck.x + layout.topInfoDeck.width / 2
+    let feedCenter = layout.feed.x + layout.feed.width / 2
+
+    #expect(layout.feed.x == 0)
+    #expect(
+        lockRight + MonitorLiveViewModuleLayout.topInfoDeckControlGap
+            <= layout.topInfoDeck.x)
+    #expect(abs(deckCenter - feedCenter) < 0.001)
+    #expect(layout.topInfoDeck.x + layout.topInfoDeck.width <= 896)
+}
+
 @Test func liveViewLockButtonAlignsWithTopDeckBand() {
     let chromeInsets = MonitorChromeLayout.insets(feedSafeArea: .zero)
     let layout = MonitorLiveViewModuleLayout.fit(
@@ -526,6 +549,28 @@ import Testing
 
     #expect(layout.phoneCenterY > MonitorBatteryRailLayout.indicatorHeight / 2)
     #expect(layout.cameraCenterY < 390 - MonitorBatteryRailLayout.indicatorHeight / 2)
+}
+
+@Test func batteryRailReservesTheFullClassicIPhoneNotch() {
+    let classicSafeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
+    let dynamicIslandSafeArea = MonitorEdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 44)
+    let classic = MonitorBatteryRailLayout.fit(
+        railHeight: 414,
+        safeArea: classicSafeArea
+    )
+    let dynamicIsland = MonitorBatteryRailLayout.fit(
+        railHeight: 414,
+        safeArea: dynamicIslandSafeArea
+    )
+
+    #expect(
+        classic.notchBottom - classic.notchTop
+            == MonitorBatteryRailLayout.classicSideNotchHeight)
+    #expect(
+        dynamicIsland.notchBottom - dynamicIsland.notchTop
+            == MonitorBatteryRailLayout.sideNotchHeight)
+    #expect(classic.phoneBottom == classic.notchTop - MonitorBatteryRailLayout.notchPadding)
+    #expect(classic.cameraTop == classic.notchBottom + MonitorBatteryRailLayout.notchPadding)
 }
 
 @Test func startupContentMarginsDoNotAddHorizontalSafeAreaGutters() {

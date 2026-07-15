@@ -976,7 +976,7 @@ struct MonitorShell: View {
                                     .environment(model)
                                     .monitorModuleFrame(battery.frame, alignment: .leading)
                             } else {
-                                BatteryRailModule()
+                                BatteryRailModule(safeArea: context.feedSafeArea)
                                     .environment(model)
                                     .monitorModuleFrame(battery.frame)
                             }
