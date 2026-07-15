@@ -21,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -139,13 +141,24 @@ public fun SettingsValueText(value: String) {
 
 /** Accent inline action ("Open", "Sign in") — the iOS System-tab link button treatment. */
 @Composable
-public fun SettingsLinkAction(title: String, onClick: () -> Unit) {
-    Text(
-        title,
-        style = chromeStyle(13f, FontWeight.SemiBold),
-        color = LiveDesign.accent,
-        modifier = Modifier.settingsClickable(role = Role.Button, onClick = onClick).padding(4.dp),
-    )
+public fun SettingsLinkAction(
+    title: String,
+    contentDescription: String = title,
+    onClick: () -> Unit,
+): Unit {
+    Box(
+        Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .settingsClickable(role = Role.Button, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            title,
+            style = chromeStyle(13f, FontWeight.SemiBold),
+            color = LiveDesign.accent,
+        )
+    }
 }
 
 /**
@@ -154,15 +167,21 @@ public fun SettingsLinkAction(title: String, onClick: () -> Unit) {
  * titles so it never competes with them.
  */
 @Composable
-public fun SettingsQuietLink(title: String, onClick: () -> Unit) {
-    Text(
-        title,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = LiveDesign.faint,
-        maxLines = 1,
-        modifier = Modifier.settingsClickable(role = Role.Button, onClick = onClick).padding(4.dp),
-    )
+public fun SettingsQuietLink(title: String, onClick: () -> Unit): Unit {
+    Box(
+        Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .settingsClickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            title,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = LiveDesign.faint,
+            maxLines = 1,
+        )
+    }
 }
 
 /** Titled glass card with an optional per-tool reset and free-form content. */

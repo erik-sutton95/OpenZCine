@@ -48,6 +48,18 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/media_share_paths" />
         </provider>
+        <!-- Diagnostics have their own authority and one cache-only ready
+          subtree. Event storage and every other app-private file remain
+          unreachable, and each share receives only a temporary read grant. -->
+        <provider
+            android:name=".diagnostics.DiagnosticsFileProvider"
+            android:authorities="${applicationId}.diagnostics-share"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/diagnostics_share_paths" />
+        </provider>
         <!-- Sensor-based portrait + landscape (iOS allows Portrait + LandscapeRight;
           "user" is the closest platform posture: it follows the rotation lock).
           configChanges keeps the activity (camera session, live feed, glass

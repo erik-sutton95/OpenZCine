@@ -109,6 +109,7 @@ import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** One measured live-toolbar tool and the orientation in which its anchor is valid. */
 private data class LiveAssistOptionsRequest(
@@ -258,7 +259,7 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * immediately drive the same feed-effects and scope state.
  */
 @Composable
-fun MonitorScreen(
+internal fun MonitorScreen(
     session: CameraSession,
     frameSource: LiveFrameSource?,
     assist: AssistState,
@@ -271,6 +272,7 @@ fun MonitorScreen(
     linkHealth: AndroidLinkHealthMonitor? = null,
     activeTransportIsUsb: Boolean = false,
     isDemoSession: Boolean = false,
+    liveViewGuideController: LiveViewGuideController? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
 ) {
@@ -374,6 +376,11 @@ fun MonitorScreen(
     val recording =
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.RECORDING
+    val liveViewGuideVisible =
+        liveViewGuideController?.activeStep != null &&
+            isMonitorFront &&
+            effectiveDisplayMode == MonitorDisplayMode.LIVE &&
+            !recording
     val previewPolicyRecording = previewPolicyRecordingActive(recordingState)
     // The Android shell stores operator intent only. Swift resolves that
     // intent against the portable stream/thermal policy, then the active
@@ -403,8 +410,13 @@ fun MonitorScreen(
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.STOPPING
     val recordControlEnabled =
-        sessionState is CameraSessionState.Connected && !recordCommandPending
+        sessionState is CameraSessionState.Connected &&
+            !recordCommandPending &&
+            !liveViewGuideVisible
     val recordScope = rememberCoroutineScope()
+    val guideNeedsRealFrame = liveViewGuideController?.needsRealDecodedFrame == true
+    val latestGuideNeedsRealFrame = rememberUpdatedState(guideNeedsRealFrame)
+    val guideFrameDispatchPending = remember(session) { AtomicBoolean(false) }
     val commandTileOrderStore = remember(appContext) { CommandTileOrderStore(appContext) }
     var commandTileOrder by remember(commandTileOrderStore) {
         mutableStateOf(commandTileOrderStore.load())
@@ -412,6 +424,13 @@ fun MonitorScreen(
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
     var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
     var activeAssistOptions by remember { mutableStateOf<LiveAssistOptionsRequest?>(null) }
+    LaunchedEffect(liveViewGuideVisible) {
+        if (liveViewGuideVisible) {
+            activeCommandControl = null
+            activeMonitorPickerKind = null
+            activeAssistOptions = null
+        }
+    }
     val analysisPanelPlacementStore =
         remember(appContext) { MonitorAnalysisPanelPlacementStore(appContext) }
     var analysisPanelPlacementRevision by remember { mutableIntStateOf(0) }
@@ -461,6 +480,7 @@ fun MonitorScreen(
     val commandControlsEnabled =
         sessionState is CameraSessionState.Connected &&
             !locked &&
+            !liveViewGuideVisible &&
             !mediaOwnsCommandChannel
     LaunchedEffect(sessionState, activeMonitorPickerKind, activeMonitorPicker) {
         if (sessionState !is CameraSessionState.Connected ||
@@ -539,7 +559,7 @@ fun MonitorScreen(
             newValue = {
                 val safety =
                     WearRecordCommandSafety(
-                        monitorFront = isMonitorFront,
+                        monitorFront = isMonitorFront && !liveViewGuideVisible,
                         applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                         cameraConnected = sessionState is CameraSessionState.Connected,
                         recordCommandPending = recordCommandPending,
@@ -572,7 +592,7 @@ fun MonitorScreen(
     val mediaRemoteShutterShouldArm =
         shouldArmMediaRemoteShutter(
             enabled = operatorSettings.mediaRemoteShutterEnabled.value,
-            monitorIsFront = isMonitorFront,
+            monitorIsFront = isMonitorFront && !liveViewGuideVisible,
             cameraConnected = sessionState is CameraSessionState.Connected,
             recordCommandPending = recordCommandPending,
             applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
@@ -902,6 +922,7 @@ fun MonitorScreen(
                 cameraProperties,
                 recording,
                 isMonitorFront,
+                liveViewGuideVisible,
                 lifecycleState,
                 monitorFrameSource,
             ) {
@@ -909,7 +930,7 @@ fun MonitorScreen(
                     sessionState = sessionState,
                     cameraProperties = cameraProperties,
                     isRecording = recording,
-                    monitorFront = isMonitorFront,
+                    monitorFront = isMonitorFront && !liveViewGuideVisible,
                     applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                     liveFeedActive = monitorFrameSource != null && isMonitorFront,
                 )
@@ -1106,7 +1127,7 @@ fun MonitorScreen(
         val focusGestureContext =
             FocusFeedGestureContext(
                 geometry = feedGestureGeometry,
-                interfaceLocked = locked,
+                interfaceLocked = locked || liveViewGuideVisible,
                 focusPointLocked = focusPointLocked,
                 focusAvailable = focusMetadataAvailable,
                 commandPending = otherCameraCommandPending || focusResetPending,
@@ -1259,6 +1280,29 @@ fun MonitorScreen(
                         onPresentedFrame = { frame, bitmap, baker ->
                             timecodeRetention.accept(frame.timecode)
                             wearRelay.ingestPresentedFrame(frame, bitmap, baker)
+                            val isRealCameraFrame =
+                                realDecodedFrameCanTriggerGuide(
+                                    isDemoSession = isDemoSession,
+                                    hasExplicitFrameSource = frameSource != null,
+                                    monitorUsesSwiftCameraSource =
+                                        monitorFrameSource === swiftLiveFrameSource,
+                                    cameraConnected =
+                                        sessionState is CameraSessionState.Connected,
+                                )
+                            if (isRealCameraFrame &&
+                                latestGuideNeedsRealFrame.value &&
+                                guideFrameDispatchPending.compareAndSet(false, true)
+                            ) {
+                                recordScope.launch {
+                                    try {
+                                        if (liveViewGuideController?.needsRealDecodedFrame == true) {
+                                            liveViewGuideController.onRealDecodedFrame()
+                                        }
+                                    } finally {
+                                        guideFrameDispatchPending.set(false)
+                                    }
+                                }
+                            }
                         },
                         presentationState = liveFeedPresentation,
                         effects = assist.effects,
@@ -1726,6 +1770,26 @@ fun MonitorScreen(
                     onDismiss = { activeAssistOptions = null },
                 )
             }
+        }
+        if (liveViewGuideVisible) {
+            val guideController = requireNotNull(liveViewGuideController)
+            val guideAssistTarget =
+                if (isPortraitFill) {
+                    portraitFillAssistRailFrame(
+                        feed = zones.feed,
+                        captureStrip = zones.captureStrip.takeIf { cameraValuesVisible },
+                        expanded = false,
+                    )
+                } else {
+                    zones.assistStrip
+                }
+            LiveViewGuideOverlay(
+                controller = guideController,
+                zones = zones,
+                isPortrait = isPortrait,
+                usesVerticalAssistRail = isPortraitFill,
+                assistTarget = guideAssistTarget,
+            )
         }
     }
     pendingRecordTarget?.let { target ->

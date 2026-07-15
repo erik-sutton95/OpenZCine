@@ -70,7 +70,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -97,6 +96,7 @@ import com.opencapture.openzcine.FeedPeakingSensitivity
 import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.LiveDesign
+import com.opencapture.openzcine.LiveViewGuideController
 import com.opencapture.openzcine.zebraEditorValue
 import com.opencapture.openzcine.zebraMonitorPercent
 import com.opencapture.openzcine.chromeStyle
@@ -116,6 +116,7 @@ import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioNetworkState
+import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -180,6 +181,10 @@ internal fun OperatorSettingsScreen(
     activeTransportLabel: String? = null,
     onDisconnect: (() -> Unit)? = null,
     onReconnect: (() -> Unit)? = null,
+    systemSettingsActions: SystemSettingsActions,
+    liveViewGuideController: LiveViewGuideController,
+    onShowGuideNow: (() -> Unit)? = null,
+    onShowGuideOnNextRealFrame: () -> Unit,
     initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
     onClose: () -> Unit,
 ) {
@@ -260,6 +265,10 @@ internal fun OperatorSettingsScreen(
                     activeTransportLabel,
                     onDisconnect,
                     onReconnect,
+                    systemSettingsActions,
+                    liveViewGuideController,
+                    onShowGuideNow,
+                    onShowGuideOnNextRealFrame,
                     onSettingToggle = toggleSetting,
                     onAssistToggle = toggleAssist,
                     onInteraction = emitHaptic,
@@ -286,6 +295,10 @@ internal fun OperatorSettingsScreen(
                         activeTransportLabel,
                         onDisconnect,
                         onReconnect,
+                        systemSettingsActions,
+                        liveViewGuideController,
+                        onShowGuideNow,
+                        onShowGuideOnNextRealFrame,
                         onSettingToggle = toggleSetting,
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
@@ -526,6 +539,10 @@ private fun SettingsContentPane(
     activeTransportLabel: String?,
     onDisconnect: (() -> Unit)?,
     onReconnect: (() -> Unit)?,
+    systemSettingsActions: SystemSettingsActions,
+    liveViewGuideController: LiveViewGuideController,
+    onShowGuideNow: (() -> Unit)?,
+    onShowGuideOnNextRealFrame: () -> Unit,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
@@ -623,7 +640,13 @@ private fun SettingsContentPane(
                                 )
                             OperatorSettingsTab.STORAGE ->
                                 StorageRows(mediaCacheStore, frameioController, condensed)
-                            OperatorSettingsTab.SYSTEM -> SystemRows()
+                            OperatorSettingsTab.SYSTEM ->
+                                SystemRows(
+                                    actions = systemSettingsActions,
+                                    guideController = liveViewGuideController,
+                                    onShowGuideNow = onShowGuideNow,
+                                    onShowGuideOnNextRealFrame = onShowGuideOnNextRealFrame,
+                                )
                         }
                     }
                 }
@@ -762,14 +785,14 @@ private fun LinkRows(
             if (onDisconnect == null) {
                 SettingsValueText(if (session == null) "No active camera" else "No saved profile")
             } else {
-                SettingsLinkAction("Disconnect", onDisconnect)
+                SettingsLinkAction("Disconnect", onClick = onDisconnect)
             }
         }
         SettingsInlineRow(title = "Reconnect") {
             if (onReconnect == null) {
                 SettingsValueText("No saved profile")
             } else {
-                SettingsLinkAction("Reconnect", onReconnect)
+                SettingsLinkAction("Reconnect", onClick = onReconnect)
             }
         }
     }
@@ -1666,7 +1689,7 @@ private fun StoredLutEntryRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AssistChoice(label = "USE", selected = selected, onClick = onSelect)
-            SettingsLinkAction("Remove", onRemove)
+            SettingsLinkAction("Remove", onClick = onRemove)
         }
     }
     failure?.let {
@@ -2906,11 +2929,92 @@ private fun clearResultLabel(context: Context, result: MediaCacheClearResult): S
                 "${cacheSizeLabel(context, result.preservedIncompleteBytes)} remains resumable."
     }
 
-/** System tab — fully real: version, support, legal links, licenses (iOS `systemRows`). */
+/** System tab: native support/share intents, replayable guide, project links, and build data. */
 @Composable
-private fun SystemRows() {
-    val uriHandler = LocalUriHandler.current
-    SettingsRowCard {
+internal fun SystemRows(
+    actions: SystemSettingsActions,
+    guideController: LiveViewGuideController,
+    onShowGuideNow: (() -> Unit)?,
+    onShowGuideOnNextRealFrame: () -> Unit,
+) {
+    val context = LocalContext.current
+    fun runAction(action: () -> Boolean) {
+        if (!action()) {
+            Toast.makeText(context, "No app is available for that action.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    SettingsGroupCard(
+        title = "Help & Feedback",
+        caption = "Open project support, report reproducible Android problems, or share a local report you can review first.",
+    ) {
+        SettingsInlineRow("Support", showTopDivider = false) {
+            SettingsLinkAction("Open", "Open Support") { runAction(actions::openSupport) }
+        }
+        SettingsInlineRow("Report a Problem") {
+            SettingsLinkAction("Report", "Report an Android Problem") {
+                runAction(actions::reportBug)
+            }
+        }
+        SettingsInlineRow("Request a Feature") {
+            SettingsLinkAction("Request", "Request a Feature") {
+                runAction(actions::requestFeature)
+            }
+        }
+        SettingsInlineRow("Share Diagnostics") {
+            SettingsLinkAction("Share", "Share Diagnostics") {
+                runAction(actions::shareDiagnostics)
+            }
+        }
+    }
+
+    SettingsGroupCard(
+        title = "Live View Guide",
+        caption =
+            "Replay the short camera-controls, View Assist, and system-controls introduction without enabling camera commands underneath it.",
+    ) {
+        SettingsInlineRow("Guide Status", showTopDivider = false) {
+            SettingsValueText(guideController.status.label)
+        }
+        SettingsInlineRow("Replay") {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onShowGuideNow != null && guideController.canReplayNow) {
+                    SettingsLinkAction("Now", "Show Live View Guide Now", onShowGuideNow)
+                }
+                SettingsLinkAction(
+                    "Next frame",
+                    "Show Live View Guide on Next Real Frame",
+                    onShowGuideOnNextRealFrame,
+                )
+            }
+        }
+    }
+
+    SettingsGroupCard(
+        title = "Project & Legal",
+        caption = "OpenZCine is open source. These links leave the app only when you choose them.",
+    ) {
+        SettingsInlineRow("Source Code", showTopDivider = false) {
+            SettingsLinkAction("Open", "Open Source Code") { runAction(actions::openSource) }
+        }
+        SettingsInlineRow("Privacy") {
+            SettingsLinkAction("Open", "Open Privacy Policy") { runAction(actions::openPrivacy) }
+        }
+        SettingsInlineRow("Terms") {
+            SettingsLinkAction("Open", "Open Terms of Use") { runAction(actions::openTerms) }
+        }
+        SettingsInlineRow("Open-Source Licenses") {
+            SettingsValueText("Third-Party Notices")
+        }
+    }
+
+    SettingsGroupCard(
+        title = "App Information",
+        caption = "Build and protocol details for support reports.",
+    ) {
         SettingsInlineRow("Theme", showTopDivider = false) {
             SettingsValueText("Warm Dark")
         }
@@ -2919,21 +3023,6 @@ private fun SystemRows() {
         }
         SettingsInlineRow("App Version") {
             SettingsValueText(appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE))
-        }
-        SettingsInlineRow("Support") {
-            SettingsLinkAction("Open") { uriHandler.openUri("https://openzcine.app/support/") }
-        }
-        SettingsInlineRow("Legal") {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SettingsQuietLink("Privacy") { uriHandler.openUri("https://openzcine.app/privacy") }
-                SettingsQuietLink("Terms") { uriHandler.openUri("https://openzcine.app/terms") }
-            }
-        }
-        SettingsInlineRow("Open-Source Licenses") {
-            SettingsValueText("Third-Party Notices")
         }
     }
 }

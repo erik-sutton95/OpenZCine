@@ -268,8 +268,14 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Waveform/parade brightness calibration** (OPE-88, in progress) — a useful 0–200% trace-intensity
   range where 100% matches the former 25% appearance and saved iOS and Android settings migrate
   without a visual jump; vectorscope brightness retains its original gain contract.
-- **Android beta-readiness parity** (planned) — port the diagnostics, support links, and live-view
-  guide after the iOS behavior is validated with external testers.
+- **Android beta-readiness parity** (OPE-90, in progress): retain only bounded, closed-category
+  local breadcrumbs and privacy-reduced Android 11+ process-exit reasons; generate an
+  operator-readable cache report behind its own narrow FileProvider; and expose native System
+  actions for support, Android-prefilled bugs, feature requests, diagnostics, source, privacy, and
+  terms without telemetry. The persisted three-step live-view guide is armed only by the first
+  successfully decoded real Swift-camera frame, never a disconnected or synthetic fixture, and
+  blocks phone, remote, and Wear camera commands while visible. Settings can replay it now when a
+  real frame is available or schedule the next real frame.
 - **Public launch landing actions**: keep TestFlight available while Android and the
   public repository are presented as clearly unavailable until their launches.
 - **Landing-page camera compatibility** (in progress): identify the Nikon ZR, Z9, and Z5II as

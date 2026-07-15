@@ -47,15 +47,15 @@ body:
     id: camera
     attributes:
       label: Camera and connection (optional)
-      description: Include the camera model and how your Apple device was connected, if you know.
+      description: Include the camera model and how your phone or tablet was connected, if you know.
       placeholder: "Example: Nikon ZR over Wi-Fi, Personal Hotspot, or USB-C"
 
   - type: input
     id: platform
     attributes:
-      label: App version and Apple device (optional)
-      description: Include your OpenZCine version, iPhone or iPad model, and OS version, if you know.
-      placeholder: "Example: OpenZCine 0.3.12, iPhone 16 Pro, iOS 18.5"
+      label: App version and device (optional)
+      description: Include your OpenZCine version, device model, and OS version, if you know.
+      placeholder: "Example: OpenZCine 0.3.12, iPhone 16 Pro on iOS 18.5, or Pixel 9 on Android 16"
 
   - type: dropdown
     id: frequency

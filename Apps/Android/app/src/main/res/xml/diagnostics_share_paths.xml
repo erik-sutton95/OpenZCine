@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only a completed, operator-readable diagnostics report is published here.
+  The retained event log lives under filesDir and has no provider path. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        name="shared_diagnostics"
+        path="diagnostics/ready/" />
+</paths>

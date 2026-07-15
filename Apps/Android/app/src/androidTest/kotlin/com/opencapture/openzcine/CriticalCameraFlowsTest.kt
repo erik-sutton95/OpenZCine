@@ -115,7 +115,7 @@ class CriticalCameraFlowsTest {
         description: String,
         timeoutMillis: Long,
     ): UiObject2 =
-        wait(Until.findObject(By.desc(description)), timeoutMillis)
+        wait(Until.findObject(By.descContains(description)), timeoutMillis)
             ?: throw AssertionError("Timed out waiting for description: $description")
 
     private companion object {
