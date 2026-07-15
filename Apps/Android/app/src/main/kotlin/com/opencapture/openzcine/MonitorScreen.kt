@@ -33,6 +33,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -412,6 +413,19 @@ fun MonitorScreen(
     val analysisPanelPlacementStore =
         remember(appContext) { MonitorAnalysisPanelPlacementStore(appContext) }
     var analysisPanelPlacementRevision by remember { mutableIntStateOf(0) }
+    val analysisPanelFrames =
+        remember { mutableStateMapOf<MonitorAnalysisPanelID, ZoneFrame>() }
+    val onAnalysisPanelFrameChanged =
+        remember(analysisPanelFrames) {
+            { id: MonitorAnalysisPanelID, frame: ZoneFrame? ->
+                if (frame == null) {
+                    analysisPanelFrames.remove(id)
+                } else {
+                    analysisPanelFrames[id] = frame
+                }
+                Unit
+            }
+        }
     LiveAssistOptionsBackHandler(visible = activeAssistOptions != null) {
         activeAssistOptions = null
     }
@@ -1153,6 +1167,33 @@ fun MonitorScreen(
                 FocusFeedGestureAction.ToggleFocusPointLock -> toggleFocusPointLock()
             }
         }
+        val focusResetVisible =
+            focusResetAvailable(feedFocus, focusPointLocked) &&
+                sessionState is CameraSessionState.Connected &&
+                !locked &&
+                !mediaOwnsCommandChannel &&
+                !otherCameraCommandPending
+        val requestFocusReset: () -> Unit = resetFocusPoint@{
+            if (focusCommandPending) return@resetFocusPoint
+            focusResetPending = true
+            recordScope.launch {
+                try {
+                    session.resetFocusPoint()
+                    if (operatorSettings.hapticsEnabled.value) {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                } catch (error: CameraFocusException) {
+                    Toast.makeText(
+                            appContext,
+                            error.message ?: "The camera could not reset focus.",
+                            Toast.LENGTH_SHORT,
+                        )
+                        .show()
+                } finally {
+                    focusResetPending = false
+                }
+            }
+        }
         if (!isCommand) {
             Box(
                 Modifier.zone(zones.feed)
@@ -1258,77 +1299,6 @@ fun MonitorScreen(
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
                 )
-                val focusResetVisible =
-                    focusResetAvailable(feedFocus, focusPointLocked) &&
-                        sessionState is CameraSessionState.Connected &&
-                        !locked &&
-                        !mediaOwnsCommandChannel &&
-                        !otherCameraCommandPending
-                if (focusResetVisible) {
-                    IconButton(
-                        onClick = resetFocusPoint@{
-                            if (focusCommandPending) return@resetFocusPoint
-                            focusResetPending = true
-                            recordScope.launch {
-                                try {
-                                    session.resetFocusPoint()
-                                    if (operatorSettings.hapticsEnabled.value) {
-                                        view.performHapticFeedback(
-                                            HapticFeedbackConstants.KEYBOARD_TAP,
-                                        )
-                                    }
-                                } catch (error: CameraFocusException) {
-                                    Toast.makeText(
-                                            appContext,
-                                            error.message ?: "The camera could not reset focus.",
-                                            Toast.LENGTH_SHORT,
-                                        )
-                                        .show()
-                                } finally {
-                                    focusResetPending = false
-                                }
-                            }
-                        },
-                        enabled = !focusCommandPending,
-                        modifier =
-                            Modifier
-                                .align(
-                                    if (isPortrait) {
-                                        Alignment.BottomEnd
-                                    } else {
-                                        Alignment.BottomStart
-                                    },
-                                )
-                                .padding(
-                                    start = 10.dp,
-                                    end = 10.dp,
-                                    bottom =
-                                        with(density) {
-                                            levelGaugeBottomChromeInset.toDp()
-                                        } + 10.dp,
-                                )
-                                .size(40.dp)
-                                .background(Color.Black.copy(alpha = 0.58f), CircleShape)
-                                .border(1.dp, LiveDesign.hairline, CircleShape)
-                                .testTag("focus_reset_button")
-                                .semantics {
-                                    contentDescription =
-                                        when {
-                                            focusResetPending ->
-                                                "Resetting focus point to center"
-                                            focusMoveRequestsInFlight > 0 ->
-                                                "Reset focus point unavailable while moving focus"
-                                            else -> "Reset focus point to center"
-                                        }
-                                },
-                    ) {
-                        Text(
-                            text = if (focusResetPending) "…" else "◎",
-                            style = chromeStyle(18f, FontWeight.SemiBold),
-                            color = LiveDesign.text,
-                        )
-                    }
-                }
             }
         }
         CompositionLocalProvider(LocalMonitorGlass provides glass) {
@@ -1608,6 +1578,7 @@ fun MonitorScreen(
                 placementStore = analysisPanelPlacementStore,
                 placementRevision = analysisPanelPlacementRevision,
                 hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                onPanelFrameChanged = onAnalysisPanelFrameChanged,
             )
         }
         if (!isCommand && (!isPortrait || isPortraitFill) && audioMetersEnabled) {
@@ -1637,6 +1608,52 @@ fun MonitorScreen(
                     placementStore = analysisPanelPlacementStore,
                     placementRevision = analysisPanelPlacementRevision,
                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                    onPanelFrameChanged = onAnalysisPanelFrameChanged,
+                )
+            }
+        }
+
+        // Keep the reset affordance above every movable scope/reference panel. The pure placement
+        // policy mirrors iOS and this later composition order remains reachable even if a viewport
+        // is too crowded to provide a geometrically clear slot.
+        if (focusResetVisible) {
+            val bottomChromeInset =
+                with(density) { levelGaugeBottomChromeInset.toDp().value }
+            val baseFrame =
+                focusResetButtonBaseFrame(
+                    feed = zones.feed,
+                    isPortrait = isPortrait,
+                    bottomChromeInset = bottomChromeInset,
+                )
+            val resetFrame =
+                focusResetButtonClearFrame(
+                    base = baseFrame,
+                    panelFrames = analysisPanelFrames.values,
+                    bounds = zones.feed,
+                )
+            IconButton(
+                onClick = requestFocusReset,
+                enabled = !focusCommandPending,
+                modifier =
+                    Modifier
+                        .zone(resetFrame)
+                        .background(Color.Black.copy(alpha = 0.58f), CircleShape)
+                        .border(1.dp, LiveDesign.hairline, CircleShape)
+                        .testTag("focus_reset_button")
+                        .semantics {
+                            contentDescription =
+                                when {
+                                    focusResetPending -> "Resetting focus point to center"
+                                    focusMoveRequestsInFlight > 0 ->
+                                        "Reset focus point unavailable while moving focus"
+                                    else -> "Reset focus point to center"
+                                }
+                        },
+            ) {
+                Text(
+                    text = if (focusResetPending) "…" else "◎",
+                    style = chromeStyle(18f, FontWeight.SemiBold),
+                    color = LiveDesign.text,
                 )
             }
         }

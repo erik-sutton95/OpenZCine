@@ -24,7 +24,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -473,6 +475,7 @@ internal fun ScopePanels(
     placementStore: MonitorAnalysisPanelPlacementStore,
     placementRevision: Int,
     hapticsEnabled: Boolean,
+    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
 ) {
     val displayed =
         displayedScopeKinds(
@@ -543,6 +546,7 @@ internal fun ScopePanels(
             placementStore = placementStore,
             placementRevision = placementRevision,
             hapticsEnabled = hapticsEnabled,
+            onPanelFrameChanged = onPanelFrameChanged,
         )
     }
 }
@@ -688,6 +692,7 @@ private fun FloatingScopePanels(
     placementStore: MonitorAnalysisPanelPlacementStore? = null,
     placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
+    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current.applicationContext
     val legacyStore =
@@ -723,6 +728,7 @@ private fun FloatingScopePanels(
                     legacyStore = legacyStore,
                     placementRevision = placementRevision,
                     hapticsEnabled = hapticsEnabled,
+                    onPanelFrameChanged = onPanelFrameChanged,
                     onScaleChange = { onScaleChange(kind, it) },
                 ) { modifier ->
                     ScopePanel(
@@ -820,6 +826,7 @@ internal fun FloatingScopePanel(
     legacyStore: ScopePanelPlacementStore?,
     placementRevision: Int,
     hapticsEnabled: Boolean,
+    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
     onScaleChange: (Float) -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
@@ -841,6 +848,11 @@ internal fun FloatingScopePanel(
         remember(kind, default, panelLayout, placementRevision) {
             mutableStateOf(resolvedFrame())
         }
+    val currentFrameCallback by rememberUpdatedState(onPanelFrameChanged)
+    SideEffect { currentFrameCallback(panelID, frame) }
+    DisposableEffect(panelID) {
+        onDispose { currentFrameCallback(panelID, null) }
+    }
     var liveScale by
         remember(kind, scale, panelLayout, baseWidth, baseHeight) {
             mutableStateOf(

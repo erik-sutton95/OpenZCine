@@ -40,6 +40,7 @@ class MonitorAnalysisPanelComposeTest {
         val store = MonitorAnalysisPanelPlacementStore(context)
         val visible = mutableStateOf(true)
         val placementRevision = mutableIntStateOf(0)
+        var reportedFrame: ZoneFrame? = null
         val default = ZoneFrame(60f, 40f, 100f, 60f)
         val layout =
             MonitorAnalysisPanelLayout(
@@ -61,6 +62,9 @@ class MonitorAnalysisPanelComposeTest {
                             legacyStore = null,
                             placementRevision = placementRevision.intValue,
                             hapticsEnabled = false,
+                            onPanelFrameChanged = { id, frame ->
+                                if (id == MonitorAnalysisPanelID.WAVEFORM) reportedFrame = frame
+                            },
                             onScaleChange = {},
                         ) { modifier ->
                             Box(modifier.fillMaxSize().background(Color.Black))
@@ -70,6 +74,7 @@ class MonitorAnalysisPanelComposeTest {
             }
         }
         val panel = composeRule.onNodeWithContentDescription("WAVE analysis panel, movable")
+        composeRule.runOnIdle { assertEquals(default, reportedFrame) }
 
         panel.performTouchInput {
             down(center)
@@ -83,8 +88,10 @@ class MonitorAnalysisPanelComposeTest {
                 ZoneFrame(160f, 100f, 100f, 60f),
                 store.resolve(MonitorAnalysisPanelID.WAVEFORM, default, layout),
             )
+            assertEquals(ZoneFrame(160f, 100f, 100f, 60f), reportedFrame)
             visible.value = false
         }
+        composeRule.runOnIdle { assertNull(reportedFrame) }
         composeRule.runOnIdle { visible.value = true }
         composeRule.onNodeWithContentDescription("WAVE analysis panel, movable").assertIsDisplayed()
 

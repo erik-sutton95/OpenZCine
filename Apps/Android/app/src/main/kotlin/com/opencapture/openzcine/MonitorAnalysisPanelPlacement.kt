@@ -8,6 +8,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 private const val PANEL_CONTROL_CLEARANCE_DP = 8f
+private const val FOCUS_RESET_BUTTON_SIZE_DP = 40f
+private const val FOCUS_RESET_PANEL_GAP_DP = 10f
+private const val FOCUS_RESET_MAX_CLEARANCE_PASSES = 8
 
 /** Stable identities for the movable live-monitor analysis panels. */
 internal enum class MonitorAnalysisPanelID(
@@ -54,6 +57,73 @@ internal data class MonitorAnalysisPanelLayout(
         }
     }
 }
+
+/**
+ * Seats the focus-reset affordance in its feed-relative corner before movable-panel avoidance.
+ *
+ * The frame uses monitor-zone dp coordinates, matching every [MonitorAnalysisPanelLayout] frame.
+ */
+internal fun focusResetButtonBaseFrame(
+    feed: ZoneFrame,
+    isPortrait: Boolean,
+    bottomChromeInset: Float,
+): ZoneFrame {
+    val x =
+        if (isPortrait) {
+            feed.x + feed.width - FOCUS_RESET_PANEL_GAP_DP - FOCUS_RESET_BUTTON_SIZE_DP
+        } else {
+            feed.x + FOCUS_RESET_PANEL_GAP_DP
+        }
+    return clampScopeFrame(
+        ZoneFrame(
+            x = x,
+            y =
+                feed.y + feed.height -
+                    bottomChromeInset.coerceAtLeast(0f) -
+                    FOCUS_RESET_PANEL_GAP_DP -
+                    FOCUS_RESET_BUTTON_SIZE_DP,
+            width = FOCUS_RESET_BUTTON_SIZE_DP,
+            height = FOCUS_RESET_BUTTON_SIZE_DP,
+        ),
+        feed,
+    )
+}
+
+/**
+ * Lifts the focus-reset affordance above overlapping movable analysis panels.
+ *
+ * Panels are considered from lowest to highest so a crowded stack is climbed one panel at a time.
+ * The bounded pass count matches the iOS policy and the result never leaves [bounds]. The button is
+ * also mounted above the panels in Compose, so an impossible fully-packed layout remains reachable.
+ */
+internal fun focusResetButtonClearFrame(
+    base: ZoneFrame,
+    panelFrames: Collection<ZoneFrame>,
+    bounds: ZoneFrame,
+): ZoneFrame {
+    val panels = panelFrames.sortedByDescending { it.y + it.height }
+    var frame = clampScopeFrame(base, bounds)
+    repeat(FOCUS_RESET_MAX_CLEARANCE_PASSES) {
+        var moved = false
+        panels.forEach { panel ->
+            if (frame.intersectsWithGap(panel, FOCUS_RESET_PANEL_GAP_DP)) {
+                val nextY = panel.y - FOCUS_RESET_PANEL_GAP_DP - frame.height
+                if (nextY < frame.y) {
+                    frame = frame.copy(y = nextY)
+                    moved = true
+                }
+            }
+        }
+        if (!moved) return clampScopeFrame(frame, bounds)
+    }
+    return clampScopeFrame(frame, bounds)
+}
+
+private fun ZoneFrame.intersectsWithGap(other: ZoneFrame, gap: Float): Boolean =
+    x < other.x + other.width + gap &&
+        x + width > other.x - gap &&
+        y < other.y + other.height + gap &&
+        y + height > other.y - gap
 
 /** Actual monitor chrome surfaces mounted beside analysis panels in the current DISP/layout mode. */
 internal data class MonitorAnalysisChromeMounts(

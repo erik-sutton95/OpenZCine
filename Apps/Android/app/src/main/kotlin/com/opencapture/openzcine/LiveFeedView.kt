@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -440,6 +441,7 @@ internal fun FalseColorReferenceOverlay(
     placementStore: MonitorAnalysisPanelPlacementStore? = null,
     placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
+    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
 ) {
     val presentation = effectsState.falseColorReference ?: return
     val resolvedLayout =
@@ -475,6 +477,11 @@ internal fun FalseColorReferenceOverlay(
         remember(default, resolvedLayout, placementRevision) {
             mutableStateOf(resolvedFrame())
         }
+    val currentFrameCallback by rememberUpdatedState(onPanelFrameChanged)
+    SideEffect { currentFrameCallback(panelID, frame) }
+    DisposableEffect(panelID) {
+        onDispose { currentFrameCallback(panelID, null) }
+    }
     var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
     val density = LocalDensity.current
     val view = LocalView.current

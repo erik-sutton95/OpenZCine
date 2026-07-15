@@ -607,6 +607,65 @@ class MonitorAnalysisPanelPlacementTest {
         )
     }
 
+    @Test
+    fun `focus reset base frame preserves landscape and portrait feed corners`() {
+        assertEquals(
+            ZoneFrame(69f, 271f, 40f, 40f),
+            focusResetButtonBaseFrame(
+                feed = landscapeZones().feed,
+                isPortrait = false,
+                bottomChromeInset = 72f,
+            ),
+        )
+        assertEquals(
+            ZoneFrame(350f, 560f, 40f, 40f),
+            focusResetButtonBaseFrame(
+                feed = portraitZones().feed,
+                isPortrait = true,
+                bottomChromeInset = 64f,
+            ),
+        )
+    }
+
+    @Test
+    fun `focus reset climbs overlapping panels from lowest to highest`() {
+        val bounds = ZoneFrame(0f, 0f, 400f, 320f)
+        val base = ZoneFrame(20f, 270f, 40f, 40f)
+        val panels =
+            listOf(
+                ZoneFrame(10f, 250f, 180f, 70f),
+                ZoneFrame(10f, 160f, 180f, 50f),
+            )
+
+        assertEquals(
+            ZoneFrame(20f, 110f, 40f, 40f),
+            focusResetButtonClearFrame(base, panels, bounds),
+        )
+    }
+
+    @Test
+    fun `focus reset ignores distant panels and clamps impossible stacks to feed top`() {
+        val bounds = ZoneFrame(0f, 20f, 400f, 300f)
+        val base = ZoneFrame(20f, 270f, 40f, 40f)
+
+        assertEquals(
+            base,
+            focusResetButtonClearFrame(
+                base = base,
+                panelFrames = listOf(ZoneFrame(220f, 240f, 100f, 70f)),
+                bounds = bounds,
+            ),
+        )
+        assertEquals(
+            ZoneFrame(20f, 20f, 40f, 40f),
+            focusResetButtonClearFrame(
+                base = base,
+                panelFrames = listOf(ZoneFrame(0f, 20f, 160f, 300f)),
+                bounds = bounds,
+            ),
+        )
+    }
+
     private fun landscapeZones(): MonitorZones =
         MonitorZones(
             feed = ZoneFrame(59f, 0f, 734f, 393f),
