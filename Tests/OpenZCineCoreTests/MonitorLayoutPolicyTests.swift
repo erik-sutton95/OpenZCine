@@ -580,8 +580,12 @@ import Testing
 @Test func batteryRailPlacesIndicatorsAroundSideNotch() {
     let layout = MonitorBatteryRailLayout.fit(railHeight: 390)
 
-    #expect(layout.phoneBottom == layout.notchTop - MonitorBatteryRailLayout.notchPadding)
-    #expect(layout.cameraTop == layout.notchBottom + MonitorBatteryRailLayout.notchPadding)
+    #expect(
+        layout.phoneBottom
+            == layout.notchTop - MonitorBatteryRailLayout.dynamicIslandPadding)
+    #expect(
+        layout.cameraTop
+            == layout.notchBottom + MonitorBatteryRailLayout.dynamicIslandPadding)
 }
 
 @Test func batteryRailKeepsIndicatorsCloserThanCornerAnchors() {
@@ -617,6 +621,12 @@ import Testing
         !MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: symmetricDynamicIslandSafeArea))
     #expect(classic.phoneBottom == classic.notchTop - MonitorBatteryRailLayout.notchPadding)
     #expect(classic.cameraTop == classic.notchBottom + MonitorBatteryRailLayout.notchPadding)
+    #expect(
+        dynamicIsland.phoneBottom
+            == dynamicIsland.notchTop - MonitorBatteryRailLayout.dynamicIslandPadding)
+    #expect(
+        dynamicIsland.cameraTop
+            == dynamicIsland.notchBottom + MonitorBatteryRailLayout.dynamicIslandPadding)
 }
 
 @Test func dynamicIslandGeometryKeepsTheEstablishedMonitorLayout() {

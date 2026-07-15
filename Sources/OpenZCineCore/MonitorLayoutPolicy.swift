@@ -727,17 +727,19 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// Visual separation between the lock button and compact phone-battery readout.
     public static let lockButtonGap = 4.0
 
-    /// Reserved vertical span for the landscape Dynamic Island. Sized just over the physical
-    /// island (~126pt black core on the Pro Max) so the indicators sit snug above and below it.
-    public static let sideNotchHeight = 135.0
+    /// Reserved vertical span for the landscape Dynamic Island. The physical black core is about
+    /// 126pt tall, so this leaves a narrow safety edge while keeping both battery groups clear of
+    /// the neighboring lock and LUT controls.
+    public static let sideNotchHeight = 127.0
 
     /// Reserved vertical span for the wider classic notch used by iPhone 11-era displays.
     public static let classicSideNotchHeight = 232.0
 
-    /// Clearance between the battery indicators and the side notch reservation. Kept small so the
-    /// indicators tuck in close to the Dynamic Island (the reservation already clears the physical
-    /// island by a few points, so this stays off it).
+    /// Clearance between the battery indicators and the classic-notch reservation.
     public static let notchPadding = 3.0
+
+    /// Tighter clearance around the Dynamic Island reservation on newer iPhones.
+    public static let dynamicIslandPadding = 1.0
 
     /// Horizontal nudge that aligns the indicators with the Dynamic Island, which sits slightly
     /// inboard of the chrome's leading inset.
@@ -776,9 +778,10 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
         let phoneIndicatorHeight =
             usesCompactPhoneIndicator ? compactPhoneIndicatorHeight : indicatorHeight
         let requestedNotchHeight = sideNotchHeight(for: safeArea)
+        let padding = notchPadding(for: safeArea)
         let maximumNotchHeight = max(
             0,
-            railHeight - phoneIndicatorHeight - indicatorHeight - 2 * notchPadding
+            railHeight - phoneIndicatorHeight - indicatorHeight - 2 * padding
         )
         let notchHeight = min(requestedNotchHeight, maximumNotchHeight)
         let notchCenterY = railHeight / 2
@@ -791,11 +794,11 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
         let maximumCenterY = max(minimumCameraCenterY, railHeight - indicatorHeight / 2)
         let phoneCenterY = max(
             minimumPhoneCenterY,
-            notchTop - notchPadding - phoneIndicatorHeight / 2
+            notchTop - padding - phoneIndicatorHeight / 2
         )
         let cameraCenterY = min(
             maximumCenterY,
-            notchBottom + notchPadding + indicatorHeight / 2
+            notchBottom + padding + indicatorHeight / 2
         )
 
         return MonitorBatteryRailLayout(
@@ -811,6 +814,10 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
 
     private static func sideNotchHeight(for safeArea: MonitorEdgeInsets) -> Double {
         usesClassicSideNotch(safeArea: safeArea) ? classicSideNotchHeight : sideNotchHeight
+    }
+
+    private static func notchPadding(for safeArea: MonitorEdgeInsets) -> Double {
+        usesClassicSideNotch(safeArea: safeArea) ? notchPadding : dynamicIslandPadding
     }
 
     /// Whether landscape safe-area geometry identifies a wider pre-Dynamic-Island notch.
