@@ -20,6 +20,15 @@
 import Foundation
 import OpenZCineCore
 
+/// Stable Android PTP-IP initiator identity kept separate from the iOS camera profile.
+public enum AndroidPTPIPInitiator {
+    /// The 16-byte Android GUID retained across reconnects and upgrades.
+    public static let appGUID = Data("OpenZCineAndroid".utf8)
+
+    /// Android's paired-initiator display name.
+    public static let friendlyName = "OpenZCine Android"
+}
+
 #if canImport(Android)
     import Android
 #elseif canImport(Glibc)
@@ -278,8 +287,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
     public static func connect(
         host: String,
         port: UInt16 = UInt16(ptpIPPort),
-        guid: Data = PTPIPInitiator.androidAppGUID,
-        friendlyName: String = PTPIPInitiator.androidFriendlyName,
+        guid: Data = AndroidPTPIPInitiator.appGUID,
+        friendlyName: String = AndroidPTPIPInitiator.friendlyName,
         timeoutMilliseconds: Int32 = 10_000,
         onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
     ) throws -> PTPIPClientSession {

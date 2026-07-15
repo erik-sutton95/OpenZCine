@@ -11,6 +11,14 @@ import Testing
 
 @testable import OpenZCineAndroidFacade
 
+@Test func androidInitiatorIdentityIsStableAndDistinctFromIOS() {
+    #expect(Array(AndroidPTPIPInitiator.appGUID) == Array("OpenZCineAndroid".utf8))
+    #expect(AndroidPTPIPInitiator.appGUID.count == 16)
+    #expect(AndroidPTPIPInitiator.appGUID != PTPIPInitiator.appGUID)
+    #expect(AndroidPTPIPInitiator.friendlyName == "OpenZCine Android")
+    #expect(AndroidPTPIPInitiator.friendlyName != PTPIPInitiator.friendlyName)
+}
+
 struct PTPIPClientSessionTests {
     private func connect(
         to server: FakeZRServer,

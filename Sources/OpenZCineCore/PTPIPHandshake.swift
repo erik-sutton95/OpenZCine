@@ -9,11 +9,12 @@ public let ptpIPProtocolVersion: UInt32 = 0x0001_0000
 /// Stable PTP-IP initiator identity used for Nikon camera connection profiles.
 public enum PTPIPInitiator {
     /// Nikon cameras can reject an unrecognized per-install/random initiator GUID.
-    public static let appGUID =
+    public static var appGUID: Data {
         Data([
             0x4F, 0x70, 0x65, 0x6E, 0x5A, 0x43, 0x69, 0x6E,
             0x65, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
         ])
+    }
 
     /// Preserves a valid installed identity, seeding ``appGUID`` only for a fresh or corrupt store.
     /// Camera pairing profiles are keyed to these 16 bytes, so branding changes must never replace
@@ -25,18 +26,6 @@ public enum PTPIPInitiator {
 
     /// This string is part of the paired initiator identity; keep it stable.
     public static let friendlyName = "WTU-iPhone"
-
-    /// Android's stable, platform-specific PTP-IP identity.
-    ///
-    /// A Nikon body stores pairing profiles by initiator identity. Reusing the
-    /// iOS GUID here would make one platform replace the other's profile; the
-    /// 16-byte ASCII value `OpenZCineAndroid` keeps both profiles distinct
-    /// while remaining stable across Android launches and upgrades.
-    public static let androidAppGUID = Data("OpenZCineAndroid".utf8)
-
-    /// Android's paired-initiator display name. Keep this stable with
-    /// ``androidAppGUID`` so reconnects reuse the Android camera profile.
-    public static let androidFriendlyName = "OpenZCine Android"
 }
 
 /// Human-confirmed pairing challenge returned by Nikon's pairing-info operation.
