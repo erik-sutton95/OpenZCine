@@ -125,10 +125,82 @@ private struct AndroidRawControlMode<Value: FixedWidthInteger & Sendable>: Senda
     let raw: Value
 }
 
+/// Nikon ZR controls whose settable domain is stable even when the body omits or temporarily
+/// narrows a descriptor. These are never applied to a different camera model.
+private enum AndroidNikonZRControlFallback {
+    static let baseISO: [AndroidRawControlMode<UInt8>] = [
+        AndroidRawControlMode(label: "Low", raw: 1),
+        AndroidRawControlMode(label: "High", raw: 2),
+    ]
+    static let whiteBalanceKelvin: [AndroidRawControlMode<UInt16>] = [
+        3_200, 4_300, 5_400, 5_500, 5_600, 5_700, 6_500,
+    ].map { AndroidRawControlMode(label: "\($0)K", raw: UInt16($0)) }
+    static let whiteBalanceModes: [AndroidRawControlMode<UInt16>] = [
+        AndroidRawControlMode(label: "Auto", raw: 0x0002),
+        AndroidRawControlMode(label: "Natural auto", raw: 0x8016),
+        AndroidRawControlMode(label: "Sunny", raw: 0x0004),
+        AndroidRawControlMode(label: "Cloudy", raw: 0x8010),
+        AndroidRawControlMode(label: "Shade", raw: 0x8011),
+        AndroidRawControlMode(label: "Incandescent", raw: 0x0006),
+        AndroidRawControlMode(label: "Fluorescent", raw: 0x0005),
+        AndroidRawControlMode(label: "Flash", raw: 0x0007),
+        AndroidRawControlMode(label: "Preset", raw: 0x8013),
+        AndroidRawControlMode(label: "Color temp", raw: 0x8012),
+    ]
+    static let focusModes: [AndroidRawControlMode<UInt8>] = [
+        AndroidRawControlMode(label: "AF-S", raw: 0),
+        AndroidRawControlMode(label: "AF-C", raw: 1),
+        AndroidRawControlMode(label: "AF-F", raw: 2),
+        AndroidRawControlMode(label: "MF", raw: 4),
+    ]
+    static let focusAreas: [AndroidRawControlMode<UInt16>] = [
+        AndroidRawControlMode(label: "Single", raw: 0x8010),
+        AndroidRawControlMode(label: "Wide-S", raw: 0x8018),
+        AndroidRawControlMode(label: "Wide-L", raw: 0x8019),
+        AndroidRawControlMode(label: "Auto", raw: 0x8011),
+        AndroidRawControlMode(label: "Subject", raw: 0x8033),
+    ]
+    static let focusSubjects: [AndroidRawControlMode<UInt8>] = [
+        AndroidRawControlMode(label: "Auto", raw: 1),
+        AndroidRawControlMode(label: "People", raw: 2),
+        AndroidRawControlMode(label: "Animal", raw: 3),
+        AndroidRawControlMode(label: "Bird", raw: 5),
+        AndroidRawControlMode(label: "Vehicle", raw: 4),
+        AndroidRawControlMode(label: "Airplane", raw: 6),
+    ]
+    static let audioSensitivities: [AndroidRawControlMode<UInt8>] =
+        [AndroidRawControlMode(label: "Auto", raw: 0xFF)]
+        + (1...20).map { AndroidRawControlMode(label: String($0), raw: UInt8($0)) }
+    static let audioInputs: [AndroidRawControlMode<UInt8>] = [
+        AndroidRawControlMode(label: "Microphone", raw: 1),
+        AndroidRawControlMode(label: "Line", raw: 2),
+    ]
+    static let onOff: [AndroidRawControlMode<UInt8>] = [
+        AndroidRawControlMode(label: "OFF", raw: 0),
+        AndroidRawControlMode(label: "ON", raw: 1),
+    ]
+    static let vibrationReduction: [AndroidRawControlMode<UInt8>] = [
+        AndroidRawControlMode(label: "OFF", raw: 0),
+        AndroidRawControlMode(label: "ON", raw: 1),
+        AndroidRawControlMode(label: "SPORT", raw: 2),
+    ]
+}
+
 /// Exact camera-advertised values retained inside the Swift session.
 private struct AndroidRawControlCatalog: Sendable {
     var screenSizes: [PTPCameraScreenSizeMode] = []
     var fileTypes: [PTPCameraFileTypeMode] = []
+    var apertures: [AndroidRawControlMode<UInt16>] = []
+    var whiteBalanceKelvin: [AndroidRawControlMode<UInt16>] = []
+    var whiteBalanceModes: [AndroidRawControlMode<UInt16>] = []
+    var focusModes: [AndroidRawControlMode<UInt8>] = []
+    var focusAreas: [AndroidRawControlMode<UInt16>] = []
+    var focusSubjects: [AndroidRawControlMode<UInt8>] = []
+    var audioSensitivities: [AndroidRawControlMode<UInt8>] = []
+    var audioInputs: [AndroidRawControlMode<UInt8>] = []
+    var windFilters: [AndroidRawControlMode<UInt8>] = []
+    var attenuators: [AndroidRawControlMode<UInt8>] = []
+    var audio32BitFloat: [AndroidRawControlMode<UInt8>] = []
     var shutterAngles: [AndroidRawControlMode<UInt32>] = []
     var shutterSpeeds: [AndroidRawControlMode<UInt32>] = []
     var baseISO: [AndroidRawControlMode<UInt8>] = []
@@ -140,7 +212,8 @@ private struct AndroidRawControlCatalog: Sendable {
 
     func capabilities(
         properties: PTPCameraPropertySnapshot,
-        whiteBalanceTint: String?
+        whiteBalanceTint: String?,
+        usesNikonZRFallbacks: Bool
     ) -> AndroidCameraControlCapabilities {
         let activeShutterValues: [String] =
             switch properties.shutterMode {
@@ -148,6 +221,30 @@ private struct AndroidRawControlCatalog: Sendable {
             case .speed: shutterSpeeds.map(\.label)
             case nil: []
             }
+        let irisValues: [String]
+        if apertures.isEmpty, usesNikonZRFallbacks, properties.lens != nil {
+            irisValues = PTPCameraPropertyDecoders.availableApertures(forLens: properties.lens)
+        } else {
+            irisValues = apertures.map(\.label)
+        }
+        let isoValues: [String]
+        if usesNikonZRFallbacks, let codec = properties.fileType {
+            if ISOPickerPolicy.showsDualBaseCircuits(codec: codec) {
+                switch properties.baseISO {
+                case "Low": isoValues = ISOPickerPolicy.lowBaseOptions
+                case "High": isoValues = ISOPickerPolicy.highBaseOptions
+                default: isoValues = []
+                }
+            } else {
+                isoValues = ISOPickerPolicy.unifiedOptions
+            }
+        } else {
+            isoValues = []
+        }
+        let whiteBalanceValues =
+            (whiteBalanceModes.contains { $0.label == "Color temp" }
+                ? whiteBalanceKelvin.map(\.label) : [])
+            + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: MonitorTextFormat.resolutionLabel(
                 fromProperty: properties.resolution,
@@ -156,7 +253,18 @@ private struct AndroidRawControlCatalog: Sendable {
             ).nilIfEmpty,
             codec: properties.fileType.map(MonitorTextFormat.codecShortLabel),
             whiteBalanceTint: whiteBalanceTint,
+            isoValues: isoValues,
             shutterValues: activeShutterValues,
+            irisValues: irisValues,
+            whiteBalanceValues: uniqueLabels(whiteBalanceValues),
+            focusModes: focusModes.map(\.label),
+            focusAreas: focusAreas.map(\.label),
+            focusSubjects: focusSubjects.map(\.label),
+            audioSensitivities: audioSensitivities.map(\.label),
+            audioInputs: audioInputs.map(\.label),
+            windFilters: windFilters.map(\.label),
+            attenuators: attenuators.map(\.label),
+            audio32BitFloat: audio32BitFloat.map(\.label),
             baseISO: baseISO.map(\.label),
             shutterModes: shutterModes.map(\.label),
             shutterLocks: shutterLocks.map(\.label),
@@ -166,6 +274,11 @@ private struct AndroidRawControlCatalog: Sendable {
             vibrationReduction: vibrationReduction.map(\.label),
             electronicVR: electronicVR.map(\.label)
         )
+    }
+
+    private func uniqueLabels(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
 }
 
@@ -255,6 +368,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// `identify()` during establishment, before the session escapes to
     /// callers, so reads never race the write.
     public private(set) var identity: PTPIPClientIdentity
+
+    /// True only for the production target whose stable descriptor omissions have explicit policy.
+    private var usesNikonZRFallbacks: Bool {
+        let manufacturer = identity.manufacturer.trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        let model = identity.model.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return manufacturer.contains("NIKON") && (model == "ZR" || model == "NIKON ZR")
+    }
 
     private init(command: PosixTCPSocket, event: PosixTCPSocket, identity: PTPIPClientIdentity) {
         self.command = command
@@ -674,6 +795,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let refreshers: [() throws -> Void] = [
             refreshAndroidScreenSizeDescriptor,
             refreshAndroidFileTypeDescriptor,
+            refreshAndroidApertureDescriptor,
+            refreshAndroidWhiteBalanceKelvinDescriptor,
+            refreshAndroidWhiteBalanceModeDescriptor,
+            refreshAndroidFocusModeDescriptor,
+            refreshAndroidFocusAreaDescriptor,
+            refreshAndroidFocusSubjectDescriptor,
+            refreshAndroidAudioSensitivityDescriptor,
+            refreshAndroidAudioInputDescriptor,
+            refreshAndroidWindFilterDescriptor,
+            refreshAndroidAttenuatorDescriptor,
+            refreshAndroidAudio32BitFloatDescriptor,
             refreshAndroidShutterAngleDescriptor,
             refreshAndroidShutterSpeedDescriptor,
             refreshAndroidBaseISODescriptor,
@@ -711,6 +843,141 @@ public final class PTPIPClientSession: @unchecked Sendable {
             fromEnum: try descriptorEnumValues(.movieFileType, valueByteCount: 4))
     }
 
+    private func refreshAndroidApertureDescriptor() throws {
+        androidControlCatalog.apertures = []
+        androidControlCatalog.apertures = try descriptorModesWithZRFallback(fallback: []) {
+            let raw = try descriptorEnumValues(.movieFNumber, valueByteCount: 2)
+            return uniqueUInt16Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.irisFNumber(value)
+                return label == "—" ? nil : label
+            }
+        }
+    }
+
+    private func refreshAndroidWhiteBalanceKelvinDescriptor() throws {
+        androidControlCatalog.whiteBalanceKelvin = []
+        androidControlCatalog.whiteBalanceKelvin = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.whiteBalanceKelvin
+        ) {
+            let raw = try descriptorEnumValues(.movieWBColorTemp, valueByteCount: 2)
+            return uniqueUInt16Modes(raw) { value in
+                (1_000...50_000).contains(value) ? "\(value)K" : nil
+            }
+        }
+    }
+
+    private func refreshAndroidWhiteBalanceModeDescriptor() throws {
+        androidControlCatalog.whiteBalanceModes = []
+        androidControlCatalog.whiteBalanceModes = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.whiteBalanceModes
+        ) {
+            let raw = try descriptorEnumValues(.movieWhiteBalance, valueByteCount: 2)
+            return uniqueUInt16Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.whiteBalanceMode(value)
+                return label.hasPrefix("0x") ? nil : label
+            }
+        }
+    }
+
+    private func refreshAndroidFocusModeDescriptor() throws {
+        androidControlCatalog.focusModes = []
+        let advertised = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.focusModes
+        ) {
+            let raw = try descriptorEnumValues(.movieFocusMode, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.movieFocusMode(value)
+                return label.hasPrefix("0x") ? nil : label
+            }
+        }
+        androidControlCatalog.focusModes =
+            usesNikonZRFallbacks
+            ? mergedModes(AndroidNikonZRControlFallback.focusModes, advertised)
+            : advertised
+    }
+
+    private func refreshAndroidFocusAreaDescriptor() throws {
+        androidControlCatalog.focusAreas = []
+        androidControlCatalog.focusAreas = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.focusAreas
+        ) {
+            let raw = try descriptorEnumValues(.movieFocusMeteringMode, valueByteCount: 2)
+            return uniqueUInt16Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.movieFocusArea(value)
+                return label.hasPrefix("0x") ? nil : label
+            }
+        }
+    }
+
+    private func refreshAndroidFocusSubjectDescriptor() throws {
+        androidControlCatalog.focusSubjects = []
+        androidControlCatalog.focusSubjects = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.focusSubjects
+        ) {
+            let raw = try descriptorEnumValues(.movieAFSubjectDetection, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.movieAFSubject(value)
+                return label.hasPrefix("0x") ? nil : label
+            }
+        }
+    }
+
+    private func refreshAndroidAudioSensitivityDescriptor() throws {
+        androidControlCatalog.audioSensitivities = []
+        androidControlCatalog.audioSensitivities = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.audioSensitivities
+        ) {
+            let raw = try descriptorEnumValues(.movieAudioInputSensitivity, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.audioInputSensitivity(value)
+                return PTPCameraPropertyDecoders.audioInputSensitivityCode(for: label) == nil
+                    ? nil : label
+            }
+        }
+    }
+
+    private func refreshAndroidAudioInputDescriptor() throws {
+        androidControlCatalog.audioInputs = []
+        androidControlCatalog.audioInputs = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.audioInputs
+        ) {
+            let raw = try descriptorEnumValues(.audioInputSelection, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.audioInputSelection(value)
+                return label.hasPrefix("0x") ? nil : label
+            }
+        }
+    }
+
+    private func refreshAndroidWindFilterDescriptor() throws {
+        androidControlCatalog.windFilters = []
+        androidControlCatalog.windFilters = try refreshAndroidOnOffDescriptor(
+            .movWindNoiseReduction)
+    }
+
+    private func refreshAndroidAttenuatorDescriptor() throws {
+        androidControlCatalog.attenuators = []
+        androidControlCatalog.attenuators = try refreshAndroidOnOffDescriptor(.movieAttenuator)
+    }
+
+    private func refreshAndroidAudio32BitFloatDescriptor() throws {
+        androidControlCatalog.audio32BitFloat = []
+        androidControlCatalog.audio32BitFloat = try refreshAndroidOnOffDescriptor(
+            .movie32BitFloatAudioRecording)
+    }
+
+    private func refreshAndroidOnOffDescriptor(
+        _ property: PTPPropertyCode
+    ) throws -> [AndroidRawControlMode<UInt8>] {
+        try descriptorModesWithZRFallback(fallback: AndroidNikonZRControlFallback.onOff) {
+            let raw = try descriptorEnumValues(property, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                guard value == 0 || value == 1 else { return nil }
+                return PTPCameraPropertyDecoders.onOffLabel(value)
+            }
+        }
+    }
+
     private func refreshAndroidShutterAngleDescriptor() throws {
         androidControlCatalog.shutterAngles = []
         let raw = try descriptorEnumValues(.movieShutterAngle, valueByteCount: 4)
@@ -730,10 +997,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     private func refreshAndroidBaseISODescriptor() throws {
         androidControlCatalog.baseISO = []
-        let raw = try descriptorEnumValues(.movieBaseISO, valueByteCount: 1)
-        androidControlCatalog.baseISO = uniqueUInt8Modes(raw) { value in
-            let label = PTPCameraPropertyDecoders.baseISO(value)
-            return label.hasPrefix("0x") ? nil : label
+        androidControlCatalog.baseISO = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.baseISO
+        ) {
+            let raw = try descriptorEnumValues(.movieBaseISO, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.baseISO(value)
+                return label.hasPrefix("0x") ? nil : label
+            }
         }
     }
 
@@ -781,19 +1052,27 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     private func refreshAndroidVibrationReductionDescriptor() throws {
         androidControlCatalog.vibrationReduction = []
-        let raw = try descriptorEnumValues(.movieVibrationReduction, valueByteCount: 1)
-        androidControlCatalog.vibrationReduction = uniqueUInt8Modes(raw) { value in
-            let label = PTPCameraPropertyDecoders.movieVibrationReduction(value)
-            return label.hasPrefix("0x") ? nil : label
+        androidControlCatalog.vibrationReduction = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.vibrationReduction
+        ) {
+            let raw = try descriptorEnumValues(.movieVibrationReduction, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                let label = PTPCameraPropertyDecoders.movieVibrationReduction(value)
+                return label.hasPrefix("0x") ? nil : label
+            }
         }
     }
 
     private func refreshAndroidElectronicVRDescriptor() throws {
         androidControlCatalog.electronicVR = []
-        let raw = try descriptorEnumValues(.electronicVR, valueByteCount: 1)
-        androidControlCatalog.electronicVR = uniqueUInt8Modes(raw) { value in
-            guard value == 0 || value == 1 else { return nil }
-            return PTPCameraPropertyDecoders.onOffLabel(value)
+        androidControlCatalog.electronicVR = try descriptorModesWithZRFallback(
+            fallback: AndroidNikonZRControlFallback.onOff
+        ) {
+            let raw = try descriptorEnumValues(.electronicVR, valueByteCount: 1)
+            return uniqueUInt8Modes(raw) { value in
+                guard value == 0 || value == 1 else { return nil }
+                return PTPCameraPropertyDecoders.onOffLabel(value)
+            }
         }
     }
 
@@ -807,6 +1086,34 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
+    /// Uses a known ZR control domain only when this connected body identifies as a Nikon ZR and
+    /// its descriptor is omitted, rejected, or temporarily empty. Other models fail closed.
+    private func descriptorModesWithZRFallback<Value>(
+        fallback: [AndroidRawControlMode<Value>],
+        load: () throws -> [AndroidRawControlMode<Value>]
+    ) throws -> [AndroidRawControlMode<Value>]
+    where Value: FixedWidthInteger & Sendable {
+        do {
+            let advertised = try load()
+            if !advertised.isEmpty || !usesNikonZRFallbacks { return advertised }
+            return fallback
+        } catch let error as PTPIPClientSessionError {
+            guard usesNikonZRFallbacks, androidDescriptorResult(for: error) == .unsupported else {
+                throw error
+            }
+            return fallback
+        }
+    }
+
+    private func mergedModes<Value>(
+        _ preferred: [AndroidRawControlMode<Value>],
+        _ fallback: [AndroidRawControlMode<Value>]
+    ) -> [AndroidRawControlMode<Value>]
+    where Value: FixedWidthInteger & Sendable {
+        var seen = Set<String>()
+        return (preferred + fallback).filter { seen.insert($0.label).inserted }
+    }
+
     private func uniqueUInt32Modes(
         _ rawValues: [UInt32],
         label: (UInt32) -> String?
@@ -815,6 +1122,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return rawValues.compactMap { raw in
             guard let label = label(raw), seen.insert(label).inserted else { return nil }
             return AndroidRawControlMode(label: label, raw: raw)
+        }
+    }
+
+    private func uniqueUInt16Modes(
+        _ rawValues: [UInt32],
+        label: (UInt16) -> String?
+    ) -> [AndroidRawControlMode<UInt16>] {
+        var seen = Set<String>()
+        return rawValues.compactMap { raw in
+            guard let value = UInt16(exactly: raw), let label = label(value),
+                seen.insert(label).inserted
+            else { return nil }
+            return AndroidRawControlMode(label: label, raw: value)
         }
     }
 
@@ -909,7 +1229,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
             storage: androidStorageInfo,
             controls: androidControlCatalog.capabilities(
                 properties: androidPropertySnapshot,
-                whiteBalanceTint: androidWhiteBalanceTint)
+                whiteBalanceTint: androidWhiteBalanceTint,
+                usesNikonZRFallbacks: usesNikonZRFallbacks)
         )
     }
 
@@ -930,6 +1251,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// details. Each read remains a separate serialized PTP transaction.
     private static let androidBootstrapPropertyOrder: [PTPPropertyCode] = [
         .movieISOSensitivity,
+        .movieBaseISO,
         .movieShutterMode,
         .movieShutterAngle,
         .movieShutterSpeed,
@@ -1069,9 +1391,69 @@ public final class PTPIPClientSession: @unchecked Sendable {
         _ control: AndroidCameraControl,
         label: String
     ) -> [PTPCameraPropertyWrite] {
+        if control.requiresCapabilityValidation,
+            !currentAndroidCapabilityOptions(for: control).contains(label)
+        {
+            return []
+        }
         switch control {
+        case .iso, .focusMode:
+            guard let sharedControl = control.sharedControl else { return [] }
+            return PTPCameraPropertyWrite.requests(
+                control: sharedControl,
+                label: label,
+                snapshot: androidPropertySnapshot)
         case .shutter:
             return shutterDescriptorWrite(label: label).map { [$0] } ?? []
+        case .iris:
+            if let raw = androidControlCatalog.apertures.first(where: { $0.label == label })?.raw {
+                return [
+                    PTPCameraPropertyWrite(
+                        property: .movieFNumber, data: Data(ByteCoding.uint16LE(raw)))
+                ]
+            }
+            guard usesNikonZRFallbacks, let sharedControl = control.sharedControl else { return [] }
+            return PTPCameraPropertyWrite.requests(
+                control: sharedControl,
+                label: label,
+                snapshot: androidPropertySnapshot)
+        case .whiteBalance:
+            return whiteBalanceDescriptorWrites(label: label)
+        case .focusArea:
+            return uint16DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.focusAreas,
+                property: .movieFocusMeteringMode)
+        case .focusSubject:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.focusSubjects,
+                property: .movieAFSubjectDetection)
+        case .audioSensitivity:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.audioSensitivities,
+                property: .movieAudioInputSensitivity)
+        case .audioInput:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.audioInputs,
+                property: .audioInputSelection)
+        case .windFilter:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.windFilters,
+                property: .movWindNoiseReduction)
+        case .attenuator:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.attenuators,
+                property: .movieAttenuator)
+        case .audio32BitFloat:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.audio32BitFloat,
+                property: .movie32BitFloatAudioRecording)
         case .baseISO:
             return uint8DescriptorWrite(
                 label: label,
@@ -1101,16 +1483,49 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 modes: androidControlCatalog.vibrationReduction,
                 property: .movieVibrationReduction)
         case .electronicVR:
+            guard let codec = androidPropertySnapshot.fileType,
+                !MonitorTextFormat.isRawCodec(codec)
+            else { return [] }
             return uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.electronicVR,
                 property: .electronicVR)
-        default:
+        case .exposureMode:
             guard let sharedControl = control.sharedControl else { return [] }
             return PTPCameraPropertyWrite.requests(
                 control: sharedControl,
                 label: label,
                 snapshot: androidPropertySnapshot)
+        }
+    }
+
+    private func currentAndroidCapabilityOptions(for control: AndroidCameraControl) -> [String] {
+        let capabilities = androidControlCatalog.capabilities(
+            properties: androidPropertySnapshot,
+            whiteBalanceTint: androidWhiteBalanceTint,
+            usesNikonZRFallbacks: usesNikonZRFallbacks)
+        return switch control {
+        case .iso: capabilities.isoValues
+        case .shutter: capabilities.shutterValues
+        case .iris: capabilities.irisValues
+        case .whiteBalance: capabilities.whiteBalanceValues
+        case .focusMode: capabilities.focusModes
+        case .focusArea: capabilities.focusAreas
+        case .focusSubject: capabilities.focusSubjects
+        case .audioSensitivity: capabilities.audioSensitivities
+        case .audioInput: capabilities.audioInputs
+        case .windFilter: capabilities.windFilters
+        case .attenuator: capabilities.attenuators
+        case .audio32BitFloat: capabilities.audio32BitFloat
+        case .baseISO: capabilities.baseISO
+        case .shutterMode: capabilities.shutterModes
+        case .shutterLock: capabilities.shutterLocks
+        case .whiteBalanceTint: capabilities.whiteBalanceTints
+        case .resolutionFrameRate: capabilities.resolutionFrameRates
+        case .codec: capabilities.codecs
+        case .vibrationReduction: capabilities.vibrationReduction
+        case .electronicVR: capabilities.electronicVR
+        case .exposureMode: []
         }
     }
 
@@ -1138,6 +1553,39 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) -> [PTPCameraPropertyWrite] {
         guard let raw = modes.first(where: { $0.label == label })?.raw else { return [] }
         return [PTPCameraPropertyWrite(property: property, data: Data([raw]))]
+    }
+
+    private func uint16DescriptorWrite(
+        label: String,
+        modes: [AndroidRawControlMode<UInt16>],
+        property: PTPPropertyCode
+    ) -> [PTPCameraPropertyWrite] {
+        guard let raw = modes.first(where: { $0.label == label })?.raw else { return [] }
+        return [
+            PTPCameraPropertyWrite(property: property, data: Data(ByteCoding.uint16LE(raw)))
+        ]
+    }
+
+    private func whiteBalanceDescriptorWrites(label: String) -> [PTPCameraPropertyWrite] {
+        if let kelvin = androidControlCatalog.whiteBalanceKelvin.first(where: {
+            $0.label == label
+        })?.raw {
+            guard
+                let mode = androidControlCatalog.whiteBalanceModes.first(where: {
+                    $0.label == "Color temp"
+                })?.raw
+            else { return [] }
+            return [
+                PTPCameraPropertyWrite(
+                    property: .movieWhiteBalance, data: Data(ByteCoding.uint16LE(mode))),
+                PTPCameraPropertyWrite(
+                    property: .movieWBColorTemp, data: Data(ByteCoding.uint16LE(kelvin))),
+            ]
+        }
+        return uint16DescriptorWrite(
+            label: label,
+            modes: androidControlCatalog.whiteBalanceModes,
+            property: .movieWhiteBalance)
     }
 
     private func whiteBalanceTintWrite(label: String) -> PTPCameraPropertyWrite? {

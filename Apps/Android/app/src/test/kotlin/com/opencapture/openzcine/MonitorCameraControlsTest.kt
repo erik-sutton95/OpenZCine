@@ -375,7 +375,13 @@ class MonitorCameraControlsTest {
             baseIso = "Low",
             controlCapabilities =
                 CameraControlCapabilities(
+                    isoValues = listOf("800", "1600"),
                     shutterValues = listOf("90°", "180°"),
+                    irisValues = listOf("f/2.8", "f/4"),
+                    whiteBalanceValues = listOf("5600K", "Sunny"),
+                    focusModes = listOf("AF-C", "MF"),
+                    focusAreas = listOf("Wide-L", "Subject"),
+                    focusSubjects = listOf("People", "Animal"),
                     baseIso = listOf("Low", "High"),
                     shutterModes = listOf("Angle", "Speed"),
                     shutterLocks = listOf("Unlocked", "Locked"),

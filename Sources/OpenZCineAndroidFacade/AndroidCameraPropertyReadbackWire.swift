@@ -38,7 +38,18 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         resolutionFrameRate: String? = nil,
         codec: String? = nil,
         whiteBalanceTint: String? = nil,
+        isoValues: [String] = [],
         shutterValues: [String] = [],
+        irisValues: [String] = [],
+        whiteBalanceValues: [String] = [],
+        focusModes: [String] = [],
+        focusAreas: [String] = [],
+        focusSubjects: [String] = [],
+        audioSensitivities: [String] = [],
+        audioInputs: [String] = [],
+        windFilters: [String] = [],
+        attenuators: [String] = [],
+        audio32BitFloat: [String] = [],
         baseISO: [String] = [],
         shutterModes: [String] = [],
         shutterLocks: [String] = [],
@@ -51,7 +62,18 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         self.resolutionFrameRate = resolutionFrameRate
         self.codec = codec
         self.whiteBalanceTint = whiteBalanceTint
+        self.isoValues = isoValues
         self.shutterValues = shutterValues
+        self.irisValues = irisValues
+        self.whiteBalanceValues = whiteBalanceValues
+        self.focusModes = focusModes
+        self.focusAreas = focusAreas
+        self.focusSubjects = focusSubjects
+        self.audioSensitivities = audioSensitivities
+        self.audioInputs = audioInputs
+        self.windFilters = windFilters
+        self.attenuators = attenuators
+        self.audio32BitFloat = audio32BitFloat
         self.baseISO = baseISO
         self.shutterModes = shutterModes
         self.shutterLocks = shutterLocks
@@ -68,8 +90,30 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
     public let codec: String?
     /// Current WB fine-tune label for the active camera WB mode.
     public let whiteBalanceTint: String?
+    /// ISO values valid for the active codec and base circuit.
+    public let isoValues: [String]
     /// Values from the active shutter angle/speed descriptor.
     public let shutterValues: [String]
+    /// Apertures valid for the mounted lens.
+    public let irisValues: [String]
+    /// Kelvin and preset white-balance values valid on the body.
+    public let whiteBalanceValues: [String]
+    /// Movie autofocus modes valid on the body.
+    public let focusModes: [String]
+    /// Movie autofocus areas valid on the body.
+    public let focusAreas: [String]
+    /// Movie autofocus subject modes valid on the body.
+    public let focusSubjects: [String]
+    /// Audio-input sensitivity values valid on the body.
+    public let audioSensitivities: [String]
+    /// Audio source values valid on the body.
+    public let audioInputs: [String]
+    /// Wind-filter states valid on the body.
+    public let windFilters: [String]
+    /// Input-attenuator states valid on the body.
+    public let attenuators: [String]
+    /// 32-bit-float audio states valid on the body.
+    public let audio32BitFloat: [String]
     /// Dual-base circuits advertised by the camera.
     public let baseISO: [String]
     /// Shutter display modes advertised by the camera.
@@ -184,7 +228,21 @@ public enum AndroidCameraPropertyReadbackWire {
         append("resolutionFrameRate", value: controls.resolutionFrameRate, to: &fields)
         append("codecSelection", value: controls.codec, to: &fields)
         append("whiteBalanceTint", value: controls.whiteBalanceTint, to: &fields)
+        appendOptions("options.iso", values: controls.isoValues, to: &fields)
         appendOptions("options.shutter", values: controls.shutterValues, to: &fields)
+        appendOptions("options.iris", values: controls.irisValues, to: &fields)
+        appendOptions(
+            "options.whiteBalance", values: controls.whiteBalanceValues, to: &fields)
+        appendOptions("options.focusMode", values: controls.focusModes, to: &fields)
+        appendOptions("options.focusArea", values: controls.focusAreas, to: &fields)
+        appendOptions("options.focusSubject", values: controls.focusSubjects, to: &fields)
+        appendOptions(
+            "options.audioSensitivity", values: controls.audioSensitivities, to: &fields)
+        appendOptions("options.audioInput", values: controls.audioInputs, to: &fields)
+        appendOptions("options.windFilter", values: controls.windFilters, to: &fields)
+        appendOptions("options.attenuator", values: controls.attenuators, to: &fields)
+        appendOptions(
+            "options.audio32BitFloat", values: controls.audio32BitFloat, to: &fields)
         appendOptions("options.baseIso", values: controls.baseISO, to: &fields)
         appendOptions("options.shutterMode", values: controls.shutterModes, to: &fields)
         appendOptions("options.shutterLock", values: controls.shutterLocks, to: &fields)

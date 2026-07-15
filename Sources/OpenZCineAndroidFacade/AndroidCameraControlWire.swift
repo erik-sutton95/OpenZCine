@@ -28,6 +28,13 @@ enum AndroidCameraControl: Hashable, Sendable {
     case vibrationReduction
     case electronicVR
 
+    /// Whether a write must match the active Swift-owned capability snapshot.
+    /// Exposure mode remains the one iOS-parity control whose fixed program labels are owned by
+    /// the shared decoder rather than a body descriptor.
+    var requiresCapabilityValidation: Bool {
+        self != .exposureMode
+    }
+
     /// Existing label-based controls whose byte policy already lives in the
     /// portable shared core.
     var sharedControl: PTPCameraControl? {

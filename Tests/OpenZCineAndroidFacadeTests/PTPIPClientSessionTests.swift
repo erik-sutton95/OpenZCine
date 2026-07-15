@@ -185,11 +185,12 @@ struct PTPIPClientSessionTests {
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
 
         // ISO is a 32-bit 0x0001_Dxxx extended property; focus area is a
         // 16-bit 0xDxxx property. The operation must follow property width,
         // not the payload's byte count.
-        try session.applyControl(.iso, label: "800")
+        try session.applyControl(.iso, label: "1600")
         try session.applyControl(.focusArea, label: "Subject")
 
         #expect(
@@ -198,7 +199,7 @@ struct PTPIPClientSessionTests {
                     FakeZRPropertyWrite(
                         operation: .setDevicePropValueEx,
                         property: PTPPropertyCode.movieISOSensitivity.rawValue,
-                        data: Data([0x20, 0x03, 0x00, 0x00])),
+                        data: Data([0x40, 0x06, 0x00, 0x00])),
                     FakeZRPropertyWrite(
                         operation: .setDevicePropValue,
                         property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
@@ -220,7 +221,16 @@ struct PTPIPClientSessionTests {
         #expect(bootstrap.controls.resolutionFrameRate == "6K · 25p")
         #expect(bootstrap.controls.codec == "R3D NE")
         #expect(bootstrap.controls.whiteBalanceTint == "Neutral")
+        #expect(bootstrap.controls.isoValues == ISOPickerPolicy.highBaseOptions)
         #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
+        #expect(
+            bootstrap.controls.irisValues == [
+                "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0", "f/16.0", "f/22.0",
+            ])
+        #expect(bootstrap.controls.whiteBalanceValues.contains("5600K"))
+        #expect(bootstrap.controls.focusAreas.contains("Subject"))
+        #expect(bootstrap.controls.audioSensitivities.last == "20")
+        #expect(bootstrap.controls.audioInputs == ["Microphone", "Line"])
         #expect(bootstrap.controls.baseISO == ["Low", "High"])
         #expect(bootstrap.controls.shutterModes == ["Speed", "Angle"])
         #expect(bootstrap.controls.shutterLocks == ["Unlocked", "Locked"])
@@ -309,6 +319,251 @@ struct PTPIPClientSessionTests {
         #expect(server.receivedPropertyWrites().count == rejectedBaseline)
     }
 
+    @Test func dynamicAndroidControlsPreserveAdvertisedRawValuesEndToEnd() throws {
+        var options = FakeZRServer.Options()
+        options.descriptorEnumOverrides = [
+            .movieFNumber: [400, 560],
+            .movieWBColorTemp: [5_000, 5_600],
+            .movieWhiteBalance: [0x8012, 0x0004],
+            .movieFocusMode: [3],
+            .movieFocusMeteringMode: [0x8010],
+            .movieAFSubjectDetection: [6],
+            .movieAudioInputSensitivity: [7],
+            .audioInputSelection: [2],
+            .movWindNoiseReduction: [0],
+            .movieAttenuator: [1],
+            .movie32BitFloatAudioRecording: [1],
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(controls.irisValues == ["f/4.0", "f/5.6"])
+        #expect(controls.whiteBalanceValues == ["5000K", "5600K", "Sunny"])
+        #expect(controls.focusModes == ["AF-S", "AF-C", "AF-F", "MF"])
+        #expect(controls.focusAreas == ["Single"])
+        #expect(controls.focusSubjects == ["Airplane"])
+        #expect(controls.audioSensitivities == ["7"])
+        #expect(controls.audioInputs == ["Line"])
+        #expect(controls.windFilters == ["OFF"])
+        #expect(controls.attenuators == ["ON"])
+        #expect(controls.audio32BitFloat == ["ON"])
+
+        try session.applyAndroidControl(.iris, label: "f/5.6")
+        try session.applyAndroidControl(.whiteBalance, label: "5000K")
+        try session.applyAndroidControl(.focusMode, label: "AF-S")
+        try session.applyAndroidControl(.focusArea, label: "Single")
+        try session.applyAndroidControl(.focusSubject, label: "Airplane")
+        try session.applyAndroidControl(.audioSensitivity, label: "7")
+        try session.applyAndroidControl(.audioInput, label: "Line")
+        try session.applyAndroidControl(.windFilter, label: "OFF")
+        try session.applyAndroidControl(.attenuator, label: "ON")
+        try session.applyAndroidControl(.audio32BitFloat, label: "ON")
+
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFNumber.rawValue,
+                        data: Data(ByteCoding.uint16LE(560))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWhiteBalance.rawValue,
+                        data: Data(ByteCoding.uint16LE(0x8012))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWBColorTemp.rawValue,
+                        data: Data(ByteCoding.uint16LE(5_000))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFocusMode.rawValue,
+                        data: Data([0])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                        data: Data(ByteCoding.uint16LE(0x8010))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieAFSubjectDetection.rawValue,
+                        data: Data([6])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieAudioInputSensitivity.rawValue,
+                        data: Data([7])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.audioInputSelection.rawValue,
+                        data: Data([2])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movWindNoiseReduction.rawValue,
+                        data: Data([0])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieAttenuator.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movie32BitFloatAudioRecording.rawValue,
+                        data: Data([1])),
+                ])
+
+        let rejectedBaseline = server.receivedPropertyWrites().count
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iris", "f/2.8")) {
+            try session.applyAndroidControl(.iris, label: "f/2.8")
+        }
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "audioInput", "Microphone")
+        ) {
+            try session.applyAndroidControl(.audioInput, label: "Microphone")
+        }
+        #expect(server.receivedPropertyWrites().count == rejectedBaseline)
+    }
+
+    @Test func nikonZRFallbacksAreModelScopedAndFailClosedElsewhere() throws {
+        let omittedDescriptors: [PTPPropertyCode: [UInt32]] = [
+            .movieFNumber: [],
+            .movieWBColorTemp: [],
+            .movieWhiteBalance: [],
+            .movieFocusMode: [],
+            .movieFocusMeteringMode: [],
+            .movieAFSubjectDetection: [],
+            .movieAudioInputSensitivity: [],
+            .audioInputSelection: [],
+            .movWindNoiseReduction: [],
+            .movieAttenuator: [],
+            .movie32BitFloatAudioRecording: [],
+            .movieBaseISO: [],
+            .movieVibrationReduction: [],
+            .electronicVR: [],
+        ]
+
+        func controls(model: String) throws -> AndroidCameraControlCapabilities {
+            var options = FakeZRServer.Options()
+            options.model = model
+            options.descriptorEnumOverrides = omittedDescriptors
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+            for property in [
+                PTPPropertyCode.focalLength, .lensFocalMin, .lensFocalMax,
+            ] {
+                _ = session.refreshAndroidPropertySnapshot(.propertyChanged(property.rawValue))
+            }
+            return session.refreshAndroidPropertySnapshot(
+                .propertyChanged(PTPPropertyCode.lensApertureMin.rawValue)
+            ).controls
+        }
+
+        let zr = try controls(model: "ZR")
+        #expect(zr.isoValues == ISOPickerPolicy.highBaseOptions)
+        #expect(!zr.irisValues.isEmpty)
+        #expect(!zr.whiteBalanceValues.isEmpty)
+        #expect(zr.focusModes == ["AF-S", "AF-C", "AF-F", "MF"])
+        #expect(!zr.focusAreas.isEmpty)
+        #expect(!zr.focusSubjects.isEmpty)
+        #expect(!zr.audioSensitivities.isEmpty)
+        #expect(zr.audioInputs == ["Microphone", "Line"])
+        #expect(zr.vibrationReduction == ["OFF", "ON", "SPORT"])
+        #expect(zr.electronicVR == ["OFF", "ON"])
+
+        let z8 = try controls(model: "Z8")
+        #expect(z8.isoValues.isEmpty)
+        #expect(z8.irisValues.isEmpty)
+        #expect(z8.whiteBalanceValues.isEmpty)
+        #expect(z8.focusModes.isEmpty)
+        #expect(z8.focusAreas.isEmpty)
+        #expect(z8.focusSubjects.isEmpty)
+        #expect(z8.audioSensitivities.isEmpty)
+        #expect(z8.audioInputs.isEmpty)
+        #expect(z8.windFilters.isEmpty)
+        #expect(z8.attenuators.isEmpty)
+        #expect(z8.audio32BitFloat.isEmpty)
+        #expect(z8.baseISO.isEmpty)
+        #expect(z8.vibrationReduction.isEmpty)
+        #expect(z8.electronicVR.isEmpty)
+    }
+
+    @Test func isoOptionsTrackTheActiveR3DBaseCircuit() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let high = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(high.isoValues == ISOPickerPolicy.highBaseOptions)
+        let highBaseline = server.receivedPropertyWrites().count
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iso", "800")) {
+            try session.applyAndroidControl(.iso, label: "800")
+        }
+        #expect(server.receivedPropertyWrites().count == highBaseline)
+        try session.applyAndroidControl(.iso, label: "1600")
+        try session.applyAndroidControl(.baseISO, label: "Low")
+
+        let low = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieBaseISO.rawValue)
+        ).controls
+        #expect(low.isoValues == ISOPickerPolicy.lowBaseOptions)
+        let lowBaseline = server.receivedPropertyWrites().count
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iso", "25600")) {
+            try session.applyAndroidControl(.iso, label: "25600")
+        }
+        #expect(server.receivedPropertyWrites().count == lowBaseline)
+        try session.applyAndroidControl(.iso, label: "800")
+    }
+
+    @Test func electronicVRIsRejectedBeforeWritingForRawOrUnknownCodec() throws {
+        let rawServer = try FakeZRServer()
+        defer { rawServer.stop() }
+        let rawSession = try connect(to: rawServer)
+        defer { rawSession.disconnect() }
+        _ = rawSession.refreshAndroidPropertySnapshot(.bootstrap)
+
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("electronicVR", "ON")
+        ) {
+            try rawSession.applyAndroidControl(.electronicVR, label: "ON")
+        }
+        #expect(rawServer.receivedPropertyWrites().isEmpty)
+
+        let unknownServer = try FakeZRServer()
+        defer { unknownServer.stop() }
+        let unknownSession = try connect(to: unknownServer)
+        defer { unknownSession.disconnect() }
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("electronicVR", "ON")
+        ) {
+            try unknownSession.applyAndroidControl(.electronicVR, label: "ON")
+        }
+        #expect(unknownServer.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func kelvinOptionsRequireAnAdvertisedColorTemperatureMode() throws {
+        var options = FakeZRServer.Options()
+        options.descriptorEnumOverrides[.movieWBColorTemp] = [5_000]
+        options.descriptorEnumOverrides[.movieWhiteBalance] = [0x0004]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(controls.whiteBalanceValues == ["Sunny"])
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "whiteBalance", "5000K")
+        ) {
+            try session.applyAndroidControl(.whiteBalance, label: "5000K")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
     @Test func acceptedControlWriteRequiresMatchingAuthoritativeReadback() throws {
         var options = FakeZRServer.Options()
         options.ignoredPropertyWrites = [PTPPropertyCode.movieISOSensitivity.rawValue]
@@ -316,6 +571,7 @@ struct PTPIPClientSessionTests {
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
 
         #expect(
             throws: PTPIPClientSessionError.controlReadbackMismatch("iso", "1600")
@@ -339,7 +595,7 @@ struct PTPIPClientSessionTests {
         let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
         #expect(bootstrap.result == .unsupported)
         #expect(bootstrap.controls.codecs.isEmpty)
-        #expect(bootstrap.controls.electronicVR.isEmpty)
+        #expect(bootstrap.controls.electronicVR == ["OFF", "ON"])
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
         #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
         #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
@@ -381,6 +637,7 @@ struct PTPIPClientSessionTests {
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
 
         try session.applyControl(.whiteBalanceKelvin, label: "5600K")
         try session.startRecording()
@@ -412,6 +669,7 @@ struct PTPIPClientSessionTests {
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
 
         #expect(
             throws: PTPIPClientSessionError.unsupportedAndroidControl("codec", "Unadvertised")
@@ -432,6 +690,7 @@ struct PTPIPClientSessionTests {
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
 
         #expect(
             throws: PTPIPClientSessionError.operationRejected(

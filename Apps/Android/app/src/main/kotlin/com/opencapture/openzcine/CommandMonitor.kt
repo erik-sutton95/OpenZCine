@@ -319,6 +319,21 @@ internal fun commandDashboardPresentation(
             "ISO is locked while recording in R3D NE."
         }
     val capabilities = snapshot.controlCapabilities
+    val isoCapabilityReason =
+        when {
+            recording && isoLockedDuringRecording -> isoLockReason
+            codec == null -> "Waiting for the camera codec before offering ISO values."
+            codec.contains("R3D", ignoreCase = true) && snapshot.baseIso == null ->
+                "Waiting for the active base-ISO circuit."
+            else -> "This camera did not provide ISO values for the active circuit."
+        }
+    val electronicVrWritable = codec != null && !isRawCameraCodec(codec)
+    val electronicVrBlockedReason =
+        when {
+            codec == null -> "Waiting for camera codec readback before enabling electronic VR."
+            isRawCameraCodec(codec) -> "Electronic VR is unavailable in RAW codecs."
+            else -> "This camera did not advertise electronic VR."
+        }
     // The active descriptor changes with the camera's shutter circuit. Never
     // surface the inactive circuit or a local fallback ladder.
     val shutterOptions = capabilities.options(CameraControl.SHUTTER)
@@ -405,14 +420,13 @@ internal fun commandDashboardPresentation(
                     EXPOSURE_MODE_OPTIONS,
                 ),
             CommandTileKind.ISO to
-                editable(
-                    CommandTileKind.ISO,
-                    "ISO",
-                    snapshot.iso?.takeIf { it > 0 }?.toString(),
-                    CameraControl.ISO,
-                    ISO_OPTIONS,
+                advertisedEditable(
+                    kind = CommandTileKind.ISO,
+                    title = "ISO",
+                    value = snapshot.iso?.takeIf { it > 0 }?.toString(),
+                    control = CameraControl.ISO,
                     writable = !isoLockedDuringRecording,
-                    blockedReason = isoLockReason,
+                    blockedReason = isoCapabilityReason,
                 ),
             CommandTileKind.SHUTTER to
                 advertisedEditable(
@@ -424,20 +438,20 @@ internal fun commandDashboardPresentation(
                     writable = shutterWritable,
                 ),
             CommandTileKind.IRIS to
-                editable(
-                    CommandTileKind.IRIS,
-                    "Iris",
-                    snapshot.iris,
-                    CameraControl.IRIS,
-                    IRIS_OPTIONS,
+                advertisedEditable(
+                    kind = CommandTileKind.IRIS,
+                    title = "Iris",
+                    value = snapshot.iris,
+                    control = CameraControl.IRIS,
+                    blockedReason = "This camera did not provide apertures for the mounted lens.",
                 ),
             CommandTileKind.WHITE_BALANCE to
-                editable(
-                    CommandTileKind.WHITE_BALANCE,
-                    "White Bal",
-                    whiteBalance,
-                    CameraControl.WHITE_BALANCE,
-                    WHITE_BALANCE_OPTIONS,
+                advertisedEditable(
+                    kind = CommandTileKind.WHITE_BALANCE,
+                    title = "White Bal",
+                    value = whiteBalance,
+                    control = CameraControl.WHITE_BALANCE,
+                    blockedReason = "This camera did not provide white-balance choices.",
                 ),
             CommandTileKind.RESOLUTION_FRAMERATE to
                 advertisedEditable(
@@ -466,36 +480,32 @@ internal fun commandDashboardPresentation(
         )
     val focusCells =
         listOf(
-            editable(
-                null,
-                "Mode",
-                snapshot.focusMode,
-                CameraControl.FOCUS_MODE,
-                FOCUS_MODE_OPTIONS,
+            advertisedEditable(
+                title = "Mode",
+                value = snapshot.focusMode,
+                control = CameraControl.FOCUS_MODE,
+                blockedReason = "This camera did not provide movie focus modes.",
             ),
-            editable(
-                null,
-                "Area",
-                snapshot.focusArea,
-                CameraControl.FOCUS_AREA,
-                FOCUS_AREA_OPTIONS,
+            advertisedEditable(
+                title = "Area",
+                value = snapshot.focusArea,
+                control = CameraControl.FOCUS_AREA,
+                blockedReason = "This camera did not provide movie focus areas.",
             ),
-            editable(
-                null,
-                "Subject",
-                snapshot.focusSubject,
-                CameraControl.FOCUS_SUBJECT,
-                FOCUS_SUBJECT_OPTIONS,
+            advertisedEditable(
+                title = "Subject",
+                value = snapshot.focusSubject,
+                control = CameraControl.FOCUS_SUBJECT,
+                blockedReason = "This camera did not provide focus-subject modes.",
             ),
         )
     val audioSensitivityCell =
         if (snapshot.audioSensitivity.monitorValueOrNull() != null) {
-            editable(
-                null,
-                "Sens",
-                snapshot.audioSensitivity,
-                CameraControl.AUDIO_SENSITIVITY,
-                AUDIO_SENSITIVITY_OPTIONS,
+            advertisedEditable(
+                title = "Sens",
+                value = snapshot.audioSensitivity,
+                control = CameraControl.AUDIO_SENSITIVITY,
+                blockedReason = "This camera did not provide audio-sensitivity choices.",
             )
         } else {
             readOnly(
@@ -507,33 +517,29 @@ internal fun commandDashboardPresentation(
     val audioCells =
         listOf(
             audioSensitivityCell,
-            editable(
-                null,
-                "Input",
-                snapshot.audioInput,
-                CameraControl.AUDIO_INPUT,
-                AUDIO_INPUT_OPTIONS,
+            advertisedEditable(
+                title = "Input",
+                value = snapshot.audioInput,
+                control = CameraControl.AUDIO_INPUT,
+                blockedReason = "This camera did not provide audio-input choices.",
             ),
-            editable(
-                null,
-                "Wind",
-                snapshot.windFilter,
-                CameraControl.WIND_FILTER,
-                ON_OFF_OPTIONS,
+            advertisedEditable(
+                title = "Wind",
+                value = snapshot.windFilter,
+                control = CameraControl.WIND_FILTER,
+                blockedReason = "This camera did not advertise a wind-filter control.",
             ),
-            editable(
-                null,
-                "Atten",
-                snapshot.inputAttenuator,
-                CameraControl.ATTENUATOR,
-                ON_OFF_OPTIONS,
+            advertisedEditable(
+                title = "Atten",
+                value = snapshot.inputAttenuator,
+                control = CameraControl.ATTENUATOR,
+                blockedReason = "This camera did not advertise an input attenuator.",
             ),
-            editable(
-                null,
-                "32-bit Float",
-                snapshot.audio32BitFloat,
-                CameraControl.AUDIO_32_BIT_FLOAT,
-                ON_OFF_OPTIONS,
+            advertisedEditable(
+                title = "32-bit Float",
+                value = snapshot.audio32BitFloat,
+                control = CameraControl.AUDIO_32_BIT_FLOAT,
+                blockedReason = "This camera did not advertise 32-bit-float audio.",
             ),
         )
 
@@ -606,7 +612,8 @@ internal fun commandDashboardPresentation(
                             title = "e-VR",
                             value = snapshot.electronicVr,
                             control = CameraControl.ELECTRONIC_VR,
-                            blockedReason = "This camera did not advertise electronic VR.",
+                            blockedReason = electronicVrBlockedReason,
+                            writable = electronicVrWritable,
                         ),
                     ),
                 ),
@@ -708,35 +715,16 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.ELECTRONIC_VR -> snapshot.electronicVr == label
     }
 
+/** Mirrors the shared core's RAW-family gate without moving codec parsing into Compose. */
+internal fun isRawCameraCodec(codec: String): Boolean {
+    val normalized = codec.uppercase()
+    return normalized.contains("RAW") || normalized.contains("R3D")
+}
+
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
 private const val COLOR_TEMPERATURE_MODE = "Color temp"
 
-private val ISO_OPTIONS =
-    listOf(
-        "200", "250", "320", "400", "500", "640", "800", "1000", "1250", "1600",
-        "2000", "2500", "3200", "4000", "5000", "6400", "8000", "10000", "12800",
-        "16000", "20000", "25600",
-    )
-
-private val IRIS_OPTIONS =
-    listOf("f/1.4", "f/2.0", "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0")
-
-private val WHITE_BALANCE_OPTIONS =
-    listOf(
-        "3200K", "4300K", "5400K", "5500K", "5600K", "5700K", "6500K", "Auto",
-        "Natural auto", "Sunny", "Cloudy", "Shade", "Incandescent", "Fluorescent", "Flash",
-        "Preset",
-    )
-
 private val EXPOSURE_MODE_OPTIONS = listOf("Auto", "P", "A", "S", "M", "U1", "U2", "U3")
-private val FOCUS_MODE_OPTIONS = listOf("AF-S", "AF-C", "AF-F", "MF")
-private val FOCUS_AREA_OPTIONS =
-    listOf("Single", "Auto", "Wide-S", "Wide-L", "Wide-C1", "Wide-C2", "Subject")
-private val FOCUS_SUBJECT_OPTIONS =
-    listOf("Off", "Auto", "People", "Animal", "Vehicle", "Bird", "Airplane")
-private val AUDIO_SENSITIVITY_OPTIONS = listOf("Auto") + (1..20).map(Int::toString)
-private val AUDIO_INPUT_OPTIONS = listOf("Microphone", "Line")
-private val ON_OFF_OPTIONS = listOf("OFF", "ON")
 
 /**
  * The DISP 3 command dashboard: camera-backed health and primary controls at
