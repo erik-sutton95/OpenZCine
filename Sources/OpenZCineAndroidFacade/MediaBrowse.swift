@@ -349,6 +349,16 @@ extension PTPIPClientSession {
     /// `GetStorageInfo`. `nil` means no card answered, not a fabricated empty
     /// storage value.
     public func readStorageInfo() throws -> PTPStorageInfo? {
+        try readAllStorageInfo().first?.info
+    }
+
+    /// Reads every camera slot that reports valid capacity data.
+    ///
+    /// Results retain the camera-advertised order after duplicate and
+    /// placeholder IDs are removed. A rejected or malformed individual slot
+    /// is skipped without preventing a later card from being exposed.
+    public func readAllStorageInfo() throws -> [(id: UInt32, info: PTPStorageInfo)] {
+        var slots: [(id: UInt32, info: PTPStorageInfo)] = []
         for storageID in try usableStorageIDs() {
             let result = try executeTransaction(
                 .getStorageInfo, parameters: [storageID], dataPhase: .dataIn)
@@ -357,9 +367,9 @@ extension PTPIPClientSession {
             else {
                 continue
             }
-            return info
+            slots.append((storageID, info))
         }
-        return nil
+        return slots
     }
 
     /// Starts a stable, incremental media enumeration across every usable card.

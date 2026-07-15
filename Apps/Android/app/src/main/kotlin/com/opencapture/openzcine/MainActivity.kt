@@ -564,6 +564,7 @@ class MainActivity : ComponentActivity() {
                                             currentSessionState is CameraSessionState.Connected,
                                         savedCameraID = activeSavedCamera?.id,
                                         cameraDisplayName = activeSavedCamera?.displayTitle,
+                                        cameraStorageSlots = currentCameraProperties.storageSlots,
                                         liveAssistState = assist,
                                         exposureAssistCameraInput = playbackExposureAssistCameraInput,
                                         operatorSettings = operatorSettings,

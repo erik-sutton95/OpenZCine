@@ -75,10 +75,17 @@ internal data class MediaLibraryFilters(
     fun retainingAvailableStorage(
         source: MediaLibrarySource,
         clips: List<MediaClipRecord>,
+    ): MediaLibraryFilters =
+        retainingAvailableStorage(source, clips.mapTo(linkedSetOf(), MediaClipRecord::storageId))
+
+    /** Drops a stale card selection against the authoritative connected-card generation. */
+    fun retainingAvailableStorage(
+        source: MediaLibrarySource,
+        availableStorageIds: Set<Long>,
     ): MediaLibraryFilters {
         val selected = storageId ?: return this
         val remainsAvailable =
-            source == MediaLibrarySource.CAMERA && clips.any { clip -> clip.storageId == selected }
+            source == MediaLibrarySource.CAMERA && selected in availableStorageIds
         return if (remainsAvailable) this else copy(storageId = null)
     }
 }

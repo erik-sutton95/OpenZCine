@@ -340,6 +340,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// media ownership, or teardown.
     private var androidPropertySnapshot = PTPCameraPropertySnapshot()
     private var androidStorageInfo: PTPStorageInfo?
+    private var androidStorageSlots: [AndroidCameraStorageSlot] = []
     private var androidControlCatalog = AndroidRawControlCatalog()
     private var androidWhiteBalanceTint: String?
     private var androidPropertyPollIndex = 0
@@ -882,11 +883,22 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
-    /// Refreshes active-card capacity at the shared core's slow storage cadence.
+    /// Refreshes every valid card at the shared core's slow storage cadence.
     private func refreshAndroidStorage() -> AndroidCameraPropertyRefreshResult {
         do {
-            guard let storage = try readStorageInfo() else { return .unsupported }
-            androidStorageInfo = storage
+            let slots = try readAllStorageInfo().enumerated().map { index, slot in
+                AndroidCameraStorageSlot(
+                    storageID: slot.id,
+                    slotNumber: index + 1,
+                    storage: slot.info)
+            }
+            guard !slots.isEmpty else {
+                androidStorageInfo = nil
+                androidStorageSlots = []
+                return .unsupported
+            }
+            androidStorageSlots = slots
+            androidStorageInfo = slots.first?.storage
             androidLastStorageRefreshAt = Date()
             return .accepted
         } catch let error as PTPIPClientSessionError {
@@ -1367,6 +1379,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             result: result,
             properties: androidPropertySnapshot,
             storage: androidStorageInfo,
+            storageSlots: androidStorageSlots,
             controls: androidControlCatalog.capabilities(
                 properties: androidPropertySnapshot,
                 whiteBalanceTint: androidWhiteBalanceTint,

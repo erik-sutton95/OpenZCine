@@ -43,6 +43,13 @@ struct FakeZRPropertyWrite: Equatable {
     let data: Data
 }
 
+/// One recording card exposed by the scripted camera's storage operations.
+struct FakeZRStorageCard: Equatable, Sendable {
+    let storageID: UInt32
+    let totalCapacityBytes: UInt64
+    let freeSpaceBytes: UInt64
+}
+
 /// A scripted fake ZR listening on an ephemeral localhost port.
 // SAFETY: `@unchecked Sendable` — mutable state is guarded by `lock`; each
 // accepted connection runs on its own thread.
@@ -93,10 +100,13 @@ final class FakeZRServer: @unchecked Sendable {
         var shortPropertyCodesAfterFirstRead: Set<UInt32> = []
         /// Deterministic command-response latency used to prove RTT is measured, not synthesized.
         var commandResponseDelayMilliseconds: UInt64 = 0
-        /// Active-card capacity exposed by `GetStorageInfo` for monitor state tests.
-        var storageTotalCapacityBytes: UInt64 = 1_000_000_000_000
-        /// Active-card free capacity exposed by `GetStorageInfo` for monitor state tests.
-        var storageFreeSpaceBytes: UInt64 = 500_000_000_000
+        /// Ordered recording cards exposed by both storage-ID operations.
+        var storageCards: [FakeZRStorageCard] = [
+            FakeZRStorageCard(
+                storageID: FakeZRMediaCard.storageID,
+                totalCapacityBytes: 1_000_000_000_000,
+                freeSpaceBytes: 500_000_000_000)
+        ]
         var manufacturer = "Nikon Corporation"
         var model = "ZR"
         var deviceVersion = "01.00"
@@ -579,20 +589,21 @@ final class FakeZRServer: @unchecked Sendable {
                 connection, data: liveViewObject(frameIndex: frameIndex, isRecording: isRecording),
                 transactionID: transactionID)
         case .getVendorStorageIDs, .getStorageIDs:
-            // One valid volume (both ops report the same card, like a
-            // single-card body).
-            let payload = ByteCoding.uint32LE(1) + ByteCoding.uint32LE(FakeZRMediaCard.storageID)
+            var payload = ByteCoding.uint32LE(UInt32(options.storageCards.count))
+            for card in options.storageCards {
+                payload += ByteCoding.uint32LE(card.storageID)
+            }
             sendDataIn(connection, data: Data(payload), transactionID: transactionID)
         case .getStorageInfo:
             let storageID = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
-            guard storageID == FakeZRMediaCard.storageID else {
+            guard let card = options.storageCards.first(where: { $0.storageID == storageID }) else {
                 // Invalid_StorageID.
                 sendResponse(connection, code: 0x2008, transactionID: transactionID)
                 return
             }
             sendDataIn(
                 connection,
-                data: storageInfoDataset(),
+                data: storageInfoDataset(card),
                 transactionID: transactionID)
         case .getObjectHandles:
             if options.disconnectsOnGetObjectHandles {
@@ -600,13 +611,14 @@ final class FakeZRServer: @unchecked Sendable {
                 return
             }
             let storageID = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
-            guard storageID == FakeZRMediaCard.storageID else {
+            guard options.storageCards.contains(where: { $0.storageID == storageID }) else {
                 // Invalid_StorageID.
                 sendResponse(connection, code: 0x2008, transactionID: transactionID)
                 return
             }
-            var payload = ByteCoding.uint32LE(UInt32(options.mediaObjects.count))
-            for object in options.mediaObjects {
+            let objects = storageID == FakeZRMediaCard.storageID ? options.mediaObjects : []
+            var payload = ByteCoding.uint32LE(UInt32(objects.count))
+            for object in objects {
                 payload += ByteCoding.uint32LE(object.handle)
             }
             sendDataIn(connection, data: Data(payload), transactionID: transactionID)
@@ -1044,10 +1056,10 @@ final class FakeZRServer: @unchecked Sendable {
 
     /// Minimal PIMA `StorageInfo` record: three UINT16 headers followed by
     /// total/free UINT64 values. The parser needs only the first 22 bytes.
-    private func storageInfoDataset() -> Data {
+    private func storageInfoDataset(_ card: FakeZRStorageCard) -> Data {
         var bytes = [UInt8](repeating: 0, count: 6)
-        bytes += ByteCoding.uint64LE(options.storageTotalCapacityBytes)
-        bytes += ByteCoding.uint64LE(options.storageFreeSpaceBytes)
+        bytes += ByteCoding.uint64LE(card.totalCapacityBytes)
+        bytes += ByteCoding.uint64LE(card.freeSpaceBytes)
         return Data(bytes)
     }
 

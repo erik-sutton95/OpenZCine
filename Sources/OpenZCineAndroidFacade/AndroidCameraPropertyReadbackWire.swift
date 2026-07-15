@@ -135,6 +135,23 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
     public static let empty = AndroidCameraControlCapabilities()
 }
 
+/// One camera card decoded by Swift and exposed to the Android shell.
+public struct AndroidCameraStorageSlot: Equatable, Sendable {
+    /// Authoritative PTP storage identifier used by media-object records.
+    public let storageID: UInt32
+    /// One-based display order after unusable camera storage IDs are removed.
+    public let slotNumber: Int
+    /// Capacity and free-space data decoded by the shared core.
+    public let storage: PTPStorageInfo
+
+    /// Creates one ordered semantic storage-slot record for Android.
+    public init(storageID: UInt32, slotNumber: Int, storage: PTPStorageInfo) {
+        self.storageID = storageID
+        self.slotNumber = slotNumber
+        self.storage = storage
+    }
+}
+
 /// Swift-owned decoded state returned to the Android shell after one refresh.
 ///
 /// This keeps `PTPCameraPropertySnapshot` and `PTPStorageInfo` as the only
@@ -147,6 +164,8 @@ public struct AndroidCameraPropertyReadback: Equatable, Sendable {
     public let properties: PTPCameraPropertySnapshot
     /// Current active-card storage state when it has been read successfully.
     public let storage: PTPStorageInfo?
+    /// Every valid camera card in camera-advertised order.
+    public let storageSlots: [AndroidCameraStorageSlot]
     /// Camera-advertised control labels backed by exact raw values retained in Swift.
     public let controls: AndroidCameraControlCapabilities
 
@@ -155,11 +174,13 @@ public struct AndroidCameraPropertyReadback: Equatable, Sendable {
         result: AndroidCameraPropertyRefreshResult,
         properties: PTPCameraPropertySnapshot,
         storage: PTPStorageInfo?,
+        storageSlots: [AndroidCameraStorageSlot] = [],
         controls: AndroidCameraControlCapabilities = .empty
     ) {
         self.result = result
         self.properties = properties
         self.storage = storage
+        self.storageSlots = storageSlots
         self.controls = controls
     }
 }
@@ -204,11 +225,13 @@ public enum AndroidCameraPropertyReadbackWire {
             to: &fields)
         if let storage = readback.storage,
             let totalCapacity = Int64(exactly: storage.totalCapacityBytes),
-            let freeSpace = Int64(exactly: storage.freeSpaceBytes)
+            let freeSpace = Int64(exactly: storage.freeSpaceBytes),
+            totalCapacity == 0 || freeSpace <= totalCapacity
         {
             append("storageTotalCapacityBytes", value: String(totalCapacity), to: &fields)
             append("storageFreeSpaceBytes", value: String(freeSpace), to: &fields)
         }
+        appendStorageSlots(readback.storageSlots, to: &fields)
         append("lens", value: properties.lens, to: &fields)
         append("focalLength", value: properties.focalLength, to: &fields)
         append("focusMode", value: properties.focusMode, to: &fields)
@@ -257,6 +280,37 @@ public enum AndroidCameraPropertyReadbackWire {
     }
 
     private static let optionSeparator = "\u{1F}"
+    private static let maximumStorageSlotCount = 32
+
+    /// Adds one atomic, indexed slot generation. Invalid native values omit the
+    /// generation instead of publishing a partial list that Kotlin could
+    /// mistake for the camera's complete card order.
+    private static func appendStorageSlots(
+        _ slots: [AndroidCameraStorageSlot],
+        to fields: inout [(key: String, value: String)]
+    ) {
+        guard slots.count <= maximumStorageSlotCount else { return }
+        var encoded: [(key: String, value: String)] = []
+        var seen = Set<UInt32>()
+        for (index, slot) in slots.enumerated() {
+            let storage = slot.storage
+            guard slot.slotNumber == index + 1,
+                slot.storageID != 0,
+                slot.storageID != UInt32.max,
+                seen.insert(slot.storageID).inserted,
+                let totalCapacity = Int64(exactly: storage.totalCapacityBytes),
+                let freeSpace = Int64(exactly: storage.freeSpaceBytes),
+                totalCapacity == 0 || freeSpace <= totalCapacity
+            else { return }
+            let prefix = "storageSlot.\(index)"
+            encoded.append(("\(prefix).storageId", String(slot.storageID)))
+            encoded.append(("\(prefix).slotNumber", String(slot.slotNumber)))
+            encoded.append(("\(prefix).totalCapacityBytes", String(totalCapacity)))
+            encoded.append(("\(prefix).freeSpaceBytes", String(freeSpace)))
+        }
+        append("storageSlotCount", value: String(slots.count), to: &fields)
+        fields.append(contentsOf: encoded)
+    }
 
     private static func appendOptions(
         _ key: String,

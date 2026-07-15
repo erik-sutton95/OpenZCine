@@ -248,8 +248,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   unsupported HEIF/RAW decoders). Android playback-assist parity is tracked by OPE-69.
 - **Android media-library delivery parity** (OPE-87, in progress): the browser persists small,
   medium, and large grid densities and composes container, resolution, Today, and camera-slot
-  filters from authoritative clip metadata. Paired proxies retain their R3D source dimensions before
-  the master is hidden, with proxy-pixel and filename fallbacks matching the shared policy. Saved
+  filters from authoritative clip metadata. Connected camera browsing also shows every valid card's
+  Swift-decoded free/total capacity in camera order; those cards select the same storage-ID filter
+  and disappear for local or disconnected sources. Paired proxies retain their R3D source dimensions
+  before the master is hidden, with proxy-pixel and filename fallbacks matching the shared policy. Saved
   camera cards expose only validated complete cache buckets, so clips and stills remain browsable,
   playable, favoritable, and deliverable without a live session; stale cache files fail closed and
   the persisted index no longer drops history at 1,024 records. Native Share, Save to Gallery, and

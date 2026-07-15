@@ -71,6 +71,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
@@ -79,6 +80,7 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,6 +91,7 @@ import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FilmGlyph
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
@@ -102,6 +105,7 @@ import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.lut.AndroidLutLibrary
+import com.opencapture.openzcine.core.CameraStorageSlotStatus
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -412,6 +416,7 @@ internal fun MediaBrowseScreen(
     cameraSessionAvailable: Boolean = true,
     savedCameraID: String? = null,
     cameraDisplayName: String? = null,
+    cameraStorageSlots: List<CameraStorageSlotStatus> = emptyList(),
     liveAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
@@ -515,6 +520,16 @@ internal fun MediaBrowseScreen(
         nativeDeliveryPresented = false
     }
 
+    fun updateFilters(updated: MediaLibraryFilters) {
+        filters = updated
+        isSelecting = false
+        selectedIDs = emptySet()
+    }
+
+    fun toggleStorageSlot(storageId: Long) {
+        updateFilters(filters.togglingStorageSlot(storageId))
+    }
+
     fun exitSelection() {
         isSelecting = false
         selectedIDs = emptySet()
@@ -606,9 +621,20 @@ internal fun MediaBrowseScreen(
     }
 
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
-    LaunchedEffect(cameraID, options.source, state) {
+    val visibleStorageSlots =
+        mediaStorageSlotPresentations(
+            source = options.source,
+            cameraConnected = cameraConnected,
+            cameraSessionAvailable = cameraSessionAvailable,
+            slots = cameraStorageSlots,
+        )
+    LaunchedEffect(cameraID, options.source, state, visibleStorageSlots) {
         if (state !is BrowseState.Loaded) return@LaunchedEffect
-        val retained = filters.retainingAvailableStorage(options.source, loadedClips)
+        val retained =
+            filters.retainingAvailableStorage(
+                options.source,
+                visibleStorageSlots.mapTo(linkedSetOf(), MediaStorageSlotPresentation::storageId),
+            )
         if (retained != filters) filters = retained
     }
     val displayedClips =
@@ -1040,6 +1066,15 @@ internal fun MediaBrowseScreen(
                         modifier = Modifier.padding(start = 45.dp),
                         onSelect = { category -> updateOptions(options.copy(category = category)) },
                     )
+                    if (visibleStorageSlots.isNotEmpty()) {
+                        MediaStorageSlotSelector(
+                            slots = visibleStorageSlots,
+                            selectedStorageId = filters.storageId,
+                            horizontal = true,
+                            onSelect = ::toggleStorageSlot,
+                            modifier = Modifier.padding(start = 45.dp),
+                        )
+                    }
                     MediaLibraryHeader(
                         state = state,
                         category = options.category,
@@ -1099,8 +1134,11 @@ internal fun MediaBrowseScreen(
                     MediaLibraryRail(
                         source = options.source,
                         category = options.category,
+                        storageSlots = visibleStorageSlots,
+                        selectedStorageId = filters.storageId,
                         onSourceChange = { source -> updateOptions(options.copy(source = source)) },
                         onCategoryChange = { category -> updateOptions(options.copy(category = category)) },
+                        onStorageSelect = ::toggleStorageSlot,
                         modifier = Modifier.width(164.dp),
                     )
                     Column(
@@ -1197,19 +1235,8 @@ internal fun MediaBrowseScreen(
         if (filterDialogPresented) {
             MediaFilterDialog(
                 filters = filters,
-                storageIds =
-                    if (options.source == MediaLibrarySource.CAMERA) {
-                        // MediaBrowse.swift enumerates usable storage IDs in camera order;
-                        // preserve that order so Slot 1/2 never comes from numeric guessing.
-                        loadedClips.map(MediaClipRecord::storageId).distinct()
-                    } else {
-                        emptyList()
-                    },
-                onFiltersChanged = { updated ->
-                    filters = updated
-                    isSelecting = false
-                    selectedIDs = emptySet()
-                },
+                storageIds = visibleStorageSlots.map(MediaStorageSlotPresentation::storageId),
+                onFiltersChanged = ::updateFilters,
                 onDismiss = { filterDialogPresented = false },
             )
         }
@@ -1330,13 +1357,115 @@ private fun MediaCategoryStrip(
     }
 }
 
+/** Ordered, selectable capacity cards shared by portrait and landscape media layouts. */
+@Composable
+internal fun MediaStorageSlotSelector(
+    slots: List<MediaStorageSlotPresentation>,
+    selectedStorageId: Long?,
+    horizontal: Boolean,
+    onSelect: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (slots.isEmpty()) return
+    if (horizontal) {
+        Row(
+            modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            slots.forEach { slot ->
+                MediaStorageSlotCard(
+                    slot = slot,
+                    active = selectedStorageId == slot.storageId,
+                    horizontal = true,
+                    onClick = { onSelect(slot.storageId) },
+                )
+            }
+        }
+    } else {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            slots.forEach { slot ->
+                MediaStorageSlotCard(
+                    slot = slot,
+                    active = selectedStorageId == slot.storageId,
+                    horizontal = false,
+                    onClick = { onSelect(slot.storageId) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaStorageSlotCard(
+    slot: MediaStorageSlotPresentation,
+    active: Boolean,
+    horizontal: Boolean,
+    onClick: () -> Unit,
+) {
+    val label = stringResource(R.string.media_storage_slot_label, slot.slotNumber)
+    val summary =
+        if (slot.totalGigabytes > 0) {
+            stringResource(
+                R.string.media_storage_slot_summary,
+                slot.freeGigabytes,
+                slot.totalGigabytes,
+            )
+        } else {
+            stringResource(R.string.media_storage_slot_summary_unknown_total, slot.freeGigabytes)
+        }
+    val description =
+        stringResource(
+            if (active) {
+                R.string.media_storage_slot_filter_selected_description
+            } else {
+                R.string.media_storage_slot_filter_description
+            },
+            slot.slotNumber,
+            summary,
+        )
+    val shape = RoundedCornerShape(8.dp)
+    Column(
+        Modifier.then(if (horizontal) Modifier.width(154.dp) else Modifier.fillMaxWidth())
+            .heightIn(min = 48.dp)
+            .clip(shape)
+            .background(if (active) LiveDesign.accentDim else LiveDesign.surface.copy(alpha = 0.55f))
+            .border(
+                1.dp,
+                if (active) LiveDesign.accent.copy(alpha = 0.5f) else LiveDesign.hairline,
+                shape,
+            ).semantics {
+                contentDescription = description
+                role = Role.RadioButton
+                selected = active
+            }.chromeClickable(onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            label,
+            style = chromeStyle(11f, FontWeight.SemiBold, mono = true),
+            color = if (active) LiveDesign.accent else LiveDesign.text,
+            maxLines = 1,
+        )
+        Text(
+            summary,
+            style = chromeStyle(9f, FontWeight.Medium, mono = true),
+            color = LiveDesign.muted,
+            maxLines = 1,
+        )
+    }
+}
+
 /** Landscape navigation rail. */
 @Composable
 private fun MediaLibraryRail(
     source: MediaLibrarySource,
     category: MediaLibraryCategory,
+    storageSlots: List<MediaStorageSlotPresentation>,
+    selectedStorageId: Long?,
     onSourceChange: (MediaLibrarySource) -> Unit,
     onCategoryChange: (MediaLibraryCategory) -> Unit,
+    onStorageSelect: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1366,6 +1495,15 @@ private fun MediaLibraryRail(
                 category = candidate,
                 active = candidate == category,
                 onClick = { onCategoryChange(candidate) },
+            )
+        }
+        if (storageSlots.isNotEmpty()) {
+            Spacer(Modifier.heightIn(min = 2.dp))
+            MediaStorageSlotSelector(
+                slots = storageSlots,
+                selectedStorageId = selectedStorageId,
+                horizontal = false,
+                onSelect = onStorageSelect,
             )
         }
     }

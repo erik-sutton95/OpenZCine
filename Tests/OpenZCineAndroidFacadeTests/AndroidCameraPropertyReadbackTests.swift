@@ -31,6 +31,8 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(bootstrap.properties.warningRaw == 0)
         #expect(bootstrap.storage?.totalCapacityBytes == 1_000_000_000_000)
         #expect(bootstrap.storage?.freeSpaceBytes == 500_000_000_000)
+        #expect(bootstrap.storageSlots.map(\.storageID) == [FakeZRMediaCard.storageID])
+        #expect(bootstrap.storageSlots.map(\.slotNumber) == [1])
         #expect(bootstrap.controls.resolutionFrameRate == "6K · 25p")
         #expect(bootstrap.controls.codec == "R3D NE")
         #expect(bootstrap.controls.whiteBalanceTint == "Neutral")
@@ -102,6 +104,9 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["temperatureStatus"] == "OK")
         #expect(fields["lens"] == "24-70mm f/2.8")
         #expect(fields["storageFreeSpaceBytes"] != nil)
+        #expect(fields["storageSlotCount"] == "1")
+        #expect(fields["storageSlot.0.storageId"] == String(FakeZRMediaCard.storageID))
+        #expect(fields["storageSlot.0.slotNumber"] == "1")
         #expect(fields["resolutionFrameRate"] == "6K · 25p")
         #expect(fields["codecSelection"] == "R3D NE")
         #expect(fields["tone"] == "Log3G10")
@@ -114,6 +119,60 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["options.shutter"] == "90°\u{1F}180°\u{1F}360°")
         #expect(fields["options.codec"] == "R3D NE\u{1F}H.265")
         #expect(!wire.contains("D09E"))
+    }
+
+    @Test func bootstrapPreservesEveryValidCardInCameraOrder() throws {
+        let secondStorageID: UInt32 = 0x0002_0001
+        var options = FakeZRServer.Options()
+        options.storageCards = [
+            FakeZRStorageCard(
+                storageID: FakeZRMediaCard.storageID,
+                totalCapacityBytes: 954_000_000_000,
+                freeSpaceBytes: 242_000_000_000),
+            FakeZRStorageCard(
+                storageID: secondStorageID,
+                totalCapacityBytes: 512_000_000_000,
+                freeSpaceBytes: 111_000_000_000),
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        #expect(bootstrap.result == .accepted)
+        #expect(bootstrap.storage?.totalCapacityBytes == 954_000_000_000)
+        #expect(bootstrap.storage?.freeSpaceBytes == 242_000_000_000)
+        #expect(
+            bootstrap.storageSlots.map(\.storageID) == [FakeZRMediaCard.storageID, secondStorageID])
+        #expect(bootstrap.storageSlots.map(\.slotNumber) == [1, 2])
+        #expect(
+            bootstrap.storageSlots.map(\.storage.totalCapacityBytes) == [
+                954_000_000_000, 512_000_000_000,
+            ])
+        #expect(
+            bootstrap.storageSlots.map(\.storage.freeSpaceBytes) == [
+                242_000_000_000, 111_000_000_000,
+            ])
+
+        let storageReads =
+            server.receivedRequests().filter { $0.operation == .getStorageInfo }
+        #expect(
+            storageReads.compactMap(\.parameters.first) == [
+                FakeZRMediaCard.storageID, secondStorageID,
+            ])
+
+        let fields = wireFields(AndroidCameraPropertyReadbackWire.encode(bootstrap))
+        #expect(fields["storageSlotCount"] == "2")
+        #expect(fields["storageSlot.0.storageId"] == String(FakeZRMediaCard.storageID))
+        #expect(fields["storageSlot.0.slotNumber"] == "1")
+        #expect(fields["storageSlot.0.totalCapacityBytes"] == "954000000000")
+        #expect(fields["storageSlot.0.freeSpaceBytes"] == "242000000000")
+        #expect(fields["storageSlot.1.storageId"] == String(secondStorageID))
+        #expect(fields["storageSlot.1.slotNumber"] == "2")
+        #expect(fields["storageSlot.1.totalCapacityBytes"] == "512000000000")
+        #expect(fields["storageSlot.1.freeSpaceBytes"] == "111000000000")
     }
 
     @Test func unsupportedAndMediaOwnedReadbacksRemainNonTerminal() throws {

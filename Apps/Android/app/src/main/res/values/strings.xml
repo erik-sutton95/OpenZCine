@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenZCine</string>
+    <string name="media_storage_slot_label">Slot %1$d</string>
+    <string name="media_storage_slot_summary">%1$dGB / %2$dGB free</string>
+    <string name="media_storage_slot_summary_unknown_total">%1$dGB free</string>
+    <string name="media_storage_slot_filter_description">Filter media by Slot %1$d, %2$s</string>
+    <string name="media_storage_slot_filter_selected_description">Slot %1$d filter selected, %2$s</string>
 </resources>

@@ -157,6 +157,18 @@ public data class CameraStorageStatus(
     val freeSpaceBytes: Long,
 )
 
+/** Capacity and identity for one connected camera recording card. */
+public data class CameraStorageSlotStatus(
+    /** Authoritative unsigned PTP StorageID represented exactly in a Kotlin [Long]. */
+    val storageId: Long,
+    /** One-based camera order after unusable storage IDs are removed. */
+    val slotNumber: Int,
+    /** Total capacity in bytes, or zero only when the camera explicitly reports it as unknown. */
+    val totalCapacityBytes: Long,
+    /** Currently free capacity in bytes. */
+    val freeSpaceBytes: Long,
+)
+
 /**
  * Swift-authorized control labels whose protocol values remain in the native session.
  *
@@ -286,6 +298,8 @@ public data class CameraPropertySnapshot(
     val temperatureStatus: CameraTemperatureStatus? = null,
     /** Current recording-card capacity/free-space readback. */
     val storage: CameraStorageStatus? = null,
+    /** Every valid recording card in camera-advertised order. */
+    val storageSlots: List<CameraStorageSlotStatus> = emptyList(),
     /** Derived mounted-lens description when sufficient lens properties are available. */
     val lens: String? = null,
     /** Current focal-length label. */
