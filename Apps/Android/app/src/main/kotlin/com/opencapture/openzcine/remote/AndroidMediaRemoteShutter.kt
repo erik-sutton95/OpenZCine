@@ -38,7 +38,6 @@ public class AndroidMediaRemoteShutter(context: Context) {
     private var closed: Boolean = false
     private val mediaSession: MediaSession =
         MediaSession(context.applicationContext, SESSION_TAG).apply {
-            setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS)
             setCallback(
                 object : MediaSession.Callback() {
                     override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
