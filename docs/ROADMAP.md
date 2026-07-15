@@ -125,6 +125,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   device-tilt fallback when a frame has no reliable camera level (direct gravity sensor
   where available; normalized low-pass accelerometer approximation otherwise). Physical Nikon validation
   remains required; debug-fixture metadata is never presented as camera data.
+- **Android monitor feed texture parity** (OPE-72, to do) — mirror iOS's feed-local vignette and
+  deterministic static grain after the camera frame/effect pipeline, clipped to the visible image
+  without affecting clean-source analysis, framing/focus/horizon geometry, or monitor chrome.
 - **Android custom and RED LUT library parity** (to do) — operator-authorized `.cube` import,
   app-private stored selections, and a RED IPP2 terms/download flow with internet and camera-AP
   safeguards; non-redistributable LUT assets are never bundled or committed.
