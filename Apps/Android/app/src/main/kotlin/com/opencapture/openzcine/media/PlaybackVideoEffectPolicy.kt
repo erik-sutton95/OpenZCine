@@ -1,3 +1,5 @@
+@file:androidx.media3.common.util.UnstableApi
+
 package com.opencapture.openzcine.media
 
 import androidx.media3.common.C
