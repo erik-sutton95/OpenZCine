@@ -479,6 +479,7 @@ fun AssistToolbar(
     state: AssistState,
     modifier: Modifier = Modifier,
     visibleTools: List<AssistTool> = AssistTool.entries.toList(),
+    imageEffectsAvailable: Boolean = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable,
     framingConfiguration: LocalFramingAssistConfiguration? = null,
     onToggleFramingTool: (AssistTool) -> Unit = {},
     hapticsEnabled: Boolean = true,
@@ -487,7 +488,7 @@ fun AssistToolbar(
     onScopeLimitReached: () -> Unit = {},
 ) {
     val supportedTools =
-        if (Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable) {
+        if (imageEffectsAvailable) {
             visibleTools
         } else {
             visibleTools.filterNot { it in imageEffectTools }

@@ -7,37 +7,12 @@ import android.graphics.Paint
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.graphics.Shader
-import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import java.nio.ByteBuffer
-import java.util.LinkedHashMap
-
-private const val TAG = "ZCFeedEffects"
-
-/**
- * Small process-local cache for immutable Swift-baked cube payloads. Changing
- * zebra or peaking settings rebuilds shader uniforms but must not rebake the
- * same 1 MB false-colour textures. Access is synchronized because renderer
- * construction runs off the Compose thread.
- */
-private object FeedEffectsCubeCache {
-    private const val MAX_ENTRIES = 8
-    private val cubes =
-        object : LinkedHashMap<String, ByteArray>(MAX_ENTRIES, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?): Boolean =
-                size > MAX_ENTRIES
-        }
-
-    fun value(key: String, bake: () -> ByteArray?): ByteArray? =
-        synchronized(cubes) {
-            cubes[key] ?: bake()?.also { cubes[key] = it }
-        }
-}
 
 /**
  * Process-local compatibility mirror for callers that have not yet adopted an
@@ -127,9 +102,6 @@ class FeedEffectsRenderer private constructor(
     }
 
     companion object {
-        /** 33³ matches the iOS built-in looks; false colour uses the core's 64³. */
-        private const val LUT_SIZE = 33
-
         /**
          * Renderer for [effects], or null when nothing is on or the Swift
          * core isn't staged — callers fall back to the plain feed. Callers
@@ -141,122 +113,27 @@ class FeedEffectsRenderer private constructor(
             cameraInput: ExposureAssistCameraInput,
             lutLibrary: AndroidLutLibrary? = null,
         ): FeedEffectsRenderer? {
-            if (effects.isIdentity) return null
-            if (!SwiftCore.isAvailable) {
-                Log.w(TAG, "feed effects need the Swift core (just android-core); rendering plain")
-                return null
-            }
-            return try {
-                build(effects, configuration.normalized(), cameraInput, lutLibrary)
-            } catch (e: RuntimeException) {
-                Log.e(TAG, "feed-effects pipeline setup failed; rendering the plain feed", e)
-                null
-            }
+            val plan =
+                FeedEffectsRenderPlanFactory.create(
+                    effects,
+                    configuration,
+                    cameraInput,
+                    lutLibrary,
+                ) ?: return null
+            return build(plan)
         }
 
-        /** Bakes once per selection: cube upload + threshold uniforms, never per frame. */
-        private fun build(
-            effects: FeedEffects,
-            configuration: FeedEffectsConfiguration,
-            cameraInput: ExposureAssistCameraInput,
-            lutLibrary: AndroidLutLibrary?,
-        ): FeedEffectsRenderer {
+        /** Uploads an already-resolved shared plan into the API 33 AGSL adapter. */
+        internal fun create(plan: FeedEffectsRenderPlan): FeedEffectsRenderer = build(plan)
+
+        /** Uploads one shared immutable plan into the API 33 AGSL adapter. */
+        private fun build(plan: FeedEffectsRenderPlan): FeedEffectsRenderer {
             val shader = RuntimeShader(EFFECTS_AGSL)
-
-            val renderConfiguration =
-                requireNotNull(
-                    SwiftCore.feedEffectsConfiguration(
-                        cameraInput.codec,
-                        cameraInput.isoWireValue,
-                        cameraInput.baseIso,
-                        configuration.peakingSensitivity.wireOrdinal,
-                        configuration.peakingColor.wireOrdinal,
-                        configuration.zebraHighlightEnabled,
-                        configuration.zebraHighlightIre,
-                        configuration.zebraHighlightColor.wireOrdinal,
-                        configuration.zebraMidtoneEnabled,
-                        configuration.zebraMidtoneIre,
-                        configuration.zebraMidtoneColor.wireOrdinal,
-                    ),
-                ) { "core rejected the effect configuration" }
-                    .let(FeedEffectsRenderConfiguration::parse)
-
-            val cube: ByteArray?
-            val cubeSize: Int
-            val lutSelection = effects.lut
-            when {
-                effects.falseColor != null && effects.falseColor != FeedFalseColorScale.LIMITS -> {
-                    cube =
-                        FeedEffectsCubeCache.value(
-                            "false:${effects.falseColor.wireOrdinal}:${renderConfiguration.curveOrdinal}:" +
-                                renderConfiguration.clipNative.toBits(),
-                        ) {
-                            SwiftCore.bakeFalseColorCube(
-                                effects.falseColor.wireOrdinal,
-                                renderConfiguration.curveOrdinal,
-                                renderConfiguration.clipNative,
-                            )
-                        }
-                    cubeSize = 64
-                }
-                lutSelection is FeedLutSelection.BuiltIn -> {
-                    cube =
-                        FeedEffectsCubeCache.value("lut:${lutSelection.value.wireOrdinal}:$LUT_SIZE") {
-                            SwiftCore.bakeLut(lutSelection.value.wireOrdinal, LUT_SIZE)
-                        }
-                    cubeSize = LUT_SIZE
-                }
-                lutSelection is FeedLutSelection.Stored -> {
-                    // A stored selection is only usable after Android's bounded app-private store
-                    // has revalidated it through Swift and cached the existing packed-cube payload.
-                    // There is intentionally no Kotlin parser/sample fallback on a cold/corrupt file.
-                    val packed = lutLibrary?.packedCube(lutSelection.value)
-                    cube = packed?.rgba
-                    cubeSize = packed?.cubeSize ?: 0
-                }
-                else -> {
-                    cube = null
-                    cubeSize = 0
-                }
-            }
-            if (cubeSize > 0 && cube == null) {
-                Log.w(TAG, "core returned no cube for $effects; base look disabled")
-            }
-            uploadCube(shader, "lut", "lutSize", cube, cubeSize)
-
-            val limitsActive = effects.falseColor == FeedFalseColorScale.LIMITS
-            val limitsPaint =
-                if (limitsActive) {
-                    FeedEffectsCubeCache.value(
-                        "limits-paint:${renderConfiguration.curveOrdinal}:" +
-                            renderConfiguration.clipNative.toBits(),
-                    ) {
-                        SwiftCore.bakeFalseColorLimitsPaint(
-                            renderConfiguration.curveOrdinal,
-                            renderConfiguration.clipNative,
-                        )
-                    }
-                } else {
-                    null
-                }
-            val limitsWeight =
-                if (limitsActive) {
-                    FeedEffectsCubeCache.value(
-                        "limits-weight:${renderConfiguration.curveOrdinal}:" +
-                            renderConfiguration.clipNative.toBits(),
-                    ) {
-                        SwiftCore.bakeFalseColorLimitsWeight(
-                            renderConfiguration.curveOrdinal,
-                            renderConfiguration.clipNative,
-                        )
-                    }
-                } else {
-                    null
-                }
-            val limitsReady = limitsPaint != null && limitsWeight != null
-            uploadCube(shader, "limitsPaintCube", "limitsPaintSize", limitsPaint, 64)
-            uploadCube(shader, "limitsWeightCube", "limitsWeightSize", limitsWeight, 64)
-            shader.setFloatUniform("limitsOn", if (limitsReady) 1f else 0f)
+            val renderConfiguration = plan.configuration
+            uploadCube(shader, "lut", "lutSize", plan.baseCube)
+            uploadCube(shader, "limitsPaintCube", "limitsPaintSize", plan.limitsPaintCube)
+            uploadCube(shader, "limitsWeightCube", "limitsWeightSize", plan.limitsWeightCube)
+            shader.setFloatUniform("limitsOn", if (plan.limitsReady) 1f else 0f)
 
             shader.setFloatUniform(
                 "deLogCurve0to3",
@@ -266,7 +143,7 @@ class FeedEffectsRenderer private constructor(
                 renderConfiguration.deLogCurve[3],
             )
             shader.setFloatUniform("deLogCurve4", renderConfiguration.deLogCurve[4])
-            shader.setFloatUniform("peakingOn", if (effects.peaking) 1f else 0f)
+            shader.setFloatUniform("peakingOn", if (plan.effects.peaking) 1f else 0f)
             shader.setFloatUniform(
                 "peakingColor",
                 renderConfiguration.peakingColor[0],
@@ -277,7 +154,7 @@ class FeedEffectsRenderer private constructor(
             shader.setFloatUniform("peakingRamp", renderConfiguration.peakingRamp)
             shader.setFloatUniform(
                 "zebraHighlightOn",
-                if (effects.zebra && renderConfiguration.highlightEnabled) 1f else 0f,
+                if (plan.effects.zebra && renderConfiguration.highlightEnabled) 1f else 0f,
             )
             shader.setFloatUniform("zebraHighlight", renderConfiguration.highlightCode)
             shader.setFloatUniform(
@@ -288,7 +165,7 @@ class FeedEffectsRenderer private constructor(
             )
             shader.setFloatUniform(
                 "zebraMidtoneOn",
-                if (effects.zebra && renderConfiguration.midtoneEnabled) 1f else 0f,
+                if (plan.effects.zebra && renderConfiguration.midtoneEnabled) 1f else 0f,
             )
             shader.setFloatUniform("zebraMidtone", renderConfiguration.midtoneCode)
             shader.setFloatUniform(
@@ -297,21 +174,7 @@ class FeedEffectsRenderer private constructor(
                 renderConfiguration.midtoneColor[1],
                 renderConfiguration.midtoneColor[2],
             )
-            if (BuildConfig.DEBUG) {
-                Log.d(
-                    TAG,
-                    "pipeline up: $effects cube=${cube?.size ?: 0}B " +
-                        "curve=${renderConfiguration.curveOrdinal} clip=${renderConfiguration.clipNative} " +
-                        "limits=$limitsReady",
-                )
-            }
-            val falseColorReady =
-                when (effects.falseColor) {
-                    FeedFalseColorScale.STOPS, FeedFalseColorScale.IRE -> cube != null
-                    FeedFalseColorScale.LIMITS -> limitsReady
-                    null -> false
-                }
-            return FeedEffectsRenderer(shader, falseColorReady)
+            return FeedEffectsRenderer(shader, plan.falseColorReady)
         }
 
         /** Uploads a core-baked packed cube, or a bound stub when that stage is unavailable. */
@@ -319,20 +182,19 @@ class FeedEffectsRenderer private constructor(
             shader: RuntimeShader,
             shaderName: String,
             sizeName: String,
-            cube: ByteArray?,
-            cubeSize: Int,
+            cube: FeedEffectsCube?,
         ) {
-            if (cube != null && cubeSize >= 2) {
-                check(cube.size == cubeSize * cubeSize * cubeSize * 4) { "bad $shaderName cube payload" }
-                val bitmap = Bitmap.createBitmap(cubeSize * cubeSize, cubeSize, Bitmap.Config.ARGB_8888)
-                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(cube))
+            if (cube != null) {
+                val bitmap =
+                    Bitmap.createBitmap(cube.size * cube.size, cube.size, Bitmap.Config.ARGB_8888)
+                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(cube.rgba))
                 shader.setInputShader(
                     shaderName,
                     BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
                         filterMode = BitmapShader.FILTER_MODE_LINEAR
                     },
                 )
-                shader.setFloatUniform(sizeName, cubeSize.toFloat())
+                shader.setFloatUniform(sizeName, cube.size.toFloat())
             } else {
                 // AGSL requires every declared child to be bound. The zero size keeps this cube
                 // stage inactive without inventing a local colour fallback.

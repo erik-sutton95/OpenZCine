@@ -146,7 +146,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;
   progressive proxy playback with an independent assist toolbar, clean-source waveform and
   vectorscope analysis, decoded-audio metering, display LUT/false-colour/peaking/zebra effects,
-  framing/desqueeze, frame scrubbing, zoom/pan, and transport gestures; and a transfer-backed
+  including the API 33 AGSL renderer and an SDR-only Media3 GLES fallback on API 29–32 with a
+  pre-effect clean-scope tap and fail-closed HDR gating; framing/desqueeze, frame scrubbing,
+  zoom/pan, and transport gestures; and a transfer-backed
   Android still-photo viewer (JPEG/PNG progressive preview; explicit thumbnail fallback for
   unsupported HEIF/RAW decoders). Android playback-assist parity is tracked by OPE-69.
 - **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.

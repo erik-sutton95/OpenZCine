@@ -520,6 +520,7 @@ internal fun PlaybackScopePanels(
     thermalTier: AndroidThermalTier,
     textureView: TextureView,
     currentFrameKey: () -> Long,
+    cleanFrameSource: PlaybackScopeFrameSource?,
     feed: ZoneFrame,
     infoBar: ZoneFrame,
     viewport: ZoneFrame,
@@ -543,6 +544,7 @@ internal fun PlaybackScopePanels(
         rememberPlaybackScopeSnapshot(
             textureView = textureView,
             currentFrameKey = { latestFrameKey() },
+            cleanFrameSource = cleanFrameSource,
             selected = displayed.toSet(),
             crushClipCompensationRaw = crushClipCompensationRaw,
             histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
@@ -1095,6 +1097,7 @@ private fun rememberScopeSnapshot(
 private fun rememberPlaybackScopeSnapshot(
     textureView: TextureView,
     currentFrameKey: () -> Long,
+    cleanFrameSource: PlaybackScopeFrameSource?,
     selected: Set<ScopeKind>,
     crushClipCompensationRaw: Int,
     histogramTrafficLightsEnabled: Boolean,
@@ -1110,6 +1113,7 @@ private fun rememberPlaybackScopeSnapshot(
     val ordered = ScopeKind.canonical.filter(selected::contains)
     LaunchedEffect(
         textureView,
+        cleanFrameSource,
         ordered,
         crushClipCompensationRaw,
         histogramTrafficLightsEnabled,
@@ -1121,7 +1125,7 @@ private fun rememberPlaybackScopeSnapshot(
         thermalTier,
     ) {
         data.value = null
-        tap.reset()
+        if (cleanFrameSource != null) cleanFrameSource.reset() else tap.reset()
         withContext(Dispatchers.Default) {
             pumpReducedScopes(
                 selected = ordered.toSet(),
@@ -1133,7 +1137,13 @@ private fun rememberPlaybackScopeSnapshot(
                 vectorscopeBrightness = vectorscopeBrightness,
                 vectorLut = vectorLut,
                 scopePeriodNanos = scopePeriodNanos(ordered.size, thermalTier),
-                nextFrame = { tap.capture(textureView, currentFrameKey) },
+                nextFrame = {
+                    if (cleanFrameSource != null) {
+                        cleanFrameSource.capture()
+                    } else {
+                        tap.capture(textureView, currentFrameKey)
+                    }
+                },
                 present = { data.value = it },
             )
         }
@@ -1208,7 +1218,7 @@ private suspend fun pumpReducedScopes(
     vectorscopeBrightness: Int,
     vectorLut: ScopeVectorLutRequest?,
     scopePeriodNanos: Long,
-    nextFrame: suspend () -> ReducedFrame?,
+    nextFrame: suspend () -> ReducedScopeFrame?,
     present: (ScopeDrawData) -> Unit,
 ) {
     val demand = scopeSamplingDemand(selected, histogramTrafficLightsEnabled)
@@ -1307,7 +1317,7 @@ private suspend fun pumpReducedScopes(
 private data class LiveScopeInput(val generation: Long, val jpeg: ByteArray)
 
 /** One reduced frame ready for the core sampler. */
-private class ReducedFrame(
+internal class ReducedScopeFrame(
     val rgba: ByteArray,
     val width: Int,
     val height: Int,
@@ -1327,7 +1337,7 @@ private class ScopeFrameTap {
     private var bitmap: Bitmap? = null
     private var rgba = ByteArray(0)
 
-    fun reduce(jpeg: ByteArray): ReducedFrame? {
+    fun reduce(jpeg: ByteArray): ReducedScopeFrame? {
         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, boundsOptions)
         if (boundsOptions.outWidth <= 0) return null
         var sample = 1
@@ -1346,7 +1356,7 @@ private class ScopeFrameTap {
         val byteCount = decoded.rowBytes * decoded.height
         if (rgba.size != byteCount) rgba = ByteArray(byteCount)
         decoded.copyPixelsToBuffer(ByteBuffer.wrap(rgba))
-        return ReducedFrame(rgba, decoded.width, decoded.height, decoded.rowBytes)
+        return ReducedScopeFrame(rgba, decoded.width, decoded.height, decoded.rowBytes)
     }
 }
 
@@ -1368,7 +1378,7 @@ private class PlaybackScopeFrameTap {
         lastFrameKey = Long.MIN_VALUE
     }
 
-    suspend fun capture(textureView: TextureView, frameKey: () -> Long): ReducedFrame? =
+    suspend fun capture(textureView: TextureView, frameKey: () -> Long): ReducedScopeFrame? =
         withContext(Dispatchers.Main.immediate) {
             if (!textureView.isAvailable || textureView.width <= 0 || textureView.height <= 0) {
                 return@withContext null
@@ -1395,8 +1405,17 @@ private class PlaybackScopeFrameTap {
             if (rgba.size != byteCount) rgba = ByteArray(byteCount)
             captured.copyPixelsToBuffer(ByteBuffer.wrap(rgba))
             lastFrameKey = key
-            ReducedFrame(rgba, captured.width, captured.height, captured.rowBytes)
+            ReducedScopeFrame(rgba, captured.width, captured.height, captured.rowBytes)
         }
+}
+
+/** A clean decoded-frame source owned by a playback video effect. */
+internal interface PlaybackScopeFrameSource {
+    /** Allows a restarted analysis pipeline to consume the current paused frame once. */
+    fun reset()
+
+    /** Returns the newest unconsumed reduced frame, or null when no decoded frame changed. */
+    suspend fun capture(): ReducedScopeFrame?
 }
 
 /**
