@@ -234,6 +234,41 @@ class MediaShareStager private constructor(
             cancellationCheck = cancellationCheck,
         )
 
+    /**
+     * Publishes an already-complete app-owned export into the same bounded
+     * FileProvider-ready cache as camera originals. The source is copied and
+     * content-verified; callers may safely delete their transient export once
+     * this method returns.
+     */
+    internal fun stagePreparedArtifact(
+        source: Path,
+        expectedBytes: Long,
+        displayName: String,
+        mimeType: String,
+        cancellationCheck: () -> Unit = {},
+    ): StagedMediaShare {
+        validateFilename(displayName)
+        if (expectedBytes <= 0 || !mimeType.matches(SAFE_MIME_TYPE)) {
+            throw InvalidMediaShareSourceException("The prepared delivery artifact is invalid.")
+        }
+        val normalizedSource = source.toAbsolutePath().normalize()
+        if (
+            normalizedSource.fileName.toString().endsWith(".part") ||
+                !Files.isRegularFile(normalizedSource, LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(normalizedSource) ||
+                Files.size(normalizedSource) != expectedBytes
+        ) {
+            throw InvalidMediaShareSourceException("The prepared delivery artifact is incomplete.")
+        }
+        return stageCompleteSource(
+            source = normalizedSource,
+            expectedLength = expectedBytes,
+            filename = displayName,
+            mimeType = mimeType,
+            cancellationCheck = cancellationCheck,
+        )
+    }
+
     private fun stage(
         entry: MediaCacheEntry,
         filename: String,
@@ -247,12 +282,34 @@ class MediaShareStager private constructor(
         val source = entry.finalPath.toAbsolutePath().normalize()
         validatePublishedSourcePath(entry, source)
 
+        return stageCompleteSource(
+            source = source,
+            expectedLength = entry.expectedLength,
+            filename = filename,
+            mimeType = mimeType,
+            cancellationCheck = cancellationCheck,
+        )
+    }
+
+    private fun stageCompleteSource(
+        source: Path,
+        expectedLength: Long,
+        filename: String,
+        mimeType: String,
+        cancellationCheck: () -> Unit,
+    ): StagedMediaShare {
         val displayExtension = filename.substringAfterLast('.').lowercase(Locale.ROOT)
         val temporary = Files.createTempFile(stagingDirectory, "share-", ".tmp")
         var movedTarget: Path? = null
         var targetWasPublished = false
         try {
-            val copied = copySourceToTemporary(entry, source, temporary, cancellationCheck)
+            val copied =
+                copySourceToTemporary(
+                    source = source,
+                    expectedLength = expectedLength,
+                    temporary = temporary,
+                    cancellationCheck = cancellationCheck,
+                )
             val target = targetPath(copied.contentDigest, displayExtension)
 
             synchronized(readyCacheLock) {
@@ -331,18 +388,18 @@ class MediaShareStager private constructor(
      * file descriptor to a symlink or a different path entry.
      */
     private fun copySourceToTemporary(
-        entry: MediaCacheEntry,
         source: Path,
+        expectedLength: Long,
         temporary: Path,
         cancellationCheck: () -> Unit,
     ): CopiedMediaSource =
         FileChannel.open(source, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { sourceChannel ->
             cancellationCheck()
             val openedLength = sourceChannel.size()
-            if (openedLength != entry.expectedLength) {
+            if (openedLength != expectedLength) {
                 throw InvalidMediaShareSourceException(
                     "Completed camera cache length changed after opening " +
-                        "(expected ${entry.expectedLength} bytes, found $openedLength).",
+                        "(expected $expectedLength bytes, found $openedLength).",
                 )
             }
 
@@ -351,19 +408,19 @@ class MediaShareStager private constructor(
                 val digest = MessageDigest.getInstance("SHA-256")
                 val buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES)
                 var copiedBytes = 0L
-                while (copiedBytes < entry.expectedLength) {
+                while (copiedBytes < expectedLength) {
                     cancellationCheck()
                     buffer.clear()
                     buffer.limit(
                         minOf(
                             buffer.capacity().toLong(),
-                            entry.expectedLength - copiedBytes,
+                            expectedLength - copiedBytes,
                         ).toInt(),
                     )
                     val read = sourceChannel.read(buffer)
                     if (read < 0) {
                         throw InvalidMediaShareSourceException(
-                            "Completed camera cache ended before ${entry.expectedLength} bytes were copied.",
+                            "Completed camera cache ended before $expectedLength bytes were copied.",
                         )
                     }
                     if (read == 0) continue
@@ -378,10 +435,10 @@ class MediaShareStager private constructor(
                 }
 
                 cancellationCheck()
-                if (sourceChannel.size() != entry.expectedLength || Files.size(temporary) != entry.expectedLength) {
+                if (sourceChannel.size() != expectedLength || Files.size(temporary) != expectedLength) {
                     throw InvalidMediaShareSourceException(
                         "Cached clip changed while preparing the share copy " +
-                            "(expected ${entry.expectedLength} bytes).",
+                            "(expected $expectedLength bytes).",
                     )
                 }
                 CopiedMediaSource(byteCount = copiedBytes, contentDigest = hex(digest.digest()))
@@ -605,6 +662,7 @@ class MediaShareStager private constructor(
         const val DEFAULT_MAXIMUM_READY_ARTIFACTS: Int = 8
         const val URI_GRANT_RETENTION_MILLIS: Long = 24L * 60L * 60L * 1000L
         const val GENERIC_MEDIA_MIME_TYPE: String = "application/octet-stream"
+        val SAFE_MIME_TYPE: Regex = Regex("[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+*-]*")
 
         /** Serializes ready-cache publication and eviction across stager instances in this process. */
         val readyCacheLock: Any = Any()

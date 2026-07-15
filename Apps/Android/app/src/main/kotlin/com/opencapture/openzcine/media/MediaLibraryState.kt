@@ -7,6 +7,8 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.MessageDigest
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.Locale
 
@@ -30,6 +32,57 @@ internal enum class MediaLibraryLayout(val accessibilityLabel: String) {
     LIST("Switch to grid view"),
 }
 
+/** Persisted adaptive-grid density, matching the current iOS media browser. */
+internal enum class MediaThumbnailSize(
+    val accessibilityLabel: String,
+    val minimumCellWidthDp: Int,
+) {
+    SMALL("Small thumbnails", 148),
+    MEDIUM("Medium thumbnails", 210),
+    LARGE("Large thumbnails", 280),
+}
+
+/** Operator-selected camera container metadata filters. */
+internal enum class MediaContainerFilter(val title: String) {
+    MOV("MOV"),
+    MP4("MP4"),
+}
+
+/** Authoritative pixel-width buckets shown by the Android media browser. */
+internal enum class MediaResolutionFilter(val title: String) {
+    HD("HD"),
+    FOUR_K("4K"),
+    FIVE_FOUR_K("5.4K"),
+    SIX_K("6K"),
+}
+
+/** Camera-scoped filters composed with AND semantics across filter groups. */
+internal data class MediaLibraryFilters(
+    val containers: Set<MediaContainerFilter> = emptySet(),
+    val resolutions: Set<MediaResolutionFilter> = emptySet(),
+    val todayOnly: Boolean = false,
+    val storageId: Long? = null,
+) {
+    /** Number displayed in the filter badge; category tabs are intentionally excluded. */
+    val activeCount: Int
+        get() =
+            containers.size +
+                resolutions.size +
+                (if (todayOnly) 1 else 0) +
+                (if (storageId != null) 1 else 0)
+
+    /** Drops a stale card selection whenever the source or connected camera changes. */
+    fun retainingAvailableStorage(
+        source: MediaLibrarySource,
+        clips: List<MediaClipRecord>,
+    ): MediaLibraryFilters {
+        val selected = storageId ?: return this
+        val remainsAvailable =
+            source == MediaLibrarySource.CAMERA && clips.any { clip -> clip.storageId == selected }
+        return if (remainsAvailable) this else copy(storageId = null)
+    }
+}
+
 /** Stable ordering choices for a media-library result set. */
 internal enum class MediaLibrarySortOrder(val title: String) {
     NEWEST("Newest"),
@@ -43,6 +96,7 @@ internal data class MediaLibraryViewOptions(
     val category: MediaLibraryCategory = MediaLibraryCategory.ALL,
     val layout: MediaLibraryLayout = MediaLibraryLayout.GRID,
     val sortOrder: MediaLibrarySortOrder = MediaLibrarySortOrder.NEWEST,
+    val thumbnailSize: MediaThumbnailSize = MediaThumbnailSize.MEDIUM,
 )
 
 /**
@@ -131,6 +185,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
             category = enumValue(PREF_CATEGORY, MediaLibraryCategory.ALL),
             layout = enumValue(PREF_LAYOUT, MediaLibraryLayout.GRID),
             sortOrder = enumValue(PREF_SORT, MediaLibrarySortOrder.NEWEST),
+            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MediaThumbnailSize.MEDIUM),
         )
 
     /** Persists only local browsing preferences; camera commands are never stored here. */
@@ -139,6 +194,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         preferences.putString(PREF_CATEGORY, options.category.name)
         preferences.putString(PREF_LAYOUT, options.layout.name)
         preferences.putString(PREF_SORT, options.sortOrder.name)
+        preferences.putString(PREF_THUMBNAIL_SIZE, options.thumbnailSize.name)
     }
 
     private inline fun <reified Value : Enum<Value>> enumValue(key: String, fallback: Value): Value =
@@ -156,6 +212,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         const val PREF_CATEGORY = "view.category"
         const val PREF_LAYOUT = "view.layout"
         const val PREF_SORT = "view.sort"
+        const val PREF_THUMBNAIL_SIZE = "view.thumbnail-size"
     }
 }
 
@@ -167,8 +224,10 @@ internal object MediaLibraryFiltering {
         favoriteIDs: Set<String>,
         cameraID: String,
         sortOrder: MediaLibrarySortOrder,
+        filters: MediaLibraryFilters = MediaLibraryFilters(),
+        todayToken: String = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
     ): List<MediaClipRecord> {
-        val filtered =
+        var filtered =
             when (category) {
                 MediaLibraryCategory.ALL -> clips
                 MediaLibraryCategory.VIDEOS ->
@@ -181,6 +240,18 @@ internal object MediaLibraryFiltering {
                 MediaLibraryCategory.FAVORITES ->
                     clips.filter { it.libraryKey(cameraID) in favoriteIDs }
             }
+        if (filters.containers.isNotEmpty()) {
+            filtered = filtered.filter { clip -> clip.containerFilter() in filters.containers }
+        }
+        if (filters.resolutions.isNotEmpty()) {
+            filtered = filtered.filter { clip -> clip.resolutionFilter() in filters.resolutions }
+        }
+        if (filters.todayOnly) {
+            filtered = filtered.filter { clip -> clip.captureDate.startsWith(todayToken) }
+        }
+        filters.storageId?.let { selectedStorage ->
+            filtered = filtered.filter { clip -> clip.storageId == selectedStorage }
+        }
         return sort(filtered, sortOrder)
     }
 
@@ -203,6 +274,24 @@ internal object MediaLibraryFiltering {
                 clips.sortedBy { it.filename.lowercase(Locale.US) }
         }
 }
+
+/** Container metadata is the sanitized camera object filename supplied by the shared core. */
+internal fun MediaClipRecord.containerFilter(): MediaContainerFilter? =
+    when (codecLabel) {
+        "MOV", "M4V" -> MediaContainerFilter.MOV
+        "MP4" -> MediaContainerFilter.MP4
+        else -> null
+    }
+
+/** Resolution filtering never guesses from a filename when camera pixel metadata is absent. */
+internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
+    when (pixelWidth) {
+        in 6_000..Int.MAX_VALUE -> MediaResolutionFilter.SIX_K
+        in 5_300..<6_000 -> MediaResolutionFilter.FIVE_FOUR_K
+        in 3_500..<5_300 -> MediaResolutionFilter.FOUR_K
+        in 1_000..<3_500 -> MediaResolutionFilter.HD
+        else -> null
+    }
 
 /** Pure set updates used by long-press, tap, and sweep selection. */
 internal object MediaLibrarySelection {

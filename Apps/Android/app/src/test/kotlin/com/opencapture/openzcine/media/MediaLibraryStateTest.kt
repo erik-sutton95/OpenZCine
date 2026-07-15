@@ -127,6 +127,26 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `Frameio summary distinguishes uploaded skipped and failed batch counts`() {
+        val summary =
+            frameioDeliverySummary(
+                state =
+                    FrameioDeliveryState.Completed(
+                        uploadedCount = 2,
+                        skippedCount = 3,
+                        failedCount = 1,
+                    ),
+                internetHopState = FrameioInternetHopState.Idle,
+                errorMessage = null,
+                skippedBeforeUpload = 0,
+            )
+
+        assertTrue(summary.contains("Delivered 2 cached items"))
+        assertTrue(summary.contains("3 already uploaded"))
+        assertTrue(summary.contains("1 failed"))
+    }
+
+    @Test
     fun `Frameio media preparation cleanup ends an active hop before returning`() = runTest {
         var ended = false
 
@@ -255,6 +275,7 @@ class MediaLibraryStateTest {
                     "view.category" to "NOPE",
                     "view.layout" to "SIDEWAYS",
                     "view.sort" to "WRONG",
+                    "view.thumbnail-size" to "HUGE",
                 ),
             )
 
@@ -273,11 +294,100 @@ class MediaLibraryStateTest {
                 category = MediaLibraryCategory.FAVORITES,
                 layout = MediaLibraryLayout.LIST,
                 sortOrder = MediaLibrarySortOrder.NAME,
+                thumbnailSize = MediaThumbnailSize.LARGE,
             )
 
         MediaLibraryIndex(preferences).saveViewOptions(options)
 
         assertEquals(options, MediaLibraryIndex(preferences).viewOptions(MediaLibrarySource.CAMERA))
+    }
+
+    @Test
+    fun `container resolution today and slot filters compose without guessing metadata`() {
+        val todayMov =
+            clip(1, "A001.MOV", captureDate = "20260715T101010")
+                .copy(storageId = 11, pixelWidth = 3_840)
+        val todayMp4 =
+            clip(2, "A002.MP4", captureDate = "20260715T111010")
+                .copy(storageId = 11, pixelWidth = 3_840)
+        val oldMov =
+            clip(3, "A003.MOV", captureDate = "20260714T101010")
+                .copy(storageId = 22, pixelWidth = 6_048)
+        val missingWidth =
+            clip(4, "A004_6K.MOV", captureDate = "20260715T121010")
+                .copy(storageId = 11, pixelWidth = 0)
+        val filters =
+            MediaLibraryFilters(
+                containers = setOf(MediaContainerFilter.MOV),
+                resolutions = setOf(MediaResolutionFilter.FOUR_K),
+                todayOnly = true,
+                storageId = 11,
+            )
+
+        val displayed =
+            MediaLibraryFiltering.displayed(
+                clips = listOf(todayMov, todayMp4, oldMov, missingWidth),
+                category = MediaLibraryCategory.ALL,
+                favoriteIDs = emptySet(),
+                cameraID = "camera",
+                sortOrder = MediaLibrarySortOrder.NAME,
+                filters = filters,
+                todayToken = "20260715",
+            )
+
+        assertEquals(listOf(todayMov), displayed)
+        assertEquals(4, filters.activeCount)
+        assertEquals(MediaContainerFilter.MOV, todayMov.containerFilter())
+        assertEquals(MediaContainerFilter.MOV, todayMov.copy(filename = "A001.M4V").containerFilter())
+        assertNull(missingWidth.resolutionFilter())
+    }
+
+    @Test
+    fun `filter groups use OR within a group and stale camera slots clear safely`() {
+        val hd = clip(1, "A001.MOV").copy(storageId = 11, pixelWidth = 1_920)
+        val sixK = clip(2, "A002.MP4").copy(storageId = 22, pixelWidth = 6_048)
+        val filters =
+            MediaLibraryFilters(
+                containers = setOf(MediaContainerFilter.MOV, MediaContainerFilter.MP4),
+                resolutions = setOf(MediaResolutionFilter.HD, MediaResolutionFilter.SIX_K),
+                storageId = 11,
+            )
+
+        assertEquals(
+            listOf(hd),
+            MediaLibraryFiltering.displayed(
+                listOf(hd, sixK),
+                MediaLibraryCategory.ALL,
+                emptySet(),
+                "camera",
+                MediaLibrarySortOrder.NAME,
+                filters,
+                "20260715",
+            ),
+        )
+        assertEquals(filters, filters.retainingAvailableStorage(MediaLibrarySource.CAMERA, listOf(hd)))
+        assertNull(
+            filters.retainingAvailableStorage(MediaLibrarySource.CAMERA, listOf(sixK)).storageId,
+        )
+        assertNull(filters.retainingAvailableStorage(MediaLibrarySource.LOCAL, listOf(hd)).storageId)
+    }
+
+    @Test
+    fun `delivery metadata summary contains only bounded clip facts`() {
+        val summary =
+            mediaDeliveryMetadataSummary(
+                listOf(clip(1, "A001.MOV", captureDate = "20260715T101010")),
+            )
+
+        assertEquals("A001.MOV · 20260715T101010 · 0MB", summary)
+        assertFalse(summary.contains("camera"))
+
+        val bounded =
+            mediaDeliveryMetadataSummary(
+                (1..40).map { index -> clip(index.toLong(), "A${index.toString().padStart(3, '0')}.MOV") },
+            )
+        assertEquals(33, bounded.lines().size)
+        assertTrue(bounded.endsWith("+8 more selected items"))
     }
 
     @Test

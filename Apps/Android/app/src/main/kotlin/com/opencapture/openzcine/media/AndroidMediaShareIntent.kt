@@ -35,7 +35,11 @@ internal object AndroidMediaShareIntent {
      * intent carries both `EXTRA_STREAM` and ClipData so Android grants read
      * access to each provider URI without exposing a `file://` path.
      */
-    fun chooserIntent(context: Context, shares: List<StagedMediaShare>): Intent {
+    fun chooserIntent(
+        context: Context,
+        shares: List<StagedMediaShare>,
+        metadataText: String? = null,
+    ): Intent {
         require(shares.isNotEmpty()) { "At least one staged media file is required." }
         val uris = shares.map { share -> contentUri(context, share) }
         val spec = MediaShareIntentSpec.forShares(shares)
@@ -50,6 +54,9 @@ internal object AndroidMediaShareIntent {
                 } else {
                     putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
                     putExtra(Intent.EXTRA_TITLE, "OpenZCine media")
+                }
+                metadataText?.takeIf(String::isNotBlank)?.let { summary ->
+                    putExtra(Intent.EXTRA_TEXT, summary)
                 }
                 this.clipData = clipData
                 if (spec.grantsReadUriPermission) {

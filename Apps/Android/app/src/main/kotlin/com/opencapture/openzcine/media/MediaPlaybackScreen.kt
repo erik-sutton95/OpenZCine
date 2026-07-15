@@ -114,6 +114,10 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.frameio.FrameioArtifactContext
+import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
+import com.opencapture.openzcine.frameio.FrameioDeliveryController
+import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import com.opencapture.openzcine.liveFeedContentRect
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.rememberAndroidThermalTier
@@ -122,6 +126,7 @@ import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.withScale
 import com.opencapture.openzcine.zone
+import java.nio.file.Files
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
@@ -129,6 +134,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -171,6 +177,7 @@ internal fun MediaPlaybackScreen(
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
+    frameioController: FrameioDeliveryController,
     onToggleFavorite: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
 ): Unit {
@@ -196,6 +203,7 @@ internal fun MediaPlaybackScreen(
             exposureAssistCameraInput = exposureAssistCameraInput,
             operatorSettings = operatorSettings,
             lutLibrary = lutLibrary,
+            frameioController = frameioController,
             onToggleFavorite = { onToggleFavorite(activeClip) },
             onNavigate = { target -> activeClip = target },
             onClose = onClose,
@@ -217,6 +225,7 @@ private fun PlaybackClipSession(
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
+    frameioController: FrameioDeliveryController,
     onToggleFavorite: () -> Unit,
     onNavigate: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
@@ -264,6 +273,12 @@ private fun PlaybackClipSession(
     val latestDeliveryJob = rememberUpdatedState(deliveryJob)
     val actionInProgress = pendingAction != null
     var chromeVisible by remember(clip.handle) { mutableStateOf(true) }
+    val deliveryLut = sharedAssistState.selectedLut
+    val deliveryLutLabel =
+        when (deliveryLut) {
+            is FeedLutSelection.BuiltIn -> deliveryLut.value.label
+            is FeedLutSelection.Stored -> lutLibrary?.displayName(deliveryLut.value)
+        }
 
     fun requestClose() {
         if (pendingAction == null) pendingAction = PlaybackSessionAction.Close
@@ -275,7 +290,7 @@ private fun PlaybackClipSession(
         }
     }
 
-    fun beginShare() {
+    fun beginShare(configuration: MediaDeliveryConfiguration) {
         val completedEntry = shareableEntry ?: return
         if (deliveryInProgress || actionInProgress) return
         val job =
@@ -290,14 +305,62 @@ private fun PlaybackClipSession(
                                     stageContext.ensureActive()
                                 }
                         }
-                    stageContext.ensureActive()
-                    if (pendingAction != null) {
-                        throw CancellationException("Playback closed before sharing began.")
+                    val prepared =
+                        frameioController.prepareForExternalDelivery(
+                            FrameioDeliveryArtifact(
+                                share = staged,
+                                byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
+                                context =
+                                    FrameioArtifactContext(
+                                        cameraID = cameraID,
+                                        captureDate = clip.captureDate,
+                                        supportsLutBake = true,
+                                        stableClipIdentity = clip.libraryKey(cameraID),
+                                    ),
+                            ),
+                            configuration,
+                        )
+                    var cleanupFailed = false
+                    try {
+                        val published =
+                            if (prepared.transientExport == null) {
+                                prepared.share
+                            } else {
+                                withContext(Dispatchers.IO) {
+                                    MediaShareStager(shareCacheDirectory).stagePreparedArtifact(
+                                        source = prepared.share.file,
+                                        expectedBytes = prepared.byteCount,
+                                        displayName = prepared.share.displayName,
+                                        mimeType = prepared.share.mimeType,
+                                    ) { stageContext.ensureActive() }
+                                }
+                            }
+                        stageContext.ensureActive()
+                        if (pendingAction != null) {
+                            throw CancellationException("Playback closed before sharing began.")
+                        }
+                        // Pause before another activity gains the foreground. Media3 also releases
+                        // its focus through the lifecycle observer if the chooser backgrounds us.
+                        activePlayer?.pause()
+                        context.startActivity(
+                            AndroidMediaShareIntent.chooserIntent(
+                                context,
+                                listOf(published),
+                                mediaDeliveryMetadataSummary(listOf(clip))
+                                    .takeIf { configuration.includeMetadata },
+                            ),
+                        )
+                    } finally {
+                        cleanupFailed =
+                            withContext(NonCancellable) {
+                                runCatching {
+                                    frameioController.releaseExternalDelivery(prepared)
+                                }.isFailure
+                            }
                     }
-                    // Pause before another activity gains the foreground. Media3 also releases
-                    // its focus through the lifecycle observer if the chooser backgrounds us.
-                    activePlayer?.pause()
-                    context.startActivity(AndroidMediaShareIntent.chooserIntent(context, staged))
+                    if (cleanupFailed) {
+                        deliveryMessage = "The share opened, but its temporary export wasn't removed."
+                    }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
@@ -315,7 +378,7 @@ private fun PlaybackClipSession(
         job.start()
     }
 
-    fun beginGallerySave() {
+    fun beginGallerySave(configuration: MediaDeliveryConfiguration) {
         val completedEntry = shareableEntry ?: return
         if (deliveryInProgress || actionInProgress) return
         val resumeAfterSave = activePlayer?.isPlaying == true
@@ -325,18 +388,55 @@ private fun PlaybackClipSession(
                 val stageContext = coroutineContext
                 val runningJob = stageContext[Job]
                 try {
-                    val result =
+                    val staged =
                         withContext(Dispatchers.IO) {
-                            val staged =
-                                MediaShareStager(shareCacheDirectory).stage(completedEntry, clip) {
-                                    stageContext.ensureActive()
-                                }
-                            val artifact = MediaGalleryArtifact.fromStagedShare(staged)
-                            MediaGallerySaver(galleryGateway).save(listOf(artifact)) {
+                            MediaShareStager(shareCacheDirectory).stage(completedEntry, clip) {
                                 stageContext.ensureActive()
                             }
                         }
-                    deliveryMessage = result.operatorMessage()
+                    val prepared =
+                        frameioController.prepareForExternalDelivery(
+                            FrameioDeliveryArtifact(
+                                share = staged,
+                                byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
+                                context =
+                                    FrameioArtifactContext(
+                                        cameraID = cameraID,
+                                        captureDate = clip.captureDate,
+                                        supportsLutBake = true,
+                                        stableClipIdentity = clip.libraryKey(cameraID),
+                                    ),
+                            ),
+                            configuration,
+                        )
+                    var cleanupFailed = false
+                    val result =
+                        try {
+                            withContext(Dispatchers.IO) {
+                                val artifact =
+                                    MediaGalleryArtifact.fromStagedShare(
+                                        prepared.share,
+                                        mediaCaptureTimestampMillis(clip.captureDate)
+                                            .takeIf { configuration.includeMetadata },
+                                    )
+                                MediaGallerySaver(galleryGateway).save(listOf(artifact)) {
+                                    stageContext.ensureActive()
+                                }
+                            }
+                        } finally {
+                            cleanupFailed =
+                                withContext(NonCancellable) {
+                                    runCatching {
+                                        frameioController.releaseExternalDelivery(prepared)
+                                    }.isFailure
+                                }
+                        }
+                    deliveryMessage =
+                        result.operatorMessage(
+                            MediaGalleryOmissions(
+                                temporaryCleanupFailureCount = if (cleanupFailed) 1 else 0,
+                            ),
+                        )
                 } catch (error: CancellationException) {
                     throw error
                 } catch (_: Exception) {
@@ -530,14 +630,16 @@ private fun PlaybackClipSession(
                 shareReadyCount = 1,
                 galleryReadyCount = 1,
                 busy = deliveryInProgress,
+                selectedLut = deliveryLut.takeIf { deliveryLutLabel != null },
+                selectedLutLabel = deliveryLutLabel,
                 onDismiss = { deliveryChooserPresented = false },
-                onShare = {
+                onShare = { configuration ->
                     deliveryChooserPresented = false
-                    beginShare()
+                    beginShare(configuration)
                 },
-                onSaveToGallery = {
+                onSaveToGallery = { configuration ->
                     deliveryChooserPresented = false
-                    beginGallerySave()
+                    beginGallerySave(configuration)
                 },
             )
         }

@@ -266,6 +266,35 @@ class MediaShareStagerTest {
         }
 
     @Test
+    fun `configured export is verified and copied into provider ready storage`() =
+        withRoot { root ->
+            val export = root.resolve("transient/export.mov")
+            Files.createDirectories(export.parent)
+            Files.write(export, byteArrayOf(9, 8, 7, 6))
+
+            val staged =
+                MediaShareStager(root.resolve("cache")).stagePreparedArtifact(
+                    source = export,
+                    expectedBytes = 4,
+                    displayName = "C0009.mov",
+                    mimeType = "video/quicktime",
+                )
+
+            assertTrue(staged.file.startsWith(root.resolve("cache/share/ready")))
+            assertEquals(listOf<Byte>(9, 8, 7, 6), Files.readAllBytes(staged.file).toList())
+            assertTrue(Files.exists(export))
+            Files.write(export, byteArrayOf(1))
+            assertFailsWith<InvalidMediaShareSourceException> {
+                MediaShareStager(root.resolve("cache")).stagePreparedArtifact(
+                    source = export,
+                    expectedBytes = 4,
+                    displayName = "C0009.mov",
+                    mimeType = "video/quicktime",
+                )
+            }
+        }
+
+    @Test
     fun `stage refuses a completed entry whose final cache file no longer matches its byte count`() =
         withRoot { root ->
             val entry = completedEntry(root, "C0006.MOV", byteArrayOf(1, 2, 3, 4))

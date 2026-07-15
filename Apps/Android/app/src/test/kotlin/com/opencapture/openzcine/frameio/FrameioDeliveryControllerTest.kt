@@ -168,8 +168,10 @@ class FrameioDeliveryControllerTest {
                 ),
             )
 
-            val failed = assertIs<FrameioDeliveryState.Failed>(controller.deliveryState)
-            assertContains(failed.message, "Only complete approved")
+            val completed = assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertEquals(0, completed.uploadedCount)
+            assertEquals(1, completed.failedCount)
+            assertContains(completed.firstFailureMessage.orEmpty(), "Only complete approved")
             assertEquals(0, http.executeCalls)
             assertEquals(0, http.uploadCalls)
         }
@@ -216,7 +218,9 @@ class FrameioDeliveryControllerTest {
                 ),
             )
 
-            assertIs<FrameioDeliveryState.Failed>(controller.deliveryState)
+            val completed = assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertEquals(0, completed.uploadedCount)
+            assertEquals(1, completed.failedCount)
             assertEquals(1, http.executeCalls)
             assertEquals(0, http.uploadCalls)
             assertContains(controller.errorMessage.orEmpty(), "will not interrupt")
@@ -592,6 +596,130 @@ class FrameioDeliveryControllerTest {
         }
     }
 
+    @Test
+    fun `confirmed upload persists and is skipped unless reupload is explicit`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("C0011.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val history = MemoryUploadHistory()
+            val http = FakeHttp()
+            val controller =
+                connectedController(
+                    readyRoot = readyRoot,
+                    http = http,
+                    uploadHistory = history,
+                )
+            val artifact =
+                FrameioDeliveryArtifact(
+                    StagedMediaShare(source, "C0011.MOV", "video/quicktime"),
+                    4,
+                    FrameioArtifactContext("camera", "20260715T120000", true, "clip-11"),
+                )
+
+            controller.deliver(listOf(artifact))
+            assertEquals(1, assertIs<FrameioDeliveryState.Completed>(controller.deliveryState).uploadedCount)
+            assertTrue(history.wasUploaded("clip-11"))
+            assertEquals(1, http.uploadCalls)
+
+            controller.deliver(listOf(artifact))
+            val skipped = assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertEquals(0, skipped.uploadedCount)
+            assertEquals(1, skipped.skippedCount)
+            assertEquals(0, skipped.failedCount)
+            assertEquals(1, http.uploadCalls)
+
+            controller.deliver(
+                listOf(artifact),
+                MediaDeliveryConfiguration(forceFrameioReupload = true),
+            )
+            val repeated = assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertEquals(1, repeated.uploadedCount)
+            assertEquals(0, repeated.skippedCount)
+            assertEquals(2, http.uploadCalls)
+        }
+    }
+
+    @Test
+    fun `mixed batch reports uploaded skipped and failed clips exactly`() = runTest {
+        withReadyRoot { readyRoot ->
+            val sources =
+                (1..3).map { index ->
+                    readyRoot.resolve("BATCH$index.MOV").also { path ->
+                        Files.write(path, byteArrayOf(1, 2, 3, 4))
+                    }
+                }
+            val history = MemoryUploadHistory(setOf("already-uploaded"))
+            val http = FakeHttp(failUploadCalls = setOf(2))
+            val controller =
+                connectedController(
+                    readyRoot = readyRoot,
+                    http = http,
+                    uploadHistory = history,
+                )
+            val identities = listOf("already-uploaded", "new-success", "new-failure")
+            val artifacts =
+                sources.mapIndexed { index, path ->
+                    FrameioDeliveryArtifact(
+                        StagedMediaShare(path, path.fileName.toString(), "video/quicktime"),
+                        4,
+                        FrameioArtifactContext("camera", "", true, identities[index]),
+                    )
+                }
+
+            controller.deliver(artifacts)
+
+            val completed = assertIs<FrameioDeliveryState.Completed>(controller.deliveryState)
+            assertEquals(1, completed.uploadedCount)
+            assertEquals(1, completed.skippedCount)
+            assertEquals(1, completed.failedCount)
+            assertTrue(history.wasUploaded("already-uploaded"))
+            assertTrue(history.wasUploaded("new-success"))
+            assertFalse(history.wasUploaded("new-failure"))
+        }
+    }
+
+    @Test
+    fun `private history failures never duplicate or reclassify a confirmed upload`() = runTest {
+        withReadyRoot { readyRoot ->
+            val source = readyRoot.resolve("HISTORY.MOV")
+            Files.write(source, byteArrayOf(1, 2, 3, 4))
+            val artifact =
+                FrameioDeliveryArtifact(
+                    StagedMediaShare(source, "HISTORY.MOV", "video/quicktime"),
+                    4,
+                    FrameioArtifactContext("camera", "", true, "history-clip"),
+                )
+
+            val readHttp = FakeHttp()
+            val readFailure =
+                connectedController(
+                    readyRoot = readyRoot,
+                    http = readHttp,
+                    uploadHistory = ThrowingUploadHistory(failRead = true),
+                )
+            readFailure.deliver(listOf(artifact))
+            val unreadable = assertIs<FrameioDeliveryState.Completed>(readFailure.deliveryState)
+            assertEquals(0, unreadable.uploadedCount)
+            assertEquals(1, unreadable.failedCount)
+            assertEquals(1, unreadable.historyFailureCount)
+            assertEquals(0, readHttp.uploadCalls)
+
+            val writeHttp = FakeHttp()
+            val writeFailure =
+                connectedController(
+                    readyRoot = readyRoot,
+                    http = writeHttp,
+                    uploadHistory = ThrowingUploadHistory(failWrite = true),
+                )
+            writeFailure.deliver(listOf(artifact))
+            val unrecorded = assertIs<FrameioDeliveryState.Completed>(writeFailure.deliveryState)
+            assertEquals(1, unrecorded.uploadedCount)
+            assertEquals(0, unrecorded.failedCount)
+            assertEquals(1, unrecorded.historyFailureCount)
+            assertEquals(1, writeHttp.uploadCalls)
+        }
+    }
+
     private fun controller(
         configuration: () -> FrameioPublicConfiguration? = { CONFIGURATION },
         core: FakeCore = FakeCore(),
@@ -604,6 +732,7 @@ class FrameioDeliveryControllerTest {
         approvedUploadRoots: List<Path> = listOf(shareReadyRoot),
         artifactPreparer: FrameioArtifactPreparer = PassthroughFrameioArtifactPreparer,
         metadataSidecarWriter: FrameioMetadataSidecarWriter = NoFrameioMetadataSidecarWriter,
+        uploadHistory: FrameioUploadHistoryStore = NoFrameioUploadHistoryStore,
         internetWaitPoll: suspend () -> Unit = {},
         internetWaitAttempts: Int = 3,
     ): FrameioDeliveryController =
@@ -618,6 +747,7 @@ class FrameioDeliveryControllerTest {
             approvedUploadRoots = approvedUploadRoots,
             artifactPreparer = artifactPreparer,
             metadataSidecarWriter = metadataSidecarWriter,
+            uploadHistory = uploadHistory,
             clock = { 100_000L },
             uiDispatcher = uiDispatcher,
             internetWaitPoll = internetWaitPoll,
@@ -632,6 +762,7 @@ class FrameioDeliveryControllerTest {
         approvedUploadRoots: List<Path> = listOf(readyRoot),
         artifactPreparer: FrameioArtifactPreparer = PassthroughFrameioArtifactPreparer,
         metadataSidecarWriter: FrameioMetadataSidecarWriter = NoFrameioMetadataSidecarWriter,
+        uploadHistory: FrameioUploadHistoryStore = NoFrameioUploadHistoryStore,
     ): FrameioDeliveryController =
         controller(
             core = core,
@@ -652,6 +783,7 @@ class FrameioDeliveryControllerTest {
             approvedUploadRoots = approvedUploadRoots,
             artifactPreparer = artifactPreparer,
             metadataSidecarWriter = metadataSidecarWriter,
+            uploadHistory = uploadHistory,
         )
 
     private suspend fun withReadyRoot(block: suspend (Path) -> Unit) {
@@ -809,6 +941,7 @@ class FrameioDeliveryControllerTest {
     private class FakeHttp(
         private val progressFromIO: Boolean = false,
         private val uploadFailure: Throwable? = null,
+        private val failUploadCalls: Set<Int> = emptySet(),
     ) : FrameioHttpClient {
         var executeCalls = 0
         var uploadCalls = 0
@@ -833,6 +966,7 @@ class FrameioDeliveryControllerTest {
         ): FrameioHttpResponse {
             uploadCalls += 1
             assertTrue(Files.isRegularFile(source))
+            if (uploadCalls in failUploadCalls) throw java.io.IOException("unit upload failure")
             uploadFailure?.let { throw it }
             if (progressFromIO) {
                 withContext(Dispatchers.IO) {
@@ -843,6 +977,34 @@ class FrameioDeliveryControllerTest {
                 onBytesSent(byteCount)
             }
             return FrameioHttpResponse(200, "")
+        }
+    }
+
+    private class MemoryUploadHistory(initial: Set<String> = emptySet()) :
+        FrameioUploadHistoryStore {
+        private val identities = initial.toMutableSet()
+
+        override fun wasUploaded(stableClipIdentity: String): Boolean =
+            stableClipIdentity in identities
+
+        override fun recordUploaded(stableClipIdentity: String): Boolean {
+            identities += stableClipIdentity
+            return true
+        }
+    }
+
+    private class ThrowingUploadHistory(
+        private val failRead: Boolean = false,
+        private val failWrite: Boolean = false,
+    ) : FrameioUploadHistoryStore {
+        override fun wasUploaded(stableClipIdentity: String): Boolean {
+            if (failRead) throw java.io.IOException("unit history read failure")
+            return false
+        }
+
+        override fun recordUploaded(stableClipIdentity: String): Boolean {
+            if (failWrite) throw java.io.IOException("unit history write failure")
+            return true
         }
     }
 

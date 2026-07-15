@@ -50,8 +50,11 @@ internal sealed interface FrameioDeliveryState {
     data class Completed(
         val uploadedCount: Int,
         val failedCount: Int,
+        val skippedCount: Int = 0,
         val metadataFailureCount: Int = 0,
         val cleanupFailureCount: Int = 0,
+        val historyFailureCount: Int = 0,
+        val firstFailureMessage: String? = null,
     ) : FrameioDeliveryState
 
     data class Failed(val message: String) : FrameioDeliveryState
@@ -95,6 +98,7 @@ internal class FrameioDeliveryController(
     private val artifactPreparer: FrameioArtifactPreparer = PassthroughFrameioArtifactPreparer,
     private val metadataSidecarWriter: FrameioMetadataSidecarWriter =
         NoFrameioMetadataSidecarWriter,
+    private val uploadHistory: FrameioUploadHistoryStore = NoFrameioUploadHistoryStore,
     private val clock: () -> Long = System::currentTimeMillis,
     private val uiDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val internetWaitPoll: suspend () -> Unit = { delay(INTERNET_WAIT_POLL_MILLIS) },
@@ -488,11 +492,37 @@ internal class FrameioDeliveryController(
                 return
             }
             var uploaded = 0
+            var skipped = 0
             var failed = 0
             var metadataFailures = 0
             var cleanupFailures = 0
+            var historyFailures = 0
             var firstFailure: String? = null
             artifacts.forEachIndexed { index, artifact ->
+                val stableIdentity = artifact.context.stableClipIdentity
+                val alreadyUploaded =
+                    if (stableIdentity.isNotBlank() && !options.forceFrameioReupload) {
+                        try {
+                            withContext(Dispatchers.IO) {
+                                uploadHistory.wasUploaded(stableIdentity)
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            failed += 1
+                            historyFailures += 1
+                            if (firstFailure == null) {
+                                firstFailure = "OpenZCine couldn't read the private Frame.io upload history."
+                            }
+                            return@forEachIndexed
+                        }
+                    } else {
+                        false
+                    }
+                if (alreadyUploaded) {
+                    skipped += 1
+                    return@forEachIndexed
+                }
                 deliveryState =
                     FrameioDeliveryState.Uploading(
                         itemIndex = index + 1,
@@ -513,6 +543,19 @@ internal class FrameioDeliveryController(
                     if (outcome.metadataFailure) metadataFailures += 1
                     if (outcome.cleanupFailure) cleanupFailures += 1
                     uploaded += 1
+                    if (stableIdentity.isNotBlank()) {
+                        val historySaved =
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    uploadHistory.recordUploaded(stableIdentity)
+                                }
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (_: Exception) {
+                                false
+                            }
+                        if (!historySaved) historyFailures += 1
+                    }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
@@ -521,16 +564,15 @@ internal class FrameioDeliveryController(
                 }
             }
             deliveryState =
-                if (uploaded > 0) {
-                    FrameioDeliveryState.Completed(
-                        uploadedCount = uploaded,
-                        failedCount = failed,
-                        metadataFailureCount = metadataFailures,
-                        cleanupFailureCount = cleanupFailures,
-                    )
-                } else {
-                    FrameioDeliveryState.Failed(firstFailure ?: "Frame.io could not upload the selected media.")
-                }
+                FrameioDeliveryState.Completed(
+                    uploadedCount = uploaded,
+                    skippedCount = skipped,
+                    failedCount = failed,
+                    metadataFailureCount = metadataFailures,
+                    cleanupFailureCount = cleanupFailures,
+                    historyFailureCount = historyFailures,
+                    firstFailureMessage = firstFailure,
+                )
         } catch (error: CancellationException) {
             deliveryState = FrameioDeliveryState.Idle
             throw error
@@ -544,6 +586,32 @@ internal class FrameioDeliveryController(
     /** Clears a completed/failed delivery message when its overlay is dismissed. */
     fun clearDeliveryState() {
         deliveryState = FrameioDeliveryState.Idle
+    }
+
+    /**
+     * Applies the same verified export configuration used by Frame.io without
+     * starting OAuth, network, or upload work. Native Share and Gallery call
+     * this only after the share stager published a complete immutable copy.
+     */
+    suspend fun prepareForExternalDelivery(
+        artifact: FrameioDeliveryArtifact,
+        configuration: MediaDeliveryConfiguration,
+        onProgress: suspend (Double) -> Unit = {},
+    ): FrameioPreparedArtifact {
+        validateApprovedArtifact(artifact)
+        val prepared = artifactPreparer.prepare(artifact, configuration, onProgress)
+        try {
+            validateApprovedArtifact(prepared.share, prepared.byteCount)
+            return prepared
+        } catch (error: Throwable) {
+            withContext(NonCancellable) { runCatching { artifactPreparer.release(prepared) } }
+            throw error
+        }
+    }
+
+    /** Releases an app-owned temporary export after its destination has made a verified copy. */
+    suspend fun releaseExternalDelivery(prepared: FrameioPreparedArtifact) {
+        artifactPreparer.release(prepared)
     }
 
     private suspend fun uploadArtifact(
@@ -905,6 +973,7 @@ internal fun frameioDeliveryController(
             AndroidFrameioMetadataSidecarWriter(
                 context.filesDir.resolve("frameio-delivery/metadata").toPath(),
             ),
+        uploadHistory = AndroidFrameioUploadHistoryStore(context),
     )
 }
 

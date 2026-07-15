@@ -13,6 +13,10 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.ResolverStyle
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -23,10 +27,14 @@ internal data class MediaGalleryArtifact(
     val displayName: String,
     val mimeType: String,
     val expectedBytes: Long,
+    val captureTimestampMillis: Long? = null,
 ) {
     companion object {
         /** Converts the existing complete-cache staging result into a gallery input. */
-        fun fromStagedShare(share: StagedMediaShare): MediaGalleryArtifact {
+        fun fromStagedShare(
+            share: StagedMediaShare,
+            captureTimestampMillis: Long? = null,
+        ): MediaGalleryArtifact {
             if (!share.mimeType.startsWith("video/")) {
                 throw InvalidMediaGalleryArtifactException("Only staged video media can be saved to Gallery.")
             }
@@ -46,7 +54,13 @@ internal data class MediaGalleryArtifact(
                             it,
                         )
                     }
-            return MediaGalleryArtifact(file, share.displayName, mimeType, byteCount)
+            return MediaGalleryArtifact(
+                file,
+                share.displayName,
+                mimeType,
+                byteCount,
+                captureTimestampMillis,
+            )
         }
     }
 }
@@ -97,6 +111,9 @@ internal class AndroidMediaGalleryGateway(
                     "${Environment.DIRECTORY_MOVIES}/$GALLERY_DIRECTORY",
                 )
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
+                artifact.captureTimestampMillis?.let { timestamp ->
+                    put(MediaStore.Video.VideoColumns.DATE_TAKEN, timestamp)
+                }
             }
         val uri =
             resolver.insert(
@@ -143,6 +160,22 @@ internal class AndroidMediaGalleryGateway(
     }
 }
 
+/** Parses the camera's PTP date without inventing a timestamp when metadata is incomplete. */
+internal fun mediaCaptureTimestampMillis(
+    captureDate: String,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): Long? =
+    runCatching {
+        LocalDateTime.parse(captureDate, PTP_CAPTURE_DATE_FORMATTER)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+    }.getOrNull()
+
+private val PTP_CAPTURE_DATE_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("uuuuMMdd'T'HHmmss", Locale.ROOT)
+        .withResolverStyle(ResolverStyle.STRICT)
+
 /** Stable operator-facing failure categories for one Gallery item. */
 internal enum class MediaGalleryFailureKind {
     PERMISSION_DENIED,
@@ -165,11 +198,13 @@ internal data class MediaGalleryOmissions(
     val nonVideoCount: Int = 0,
     val incompleteCount: Int = 0,
     val preparationFailureCount: Int = 0,
+    val temporaryCleanupFailureCount: Int = 0,
 ) {
     init {
         require(nonVideoCount >= 0)
         require(incompleteCount >= 0)
         require(preparationFailureCount >= 0)
+        require(temporaryCleanupFailureCount >= 0)
     }
 
     val totalCount: Int
@@ -215,6 +250,11 @@ internal data class MediaGalleryBatchResult(
             parts +=
                 "${omissions.preparationFailureCount} " +
                     "${noun(omissions.preparationFailureCount, "item", "items")} couldn't be prepared"
+        }
+        if (omissions.temporaryCleanupFailureCount > 0) {
+            parts +=
+                "${omissions.temporaryCleanupFailureCount} temporary " +
+                    "${noun(omissions.temporaryCleanupFailureCount, "export wasn't", "exports weren't")} removed"
         }
         return parts.joinToString(separator = "; ", postfix = ".")
     }

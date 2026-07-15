@@ -56,7 +56,7 @@ class FrameioMediaPreparationTest {
     }
 
     @Test
-    fun `bake creates a temporary mp4 without changing the staged original`() = runTest {
+    fun `default bake creates a temporary mov without changing the staged original`() = runTest {
         withTempRoots { source, exportRoot ->
             val original = byteArrayOf(1, 2, 3, 4)
             Files.write(source, original)
@@ -81,7 +81,9 @@ class FrameioMediaPreparationTest {
                 ) {}
 
             assertEquals(source, exporter.source)
-            assertEquals("C0001.mp4", prepared.share.displayName)
+            assertEquals("C0001.mov", prepared.share.displayName)
+            assertEquals("video/quicktime", prepared.share.mimeType)
+            assertTrue(exporter.target?.fileName.toString().endsWith(".mov"))
             assertEquals("Unit LUT", prepared.appliedLutName)
             assertEquals(original.toList(), Files.readAllBytes(source).toList())
             assertTrue(Files.isRegularFile(prepared.share.file))
@@ -90,6 +92,70 @@ class FrameioMediaPreparationTest {
             preparer.release(prepared)
 
             assertFalse(Files.exists(prepared.share.file))
+        }
+    }
+
+    @Test
+    fun `explicit mp4 export configuration changes target name and MIME only`() = runTest {
+        withTempRoots { source, exportRoot ->
+            val original = byteArrayOf(1, 2, 3, 4)
+            Files.write(source, original)
+            val exporter = FakeExporter()
+            val preparer =
+                AndroidFrameioArtifactPreparer(
+                    exportRoot = exportRoot,
+                    lutProvider = FixedLutProvider(unitLut()),
+                    exporter = exporter,
+                )
+
+            val prepared =
+                preparer.prepare(
+                    artifact(source, supportsLutBake = true),
+                    MediaDeliveryConfiguration(
+                        bakeLut = true,
+                        exportContainer = MediaExportContainer.MP4,
+                        selectedLut = FeedLutSelection.BuiltIn(FeedLut.MONO),
+                    ),
+                ) {}
+
+            assertEquals("C0001.mp4", prepared.share.displayName)
+            assertEquals("video/mp4", prepared.share.mimeType)
+            assertTrue(exporter.target?.fileName.toString().endsWith(".mp4"))
+            assertEquals(original.toList(), Files.readAllBytes(source).toList())
+            preparer.release(prepared)
+        }
+    }
+
+    @Test
+    fun `mov finalizer writes QuickTime major and compatible brands`() {
+        val root = createTempDirectory("frameio-mov-brand")
+        try {
+            val target = root.resolve("export.mov")
+            Files.write(target, fakeIsoBmff())
+
+            finalizeMediaExportContainer(target, MediaExportContainer.MOV)
+
+            val bytes = Files.readAllBytes(target)
+            assertEquals("qt  ", String(bytes.copyOfRange(8, 12), Charsets.US_ASCII))
+            assertEquals("qt  ", String(bytes.copyOfRange(16, 20), Charsets.US_ASCII))
+            assertEquals("avc1", String(bytes.copyOfRange(20, 24), Charsets.US_ASCII))
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `mov finalizer rejects an incomplete relabelled mp4`() {
+        val root = createTempDirectory("frameio-bad-mov")
+        try {
+            val target = root.resolve("export.mov")
+            Files.write(target, byteArrayOf(1, 2, 3, 4))
+
+            assertFailsWith<FrameioDeliveryException> {
+                finalizeMediaExportContainer(target, MediaExportContainer.MOV)
+            }
+        } finally {
+            root.toFile().deleteRecursively()
         }
     }
 
@@ -336,6 +402,7 @@ class FrameioMediaPreparationTest {
     private class FakeExporter : FrameioLutVideoExporter {
         var calls = 0
         var source: Path? = null
+        var target: Path? = null
 
         override suspend fun export(
             source: Path,
@@ -345,9 +412,22 @@ class FrameioMediaPreparationTest {
         ) {
             calls += 1
             this.source = source
+            this.target = target
             onProgress(0.5)
-            Files.write(target, byteArrayOf(9, 8, 7, 6, 5))
+            Files.write(target, fakeIsoBmff())
             onProgress(1.0)
         }
+    }
+
+    private companion object {
+        fun fakeIsoBmff(): ByteArray =
+            byteArrayOf(
+                0x00, 0x00, 0x00, 0x18,
+                0x66, 0x74, 0x79, 0x70,
+                0x69, 0x73, 0x6F, 0x6D,
+                0x00, 0x00, 0x00, 0x00,
+                0x69, 0x73, 0x6F, 0x6D,
+                0x61, 0x76, 0x63, 0x31,
+            )
     }
 }

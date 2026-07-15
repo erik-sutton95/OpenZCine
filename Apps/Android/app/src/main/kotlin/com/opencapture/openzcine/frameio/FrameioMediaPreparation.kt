@@ -19,10 +19,14 @@ import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.media.StagedMediaShare
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -35,11 +39,23 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Per-run choices that are applied only to this Frame.io delivery. */
-internal data class FrameioDeliveryOptions(
+/** Container chosen for a LUT-baked native or Frame.io export. */
+internal enum class MediaExportContainer(
+    val label: String,
+    val extension: String,
+    val mimeType: String,
+) {
+    MOV("MOV", "mov", "video/quicktime"),
+    MP4("MP4", "mp4", "video/mp4"),
+}
+
+/** One explicit per-run configuration shared by every external media destination. */
+internal data class MediaDeliveryConfiguration(
     val bakeLut: Boolean = false,
-    val includeMetadata: Boolean = false,
+    val exportContainer: MediaExportContainer = MediaExportContainer.MOV,
+    val includeMetadata: Boolean = true,
     val selectedLut: FeedLutSelection? = null,
+    val forceFrameioReupload: Boolean = false,
 ) {
     init {
         require(!bakeLut || selectedLut != null) {
@@ -48,11 +64,15 @@ internal data class FrameioDeliveryOptions(
     }
 }
 
+/** Compatibility name retained for existing Frame.io call sites and tests. */
+internal typealias FrameioDeliveryOptions = MediaDeliveryConfiguration
+
 /** Non-secret camera/media context retained while a network hop tears down the session. */
 internal data class FrameioArtifactContext(
     val cameraID: String,
     val captureDate: String,
     val supportsLutBake: Boolean,
+    val stableClipIdentity: String = "",
 )
 
 /** One Swift-approved cube ready for Media3's export-only colour effect. */
@@ -278,7 +298,7 @@ internal class FrameioExportProgressWatchdog(
     }
 }
 
-/** Production preparer for optional, per-delivery LUT-baked MP4 output. */
+/** Production preparer for optional, per-delivery LUT-baked MOV or MP4 output. */
 internal class AndroidFrameioArtifactPreparer(
     private val exportRoot: Path,
     private val lutProvider: FrameioLutProvider,
@@ -307,11 +327,12 @@ internal class AndroidFrameioArtifactPreparer(
             Files.createDirectories(exportRoot)
             pruneOwnedFrameioExports(exportRoot)
         }
-        val target = exportRoot.resolve("frameio-${UUID.randomUUID()}.mp4")
+        val target = exportRoot.resolve("frameio-${UUID.randomUUID()}.${options.exportContainer.extension}")
         try {
             exporter.export(artifact.share.file, target, lut, onProgress)
             val byteCount =
                 withContext(Dispatchers.IO) {
+                    finalizeMediaExportContainer(target, options.exportContainer)
                     if (!Files.isRegularFile(target) || Files.size(target) <= 0) {
                         throw FrameioDeliveryException(
                             "The LUT-baked export did not produce a complete video.",
@@ -323,8 +344,8 @@ internal class AndroidFrameioArtifactPreparer(
                 share =
                     StagedMediaShare(
                         file = target,
-                        displayName = bakedFilename(artifact.share.displayName),
-                        mimeType = "video/mp4",
+                        displayName = bakedFilename(artifact.share.displayName, options.exportContainer),
+                        mimeType = options.exportContainer.mimeType,
                     ),
                 byteCount = byteCount,
                 appliedLutName = lut.displayName,
@@ -369,9 +390,64 @@ internal class AndroidFrameioArtifactPreparer(
         }
     }
 
-    private fun bakedFilename(original: String): String =
-        original.substringBeforeLast('.', missingDelimiterValue = original).ifBlank { "OpenZCine" } + ".mp4"
+    private fun bakedFilename(original: String, container: MediaExportContainer): String =
+        original.substringBeforeLast('.', missingDelimiterValue = original).ifBlank { "OpenZCine" } +
+            ".${container.extension}"
 }
+
+/**
+ * Media3 always emits an ISO-BMFF MP4. Its H.264/AAC box graph is also valid in
+ * QuickTime MOV, so MOV delivery rewrites the completed `ftyp` brands instead
+ * of merely relabelling an MP4 file. The transient export is the only file
+ * opened for writing; the camera/share original remains read-only.
+ */
+internal fun finalizeMediaExportContainer(target: Path, container: MediaExportContainer) {
+    if (container == MediaExportContainer.MP4) return
+    if (
+        !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) ||
+            Files.isSymbolicLink(target)
+    ) {
+        throw FrameioDeliveryException("The LUT-baked MOV export is not a complete regular file.")
+    }
+    FileChannel.open(
+        target,
+        StandardOpenOption.READ,
+        StandardOpenOption.WRITE,
+        LinkOption.NOFOLLOW_LINKS,
+    ).use { channel ->
+        val header = ByteBuffer.allocate(QUICKTIME_FTYP_HEADER_BYTES).order(ByteOrder.BIG_ENDIAN)
+        while (header.hasRemaining()) {
+            if (channel.read(header) <= 0) {
+                throw FrameioDeliveryException("The LUT-baked MOV export has an incomplete media header.")
+            }
+        }
+        header.flip()
+        val boxSize = header.int.toLong() and 0xFFFF_FFFFL
+        val boxType = ByteArray(4).also(header::get)
+        if (
+            !boxType.contentEquals(FTYP_BOX_TYPE) ||
+                boxSize < QUICKTIME_FTYP_HEADER_BYTES ||
+                boxSize > channel.size()
+        ) {
+            throw FrameioDeliveryException("The LUT-baked MOV export has an unsupported media header.")
+        }
+        writeFully(channel, QUICKTIME_MAJOR_BRAND_OFFSET, QUICKTIME_BRAND)
+        writeFully(channel, QUICKTIME_COMPATIBLE_BRAND_OFFSET, QUICKTIME_BRAND)
+        channel.force(true)
+    }
+}
+
+private fun writeFully(channel: FileChannel, offset: Long, bytes: ByteArray) {
+    channel.position(offset)
+    val buffer = ByteBuffer.wrap(bytes)
+    while (buffer.hasRemaining()) channel.write(buffer)
+}
+
+private val FTYP_BOX_TYPE = byteArrayOf(0x66, 0x74, 0x79, 0x70)
+private val QUICKTIME_BRAND = byteArrayOf(0x71, 0x74, 0x20, 0x20)
+private const val QUICKTIME_FTYP_HEADER_BYTES = 20
+private const val QUICKTIME_MAJOR_BRAND_OFFSET = 8L
+private const val QUICKTIME_COMPATIBLE_BRAND_OFFSET = 16L
 
 /** Removes only app-owned transient exports by age and a bounded cache budget. */
 internal fun pruneOwnedFrameioExports(
@@ -427,7 +503,10 @@ private data class OwnedFrameioExport(
 )
 
 private val FRAMEIO_EXPORT_FILENAME =
-    Regex("frameio-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.mp4")
+    Regex(
+        "frameio-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" +
+            "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.(mov|mp4)",
+    )
 private const val FRAMEIO_EXPORT_MAXIMUM_AGE_MILLIS = 24L * 60L * 60L * 1_000L
 private const val FRAMEIO_EXPORT_MAXIMUM_BYTES = 2L * 1_024L * 1_024L * 1_024L
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,9 +39,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -93,8 +96,10 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
+import com.opencapture.openzcine.frameio.FrameioPreparedArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.settings.OperatorSettings
@@ -139,6 +144,19 @@ private data class BatchShareResult(
 private data class GalleryDelivery(
     val result: MediaGalleryBatchResult,
     val omissions: MediaGalleryOmissions,
+)
+
+/** One configured, verified artifact paired with its stable source record. */
+private data class PreparedExternalMedia(
+    val clip: MediaClipRecord,
+    val artifact: FrameioPreparedArtifact,
+)
+
+/** Partial-safe result from applying one export configuration to staged media. */
+private data class ExternalMediaPreparation(
+    val prepared: List<PreparedExternalMedia>,
+    val failedCount: Int,
+    val firstFailure: String?,
 )
 
 /**
@@ -186,6 +204,71 @@ private fun stageSelectedMedia(
     return BatchShareResult(staged, stagedClips, incomplete, failed, firstFailure)
 }
 
+private suspend fun prepareExternalMedia(
+    controller: FrameioDeliveryController,
+    cameraID: String,
+    staged: BatchShareResult,
+    configuration: MediaDeliveryConfiguration,
+    cancellationCheck: () -> Unit,
+): ExternalMediaPreparation {
+    val prepared = mutableListOf<PreparedExternalMedia>()
+    var failed = 0
+    var firstFailure: String? = null
+    try {
+        staged.staged.zip(staged.stagedClips).forEach { (share, clip) ->
+            cancellationCheck()
+            try {
+                val artifact =
+                    controller.prepareForExternalDelivery(
+                    FrameioDeliveryArtifact(
+                        share = share,
+                        byteCount = withContext(Dispatchers.IO) { Files.size(share.file) },
+                        context =
+                            FrameioArtifactContext(
+                                cameraID = cameraID,
+                                captureDate = clip.captureDate,
+                                supportsLutBake =
+                                    clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
+                                stableClipIdentity = clip.libraryKey(cameraID),
+                            ),
+                    ),
+                    configuration,
+                )
+                prepared += PreparedExternalMedia(clip, artifact)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                failed += 1
+                if (firstFailure == null) firstFailure = error.message
+            }
+        }
+    } catch (error: CancellationException) {
+        withContext(NonCancellable) {
+            prepared.forEach { item ->
+                runCatching { controller.releaseExternalDelivery(item.artifact) }
+            }
+        }
+        throw error
+    }
+    return ExternalMediaPreparation(prepared, failed, firstFailure)
+}
+
+/** Privacy-bounded details attached to Android's share intent only when requested. */
+internal fun mediaDeliveryMetadataSummary(clips: List<MediaClipRecord>): String {
+    val lines =
+        clips.take(MAXIMUM_SHARE_METADATA_ITEMS).map { clip ->
+            val filename = clip.filename.take(MAXIMUM_SHARE_METADATA_FILENAME_CHARACTERS)
+            val date = clip.captureDate.ifBlank { "unknown date" }.take(32)
+            "$filename · $date · ${clip.sizeLabel}"
+        }.toMutableList()
+    val omitted = clips.size - lines.size
+    if (omitted > 0) lines += "+$omitted more selected ${if (omitted == 1) "item" else "items"}"
+    return lines.joinToString(separator = "\n")
+}
+
+private const val MAXIMUM_SHARE_METADATA_ITEMS = 32
+private const val MAXIMUM_SHARE_METADATA_FILENAME_CHARACTERS = 160
+
 internal fun frameioDeliverySummary(
     state: FrameioDeliveryState,
     internetHopState: FrameioInternetHopState,
@@ -195,10 +278,20 @@ internal fun frameioDeliverySummary(
     when (state) {
         is FrameioDeliveryState.Completed ->
             buildString {
-                append("Delivered ${state.uploadedCount} cached item")
-                if (state.uploadedCount != 1) append('s')
+                if (state.uploadedCount > 0) {
+                    append("Delivered ${state.uploadedCount} cached item")
+                    if (state.uploadedCount != 1) append('s')
+                } else {
+                    append("No new cached items uploaded")
+                }
+                if (state.skippedCount > 0) {
+                    append("; ${state.skippedCount} already uploaded")
+                }
                 if (state.failedCount > 0) {
                     append("; ${state.failedCount} failed")
+                }
+                state.firstFailureMessage?.takeIf(String::isNotBlank)?.let { firstFailure ->
+                    append("; first failure: ${firstFailure.trimEnd('.')}")
                 }
                 if (state.metadataFailureCount > 0) {
                     append("; ${state.metadataFailureCount} metadata sidecar")
@@ -209,6 +302,10 @@ internal fun frameioDeliverySummary(
                     append("; ${state.cleanupFailureCount} temporary export")
                     if (state.cleanupFailureCount != 1) append('s')
                     append(" not removed")
+                }
+                if (state.historyFailureCount > 0) {
+                    append("; ${state.historyFailureCount} upload history ")
+                    append(if (state.historyFailureCount == 1) "failure" else "failures")
                 }
                 if (skippedBeforeUpload > 0) {
                     append("; $skippedBeforeUpload not prepared")
@@ -365,6 +462,8 @@ internal fun MediaBrowseScreen(
     var frameioDeliveryPresented by remember { mutableStateOf(false) }
     var frameioPreparationInProgress by remember { mutableStateOf(false) }
     var nativeDeliveryPresented by remember { mutableStateOf(false) }
+    var filters by remember(cameraID) { mutableStateOf(MediaLibraryFilters()) }
+    var filterDialogPresented by remember { mutableStateOf(false) }
 
     fun updateOptions(updated: MediaLibraryViewOptions) {
         if (shareInProgress) return
@@ -447,6 +546,11 @@ internal fun MediaBrowseScreen(
     }
 
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
+    LaunchedEffect(cameraID, options.source, state) {
+        if (state !is BrowseState.Loaded) return@LaunchedEffect
+        val retained = filters.retainingAvailableStorage(options.source, loadedClips)
+        if (retained != filters) filters = retained
+    }
     val displayedClips =
         MediaLibraryFiltering.displayed(
             clips = loadedClips,
@@ -454,6 +558,7 @@ internal fun MediaBrowseScreen(
             favoriteIDs = favorites,
             cameraID = cameraID,
             sortOrder = options.sortOrder,
+            filters = filters,
         )
     val selectedClips =
         displayedClips.filter { clip -> clip.libraryKey(cameraID) in selectedIDs }
@@ -519,7 +624,7 @@ internal fun MediaBrowseScreen(
         selectedIDs = MediaLibrarySelection.toggle(selectedIDs, clip.libraryKey(cameraID))
     }
 
-    fun beginBatchShare() {
+    fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedClips
         shareInProgress = true
@@ -528,7 +633,7 @@ internal fun MediaBrowseScreen(
             scope.launch {
                 val stageContext = coroutineContext
                 try {
-                    val result =
+                    val staged =
                         withContext(Dispatchers.IO) {
                             stageSelectedMedia(
                                 context,
@@ -537,20 +642,78 @@ internal fun MediaBrowseScreen(
                                 selectionSnapshot,
                             ) { stageContext.ensureActive() }
                         }
-                    if (result.staged.isEmpty()) {
+                    if (staged.staged.isEmpty()) {
                         shareMessage =
-                            result.firstFailure
+                            staged.firstFailure
                                 ?: "Only complete cached media can be shared."
                     } else {
-                        context.startActivity(AndroidMediaShareIntent.chooserIntent(context, result.staged))
+                        val configured =
+                            prepareExternalMedia(
+                                frameioController,
+                                cameraID,
+                                staged,
+                                configuration,
+                            ) { stageContext.ensureActive() }
+                        val published = mutableListOf<StagedMediaShare>()
+                        val publishedClips = mutableListOf<MediaClipRecord>()
+                        var publicationFailures = 0
+                        var cleanupFailures = 0
+                        configured.prepared.forEach { item ->
+                            try {
+                                val share =
+                                    if (item.artifact.transientExport == null) {
+                                        item.artifact.share
+                                    } else {
+                                        withContext(Dispatchers.IO) {
+                                            MediaShareStager(context.cacheDir.toPath())
+                                                .stagePreparedArtifact(
+                                                    source = item.artifact.share.file,
+                                                    expectedBytes = item.artifact.byteCount,
+                                                    displayName = item.artifact.share.displayName,
+                                                    mimeType = item.artifact.share.mimeType,
+                                                ) { stageContext.ensureActive() }
+                                        }
+                                    }
+                                published += share
+                                publishedClips += item.clip
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (_: Exception) {
+                                publicationFailures += 1
+                            } finally {
+                                val released =
+                                    withContext(NonCancellable) {
+                                        runCatching {
+                                            frameioController.releaseExternalDelivery(item.artifact)
+                                        }.isSuccess
+                                    }
+                                if (!released) cleanupFailures += 1
+                            }
+                        }
+                        if (published.isEmpty()) {
+                            shareMessage =
+                                configured.firstFailure
+                                    ?: "Couldn't produce a complete configured share artifact."
+                            return@launch
+                        }
+                        val metadata =
+                            mediaDeliveryMetadataSummary(publishedClips)
+                                .takeIf { configuration.includeMetadata }
+                        context.startActivity(
+                            AndroidMediaShareIntent.chooserIntent(context, published, metadata),
+                        )
+                        val skipped =
+                            staged.incompleteCount +
+                                staged.failedCount +
+                                configured.failedCount +
+                                publicationFailures
                         shareMessage =
                             buildString {
-                                append("Sharing ${result.staged.size} cached item")
-                                if (result.staged.size != 1) append('s')
-                                if (result.incompleteCount > 0 || result.failedCount > 0) {
-                                    append("; ")
-                                    append(result.incompleteCount + result.failedCount)
-                                    append(" skipped")
+                                append("Sharing ${published.size} configured item")
+                                if (published.size != 1) append('s')
+                                if (skipped > 0) append("; $skipped skipped")
+                                if (cleanupFailures > 0) {
+                                    append("; $cleanupFailures temporary export cleanup failed")
                                 }
                             }
                         exitSelection()
@@ -571,7 +734,7 @@ internal fun MediaBrowseScreen(
         nativeDeliveryPresented = true
     }
 
-    fun beginBatchGallerySave() {
+    fun beginBatchGallerySave(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedClips
         val videoSelection =
@@ -592,36 +755,69 @@ internal fun MediaBrowseScreen(
             scope.launch {
                 val stageContext = coroutineContext
                 try {
-                    val delivery =
+                    val staged =
                         withContext(Dispatchers.IO) {
-                            val staged =
-                                stageSelectedMedia(
-                                    context,
-                                    cacheStore,
-                                    cameraID,
-                                    videoSelection,
-                                ) { stageContext.ensureActive() }
-                            var artifactFailures = 0
-                            val artifacts =
-                                staged.staged.mapNotNull { share ->
-                                    runCatching { MediaGalleryArtifact.fromStagedShare(share) }
-                                        .onFailure { artifactFailures += 1 }
-                                        .getOrNull()
-                                }
-                            val result =
+                            stageSelectedMedia(
+                                context,
+                                cacheStore,
+                                cameraID,
+                                videoSelection,
+                            ) { stageContext.ensureActive() }
+                        }
+                    val configured =
+                        prepareExternalMedia(
+                            frameioController,
+                            cameraID,
+                            staged,
+                            configuration,
+                        ) { stageContext.ensureActive() }
+                    var artifactFailures = 0
+                    val artifacts =
+                        withContext(Dispatchers.IO) {
+                            configured.prepared.mapNotNull { item ->
+                                runCatching {
+                                    MediaGalleryArtifact.fromStagedShare(
+                                        item.artifact.share,
+                                        mediaCaptureTimestampMillis(item.clip.captureDate)
+                                            .takeIf { configuration.includeMetadata },
+                                    )
+                                }.onFailure { artifactFailures += 1 }
+                                    .getOrNull()
+                            }
+                        }
+                    var cleanupFailures = 0
+                    val result =
+                        try {
+                            withContext(Dispatchers.IO) {
                                 MediaGallerySaver(galleryGateway).save(artifacts) {
                                     stageContext.ensureActive()
                                 }
-                            GalleryDelivery(
-                                result = result,
-                                omissions =
-                                    MediaGalleryOmissions(
-                                        nonVideoCount = nonVideoCount,
-                                        incompleteCount = staged.incompleteCount,
-                                        preparationFailureCount = staged.failedCount + artifactFailures,
-                                    ),
-                            )
+                            }
+                        } finally {
+                            configured.prepared.forEach { item ->
+                                val released =
+                                    withContext(NonCancellable) {
+                                        runCatching {
+                                            frameioController.releaseExternalDelivery(item.artifact)
+                                        }.isSuccess
+                                    }
+                                if (!released) cleanupFailures += 1
+                            }
                         }
+                    val delivery =
+                        GalleryDelivery(
+                            result = result,
+                            omissions =
+                                MediaGalleryOmissions(
+                                    nonVideoCount = nonVideoCount,
+                                    incompleteCount = staged.incompleteCount,
+                                    preparationFailureCount =
+                                        staged.failedCount +
+                                            configured.failedCount +
+                                            artifactFailures,
+                                    temporaryCleanupFailureCount = cleanupFailures,
+                                ),
+                        )
                     shareMessage = delivery.result.operatorMessage(delivery.omissions)
                     if (
                         delivery.result.savedCount == videoSelection.size &&
@@ -688,6 +884,7 @@ internal fun MediaBrowseScreen(
                                             captureDate = clip.captureDate,
                                             supportsLutBake =
                                                 clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
+                                            stableClipIdentity = clip.libraryKey(cameraID),
                                         ),
                                 )
                             }
@@ -794,17 +991,24 @@ internal fun MediaBrowseScreen(
                         frameioInternetHopState = internetHopState,
                         layout = options.layout,
                         sortOrder = options.sortOrder,
+                        thumbnailSize = options.thumbnailSize,
+                        activeFilterCount = filters.activeCount,
                         onExitSelection = ::cancelActiveShareOrExitSelection,
                         onShare = ::presentNativeDelivery,
                         onFrameioDelivery = ::presentFrameioDelivery,
                         onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
                         onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
+                        onThumbnailSizeChange = { size ->
+                            updateOptions(options.copy(thumbnailSize = size))
+                        },
+                        onShowFilters = { filterDialogPresented = true },
                     )
                     MediaLibraryBody(
                         state = state,
                         clips = displayedClips,
                         source = options.source,
                         layout = options.layout,
+                        thumbnailSize = options.thumbnailSize,
                         cameraID = cameraID,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
@@ -854,17 +1058,24 @@ internal fun MediaBrowseScreen(
                             frameioInternetHopState = internetHopState,
                             layout = options.layout,
                             sortOrder = options.sortOrder,
+                            thumbnailSize = options.thumbnailSize,
+                            activeFilterCount = filters.activeCount,
                             onExitSelection = ::cancelActiveShareOrExitSelection,
                             onShare = ::presentNativeDelivery,
                             onFrameioDelivery = ::presentFrameioDelivery,
                             onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
                             onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
+                            onThumbnailSizeChange = { size ->
+                                updateOptions(options.copy(thumbnailSize = size))
+                            },
+                            onShowFilters = { filterDialogPresented = true },
                         )
                         MediaLibraryBody(
                             state = state,
                             clips = displayedClips,
                             source = options.source,
                             layout = options.layout,
+                            thumbnailSize = options.thumbnailSize,
                             cameraID = cameraID,
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
@@ -910,12 +1121,34 @@ internal fun MediaBrowseScreen(
                 shareReadyCount = readySelectionIDs.size,
                 galleryReadyCount = readyGalleryCount,
                 busy = shareInProgress,
+                selectedLut = selectedLut.takeIf { selectedLutLabel != null },
+                selectedLutLabel = selectedLutLabel,
                 onDismiss = { nativeDeliveryPresented = false },
-                onShare = {
+                onShare = { configuration ->
                     nativeDeliveryPresented = false
-                    beginBatchShare()
+                    beginBatchShare(configuration)
                 },
                 onSaveToGallery = ::beginBatchGallerySave,
+            )
+        }
+
+        if (filterDialogPresented) {
+            MediaFilterDialog(
+                filters = filters,
+                storageIds =
+                    if (options.source == MediaLibrarySource.CAMERA) {
+                        // MediaBrowse.swift enumerates usable storage IDs in camera order;
+                        // preserve that order so Slot 1/2 never comes from numeric guessing.
+                        loadedClips.map(MediaClipRecord::storageId).distinct()
+                    } else {
+                        emptyList()
+                    },
+                onFiltersChanged = { updated ->
+                    filters = updated
+                    isSelecting = false
+                    selectedIDs = emptySet()
+                },
+                onDismiss = { filterDialogPresented = false },
             )
         }
 
@@ -950,6 +1183,7 @@ internal fun MediaBrowseScreen(
                 exposureAssistCameraInput = exposureAssistCameraInput,
                 operatorSettings = operatorSettings,
                 lutLibrary = lutLibrary,
+                frameioController = frameioController,
                 onToggleFavorite = ::toggleFavorite,
                 onClose = {
                     playingClip = null
@@ -1106,11 +1340,15 @@ private fun MediaLibraryHeader(
     frameioInternetHopState: FrameioInternetHopState,
     layout: MediaLibraryLayout,
     sortOrder: MediaLibrarySortOrder,
+    thumbnailSize: MediaThumbnailSize,
+    activeFilterCount: Int,
     onExitSelection: () -> Unit,
     onShare: () -> Unit,
     onFrameioDelivery: () -> Unit,
     onLayoutChange: (MediaLibraryLayout) -> Unit,
     onSortChange: (MediaLibrarySortOrder) -> Unit,
+    onThumbnailSizeChange: (MediaThumbnailSize) -> Unit,
+    onShowFilters: () -> Unit,
 ) {
     if (isSelecting) {
         SelectionHeader(
@@ -1127,39 +1365,71 @@ private fun MediaLibraryHeader(
         return
     }
 
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                "MULTIMEDIA",
-                style = chromeStyle(10f, FontWeight.Bold, mono = true).copy(letterSpacing = 0.8.sp),
-                color = LiveDesign.muted,
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    category.titleForHeader(),
-                    style = chromeStyle(26f, FontWeight.SemiBold),
-                    color = LiveDesign.text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text("·", style = chromeStyle(18f, FontWeight.Medium), color = LiveDesign.faint)
-                Text(
-                    itemCountLabel(state, displayedCount),
-                    style = chromeStyle(14f, FontWeight.Medium),
-                    color = LiveDesign.muted,
-                    maxLines = 1,
+    val controls: @Composable RowScope.() -> Unit = {
+        FilterControl(activeCount = activeFilterCount, onClick = onShowFilters)
+        SortControl(sortOrder = sortOrder, onSelect = onSortChange)
+        if (layout == MediaLibraryLayout.GRID) {
+            ThumbnailSizeControl(thumbnailSize, onThumbnailSizeChange)
+        }
+        LayoutControl(layout = layout, onToggle = onLayoutChange)
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 620.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                MediaHeaderIdentity(state, category, displayedCount)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = controls,
                 )
             }
+        } else {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(Modifier.weight(1f)) {
+                    MediaHeaderIdentity(state, category, displayedCount)
+                }
+                controls()
+            }
         }
-        SortControl(sortOrder = sortOrder, onSelect = onSortChange)
-        LayoutControl(layout = layout, onToggle = onLayoutChange)
+    }
+}
+
+@Composable
+private fun MediaHeaderIdentity(
+    state: BrowseState,
+    category: MediaLibraryCategory,
+    displayedCount: Int,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "MULTIMEDIA",
+            style = chromeStyle(10f, FontWeight.Bold, mono = true).copy(letterSpacing = 0.8.sp),
+            color = LiveDesign.muted,
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                category.titleForHeader(),
+                style = chromeStyle(26f, FontWeight.SemiBold),
+                color = LiveDesign.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text("·", style = chromeStyle(18f, FontWeight.Medium), color = LiveDesign.faint)
+            Text(
+                itemCountLabel(state, displayedCount),
+                style = chromeStyle(14f, FontWeight.Medium),
+                color = LiveDesign.muted,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -1406,6 +1676,149 @@ private fun LayoutControl(layout: MediaLibraryLayout, onToggle: (MediaLibraryLay
     }
 }
 
+/** Opens the composable filter sheet and exposes its active-group count. */
+@Composable
+private fun FilterControl(activeCount: Int, onClick: () -> Unit) {
+    Text(
+        if (activeCount > 0) "FILTER $activeCount" else "FILTER",
+        style = chromeStyle(10f, FontWeight.Bold, mono = true),
+        color = if (activeCount > 0) LiveDesign.accent else LiveDesign.muted,
+        modifier =
+            Modifier.glass(CapsuleShape)
+                .semantics {
+                    contentDescription =
+                        if (activeCount > 0) "$activeCount active media filters" else "Filter media"
+                    role = Role.Button
+                }.chromeClickable(onClick)
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+    )
+}
+
+/** Three persisted adaptive-grid density presets. */
+@Composable
+private fun ThumbnailSizeControl(
+    selected: MediaThumbnailSize,
+    onSelect: (MediaThumbnailSize) -> Unit,
+) {
+    Row(
+        Modifier.glass(CapsuleShape).padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        MediaThumbnailSize.entries.forEach { size ->
+            val active = size == selected
+            Text(
+                size.name.take(1),
+                style = chromeStyle(10f, FontWeight.Bold, mono = true),
+                color = if (active) LiveDesign.accent else LiveDesign.muted,
+                modifier =
+                    Modifier.clip(CircleShape)
+                        .background(if (active) LiveDesign.accentDim else Color.Transparent)
+                        .semantics {
+                            contentDescription = size.accessibilityLabel
+                            role = Role.RadioButton
+                        }.chromeClickable { onSelect(size) }
+                        .padding(horizontal = 9.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/** Camera-scoped filter controls; sets compose with AND semantics between sections. */
+@Composable
+private fun MediaFilterDialog(
+    filters: MediaLibraryFilters,
+    storageIds: List<Long>,
+    onFiltersChanged: (MediaLibraryFilters) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Filter media") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 290.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                FilterSection("CONTAINER") {
+                    MediaContainerFilter.entries.forEach { value ->
+                        FilterChoice(value.title, value in filters.containers) {
+                            onFiltersChanged(filters.copy(containers = filters.containers.toggled(value)))
+                        }
+                    }
+                }
+                FilterSection("RESOLUTION") {
+                    MediaResolutionFilter.entries.forEach { value ->
+                        FilterChoice(value.title, value in filters.resolutions) {
+                            onFiltersChanged(filters.copy(resolutions = filters.resolutions.toggled(value)))
+                        }
+                    }
+                }
+                FilterSection("DATE") {
+                    FilterChoice("TODAY", filters.todayOnly) {
+                        onFiltersChanged(filters.copy(todayOnly = !filters.todayOnly))
+                    }
+                }
+                if (storageIds.isNotEmpty()) {
+                    FilterSection("CAMERA SLOT") {
+                        storageIds.forEachIndexed { index, storageId ->
+                            FilterChoice("SLOT ${index + 1}", filters.storageId == storageId) {
+                                onFiltersChanged(
+                                    filters.copy(
+                                        storageId = if (filters.storageId == storageId) null else storageId,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        dismissButton = {
+            TextButton(
+                enabled = filters.activeCount > 0,
+                onClick = { onFiltersChanged(MediaLibraryFilters()) },
+            ) {
+                Text("Clear all")
+            }
+        },
+        containerColor = LiveDesign.surface,
+    )
+}
+
+@Composable
+private fun FilterSection(title: String, content: @Composable RowScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, style = chromeStyle(9f, FontWeight.Bold, mono = true), color = LiveDesign.muted)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun FilterChoice(title: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        title,
+        style = chromeStyle(10f, FontWeight.Bold, mono = true),
+        color = if (selected) LiveDesign.accent else LiveDesign.muted,
+        modifier =
+            Modifier.clip(CapsuleShape)
+                .background(if (selected) LiveDesign.accentDim else LiveDesign.background)
+                .border(1.dp, if (selected) LiveDesign.accent else LiveDesign.hairline, CapsuleShape)
+                .semantics {
+                    contentDescription = "$title filter"
+                    role = Role.Checkbox
+                }.chromeClickable(onClick)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+}
+
+private fun <Value> Set<Value>.toggled(value: Value): Set<Value> =
+    toMutableSet().apply { if (!add(value)) remove(value) }
+
 /** Body chooses state, grid, or list without changing the data source. */
 @Composable
 private fun MediaLibraryBody(
@@ -1413,6 +1826,7 @@ private fun MediaLibraryBody(
     clips: List<MediaClipRecord>,
     source: MediaLibrarySource,
     layout: MediaLibraryLayout,
+    thumbnailSize: MediaThumbnailSize,
     cameraID: String,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
@@ -1437,6 +1851,7 @@ private fun MediaLibraryBody(
                 } else if (layout == MediaLibraryLayout.GRID) {
                     MediaClipGrid(
                         clips = clips,
+                        thumbnailSize = thumbnailSize,
                         source = source,
                         cameraID = cameraID,
                         cameraConnected = cameraConnected,
@@ -1474,6 +1889,7 @@ private fun MediaLibraryBody(
 @Composable
 private fun MediaClipGrid(
     clips: List<MediaClipRecord>,
+    thumbnailSize: MediaThumbnailSize,
     source: MediaLibrarySource,
     cameraID: String,
     cameraConnected: Boolean,
@@ -1515,7 +1931,7 @@ private fun MediaClipGrid(
         }
 
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 150.dp),
+        columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
         modifier =
             Modifier.fillMaxSize()
                 .onGloballyPositioned { coordinates -> gridOrigin = coordinates.positionInRoot() }
