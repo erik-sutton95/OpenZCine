@@ -201,6 +201,173 @@ struct PTPIPClientSessionTests {
         #expect(transactionIDs == Array(0..<UInt32(transactionIDs.count)))
     }
 
+    @Test func descriptorBackedAndroidControlsWriteOnlyExactAdvertisedValues() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.result == .accepted)
+        #expect(bootstrap.controls.resolutionFrameRate == "6K · 25p")
+        #expect(bootstrap.controls.codec == "R3D NE")
+        #expect(bootstrap.controls.whiteBalanceTint == "Neutral")
+        #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
+        #expect(bootstrap.controls.baseISO == ["Low", "High"])
+        #expect(bootstrap.controls.shutterModes == ["Speed", "Angle"])
+        #expect(bootstrap.controls.shutterLocks == ["Unlocked", "Locked"])
+        #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
+        #expect(bootstrap.controls.codecs == ["R3D NE", "H.265"])
+        #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
+        #expect(bootstrap.controls.electronicVR == ["OFF", "ON"])
+        #expect(bootstrap.controls.whiteBalanceTints.contains("A1 · G0.5"))
+
+        let writeBaseline = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.shutter, label: "360°")
+        try session.applyAndroidControl(.baseISO, label: "Low")
+        try session.applyAndroidControl(.shutterMode, label: "Speed")
+        try session.applyAndroidControl(.shutter, label: "1/100")
+        try session.applyAndroidControl(.shutterLock, label: "Locked")
+        try session.applyAndroidControl(.whiteBalanceTint, label: "A1 · G0.5")
+        try session.applyAndroidControl(.resolutionFrameRate, label: "4K · 60p")
+        try session.applyAndroidControl(.codec, label: "H.265")
+        try session.applyAndroidControl(.vibrationReduction, label: "ON")
+        try session.applyAndroidControl(.electronicVR, label: "OFF")
+
+        #expect(
+            Array(server.receivedPropertyWrites().dropFirst(writeBaseline))
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieShutterAngle.rawValue,
+                        data: Data(ByteCoding.uint32LE(36_000))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieBaseISO.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieShutterMode.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieShutterSpeed.rawValue,
+                        data: Data(ByteCoding.uint32LE(0x0001_0064))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieTVLockSetting.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWbTuneColorTemp.rawValue,
+                        data: Data(ByteCoding.uint16LE(416))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieRecordScreenSize.rawValue,
+                        data: Data(ByteCoding.uint64LE(0x0F00_0870_003C_0000))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFileType.rawValue,
+                        data: Data(ByteCoding.uint32LE(0x0001_0A01))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieVibrationReduction.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.electronicVR.rawValue,
+                        data: Data([0])),
+                ])
+
+        let refreshed = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieFileType.rawValue))
+        #expect(refreshed.controls.resolutionFrameRate == "4K · 60p")
+        #expect(refreshed.controls.codec == "H.265")
+        #expect(refreshed.controls.whiteBalanceTint == "A1 · G0.5")
+        #expect(refreshed.properties.shutterMode == .speed)
+        #expect(refreshed.properties.shutterSpeed == "1/100")
+        #expect(refreshed.properties.baseISO == "Low")
+        #expect(refreshed.properties.shutterLocked == true)
+        #expect(refreshed.properties.vibrationReduction == "ON")
+        #expect(refreshed.properties.electronicVR == "OFF")
+
+        let rejectedBaseline = server.receivedPropertyWrites().count
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "resolutionFrameRate", "6K · 60p")
+        ) {
+            try session.applyAndroidControl(.resolutionFrameRate, label: "6K · 60p")
+        }
+        #expect(server.receivedPropertyWrites().count == rejectedBaseline)
+    }
+
+    @Test func acceptedControlWriteRequiresMatchingAuthoritativeReadback() throws {
+        var options = FakeZRServer.Options()
+        options.ignoredPropertyWrites = [PTPPropertyCode.movieISOSensitivity.rawValue]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(
+            throws: PTPIPClientSessionError.controlReadbackMismatch("iso", "1600")
+        ) {
+            try session.applyAndroidControl(.iso, label: "1600")
+        }
+        #expect(server.receivedPropertyWrites().count == 1)
+    }
+
+    @Test func unsupportedDescriptorsHideOnlyTheirOwnAndroidControls() throws {
+        var options = FakeZRServer.Options()
+        options.unsupportedPropertyCodes = [
+            PTPPropertyCode.movieFileType.rawValue,
+            PTPPropertyCode.electronicVR.rawValue,
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.result == .unsupported)
+        #expect(bootstrap.controls.codecs.isEmpty)
+        #expect(bootstrap.controls.electronicVR.isEmpty)
+        #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
+        #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
+        #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
+    }
+
+    @Test func whiteBalanceTintOptionsRespectTheAdvertisedDescriptorRange() throws {
+        var options = FakeZRServer.Options()
+        options.whiteBalanceTintMaximum = 612
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(controls.whiteBalanceTints.count == 85)
+        #expect(controls.whiteBalanceTints.contains("B3 · G1.5"))
+        #expect(controls.whiteBalanceTints.contains("Neutral"))
+        #expect(!controls.whiteBalanceTints.contains("A3 · M1.5"))
+    }
+
+    @Test func commandRoundTripUsesMeasuredPTPResponseTimingAndClearsOnDisconnect() throws {
+        var options = FakeZRServer.Options()
+        options.commandResponseDelayMilliseconds = 12
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+
+        _ = try session.readPropertyDisplayValue(code: PTPPropertyCode.batteryLevel.rawValue)
+        let measured = try #require(session.latestCommandRoundTripMilliseconds())
+        #expect(measured >= 8)
+        #expect(measured < 1_000)
+
+        session.disconnect()
+        #expect(session.latestCommandRoundTripMilliseconds() == nil)
+    }
+
     @Test func kelvinWhiteBalanceWritesModeThenTemperatureAsOneControlSequence() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
@@ -239,9 +406,9 @@ struct PTPIPClientSessionTests {
         defer { session.disconnect() }
 
         #expect(
-            throws: PTPIPClientSessionError.unsupportedControl(.codec, "H.265")
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("codec", "Unadvertised")
         ) {
-            try session.applyControl(.codec, label: "H.265")
+            try session.applyControl(.codec, label: "Unadvertised")
         }
         session.enterMediaMode()
         #expect(throws: PTPIPClientSessionError.mediaModeActive) {

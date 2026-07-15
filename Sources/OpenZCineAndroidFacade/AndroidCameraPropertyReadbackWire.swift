@@ -29,6 +29,68 @@ public enum AndroidCameraPropertyRefreshResult: String, Equatable, Sendable {
     case transportFailed
 }
 
+/// Camera-advertised Android control selections and their current semantic readbacks.
+///
+/// Exact descriptor values remain cached by `PTPIPClientSession`. These labels are
+/// intentionally the only representation that crosses JNI.
+public struct AndroidCameraControlCapabilities: Equatable, Sendable {
+    public init(
+        resolutionFrameRate: String? = nil,
+        codec: String? = nil,
+        whiteBalanceTint: String? = nil,
+        shutterValues: [String] = [],
+        baseISO: [String] = [],
+        shutterModes: [String] = [],
+        shutterLocks: [String] = [],
+        whiteBalanceTints: [String] = [],
+        resolutionFrameRates: [String] = [],
+        codecs: [String] = [],
+        vibrationReduction: [String] = [],
+        electronicVR: [String] = []
+    ) {
+        self.resolutionFrameRate = resolutionFrameRate
+        self.codec = codec
+        self.whiteBalanceTint = whiteBalanceTint
+        self.shutterValues = shutterValues
+        self.baseISO = baseISO
+        self.shutterModes = shutterModes
+        self.shutterLocks = shutterLocks
+        self.whiteBalanceTints = whiteBalanceTints
+        self.resolutionFrameRates = resolutionFrameRates
+        self.codecs = codecs
+        self.vibrationReduction = vibrationReduction
+        self.electronicVR = electronicVR
+    }
+
+    /// Current shared-core resolution/frame-rate label matching descriptor options.
+    public let resolutionFrameRate: String?
+    /// Current shared-core short codec label matching descriptor options.
+    public let codec: String?
+    /// Current WB fine-tune label for the active camera WB mode.
+    public let whiteBalanceTint: String?
+    /// Values from the active shutter angle/speed descriptor.
+    public let shutterValues: [String]
+    /// Dual-base circuits advertised by the camera.
+    public let baseISO: [String]
+    /// Shutter display modes advertised by the camera.
+    public let shutterModes: [String]
+    /// Camera shutter-lock states advertised by the camera.
+    public let shutterLocks: [String]
+    /// Valid fine-tune grid values, present only when the active tune property is advertised.
+    public let whiteBalanceTints: [String]
+    /// Recording modes from the camera's screen-size descriptor.
+    public let resolutionFrameRates: [String]
+    /// Codecs from the camera's file-type descriptor.
+    public let codecs: [String]
+    /// Movie VR values from the camera descriptor.
+    public let vibrationReduction: [String]
+    /// Electronic-VR values from the camera descriptor.
+    public let electronicVR: [String]
+
+    /// Empty capabilities before a successful descriptor refresh.
+    public static let empty = AndroidCameraControlCapabilities()
+}
+
 /// Swift-owned decoded state returned to the Android shell after one refresh.
 ///
 /// This keeps `PTPCameraPropertySnapshot` and `PTPStorageInfo` as the only
@@ -41,16 +103,20 @@ public struct AndroidCameraPropertyReadback: Equatable, Sendable {
     public let properties: PTPCameraPropertySnapshot
     /// Current active-card storage state when it has been read successfully.
     public let storage: PTPStorageInfo?
+    /// Camera-advertised control labels backed by exact raw values retained in Swift.
+    public let controls: AndroidCameraControlCapabilities
 
     /// Creates one semantic Android property-refresh readback.
     public init(
         result: AndroidCameraPropertyRefreshResult,
         properties: PTPCameraPropertySnapshot,
-        storage: PTPStorageInfo?
+        storage: PTPStorageInfo?,
+        controls: AndroidCameraControlCapabilities = .empty
     ) {
         self.result = result
         self.properties = properties
         self.storage = storage
+        self.controls = controls
     }
 }
 
@@ -109,7 +175,35 @@ public enum AndroidCameraPropertyReadbackWire {
         append("vibrationReduction", value: properties.vibrationReduction, to: &fields)
         append("electronicVr", value: properties.electronicVR, to: &fields)
         append("cameraGrid", value: properties.gridDisplay, to: &fields)
+        let controls = readback.controls
+        append("resolutionFrameRate", value: controls.resolutionFrameRate, to: &fields)
+        append("codecSelection", value: controls.codec, to: &fields)
+        append("whiteBalanceTint", value: controls.whiteBalanceTint, to: &fields)
+        appendOptions("options.shutter", values: controls.shutterValues, to: &fields)
+        appendOptions("options.baseIso", values: controls.baseISO, to: &fields)
+        appendOptions("options.shutterMode", values: controls.shutterModes, to: &fields)
+        appendOptions("options.shutterLock", values: controls.shutterLocks, to: &fields)
+        appendOptions("options.whiteBalanceTint", values: controls.whiteBalanceTints, to: &fields)
+        appendOptions(
+            "options.resolutionFrameRate", values: controls.resolutionFrameRates, to: &fields)
+        appendOptions("options.codec", values: controls.codecs, to: &fields)
+        appendOptions(
+            "options.vibrationReduction", values: controls.vibrationReduction, to: &fields)
+        appendOptions("options.electronicVr", values: controls.electronicVR, to: &fields)
         return fields.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n")
+    }
+
+    private static let optionSeparator = "\u{1F}"
+
+    private static func appendOptions(
+        _ key: String,
+        values: [String],
+        to fields: inout [(key: String, value: String)]
+    ) {
+        guard !values.isEmpty,
+            values.allSatisfy({ !$0.contains(optionSeparator) })
+        else { return }
+        append(key, value: values.joined(separator: optionSeparator), to: &fields)
     }
 
     private static func append(

@@ -506,6 +506,9 @@ object SwiftCore {
     /** The command channel failed before every requested write completed. */
     const val CONTROL_COMMAND_TRANSPORT_FAILED: Int = 5
 
+    /** The write response was OK, but authoritative property readback did not match. */
+    const val CONTROL_COMMAND_READBACK_MISMATCH: Int = 6
+
     /** A focus command completed and the camera accepted its operation sequence. */
     const val FOCUS_COMMAND_ACCEPTED: Int = 0
 
@@ -565,6 +568,13 @@ object SwiftCore {
      * a background dispatcher.
      */
     external fun sessionReadProperty(code: Int): String?
+
+    /**
+     * Latest successful serialized PTP command round-trip duration. Native
+     * returns NaN before a transaction and after disconnect; callers expose
+     * that sentinel as null rather than fabricating latency.
+     */
+    external fun sessionLatestRoundTripMilliseconds(): Double
 
     /**
      * Refreshes semantic Android camera state through the Swift core and

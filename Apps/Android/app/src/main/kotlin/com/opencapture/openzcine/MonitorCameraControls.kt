@@ -89,6 +89,7 @@ internal fun monitorCaptureSettings(
 ): List<MonitorCaptureSettingPresentation> {
     val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
     val focus = dashboard.sideSections.firstOrNull { it.title == "Focus" }?.cells.orEmpty()
+    val exposure = dashboard.sideSections.firstOrNull { it.title == "Exposure" }?.cells.orEmpty()
 
     fun mode(label: String, tile: CommandTilePresentation?): MonitorPickerModePresentation? =
         tile?.request
@@ -116,6 +117,26 @@ internal fun monitorCaptureSettings(
         )
     }
 
+    fun multi(
+        kind: MonitorPickerKind,
+        label: String,
+        widestValue: String,
+        subtitle: String,
+        valueTile: CommandTilePresentation?,
+        modes: List<MonitorPickerModePresentation>,
+    ): MonitorCaptureSettingPresentation =
+        MonitorCaptureSettingPresentation(
+            kind = kind,
+            label = label,
+            value = valueTile?.value ?: "—",
+            widestValue = widestValue,
+            picker =
+                modes.takeIf(List<MonitorPickerModePresentation>::isNotEmpty)?.let {
+                    MonitorPickerPresentation(kind, label, subtitle, it)
+                },
+            unavailableReason = valueTile?.unavailableReason,
+        )
+
     val focusModes =
         listOfNotNull(
             mode("AF Mode", focus.getOrNull(0)),
@@ -124,19 +145,30 @@ internal fun monitorCaptureSettings(
         )
     val focusValue = focus.getOrNull(0)?.value ?: "—"
     return listOf(
-        single(
-            MonitorPickerKind.ISO,
-            "ISO",
-            "25600",
-            "Sensitivity",
-            primary[CommandTileKind.ISO],
+        multi(
+            kind = MonitorPickerKind.ISO,
+            label = "ISO",
+            widestValue = "25600",
+            subtitle = "Sensitivity / base circuit",
+            valueTile = primary[CommandTileKind.ISO],
+            modes =
+                listOfNotNull(
+                    mode("Sensitivity", primary[CommandTileKind.ISO]),
+                    mode("Base ISO", exposure.getOrNull(0)),
+                ),
         ),
-        single(
-            MonitorPickerKind.SHUTTER,
-            "SHUTTER",
-            "1/16000",
-            "Angle / speed",
-            primary[CommandTileKind.SHUTTER],
+        multi(
+            kind = MonitorPickerKind.SHUTTER,
+            label = "SHUTTER",
+            widestValue = "1/16000",
+            subtitle = "Value / circuit / camera lock",
+            valueTile = primary[CommandTileKind.SHUTTER],
+            modes =
+                listOfNotNull(
+                    mode("Value", primary[CommandTileKind.SHUTTER]),
+                    mode("Mode", exposure.getOrNull(1)),
+                    mode("Lock", exposure.getOrNull(2)),
+                ),
         ),
         single(
             MonitorPickerKind.IRIS,
@@ -161,12 +193,17 @@ internal fun monitorCaptureSettings(
                 },
             unavailableReason = focus.getOrNull(0)?.unavailableReason,
         ),
-        single(
-            MonitorPickerKind.WHITE_BALANCE,
-            "WB",
-            "5600K",
-            "Kelvin / preset",
-            primary[CommandTileKind.WHITE_BALANCE],
+        multi(
+            kind = MonitorPickerKind.WHITE_BALANCE,
+            label = "WB",
+            widestValue = "5600K",
+            subtitle = "Kelvin / preset / tint",
+            valueTile = primary[CommandTileKind.WHITE_BALANCE],
+            modes =
+                listOfNotNull(
+                    mode("Kelvin / preset", primary[CommandTileKind.WHITE_BALANCE]),
+                    mode("Tint", exposure.getOrNull(3)),
+                ),
         ),
     )
 }

@@ -273,7 +273,7 @@ internal fun commandDashboardPresentation(
     recording: Boolean = false,
 ): CommandDashboardPresentation {
     val unavailable = commandPropertyUnavailableReason(sessionState, refreshStatus)
-    val codec = snapshot.codec.monitorValueOrNull()
+    val codec = snapshot.codecSelection.monitorValueOrNull() ?: snapshot.codec.monitorValueOrNull()
     val frameRate = validMonitorFrameRate(snapshot.frameRate)
     val shutter =
         when (snapshot.shutterMode) {
@@ -296,9 +296,10 @@ internal fun commandDashboardPresentation(
             whiteBalanceMode ?: whiteBalanceKelvin?.let { "${it}K" }
         }
     val resolution =
-        listOfNotNull(snapshot.resolution.monitorValueOrNull(), frameRate?.let { "${it}p" })
-            .joinToString(separator = " · ")
-            .ifBlank { null }
+        snapshot.resolutionFrameRate.monitorValueOrNull()
+            ?: listOfNotNull(snapshot.resolution.monitorValueOrNull(), frameRate?.let { "${it}p" })
+                .joinToString(separator = " · ")
+                .ifBlank { null }
     val stabilization =
         listOfNotNull(
             snapshot.vibrationReduction.monitorValueOrNull(),
@@ -317,15 +318,10 @@ internal fun commandDashboardPresentation(
         } else {
             "ISO is locked while recording in R3D NE."
         }
-    // A shutter write addresses either the angle or speed property; changing
-    // circuits requires a separate MovieShutterMode write that Android does
-    // not expose yet. Never offer the inactive circuit as a selectable value.
-    val shutterOptions =
-        when (snapshot.shutterMode) {
-            CameraShutterMode.ANGLE -> SHUTTER_ANGLE_OPTIONS
-            CameraShutterMode.SPEED -> SHUTTER_SPEED_OPTIONS
-            null -> emptyList()
-        }
+    val capabilities = snapshot.controlCapabilities
+    // The active descriptor changes with the camera's shutter circuit. Never
+    // surface the inactive circuit or a local fallback ladder.
+    val shutterOptions = capabilities.options(CameraControl.SHUTTER)
     val shutterWritable = snapshot.shutterLocked == false && shutterOptions.isNotEmpty()
     val shutterLockReason =
         when {
@@ -374,6 +370,30 @@ internal fun commandDashboardPresentation(
         )
     }
 
+    fun advertisedEditable(
+        kind: CommandTileKind? = null,
+        title: String,
+        value: String?,
+        control: CameraControl,
+        blockedReason: String,
+        writable: Boolean = true,
+    ): CommandTilePresentation {
+        val options = capabilities.options(control)
+        return if (options.isEmpty()) {
+            readOnly(kind, title, value, blockedReason)
+        } else {
+            editable(
+                kind = kind,
+                title = title,
+                value = value,
+                control = control,
+                options = options,
+                writable = writable,
+                blockedReason = blockedReason,
+            )
+        }
+    }
+
     val tilesByKind =
         mapOf(
             CommandTileKind.MODE to
@@ -395,14 +415,13 @@ internal fun commandDashboardPresentation(
                     blockedReason = isoLockReason,
                 ),
             CommandTileKind.SHUTTER to
-                editable(
-                    CommandTileKind.SHUTTER,
-                    "Shutter",
-                    shutter,
-                    CameraControl.SHUTTER,
-                    shutterOptions,
-                    writable = shutterWritable,
+                advertisedEditable(
+                    kind = CommandTileKind.SHUTTER,
+                    title = "Shutter",
+                    value = shutter,
+                    control = CameraControl.SHUTTER,
                     blockedReason = shutterLockReason,
+                    writable = shutterWritable,
                 ),
             CommandTileKind.IRIS to
                 editable(
@@ -421,26 +440,29 @@ internal fun commandDashboardPresentation(
                     WHITE_BALANCE_OPTIONS,
                 ),
             CommandTileKind.RESOLUTION_FRAMERATE to
-                readOnly(
-                    CommandTileKind.RESOLUTION_FRAMERATE,
-                    "Resolution Framerate",
-                    resolution,
-                    "Resolution changes need camera-advertised descriptor options.",
+                advertisedEditable(
+                    kind = CommandTileKind.RESOLUTION_FRAMERATE,
+                    title = "Resolution Framerate",
+                    value = resolution,
+                    control = CameraControl.RESOLUTION_FRAMERATE,
+                    blockedReason = "This camera did not advertise recording modes.",
                 ),
             CommandTileKind.CODEC to
-                readOnly(
-                    CommandTileKind.CODEC,
-                    "Codec",
-                    codec,
-                    "Codec changes need camera-advertised descriptor options.",
+                advertisedEditable(
+                    kind = CommandTileKind.CODEC,
+                    title = "Codec",
+                    value = codec,
+                    control = CameraControl.CODEC,
+                    blockedReason = "This camera did not advertise codec modes.",
                 ),
             CommandTileKind.STABILIZATION to
-                readOnly(
-                    CommandTileKind.STABILIZATION,
-                    "VR / e-VR",
-                    stabilization,
-                    "Stabilization writes are not available on Android yet.",
-                ),
+                advertisedEditable(
+                    kind = CommandTileKind.STABILIZATION,
+                    title = "VR",
+                    value = snapshot.vibrationReduction,
+                    control = CameraControl.VIBRATION_REDUCTION,
+                    blockedReason = "This camera did not advertise movie VR modes.",
+                ).copy(title = "VR / e-VR", value = stabilization ?: "—"),
         )
     val focusCells =
         listOf(
@@ -515,6 +537,39 @@ internal fun commandDashboardPresentation(
             ),
         )
 
+    val exposureCells =
+        listOf(
+            advertisedEditable(
+                title = "Base ISO",
+                value = snapshot.baseIso,
+                control = CameraControl.BASE_ISO,
+                blockedReason = "This camera did not advertise dual-base ISO circuits.",
+            ),
+            advertisedEditable(
+                title = "Shutter Mode",
+                value =
+                    when (snapshot.shutterMode) {
+                        CameraShutterMode.ANGLE -> "Angle"
+                        CameraShutterMode.SPEED -> "Speed"
+                        null -> null
+                    },
+                control = CameraControl.SHUTTER_MODE,
+                blockedReason = "This camera did not advertise shutter display modes.",
+            ),
+            advertisedEditable(
+                title = "Shutter Lock",
+                value = snapshot.shutterLocked?.let { if (it) "Locked" else "Unlocked" },
+                control = CameraControl.SHUTTER_LOCK,
+                blockedReason = "This camera did not advertise its shutter lock control.",
+            ),
+            advertisedEditable(
+                title = "WB Tint",
+                value = snapshot.whiteBalanceTint,
+                control = CameraControl.WHITE_BALANCE_TINT,
+                blockedReason = "Fine tune is unavailable for the active white-balance mode.",
+            ),
+        )
+
     val camera =
         (sessionState as? CameraSessionState.Connected)
             ?.identity
@@ -532,22 +587,25 @@ internal fun commandDashboardPresentation(
                     "Image",
                     listOf(
                         readOnly(
-                            title = "Codec",
-                            value = snapshot.codec,
-                            reason = "Codec changes need camera-advertised descriptor options.",
-                        ),
-                        readOnly(
-                            title = "VR / e-VR",
-                            value = stabilization,
-                            reason = "Stabilization writes are not available on Android yet.",
-                        ),
-                        readOnly(
                             title = "Grid",
                             value = snapshot.cameraGrid,
                             reason = "Camera Grid Display is read-only on Android.",
                         ),
+                        advertisedEditable(
+                            title = "VR",
+                            value = snapshot.vibrationReduction,
+                            control = CameraControl.VIBRATION_REDUCTION,
+                            blockedReason = "This camera did not advertise movie VR modes.",
+                        ),
+                        advertisedEditable(
+                            title = "e-VR",
+                            value = snapshot.electronicVr,
+                            control = CameraControl.ELECTRONIC_VR,
+                            blockedReason = "This camera did not advertise electronic VR.",
+                        ),
                     ),
                 ),
+                CommandSideSectionPresentation("Exposure", exposureCells),
                 CommandSideSectionPresentation("Focus", focusCells),
                 CommandSideSectionPresentation("Audio", audioCells),
             ),
@@ -629,6 +687,20 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.WIND_FILTER -> snapshot.windFilter == label
         CameraControl.ATTENUATOR -> snapshot.inputAttenuator == label
         CameraControl.AUDIO_32_BIT_FLOAT -> snapshot.audio32BitFloat == label
+        CameraControl.BASE_ISO -> snapshot.baseIso == label
+        CameraControl.SHUTTER_MODE ->
+            when (snapshot.shutterMode) {
+                CameraShutterMode.ANGLE -> label == "Angle"
+                CameraShutterMode.SPEED -> label == "Speed"
+                null -> false
+            }
+        CameraControl.SHUTTER_LOCK ->
+            snapshot.shutterLocked?.let { (if (it) "Locked" else "Unlocked") == label } == true
+        CameraControl.WHITE_BALANCE_TINT -> snapshot.whiteBalanceTint == label
+        CameraControl.RESOLUTION_FRAMERATE -> snapshot.resolutionFrameRate == label
+        CameraControl.CODEC -> snapshot.codecSelection == label
+        CameraControl.VIBRATION_REDUCTION -> snapshot.vibrationReduction == label
+        CameraControl.ELECTRONIC_VR -> snapshot.electronicVr == label
     }
 
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
@@ -639,21 +711,6 @@ private val ISO_OPTIONS =
         "200", "250", "320", "400", "500", "640", "800", "1000", "1250", "1600",
         "2000", "2500", "3200", "4000", "5000", "6400", "8000", "10000", "12800",
         "16000", "20000", "25600",
-    )
-
-private val SHUTTER_ANGLE_OPTIONS =
-    listOf(
-        "5.6°", "11.2°", "22.5°", "45°", "72°", "90°", "108°", "144°", "172°",
-        "180°", "216°", "288°", "346°", "360°",
-    )
-
-private val SHUTTER_SPEED_OPTIONS =
-    listOf(
-        "1/25", "1/30", "1/40", "1/50",
-        "1/60", "1/80", "1/100", "1/125", "1/160", "1/200", "1/250", "1/320",
-        "1/400", "1/500", "1/640", "1/800", "1/1000", "1/1250", "1/1600",
-        "1/2000", "1/2500", "1/3200", "1/4000", "1/5000", "1/6400", "1/8000",
-        "1/10000", "1/13000", "1/16000",
     )
 
 private val IRIS_OPTIONS =

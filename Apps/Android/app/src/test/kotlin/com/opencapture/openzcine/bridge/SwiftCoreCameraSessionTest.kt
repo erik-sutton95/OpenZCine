@@ -1,10 +1,10 @@
 package com.opencapture.openzcine.bridge
 
-import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
+import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraRecordingState
@@ -225,8 +225,38 @@ class SwiftCoreCameraSessionTest {
         bridge.controlResult = SwiftCore.CONTROL_COMMAND_REJECTED
         assertControlFailure(session, CameraControlException.CommandRejected)
 
+        bridge.roundTripMilliseconds = 13.75
+        bridge.controlResult = SwiftCore.CONTROL_COMMAND_READBACK_MISMATCH
+        assertControlFailure(session, CameraControlException.ReadbackMismatch)
+        assertEquals(13.75, session.latestCommandRoundTripMilliseconds.value)
+
         bridge.controlResult = SwiftCore.CONTROL_COMMAND_TRANSPORT_FAILED
         assertControlFailure(session, CameraControlException.TransportFailed)
+    }
+
+    @Test
+    fun `session publishes native RTT and clears it during disconnect`() = runTest {
+        val bridge = FakeBridge().apply { roundTripMilliseconds = 7.25 }
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                automaticallyRefreshProperties = false,
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        assertEquals(7.25, session.latestCommandRoundTripMilliseconds.value)
+
+        bridge.roundTripMilliseconds = 11.5
+        session.applyControl(CameraControl.ISO, "800")
+        assertEquals(11.5, session.latestCommandRoundTripMilliseconds.value)
+
+        session.disconnect()
+        assertNull(session.latestCommandRoundTripMilliseconds.value)
     }
 
     @Test
@@ -465,6 +495,17 @@ class SwiftCoreCameraSessionTest {
         assertEquals("f/2.8", session.cameraProperties.value.iris)
         assertEquals("Color temp", session.cameraProperties.value.whiteBalanceMode)
         assertEquals(5_600, session.cameraProperties.value.whiteBalanceKelvin)
+        assertEquals("6K · 25p", session.cameraProperties.value.resolutionFrameRate)
+        assertEquals("R3D NE", session.cameraProperties.value.codecSelection)
+        assertEquals("Neutral", session.cameraProperties.value.whiteBalanceTint)
+        assertEquals(
+            listOf("90°", "180°", "360°"),
+            session.cameraProperties.value.controlCapabilities.shutterValues,
+        )
+        assertEquals(
+            listOf("6K · 25p", "4K · 60p"),
+            session.cameraProperties.value.controlCapabilities.resolutionFrameRates,
+        )
         assertEquals("24-70mm f/2.8", session.cameraProperties.value.lens)
         assertEquals("AF-C", session.cameraProperties.value.focusMode)
         assertEquals("Line", session.cameraProperties.value.audioInput)
@@ -742,6 +783,7 @@ class SwiftCoreCameraSessionTest {
         var focusResult = SwiftCore.FOCUS_COMMAND_ACCEPTED
         var focusResetResult = SwiftCore.FOCUS_COMMAND_ACCEPTED
         var focusHandler: ((CameraFocusPoint) -> Int)? = null
+        var roundTripMilliseconds: Double? = null
         var disconnects = 0
 
         override fun connect(
@@ -803,6 +845,8 @@ class SwiftCoreCameraSessionTest {
             recordingRequests += recording
             return SwiftCore.RECORDING_COMMAND_ACCEPTED
         }
+
+        override fun latestRoundTripMilliseconds(): Double? = roundTripMilliseconds
 
         override fun applyControl(control: CameraControl, label: String): Int {
             controlRequests += control to label
@@ -894,6 +938,12 @@ class SwiftCoreCameraSessionTest {
                 "iris\tf/2.8",
                 "whiteBalanceMode\tColor temp",
                 "whiteBalanceKelvin\t5600",
+                "resolutionFrameRate\t6K · 25p",
+                "codecSelection\tR3D NE",
+                "whiteBalanceTint\tNeutral",
+                "options.shutter\t90°\u001F180°\u001F360°",
+                "options.resolutionFrameRate\t6K · 25p\u001F4K · 60p",
+                "options.codec\tR3D NE\u001FH.265",
                 "batteryPercent\t80",
                 "warningRaw\t$warningRaw",
                 "temperatureStatus\t$temperatureStatus",

@@ -140,10 +140,22 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   versus fill portrait choice, forward it into the shared Swift zone map, centre-crop the feed and
   every feed-aligned overlay through one content rectangle, and seat fill capture/assist chrome
   from shared zones. Live ISO, shutter, iris, focus, and white-balance pickers reuse only typed
-  requests already accepted by the CameraSession/Swift command seam; descriptor-dependent
-  resolution and codec controls remain read-only. **[VERIFY-ON-HW]** Confirm picker writes and the
+  requests already accepted by the CameraSession/Swift command seam; descriptor-dependent controls
+  become actionable only when the camera advertises exact options through OPE-89. **[VERIFY-ON-HW]**
+  Confirm picker writes and the
   tightest fit/fill portrait plus landscape states against a supported Nikon body and inspect all
   four screen edges on the Android hardware floor.
+- **Android camera-control and real RTT parity** (OPE-89, in progress): retain exact raw descriptor
+  values inside the shared Swift session while Android receives only semantic current values and
+  camera-advertised options for resolution/frame rate, codec, active shutter values, shutter mode
+  and lock, dual-base ISO, white-balance tint, movie VR, and electronic VR. Writes are serialized,
+  rejected when unadvertised, and accepted only after authoritative property readback matches. Both
+  PTP-IP and USB-C publish measured command/response RTT through the session and clear it on
+  disconnect. Fake-camera transport tests cover exact descriptor writes, readback rejection, RTT,
+  and Compose option policy. **[VERIFY-ON-HW]** On a supported Nikon ZR over both Wi-Fi and USB-C,
+  confirm the advertised option sets and raw write acceptance in each recording mode, readback
+  timing and rejection feedback, WB tint, shutter mode/lock, VR/e-VR and dual-base-ISO restrictions,
+  plus RTT freshness across reconnect and transport replacement.
 - **Android authoritative monitor readouts** (OPE-63, in review): render live-view timecode only
   from the camera frame accepted for display; render resolution, codec, card space, recording FPS,
   camera battery, ISO, shutter, iris, focus, and white balance from `CameraPropertySnapshot`; and

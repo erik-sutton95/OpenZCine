@@ -78,6 +78,8 @@ final class FakeZRServer: @unchecked Sendable {
         var unsupportedPropertyCodes: Set<UInt32> = []
         /// Properties that return valid bytes once, then an accepted short payload.
         var shortPropertyCodesAfterFirstRead: Set<UInt32> = []
+        /// Deterministic command-response latency used to prove RTT is measured, not synthesized.
+        var commandResponseDelayMilliseconds: UInt64 = 0
         /// Active-card capacity exposed by `GetStorageInfo` for monitor state tests.
         var storageTotalCapacityBytes: UInt64 = 1_000_000_000_000
         /// Active-card free capacity exposed by `GetStorageInfo` for monitor state tests.
@@ -95,6 +97,12 @@ final class FakeZRServer: @unchecked Sendable {
         /// Response sent for either standard or extended property writes.
         /// Tests use a real PTP rejection code to verify command propagation.
         var propertyWriteResponseCode: UInt16 = 0x2001
+        /// Accepted writes that the fake deliberately refuses to apply to authoritative readback.
+        var ignoredPropertyWrites: Set<UInt32> = []
+        /// Advertised UINT16 range for the active white-balance tune descriptor.
+        var whiteBalanceTintMinimum: UInt16 = 0
+        var whiteBalanceTintMaximum: UInt16 = 1_224
+        var whiteBalanceTintStep: UInt16 = 2
         /// Response sent for Nikon `ChangeAfArea`.
         var changeAfAreaResponseCode: UInt16 = 0x2001
         /// Response sent for Nikon `EndTracking`.
@@ -142,6 +150,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var requestLog: [FakeZRRequest] = []
     private var propertyWriteLog: [FakeZRPropertyWrite] = []
     private var propertyReadCounts: [UInt32: Int] = [:]
+    private var propertyValueOverrides: [UInt32: Data] = [:]
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
     private var stopped = false
@@ -448,6 +457,10 @@ final class FakeZRServer: @unchecked Sendable {
         if options.traceOperations {
             print("fake ZR \(operation) \(parameters)")
         }
+        if options.commandResponseDelayMilliseconds > 0 {
+            Thread.sleep(
+                forTimeInterval: Double(options.commandResponseDelayMilliseconds) / 1_000)
+        }
 
         switch operation {
         case .openSession, .closeSession:
@@ -659,6 +672,16 @@ final class FakeZRServer: @unchecked Sendable {
                 connection,
                 data: sendsShortPayload ? Data() : data,
                 transactionID: transactionID)
+        case .getDevicePropDescEx:
+            let propertyCode = parameters.first ?? 0
+            guard !options.unsupportedPropertyCodes.contains(propertyCode),
+                let property = PTPPropertyCode(rawValue: propertyCode),
+                let descriptor = cameraPropertyDescriptor(for: property)
+            else {
+                sendResponse(connection, code: 0x2002, transactionID: transactionID)
+                return
+            }
+            sendDataIn(connection, data: descriptor, transactionID: transactionID)
         case .setDevicePropValue, .setDevicePropValueEx:
             guard let property = parameters.first, let dataOut else {
                 sendResponse(connection, code: 0x2005, transactionID: transactionID)
@@ -668,7 +691,9 @@ final class FakeZRServer: @unchecked Sendable {
             propertyWriteLog.append(
                 FakeZRPropertyWrite(operation: operation, property: property, data: dataOut))
             let responseCode = options.propertyWriteResponseCode
-            if responseCode == PTPResponseCode.ok.rawValue {
+            if responseCode == PTPResponseCode.ok.rawValue,
+                !options.ignoredPropertyWrites.contains(property)
+            {
                 applyCameraPropertyWriteLocked(property: property, data: dataOut)
             }
             lock.unlock()
@@ -733,6 +758,10 @@ final class FakeZRServer: @unchecked Sendable {
     /// Values deliberately exercise every decoder used by the Android monitor
     /// snapshot. They remain camera-side PTP data: Kotlin never sees them.
     private func cameraPropertyData(for property: PTPPropertyCode) -> Data? {
+        lock.lock()
+        let overridden = propertyValueOverrides[property.rawValue]
+        lock.unlock()
+        if let overridden { return overridden }
         switch property {
         case .movieRecProhibitionCondition:
             // 0 = nothing prohibits recording.
@@ -758,7 +787,7 @@ final class FakeZRServer: @unchecked Sendable {
         case .movieWBColorTemp:
             return Data(ByteCoding.uint16LE(5_600))
         case .movieRecordScreenSize:
-            return Data(ByteCoding.uint64LE(0x1770_0D08_1900_0000))
+            return Data(ByteCoding.uint64LE(0x1770_0D08_0019_0000))
         case .movieFileType:
             return Data(ByteCoding.uint32LE(0x0031_0A03))
         case .batteryLevel:
@@ -807,9 +836,90 @@ final class FakeZRServer: @unchecked Sendable {
             return Data([2])  // SPORT
         case .electronicVR:
             return Data([1])
+        case .movieWbTuneAuto, .movieWbTuneIncandescent, .movieWbTuneFluorescent,
+            .movieWbTuneSunny, .movieWbTuneCloudy, .movieWbTuneShade,
+            .movieWbTuneColorTemp, .movieWbTuneNatural:
+            return Data(ByteCoding.uint16LE(612))
         default:
             return nil
         }
+    }
+
+    /// Protocol-shaped descriptor datasets consumed only by shared-core decoders.
+    private func cameraPropertyDescriptor(for property: PTPPropertyCode) -> Data? {
+        switch property {
+        case .movieRecordScreenSize:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 8,
+                values: [
+                    ByteCoding.uint64LE(0x1770_0D08_0019_0000),
+                    ByteCoding.uint64LE(0x0F00_0870_003C_0000),
+                ])
+        case .movieFileType:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 4,
+                values: [
+                    ByteCoding.uint32LE(0x0031_0A03),
+                    ByteCoding.uint32LE(0x0001_0A01),
+                ])
+        case .movieShutterAngle:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 4,
+                values: [9_000, 18_000, 36_000].map(ByteCoding.uint32LE))
+        case .movieShutterSpeed:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 4,
+                values: [25, 50, 100].map { ByteCoding.uint32LE(0x0001_0000 | UInt32($0)) })
+        case .movieBaseISO:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[1], [2]])
+        case .movieShutterMode:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[1], [2]])
+        case .movieTVLockSetting:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[0], [1]])
+        case .movieVibrationReduction:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[0], [1], [2]])
+        case .electronicVR:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[0], [1]])
+        case .movieWbTuneAuto, .movieWbTuneIncandescent, .movieWbTuneFluorescent,
+            .movieWbTuneSunny, .movieWbTuneCloudy, .movieWbTuneShade,
+            .movieWbTuneColorTemp, .movieWbTuneNatural:
+            return rangeDescriptor(property: property, valueByteCount: 2)
+        default:
+            return nil
+        }
+    }
+
+    private func enumDescriptor(
+        property: PTPPropertyCode,
+        valueByteCount: Int,
+        values: [[UInt8]]
+    ) -> Data {
+        var bytes = ByteCoding.uint32LE(property.rawValue)
+        bytes += ByteCoding.uint16LE(UInt16(valueByteCount))
+        bytes.append(1)  // Get/Set
+        bytes += [UInt8](repeating: 0, count: valueByteCount * 2)
+        bytes.append(2)  // Enumeration form
+        bytes += ByteCoding.uint16LE(UInt16(values.count))
+        for value in values {
+            bytes += value
+        }
+        return Data(bytes)
+    }
+
+    private func rangeDescriptor(property: PTPPropertyCode, valueByteCount: Int) -> Data {
+        var bytes = ByteCoding.uint32LE(property.rawValue)
+        bytes += ByteCoding.uint16LE(UInt16(valueByteCount))
+        bytes.append(1)
+        bytes += [UInt8](repeating: 0, count: valueByteCount * 2)
+        bytes.append(1)  // Range form; the facade uses shared WhiteBalanceTint grid policy.
+        bytes += ByteCoding.uint16LE(options.whiteBalanceTintMinimum)
+        bytes += ByteCoding.uint16LE(options.whiteBalanceTintMaximum)
+        bytes += ByteCoding.uint16LE(options.whiteBalanceTintStep)
+        return Data(bytes)
     }
 
     /// Minimal PIMA `StorageInfo` record: three UINT16 headers followed by
@@ -896,6 +1006,7 @@ final class FakeZRServer: @unchecked Sendable {
 
     private func applyCameraPropertyWriteLocked(property: UInt32, data: Data) {
         let bytes = Array(data)
+        propertyValueOverrides[property] = data
         switch PTPPropertyCode(rawValue: property) {
         case .movieFocusMode where !bytes.isEmpty:
             focusModeRaw = bytes[0]

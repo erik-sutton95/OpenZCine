@@ -288,6 +288,8 @@ fun MonitorScreen(
         }
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
+    val commandRoundTripMilliseconds by
+        session.latestCommandRoundTripMilliseconds.collectAsState()
     val cameraReadouts = remember(cameraProperties) { monitorCameraReadouts(cameraProperties) }
     val phoneBatteryReadout = rememberPhoneBatteryReadout()
     val exposureAssistCameraInput =
@@ -492,14 +494,14 @@ fun MonitorScreen(
                 } else {
                     commandControlFeedback =
                         CommandControlFeedback(
-                            "${request.title} request accepted; awaiting camera readback.",
-                            isError = false,
+                            "${request.title} did not confirm $label. Check the active camera mode and try again.",
+                            isError = true,
                         )
                 }
             } catch (error: CameraControlException) {
                 commandControlFeedback =
                     CommandControlFeedback(
-                        error.message ?: "The camera rejected the control change.",
+                        "${request.title}: ${error.message ?: "The camera rejected the control change."}",
                         isError = true,
                     )
             } finally {
@@ -953,6 +955,9 @@ fun MonitorScreen(
         }
         LaunchedEffect(actualLinkHealth, propertyRefreshStatus) {
             actualLinkHealth.reportPropertyRefresh(propertyRefreshStatus)
+        }
+        LaunchedEffect(actualLinkHealth, commandRoundTripMilliseconds) {
+            actualLinkHealth.reportRoundTripMilliseconds(commandRoundTripMilliseconds)
         }
         LaunchedEffect(actualLinkHealth, healthFrameSource) {
             while (true) {

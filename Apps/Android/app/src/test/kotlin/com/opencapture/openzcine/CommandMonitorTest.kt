@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import androidx.compose.ui.geometry.Offset
 import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.core.CameraControlCapabilities
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
@@ -34,12 +35,15 @@ class CommandMonitorTest {
                         iso = 800,
                         exposureMode = "M",
                         shutterMode = CameraShutterMode.ANGLE,
+                        shutterLocked = false,
                         shutterAngle = "180°",
                         iris = "f/2.8",
                         whiteBalanceKelvin = 5600,
                         resolution = "6K",
                         frameRate = 25,
                         codec = "R3D NE",
+                        resolutionFrameRate = "6K · 25p",
+                        codecSelection = "R3D NE",
                         temperatureStatus = CameraTemperatureStatus.NORMAL,
                         storage =
                             CameraStorageStatus(
@@ -58,6 +62,14 @@ class CommandMonitorTest {
                         windFilter = "OFF",
                         inputAttenuator = "ON",
                         audio32BitFloat = "ON",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                shutterValues = listOf("90°", "180°"),
+                                resolutionFrameRates = listOf("4K · 60p", "6K · 25p"),
+                                codecs = listOf("H.265", "R3D NE"),
+                                vibrationReduction = listOf("OFF", "ON"),
+                                electronicVr = listOf("OFF", "ON"),
+                            ),
                     ),
                 refreshStatus = CameraPropertyRefreshStatus.Ready,
                 sessionState =
@@ -93,8 +105,19 @@ class CommandMonitorTest {
 
         val codec = presentation.tiles.first { it.kind == CommandTileKind.CODEC }
         assertEquals("R3D NE", codec.value)
-        assertEquals(null, codec.request)
-        assertContains(codec.unavailableReason.orEmpty(), "descriptor")
+        assertEquals(
+            listOf("H.265", "R3D NE"),
+            assertNotNull(codec.request).options,
+        )
+
+        val resolution = presentation.tiles.first {
+            it.kind == CommandTileKind.RESOLUTION_FRAMERATE
+        }
+        assertEquals("6K · 25p", resolution.value)
+        assertEquals(
+            listOf("4K · 60p", "6K · 25p"),
+            assertNotNull(resolution.request).options,
+        )
 
         assertEquals("OK", presentation.temperature)
         assertEquals("470 GB · 47%", presentation.storage)
@@ -136,8 +159,6 @@ class CommandMonitorTest {
                     CameraPropertySnapshot(
                         iso = 0,
                         exposureMode = " ",
-                        shutterMode = CameraShutterMode.SPEED,
-                        shutterLocked = false,
                         shutterSpeed = "",
                         iris = "\t",
                         whiteBalanceMode = " ",
@@ -234,6 +255,8 @@ class CommandMonitorTest {
                         shutterMode = CameraShutterMode.ANGLE,
                         shutterAngle = "180°",
                         shutterLocked = false,
+                        controlCapabilities =
+                            CameraControlCapabilities(shutterValues = listOf("90°", "180°")),
                     ),
                 ).tiles.first { it.kind == CommandTileKind.SHUTTER }.request,
             )
@@ -247,6 +270,8 @@ class CommandMonitorTest {
                         shutterMode = CameraShutterMode.SPEED,
                         shutterSpeed = "1/50",
                         shutterLocked = false,
+                        controlCapabilities =
+                            CameraControlCapabilities(shutterValues = listOf("1/25", "1/50")),
                     ),
                 ).tiles.first { it.kind == CommandTileKind.SHUTTER }.request,
             )
@@ -346,7 +371,10 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
-        assertEquals(listOf("Image", "Focus", "Audio"), presentation.sideSections.map { it.title })
+        assertEquals(
+            listOf("Image", "Exposure", "Focus", "Audio"),
+            presentation.sideSections.map { it.title },
+        )
         assertEquals(3, presentation.sideSections.first { it.title == "Image" }.cells.size)
         val focus = presentation.sideSections.first { it.title == "Focus" }.cells
         assertEquals(CameraControl.FOCUS_MODE, assertNotNull(focus[0].request).control)

@@ -31,6 +31,12 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(bootstrap.properties.warningRaw == 0)
         #expect(bootstrap.storage?.totalCapacityBytes == 1_000_000_000_000)
         #expect(bootstrap.storage?.freeSpaceBytes == 500_000_000_000)
+        #expect(bootstrap.controls.resolutionFrameRate == "6K · 25p")
+        #expect(bootstrap.controls.codec == "R3D NE")
+        #expect(bootstrap.controls.whiteBalanceTint == "Neutral")
+        #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
+        #expect(bootstrap.controls.baseISO == ["Low", "High"])
+        #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
 
         // One complete low-rate pass fills the fields intentionally omitted
         // from the bounded bootstrap (lens, focus, audio, VR, and grid).
@@ -73,8 +79,11 @@ struct AndroidCameraPropertyReadbackTests {
         let bootstrapReads = Array(
             propertyReads.prefix(expectedBootstrap.count).compactMap(\.parameters.first))
         #expect(bootstrapReads == expectedBootstrap)
+        #expect(
+            propertyReads.dropFirst(expectedBootstrap.count).first?.parameters.first
+                == PTPPropertyCode.movieWbTuneColorTemp.rawValue)
         let roundRobinReads = Array(
-            propertyReads.dropFirst(expectedBootstrap.count)
+            propertyReads.dropFirst(expectedBootstrap.count + 1)
                 .prefix(PTPPropertyCode.liveMonitorPollOrder.count)
                 .compactMap(\.parameters.first))
         #expect(roundRobinReads == PTPPropertyCode.liveMonitorPollOrder.map(\.rawValue))
@@ -87,6 +96,11 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["temperatureStatus"] == "OK")
         #expect(fields["lens"] == "24-70mm f/2.8")
         #expect(fields["storageFreeSpaceBytes"] != nil)
+        #expect(fields["resolutionFrameRate"] == "6K · 25p")
+        #expect(fields["codecSelection"] == "R3D NE")
+        #expect(fields["whiteBalanceTint"] == "Neutral")
+        #expect(fields["options.shutter"] == "90°\u{1F}180°\u{1F}360°")
+        #expect(fields["options.codec"] == "R3D NE\u{1F}H.265")
         #expect(!wire.contains("D09E"))
     }
 

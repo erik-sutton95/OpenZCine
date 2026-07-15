@@ -158,6 +158,7 @@ class SwiftCoreLiveFrameSource(
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val restartDelayMillis: Long = 250L,
     private val onRecordingState: (Boolean) -> Unit = {},
+    private val onCommandRoundTrip: () -> Unit = {},
     private val stopDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val beforeStartReservation: suspend () -> Unit = {},
 ) : LiveFrameSource {
@@ -359,6 +360,7 @@ class SwiftCoreLiveFrameSource(
                             level: com.opencapture.openzcine.core.LiveCameraLevel? = null,
                             timecode: LiveFrameTimecode? = null,
                         ) {
+                            onCommandRoundTrip()
                             onRecordingState(isRecording)
                             val audioLevels =
                                 if (hasAudioLevels) {
