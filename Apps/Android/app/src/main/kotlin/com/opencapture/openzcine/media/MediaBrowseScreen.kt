@@ -76,14 +76,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.FilmGlyph
+import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
+import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
+import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
+import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -91,6 +96,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -115,6 +121,7 @@ private sealed interface BrowseState {
 /** Outcome of staging the safe subset of a multi-selection for Android sharing. */
 private data class BatchShareResult(
     val staged: List<StagedMediaShare>,
+    val stagedClips: List<MediaClipRecord>,
     val incompleteCount: Int,
     val failedCount: Int,
     val firstFailure: String?,
@@ -140,6 +147,7 @@ private fun stageSelectedMedia(
 ): BatchShareResult {
     val stager = MediaShareStager(context.cacheDir.toPath())
     val staged = mutableListOf<StagedMediaShare>()
+    val stagedClips = mutableListOf<MediaClipRecord>()
     var incomplete = 0
     var failed = 0
     var firstFailure: String? = null
@@ -159,6 +167,7 @@ private fun stageSelectedMedia(
         }
         try {
             staged += stager.stage(entry, clip, cancellationCheck)
+            stagedClips += clip
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -166,11 +175,12 @@ private fun stageSelectedMedia(
             if (firstFailure == null) firstFailure = error.message
         }
     }
-    return BatchShareResult(staged, incomplete, failed, firstFailure)
+    return BatchShareResult(staged, stagedClips, incomplete, failed, firstFailure)
 }
 
 private fun frameioDeliverySummary(
     state: FrameioDeliveryState,
+    internetHopState: FrameioInternetHopState,
     errorMessage: String?,
     skippedBeforeUpload: Int,
 ): String =
@@ -182,8 +192,18 @@ private fun frameioDeliverySummary(
                 if (state.failedCount > 0) {
                     append("; ${state.failedCount} failed")
                 }
+                if (state.metadataFailureCount > 0) {
+                    append("; ${state.metadataFailureCount} metadata sidecar")
+                    if (state.metadataFailureCount != 1) append('s')
+                    append(" not saved")
+                }
                 if (skippedBeforeUpload > 0) {
                     append("; $skippedBeforeUpload not prepared")
+                }
+                when (internetHopState) {
+                    is FrameioInternetHopState.Rejoined -> append("; camera rejoined")
+                    is FrameioInternetHopState.Failed -> append("; camera rejoin not verified")
+                    else -> Unit
                 }
             }
         is FrameioDeliveryState.Failed -> state.message
@@ -206,6 +226,8 @@ internal fun MediaBrowseScreen(
     cameraConnected: Boolean,
     operatorSettings: OperatorSettings,
     frameioController: FrameioDeliveryController,
+    selectedLut: FeedLutSelection,
+    lutLibrary: AndroidLutLibrary,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     onClose: () -> Unit,
@@ -358,6 +380,11 @@ internal fun MediaBrowseScreen(
         selectedClips.count { clip ->
             clip.contentKind == MediaContentKind.PLAYABLE_PROXY &&
                 clip.libraryKey(cameraID) in readySelectionIDs
+        }
+    val selectedLutLabel =
+        when (selectedLut) {
+            is FeedLutSelection.BuiltIn -> selectedLut.value.label
+            is FeedLutSelection.Stored -> lutLibrary.displayName(selectedLut.value)
         }
 
     fun toggleFavorite(clip: MediaClipRecord) {
@@ -513,7 +540,7 @@ internal fun MediaBrowseScreen(
         frameioDeliveryPresented = true
     }
 
-    fun beginFrameioDelivery() {
+    fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedClips
         frameioDeliveryPresented = false
@@ -541,14 +568,25 @@ internal fun MediaBrowseScreen(
                     }
                     val artifacts =
                         withContext(Dispatchers.IO) {
-                            result.staged.map { share ->
-                                FrameioDeliveryArtifact(share, Files.size(share.file))
+                            result.staged.zip(result.stagedClips).map { (share, clip) ->
+                                FrameioDeliveryArtifact(
+                                    share = share,
+                                    byteCount = Files.size(share.file),
+                                    context =
+                                        FrameioArtifactContext(
+                                            cameraID = cameraID,
+                                            captureDate = clip.captureDate,
+                                            supportsLutBake =
+                                                clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
+                                        ),
+                                )
                             }
                         }
-                    frameioController.deliver(artifacts)
+                    frameioController.deliver(artifacts, options)
                     shareMessage =
                         frameioDeliverySummary(
                             state = frameioController.deliveryState,
+                            internetHopState = frameioController.internetHopState,
                             errorMessage = frameioController.errorMessage,
                             skippedBeforeUpload = result.incompleteCount + result.failedCount,
                         )
@@ -569,6 +607,9 @@ internal fun MediaBrowseScreen(
     LaunchedEffect(closeRequested) {
         if (!closeRequested) return@LaunchedEffect
         shareJob?.cancelAndJoin()
+        if (frameioController.isInternetHopActive) {
+            withContext(NonCancellable) { frameioController.endInternetHop() }
+        }
         withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode() }
         onClose()
     }
@@ -743,7 +784,16 @@ internal fun MediaBrowseScreen(
             FrameioDeliveryDialog(
                 controller = frameioController,
                 readyCount = readySelectionIDs.size,
-                onDismiss = { frameioDeliveryPresented = false },
+                selectedLut = selectedLut.takeIf { selectedLutLabel != null },
+                selectedLutLabel = selectedLutLabel,
+                onDismiss = {
+                    frameioDeliveryPresented = false
+                    if (frameioController.isInternetHopActive) {
+                        scope.launch {
+                            withContext(NonCancellable) { frameioController.endInternetHop() }
+                        }
+                    }
+                },
                 onDeliver = ::beginFrameioDelivery,
             )
         }

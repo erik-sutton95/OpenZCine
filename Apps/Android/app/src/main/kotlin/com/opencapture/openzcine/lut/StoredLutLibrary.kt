@@ -473,6 +473,10 @@ class AndroidLutLibrary private constructor(
 
     fun packedCube(selection: StoredLutSelection): PackedStoredLut? = store.packedCube(selection)
 
+    /** Operator-facing label for one app-private selection, when it is still in the library. */
+    fun displayName(selection: StoredLutSelection): String? =
+        store.entries.value.firstOrNull { entry -> entry.selection == selection }?.displayName
+
     /**
      * Reads the single document URI selected through `ACTION_OPEN_DOCUMENT` into a bounded buffer.
      * The URI is deliberately not persisted or copied into metadata; after this call only a new

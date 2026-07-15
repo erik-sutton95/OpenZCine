@@ -150,7 +150,15 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;
   progressive proxy playback; and a transfer-backed Android still-photo viewer (JPEG/PNG
   progressive preview; explicit thumbnail fallback for unsupported HEIF/RAW decoders).
-- **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
+- **Android Frame.io delivery options and camera-AP hop parity** (OPE-64, in progress): Adobe IMS
+  clip delivery accepts only finalized, approved cache artifacts; optionally bakes the selected
+  approved monitor LUT into a transient MP4 without changing the original; and records a bounded,
+  secret-free app-private metadata sidecar after confirmed upload. A real saved camera-AP session
+  can leave only after a second explicit operator confirmation, retains the delivery context while
+  waiting for validated internet, and rejoins the exact saved profile after completion, cancellation,
+  or timeout. Rejoin is claimed only after fresh protocol-connected evidence. Fixtures cannot use the
+  hop. **[VERIFY-ON-HW]** Adobe sign-in/upload, Media3 LUT export, all delivery-dialog edges, and the
+  real Nikon leave/rejoin path still require configured Android hardware validation.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
   preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and

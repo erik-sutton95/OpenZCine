@@ -27,8 +27,8 @@ internal data class FrameioNetworkSnapshot(
 /**
  * Fails cloud delivery closed while the PTP-IP process binding owns a local
  * camera AP. The app must never silently unbind/release that network because
- * doing so would interrupt active camera control; an explicit Android
- * reconnect/hop workflow needs hardware approval before it can be added.
+ * doing so interrupts active camera control. Only the explicit, operator-approved
+ * Frame.io hop may ask the pairing owner to release and later recreate it.
  */
 internal object FrameioReachabilityPolicy {
     fun state(snapshot: FrameioNetworkSnapshot): FrameioNetworkState =
@@ -43,7 +43,7 @@ internal object FrameioReachabilityPolicy {
         when (state) {
             FrameioNetworkState.ONLINE -> ""
             FrameioNetworkState.CAMERA_ACCESS_POINT ->
-                "Frame.io needs internet. This phone is still bound to the camera's Wi‑Fi, so OpenZCine will not interrupt camera control. Finish or disconnect the camera, then join a validated internet network."
+                "Frame.io needs internet. This phone is still bound to the camera's Wi-Fi, so OpenZCine will not interrupt camera control without your approval. Use Hop to internet to disconnect, upload, then verify a camera rejoin."
             FrameioNetworkState.OFFLINE ->
                 "Frame.io needs a validated internet connection. Check Wi‑Fi or cellular and try again."
         }

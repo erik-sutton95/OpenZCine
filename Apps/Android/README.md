@@ -255,12 +255,20 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   so the operator can correct or retry without losing context. This API 29+ path does not request
   broad storage access and never scans, modifies, or deletes unrelated media. Frame.io delivery uses
   that same finalized staging boundary: Settings → Storage owns Adobe PKCE sign-in, Android Keystore
-  holds token/PKCE material,
-  and multi-select media delivery creates a Frame.io file, streams each HTTPS upload part, then polls
-  completion. The feature is intentionally unavailable until a maintainer supplies an approved Adobe
-  Native App client ID and exact redirect URI through ignored/local build configuration; it never
-  fabricates an identity. A camera-AP process binding hard-blocks cloud traffic rather than silently
-  releasing camera control, and native Share remains an independent fallback. See
+  holds token/PKCE material, and multi-select media delivery creates a Frame.io file, streams each
+  HTTPS upload part, then polls completion. A per-run option can apply the currently selected approved
+  monitor LUT to a transient H.264/AAC MP4 with Media3 Transformer; the staged original stays
+  read-only and the temporary export is removed after the attempt. An optional, bounded app-private
+  metadata sidecar is written only after Frame.io confirms the upload, without OAuth values, cloud
+  identifiers, or upload URLs. The feature is intentionally unavailable until a maintainer supplies
+  an approved Adobe Native App client ID and exact redirect URI through ignored/local build
+  configuration; it never fabricates an identity. While a real saved Nikon camera-AP session is
+  active, cloud delivery requires a second explicit confirmation before OpenZCine disconnects the
+  session and releases its process binding. The delivery context stays mounted while Android waits
+  for validated internet, and every completion, cancellation, or timeout attempts to rejoin the exact
+  saved profile. The UI reports **Camera rejoined** only after a fresh protocol-connected session;
+  fixtures and incomplete saved profiles cannot use the hop. Native Share remains an independent
+  fallback. See
   [`docs/frameio-setup.md`](../../docs/frameio-setup.md) for the external **[VERIFY-ON-HW]** Adobe
   registration, browser callback, and real-upload checklist. The Nikon large-object operations still
   require real-ZR verification. For an on-device fake-ZR playback run, set

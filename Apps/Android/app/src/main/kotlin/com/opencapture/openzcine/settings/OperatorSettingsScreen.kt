@@ -2336,7 +2336,7 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
         } else if (condensed) {
             "Adobe PKCE sign-in. Delivery accepts only final cache copies; native Share is unchanged."
         } else {
-            "Adobe PKCE sign-in and project selection for complete cached media. OpenZCine never switches away from camera Wi-Fi to reach Frame.io."
+            "Adobe PKCE sign-in and project selection for complete cached media. On a camera access point, Media requires an explicit hop and verifies the saved-camera reconnect afterward."
         }
 
     SettingsGroupCard(title = "Frame.io Delivery", caption = caption) {
