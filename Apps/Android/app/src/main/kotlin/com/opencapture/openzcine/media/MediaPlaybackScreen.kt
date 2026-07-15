@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -80,9 +81,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoFrameProcessor
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -95,8 +99,10 @@ import com.opencapture.openzcine.AssistToolbar
 import com.opencapture.openzcine.AudioMetersOverlay
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FalseColorReferenceOverlay
-import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.FeedEffectsRenderer
+import com.opencapture.openzcine.FeedEffectsRenderPlan
+import com.opencapture.openzcine.FeedEffectsRenderPlanFactory
+import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.FramingAssistRect
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.LiveFeedEffectsPresentationState
@@ -515,6 +521,9 @@ private fun ProgressivePlayer(
                     ProgressiveMediaSource.Factory(dataSourceFactory)
                         .createMediaSource(MediaItem.fromUri(Uri.parse("camera-cache://clip")))
                 setMediaSource(source)
+                // Installing the Media3 video graph before preparation is required for later
+                // effect-list replacement on the API 29–32 playback fallback.
+                if (Build.VERSION.SDK_INT in 29..32) setVideoEffects(emptyList())
                 prepare()
                 playWhenReady = true
             }
@@ -566,6 +575,10 @@ private fun ProgressivePlayer(
     var pan by remember(entry) { mutableStateOf(PlaybackPan()) }
     var viewport by remember(entry) { mutableStateOf(IntSize.Zero) }
     var videoSize by remember(entry) { mutableStateOf(VideoSize.UNKNOWN) }
+    var videoColorMode by
+        remember(entry, player) {
+            mutableStateOf(selectedPlaybackVideoColorMode(player.currentTracks))
+        }
     var assistMode by remember(entry) { mutableStateOf(false) }
     var assistOptionsTool by remember(entry) { mutableStateOf<AssistTool?>(null) }
     var assistToolbarBounds by remember(entry) { mutableStateOf<Rect?>(null) }
@@ -675,6 +688,10 @@ private fun ProgressivePlayer(
                     videoSize = size
                 }
 
+                override fun onTracksChanged(tracks: Tracks) {
+                    videoColorMode = selectedPlaybackVideoColorMode(tracks)
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
                     playbackError = error
                 }
@@ -700,11 +717,17 @@ private fun ProgressivePlayer(
     val effectsConfiguration = operatorSettings.feedEffectsConfiguration
     val cameraInput = exposureAssistCameraInput
     val effectsPresentationState = remember { LiveFeedEffectsPresentationState() }
+    val playbackEffectDisplaySize = remember(entry) { PlaybackEffectDisplaySize() }
+    val playbackScopeFrameSource =
+        remember(entry) {
+            if (Build.VERSION.SDK_INT in 29..32) PlaybackCleanScopeFrameSource() else null
+        }
     val lutRenderGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value ?: 0L
     LaunchedEffect(lutLibrary, effects.lut) {
         val stored = (effects.lut as? FeedLutSelection.Stored)?.value
         if (stored != null) lutLibrary?.prepare(stored)
     }
+    var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     var renderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
         effects,
@@ -713,23 +736,66 @@ private fun ProgressivePlayer(
         lutLibrary,
         lutRenderGeneration,
     ) {
+        renderPlan = null
         renderer = null
+        if (effects.isIdentity || Build.VERSION.SDK_INT < 29) return@LaunchedEffect
+        val nextPlan =
+            withContext(Dispatchers.Default) {
+                FeedEffectsRenderPlanFactory.create(
+                    effects,
+                    effectsConfiguration,
+                    cameraInput,
+                    lutLibrary,
+                )
+            }
+        renderPlan = nextPlan
         renderer =
-            if (effects.isIdentity || Build.VERSION.SDK_INT < 33) {
-                null
+            if (Build.VERSION.SDK_INT >= 33 && nextPlan != null) {
+                withContext(Dispatchers.Default) { FeedEffectsRenderer.create(nextPlan) }
             } else {
-                withContext(Dispatchers.Default) {
-                    FeedEffectsRenderer.create(
-                        effects,
-                        effectsConfiguration,
-                        cameraInput,
-                        lutLibrary,
-                    )
-                }
+                null
             }
     }
+    val imageEffectsAvailable =
+        playbackImageEffectsAvailable(Build.VERSION.SDK_INT, SwiftCore.isAvailable, videoColorMode)
+    val playbackFeedEffect =
+        remember(renderPlan, playbackEffectDisplaySize) {
+            renderPlan?.let { PlaybackFeedEffect(it, playbackEffectDisplaySize) }
+        }
+    val fallbackDisplayAssistsActive =
+        Build.VERSION.SDK_INT in 29..32 &&
+            videoColorMode == PlaybackVideoColorMode.SDR &&
+            playbackFeedEffect != null
+    val scopesVisible = playbackAssistState.assists.selectedScopes.isNotEmpty()
     LaunchedEffect(
-        renderer,
+        player,
+        playbackFeedEffect,
+        playbackScopeFrameSource,
+        fallbackDisplayAssistsActive,
+        scopesVisible,
+    ) {
+        if (Build.VERSION.SDK_INT !in 29..32) return@LaunchedEffect
+        val nextEffects: List<Effect> =
+            playbackVideoEffectStages(fallbackDisplayAssistsActive, scopesVisible).map { stage ->
+                when (stage) {
+                    PlaybackVideoEffectStage.CLEAN_SCOPE ->
+                        requireNotNull(playbackScopeFrameSource).effect
+                    PlaybackVideoEffectStage.DISPLAY_ASSISTS -> requireNotNull(playbackFeedEffect)
+                }
+            }
+        player.setVideoEffects(nextEffects)
+        if (shouldRedrawPlaybackVideoEffects(player.playbackState, player.isPlaying)) {
+            player.setVideoEffects(VideoFrameProcessor.REDRAW)
+        }
+    }
+    val falseColorReady =
+        if (Build.VERSION.SDK_INT >= 33) {
+            renderer?.falseColorReady == true
+        } else {
+            fallbackDisplayAssistsActive && renderPlan?.falseColorReady == true
+        }
+    LaunchedEffect(
+        falseColorReady,
         effects.falseColor,
         effectsConfiguration.falseColorReferenceEnabled,
         cameraInput,
@@ -738,7 +804,7 @@ private fun ProgressivePlayer(
         effectsPresentationState.clear()
         val scale =
             effects.falseColor?.takeIf { effectsConfiguration.falseColorReferenceEnabled }
-        if (renderer?.falseColorReady == true && scale != null) {
+        if (falseColorReady && scale != null) {
             val reference =
                 withContext(Dispatchers.Default) {
                     resolveFalseColorReference(scale, cameraInput)
@@ -791,6 +857,12 @@ private fun ProgressivePlayer(
             sourceWidth = sourceWidth,
             sourceHeight = sourceHeight,
         )
+    SideEffect {
+        playbackEffectDisplaySize.update(
+            fittedVideo?.width?.toFloat() ?: viewport.width.toFloat(),
+            fittedVideo?.height?.toFloat() ?: viewport.height.toFloat(),
+        )
+    }
     val feedFrame =
         fittedVideo?.let { rect ->
             ZoneFrame(
@@ -952,6 +1024,8 @@ private fun ProgressivePlayer(
                 thermalTier = thermalTier,
                 textureView = textureView,
                 currentFrameKey = { player.currentPosition },
+                cleanFrameSource =
+                    playbackScopeFrameSource.takeIf { fallbackDisplayAssistsActive },
                 feed = feedFrame,
                 infoBar = playbackInfoBar,
                 viewport = analysisViewport,
@@ -1048,6 +1122,7 @@ private fun ProgressivePlayer(
                                     .height(58.dp)
                                     .onGloballyPositioned { assistToolbarBounds = it.boundsInRoot() },
                             visibleTools = operatorSettings.visibleAssistToolbarTools,
+                            imageEffectsAvailable = imageEffectsAvailable,
                             framingConfiguration = playbackFramingConfiguration,
                             onToggleFramingTool = { tool ->
                                 playbackAssistState.toggle(tool)

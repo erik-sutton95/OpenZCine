@@ -146,6 +146,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;
   progressive proxy playback with an independent assist toolbar, clean-source waveform and
   vectorscope analysis, decoded-audio metering, display LUT/false-colour/peaking/zebra effects,
+  including the API 33 AGSL renderer and an SDR-only Media3 GLES fallback on API 29–32 with a
+  pre-effect clean-scope tap and fail-closed HDR gating; and
   anchored long-press configuration panels that share live operator choices while retaining
   playback-only visibility, framing/desqueeze, frame scrubbing, zoom/pan, and transport gestures;
   and a transfer-backed

@@ -215,6 +215,7 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
     // Bundled, on-device Latin OCR: the scanner must work without a Play
