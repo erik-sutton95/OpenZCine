@@ -72,6 +72,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
@@ -194,6 +195,7 @@ fun MonitorScreen(
     frameSource: LiveFrameSource?,
     assist: AssistState,
     operatorSettings: OperatorSettings,
+    lutLibrary: AndroidLutLibrary? = null,
     liveViewEnabled: Boolean = true,
     glassTierOverride: String? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
@@ -662,6 +664,7 @@ fun MonitorScreen(
                         },
                         onFrame = glass::submit,
                         presentationState = liveFeedPresentation,
+                        lutLibrary = lutLibrary,
                     )
                 } else {
                     Text(

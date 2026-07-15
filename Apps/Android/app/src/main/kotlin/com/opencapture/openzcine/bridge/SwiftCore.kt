@@ -228,6 +228,42 @@ object SwiftCore {
         zebraMidtoneIre: Float,
     ): FloatArray?
 
+    // ── Stored LUT library (strict Swift parser + existing packed cube path) ──
+
+    /**
+     * Validates a selected `.cube` document before Android copies it into its app-private library.
+     *
+     * [utf8] is bounded by the Android SAF reader; Swift then enforces the shared `CubeLUT`
+     * source cap, strict UTF-8, cube parser, safe generated [fileName], and canonical
+     * `LUTSelection.cacheKey`. Returns the versioned `US`-separated record
+     * `[version, cubeSize, cacheKey]`, or null when the import must be rejected. Kotlin must never
+     * copy bytes before a non-null result and must not retain the source URI.
+     *
+     * @param categoryOrdinal 0 = Custom, 1 = RED. Built-ins do not use this API.
+     */
+    external fun validateImportedLut(
+        utf8: ByteArray,
+        categoryOrdinal: Int,
+        fileName: String,
+    ): String?
+
+    /**
+     * Revalidates an app-private cube and packs it into the existing RGBA8 2D texture layout used
+     * by [com.opencapture.openzcine.FeedEffectsRenderer]. Null is an unavailable/corrupt state;
+     * Kotlin must not parse or sample the cube as a fallback.
+     */
+    external fun packImportedLut(utf8: ByteArray): ByteArray?
+
+    /**
+     * Resolves the shared `RedLUTDownloadPolicy` decision as a versioned `US`-separated record
+     * `[version, state]`: 0 = available, 1 = camera AP, 2 = no internet. Kotlin only decodes that
+     * record into UI copy; it does not duplicate the camera-AP precedence rule.
+     */
+    external fun redLutDownloadAvailability(
+        hasInternetPath: Boolean,
+        isOnCameraAccessPoint: Boolean,
+    ): String?
+
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 
     /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */

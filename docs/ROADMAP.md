@@ -128,9 +128,12 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Android monitor feed texture parity** (OPE-72, to do) — mirror iOS's feed-local vignette and
   deterministic static grain after the camera frame/effect pipeline, clipped to the visible image
   without affecting clean-source analysis, framing/focus/horizon geometry, or monitor chrome.
-- **Android custom and RED LUT library parity** (to do) — operator-authorized `.cube` import,
-  app-private stored selections, and a RED IPP2 terms/download flow with internet and camera-AP
-  safeguards; non-redistributable LUT assets are never bundled or committed.
+- **Android custom and RED LUT library parity** (in review) — operator-selected `.cube` imports
+  are strictly parsed by the shared Swift core, copied into app-private storage under generated
+  names, and restored as stored monitor selections. The RED surface is deliberately fail-closed
+  until an authorized Android endpoint, terms acknowledgement, and delivery integration exist;
+  its shared internet/camera-AP guard is already in place. Non-redistributable LUT assets are
+  never bundled or committed.
 - **Bluetooth shutter remote** — record start/stop from a BT remote.
 - **Media browser & playback** — on-camera and validated-local clip browsing with categories,
   sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;

@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.lut.StoredLutSelection
+
 /**
  * Built-in monitor looks. [wireOrdinal] mirrors `FeedEffectsWire.look` in the
  * Swift facade — the core generates each look's cube, Kotlin only uploads it.
@@ -12,6 +14,20 @@ enum class FeedLut(val id: String, val wireOrdinal: Int, val label: String) {
     companion object {
         fun fromId(id: String): FeedLut? = entries.firstOrNull { it.id == id }
     }
+}
+
+/**
+ * The LUT selected for monitoring. Built-ins retain their existing stable JNI ordinal; stored
+ * selections carry only the generated app-private category/file identity. The latter is resolved
+ * and packed by the shared Swift parser through [com.opencapture.openzcine.lut.AndroidLutLibrary],
+ * never by Kotlin colour code or a duplicated cache-key format.
+ */
+sealed interface FeedLutSelection {
+    /** One of the procedural shared-core looks already available in every build. */
+    data class BuiltIn(val value: FeedLut) : FeedLutSelection
+
+    /** An operator-selected file retained only in app-private LUT storage. */
+    data class Stored(val value: StoredLutSelection) : FeedLutSelection
 }
 
 /** False-colour scales. [wireOrdinal] mirrors `FeedEffectsWire.bakedFalseColor`. */
@@ -35,7 +51,7 @@ enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int, val label: 
  * `--es zc.fc.scale <stops|ire>`.
  */
 data class FeedEffects(
-    val lut: FeedLut? = null,
+    val lut: FeedLutSelection? = null,
     val falseColor: FeedFalseColorScale? = null,
     val peaking: Boolean = false,
     val zebra: Boolean = false,
@@ -71,7 +87,9 @@ data class FeedEffects(
                 // False colour replaces the creative look, like iOS.
                 lut =
                     if (falseColor == null && "lut" in tokens) {
-                        lutId?.let(FeedLut::fromId) ?: FeedLut.LOG3G10_709
+                        FeedLutSelection.BuiltIn(
+                            lutId?.let(FeedLut::fromId) ?: FeedLut.LOG3G10_709,
+                        )
                     } else {
                         null
                     },

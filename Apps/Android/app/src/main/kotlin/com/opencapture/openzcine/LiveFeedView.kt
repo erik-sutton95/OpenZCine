@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +26,7 @@ import com.opencapture.openzcine.core.LiveCameraLevel
 import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.lut.AndroidLutLibrary
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -195,13 +197,21 @@ fun LiveFeedView(
     onFrame: ((Bitmap) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects = FeedEffectsState.current,
+    lutLibrary: AndroidLutLibrary? = null,
 ) {
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
+    // Stored selections are prepared off the UI thread. Until the shared Swift parser has produced
+    // a packed payload, the renderer remains fail-closed (plain feed), then rebuilds on generation.
+    val lutRenderGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value ?: 0L
+    LaunchedEffect(lutLibrary, effects.lut) {
+        val stored = (effects.lut as? FeedLutSelection.Stored)?.value
+        if (stored != null) lutLibrary?.prepare(stored)
+    }
     val renderer =
-        remember(effects) {
+        remember(effects, lutLibrary, lutRenderGeneration) {
             when {
                 effects.isIdentity -> null
-                Build.VERSION.SDK_INT >= 33 -> FeedEffectsRenderer.create(effects)
+                Build.VERSION.SDK_INT >= 33 -> FeedEffectsRenderer.create(effects, lutLibrary)
                 else -> {
                     Log.w(TAG, "feed effects need Android 13+ (AGSL); rendering the plain feed")
                     null

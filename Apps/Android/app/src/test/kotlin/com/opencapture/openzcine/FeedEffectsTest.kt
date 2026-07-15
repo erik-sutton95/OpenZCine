@@ -17,7 +17,7 @@ class FeedEffectsTest {
     @Test
     fun `parses a combined assist list`() {
         val effects = FeedEffects.parse("lut,zebra,peaking", null, null)
-        assertEquals(FeedLut.LOG3G10_709, effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709), effects.lut)
         assertNull(effects.falseColor)
         assertTrue(effects.peaking)
         assertTrue(effects.zebra)
@@ -33,8 +33,14 @@ class FeedEffectsTest {
 
     @Test
     fun `variant ids select looks and scales`() {
-        assertEquals(FeedLut.MONO, FeedEffects.parse("lut", "mono", null).lut)
-        assertEquals(FeedLut.NLOG_709, FeedEffects.parse("lut", "nlog", null).lut)
+        assertEquals(
+            FeedLutSelection.BuiltIn(FeedLut.MONO),
+            FeedEffects.parse("lut", "mono", null).lut,
+        )
+        assertEquals(
+            FeedLutSelection.BuiltIn(FeedLut.NLOG_709),
+            FeedEffects.parse("lut", "nlog", null).lut,
+        )
         assertEquals(
             FeedFalseColorScale.STOPS,
             FeedEffects.parse("falsecolor", null, null).falseColor,
@@ -44,7 +50,7 @@ class FeedEffectsTest {
     @Test
     fun `unknown tokens and ids fall back to defaults`() {
         val effects = FeedEffects.parse("sparkle, LUT , zebra", "not-a-look", null)
-        assertEquals(FeedLut.LOG3G10_709, effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709), effects.lut)
         assertTrue(effects.zebra)
         assertFalse(effects.peaking)
         assertEquals(
