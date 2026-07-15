@@ -348,6 +348,33 @@ import Testing
     #expect(defaults.paradeBrightness == AssistConfiguration.Scopes.defaultBrightness)
 }
 
+@Test func legacyWaveformAndParadeBrightnessMigratesToCalibratedScale() throws {
+    let json =
+        #"{"waveformBrightness":25,"paradeBrightness":50,"vectorscopeBrightness":25}"#
+    let decoded = try JSONDecoder().decode(
+        AssistConfiguration.Scopes.self, from: Data(json.utf8))
+
+    #expect(decoded.waveformBrightness == 100)
+    #expect(decoded.paradeBrightness == 200)
+    #expect(decoded.vectorscopeBrightness == 25)
+}
+
+@Test func legacyWaveformAndParadeBrightnessAboveNewVisualMaximumClamps() throws {
+    let json = #"{"waveformBrightness":51,"paradeBrightness":200}"#
+    let decoded = try JSONDecoder().decode(
+        AssistConfiguration.Scopes.self, from: Data(json.utf8))
+
+    #expect(decoded.waveformBrightness == 200)
+    #expect(decoded.paradeBrightness == 200)
+}
+
+@Test func calibratedWaveformAndParadeBrightnessMultiplierUsesQuarterStrengthBaseline() {
+    #expect(AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(0) == 0)
+    #expect(AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(100) == 0.25)
+    #expect(AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(200) == 0.5)
+    #expect(AssistConfiguration.Scopes.brightnessMultiplier(100) == 1)
+}
+
 @Test func operatorPreferencesDefaultBarVisibilityIncludesAllTools() {
     let preferences = OperatorPreferences.defaults
     #expect(

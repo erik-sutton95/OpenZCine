@@ -1681,7 +1681,8 @@ struct ScopeMini: View {
 enum ScopePalette {
     static let dataOpacityBase = 1.0
     static func dataOpacity(brightness: Int) -> Double {
-        dataOpacityBase * AssistConfiguration.Scopes.brightnessMultiplier(brightness)
+        dataOpacityBase
+            * AssistConfiguration.Scopes.waveformParadeBrightnessMultiplier(brightness)
     }
 
     /// One trace colour consumed by BOTH renderers: the SwiftUI Canvas reference plots and the

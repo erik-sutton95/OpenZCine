@@ -193,6 +193,21 @@ enum LUTImportError: LocalizedError {
     }
 }
 
+/// Why a stored LUT could not be removed from the app-owned library.
+enum LUTDeletionError: LocalizedError, Equatable {
+    case builtInProtected
+    case invalidFileName
+    case deletionFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .builtInProtected: "Built-in LUTs cannot be deleted."
+        case .invalidFileName: "That LUT has an invalid stored file name."
+        case .deletionFailed(let displayName): "The LUT \(displayName) could not be deleted."
+        }
+    }
+}
+
 /// File-backed store for stored `.cube` LUTs under `<app documents>/luts/<category>` (custom
 /// imports, downloaded RED presets). Storage is platform-owned (shell); the portable
 /// indexing/parsing lives in OpenZCineCore.
@@ -200,11 +215,15 @@ struct LUTFileStore {
     /// Root of the per-category subdirectories, `<app documents>/luts`.
     let root: URL
 
-    init() {
+    init(root: URL? = nil) {
+        if let root {
+            self.root = root
+            return
+        }
         let documents =
             FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        root = documents.appendingPathComponent("luts", isDirectory: true)
+        self.root = documents.appendingPathComponent("luts", isDirectory: true)
     }
 
     private func directory(for category: LUTCategory) -> URL {
@@ -272,6 +291,21 @@ struct LUTFileStore {
         let url = directory(for: category).appendingPathComponent(fileName)
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         return try? CubeLUT.parse(text)
+    }
+
+    /// Deletes one app-owned stored LUT. Built-ins have no file and are always protected.
+    func remove(_ lut: StoredLUT, from category: LUTCategory) throws {
+        guard category != .builtIn else { throw LUTDeletionError.builtInProtected }
+        let directory = directory(for: category).standardizedFileURL
+        let candidate = directory.appendingPathComponent(lut.fileName).standardizedFileURL
+        guard lut.fileName == (lut.fileName as NSString).lastPathComponent,
+            candidate.deletingLastPathComponent() == directory
+        else { throw LUTDeletionError.invalidFileName }
+        do {
+            try FileManager.default.removeItem(at: candidate)
+        } catch {
+            throw LUTDeletionError.deletionFailed(lut.displayName)
+        }
     }
 }
 
@@ -691,8 +725,12 @@ final class NativeAppModel {
     var cameraLevelRoll: Double?
     var cameraLevelPitch: Double?
 
-    init(liveViewGuideStore: LiveViewGuideStore = LiveViewGuideStore()) {
+    init(
+        liveViewGuideStore: LiveViewGuideStore = LiveViewGuideStore(),
+        lutFileStore: LUTFileStore = LUTFileStore()
+    ) {
         self.liveViewGuideStore = liveViewGuideStore
+        self.lutFileStore = lutFileStore
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -715,7 +753,7 @@ final class NativeAppModel {
         didSet { PreferencesStore.save(commandGridOrder) }
     }
     /// File store for custom-imported LUTs, and the current list (refreshed when the picker opens).
-    let lutFileStore = LUTFileStore()
+    let lutFileStore: LUTFileStore
     var customLUTs: [StoredLUT] = []
     var redLUTs: [StoredLUT] = []
     /// On-disk cache + index for camera clips (Media page), and the current library list.
@@ -5750,9 +5788,49 @@ final class NativeAppModel {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         guard let stored = try? lutFileStore.importFile(from: url, into: .custom) else { return }
+        LUTCubeCache.invalidate(
+            forKey: LUTSelection.stored(category: .custom, fileName: stored.fileName).cacheKey)
         refreshCustomLUTs()
         assistConfiguration.selectedLUT = .stored(category: .custom, fileName: stored.fileName)
         setAssist(.lut, visible: true)
+    }
+
+    /// Removes a downloaded/imported LUT and reconciles an active selection without changing the
+    /// LUT tool's on/off state. Built-in selections are rejected by the file store.
+    func deleteStoredLUT(_ lut: StoredLUT, from category: LUTCategory) throws {
+        try lutFileStore.remove(lut, from: category)
+        LUTCubeCache.invalidate(
+            forKey: LUTSelection.stored(category: category, fileName: lut.fileName).cacheKey)
+        switch category {
+        case .builtIn:
+            return
+        case .red:
+            refreshRedLUTs()
+        case .custom:
+            refreshCustomLUTs()
+        }
+
+        guard
+            case .stored(let selectedCategory, let selectedFileName) =
+                assistConfiguration.selectedLUT,
+            selectedCategory == category,
+            selectedFileName == lut.fileName
+        else { return }
+
+        switch category {
+        case .builtIn:
+            assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        case .red:
+            assistConfiguration.selectedLUT =
+                LUTLibraryIndex.defaultRedLUT(from: redLUTs)
+                .map { .stored(category: .red, fileName: $0.fileName) }
+                ?? .builtIn(.log3G10Rec709)
+        case .custom:
+            assistConfiguration.selectedLUT =
+                customLUTs.first
+                .map { .stored(category: .custom, fileName: $0.fileName) }
+                ?? .builtIn(.log3G10Rec709)
+        }
     }
 
     /// Reloads downloaded RED LUTs from disk (called when the LUT picker opens).
@@ -5775,6 +5853,10 @@ final class NativeAppModel {
         }.value
         guard let stored, let chosen = LUTLibraryIndex.defaultRedLUT(from: stored)
         else { return 0 }
+        for lut in stored {
+            LUTCubeCache.invalidate(
+                forKey: LUTSelection.stored(category: .red, fileName: lut.fileName).cacheKey)
+        }
         refreshRedLUTs()
         assistConfiguration.selectedLUT = .stored(category: .red, fileName: chosen.fileName)
         setAssist(.lut, visible: true)

@@ -905,15 +905,35 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             min(max(value, scaleRange.lowerBound), scaleRange.upperBound)
         }
 
-        /// Trace brightness as a percent of the prototype default (`100` = current appearance).
+        /// Operator-facing trace brightness. Waveform/parade use a calibrated quarter-strength
+        /// baseline (`100` = the former `25`); vectorscope retains its original unity baseline.
         public static let brightnessRange: ClosedRange<Int> = 0...200
         public static let defaultBrightness = 100
+        private static let waveformParadeBrightnessCalibrationVersion = 2
         public static func clampedBrightness(_ value: Int) -> Int {
             min(max(value, brightnessRange.lowerBound), brightnessRange.upperBound)
         }
-        /// Multiplier applied to scope trace opacity (`1.0` at default).
+        /// Original unity-based multiplier retained for vectorscope trace intensity.
         public static func brightnessMultiplier(_ percent: Int) -> Double {
             Double(clampedBrightness(percent)) / 100.0
+        }
+        /// Calibrated waveform/parade multiplier (`100%` = the former `25%`, `200%` = former `50%`).
+        public static func waveformParadeBrightnessMultiplier(_ percent: Int) -> Double {
+            Double(clampedBrightness(percent)) / 400.0
+        }
+
+        private static func decodedWaveformParadeBrightness(
+            storedValue: Int?, calibrationVersion: Int?
+        ) -> Int {
+            guard let storedValue else { return defaultBrightness }
+            guard (calibrationVersion ?? 0) < waveformParadeBrightnessCalibrationVersion else {
+                return clampedBrightness(storedValue)
+            }
+            let (migrated, overflowed) = storedValue.multipliedReportingOverflow(by: 4)
+            if overflowed {
+                return storedValue < 0 ? brightnessRange.lowerBound : brightnessRange.upperBound
+            }
+            return clampedBrightness(migrated)
         }
 
         public enum WaveformMode: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
@@ -1017,7 +1037,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
                 vectorscopeScale, vectorscopeZoom, vectorscopeBrightness,
                 histogramScale, histogramTrafficLights,
                 crushClipCompensation, histogramCrushClipCompensation,
-                histogramNoiseFloorCompensation
+                histogramNoiseFloorCompensation, waveformParadeBrightnessCalibrationVersion
         }
 
         /// Removed settings — decoded and discarded so older saved configs still load.
@@ -1047,6 +1067,9 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             try c.encode(histogramScale, forKey: .histogramScale)
             try c.encode(histogramTrafficLights, forKey: .histogramTrafficLights)
             try c.encode(crushClipCompensation, forKey: .crushClipCompensation)
+            try c.encode(
+                Self.waveformParadeBrightnessCalibrationVersion,
+                forKey: .waveformParadeBrightnessCalibrationVersion)
         }
 
         // Every field decodes with a default so a partial or older blob still loads — including one
@@ -1059,17 +1082,19 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             waveformMode = try c.decodeIfPresent(WaveformMode.self, forKey: .waveformMode) ?? .luma
             waveformGuides =
                 try c.decodeIfPresent(GuideLines.self, forKey: .waveformGuides) ?? GuideLines()
-            waveformBrightness = Self.clampedBrightness(
-                try c.decodeIfPresent(Int.self, forKey: .waveformBrightness)
-                    ?? Self.defaultBrightness)
+            let brightnessCalibrationVersion = try c.decodeIfPresent(
+                Int.self, forKey: .waveformParadeBrightnessCalibrationVersion)
+            waveformBrightness = Self.decodedWaveformParadeBrightness(
+                storedValue: try c.decodeIfPresent(Int.self, forKey: .waveformBrightness),
+                calibrationVersion: brightnessCalibrationVersion)
             paradeScale = Self.clampedScale(
                 try c.decodeIfPresent(Double.self, forKey: .paradeScale) ?? Self.defaultScale)
             paradeMode = try c.decodeIfPresent(ParadeMode.self, forKey: .paradeMode) ?? .rgb
             paradeGuides =
                 try c.decodeIfPresent(GuideLines.self, forKey: .paradeGuides) ?? GuideLines()
-            paradeBrightness = Self.clampedBrightness(
-                try c.decodeIfPresent(Int.self, forKey: .paradeBrightness) ?? Self.defaultBrightness
-            )
+            paradeBrightness = Self.decodedWaveformParadeBrightness(
+                storedValue: try c.decodeIfPresent(Int.self, forKey: .paradeBrightness),
+                calibrationVersion: brightnessCalibrationVersion)
             // Vectorscope settings postdate most saved blobs — absent keys take the defaults. The
             // retired Monitor/Source selection's key is simply ignored: the vectorscope always
             // plots the source/log signal now.

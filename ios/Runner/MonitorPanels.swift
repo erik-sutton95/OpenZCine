@@ -1261,6 +1261,8 @@ struct AccentDrumWheel: View {
 
     /// Overall wheel height; callers can shrink it (e.g. the LUT picker, to leave room for tabs).
     var wheelHeight: CGFloat = 176
+    /// Optional native long-press action for removable values. Omit it for protected wheels.
+    var onDeleteOption: ((String) -> Void)? = nil
 
     /// Row pitch — a good bit taller than the glyphs so there's clear spacing between options.
     private let rowHeight: CGFloat = 52
@@ -1271,30 +1273,7 @@ struct AccentDrumWheel: View {
                 VStack(spacing: 0) {
                     ForEach(options, id: \.self) { option in
                         let isCentered = option == selection
-                        HStack(spacing: 6) {
-                            Text(option)
-                                .font(
-                                    .system(
-                                        size: isCentered ? 30 : 23,
-                                        weight: isCentered ? .semibold : .regular,
-                                        design: .monospaced)
-                                )
-                                // Long values (codec names like "ProRes RAW HQ") shrink to fit the
-                                // row rather than truncating; short exposure values are unaffected.
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.5)
-                            if markedValues.contains(option) {
-                                Image(systemName: "star.fill")
-                                    .font(.system(size: isCentered ? 13 : 10))
-                                    .opacity(0.85)
-                            }
-                        }
-                        .foregroundStyle(
-                            isCentered ? LiveDesign.accent : LiveDesign.muted.opacity(0.7)
-                        )
-                        .frame(maxWidth: .infinity)
-                        .frame(height: rowHeight)
-                        .id(option)
+                        optionRow(option, isCentered: isCentered)
                     }
                 }
                 .scrollTargetLayout()
@@ -1335,6 +1314,47 @@ struct AccentDrumWheel: View {
             .onAppear {
                 DispatchQueue.main.async { proxy.scrollTo(selection, anchor: .center) }
             }
+        }
+    }
+
+    @ViewBuilder private func optionRow(_ option: String, isCentered: Bool) -> some View {
+        let row = HStack(spacing: 6) {
+            Text(option)
+                .font(
+                    .system(
+                        size: isCentered ? 30 : 23,
+                        weight: isCentered ? .semibold : .regular,
+                        design: .monospaced)
+                )
+                // Long values shrink to fit the row rather than truncating.
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            if markedValues.contains(option) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: isCentered ? 13 : 10))
+                    .opacity(0.85)
+            }
+        }
+        .foregroundStyle(isCentered ? LiveDesign.accent : LiveDesign.muted.opacity(0.7))
+        .frame(maxWidth: .infinity)
+        .frame(height: rowHeight)
+        .contentShape(Rectangle())
+        .id(option)
+
+        if let onDeleteOption {
+            row
+                .contextMenu {
+                    Button(role: .destructive) {
+                        onDeleteOption(option)
+                    } label: {
+                        Label("Delete LUT", systemImage: "trash")
+                    }
+                }
+                .accessibilityAction(named: Text("Delete \(option)")) {
+                    onDeleteOption(option)
+                }
+        } else {
+            row
         }
     }
 }
@@ -2029,10 +2049,18 @@ struct PlaybackAssistOptionsOverlay: View {
 
 /// Tabbed LUT picker in the assist panel: category tabs over a drum of that category's looks.
 struct LUTPickerContent: View {
+    private struct PendingLUTDeletion: Identifiable {
+        let category: LUTCategory
+        let lut: StoredLUT
+        var id: String { "\(category.rawValue):\(lut.fileName)" }
+    }
+
     @Environment(NativeAppModel.self) private var model
     @State private var category: LUTCategory = .builtIn
     @State private var importing = false
     @State private var redFilter: RedOutputFilter = .all
+    @State private var pendingDeletion: PendingLUTDeletion?
+    @State private var deletionErrorMessage: String?
     /// Tracks whether a usable internet path exists, so the RED download (which needs the public
     /// internet) is blocked while the phone is on the camera's local-only Wi‑Fi AP.
     @State private var reachability = InternetReachability()
@@ -2078,6 +2106,32 @@ struct LUTPickerContent: View {
             category = currentCategory
             // Warm the built-in cubes off the main thread so the first scroll doesn't hitch.
             Task.detached(priority: .utility) { LUTCubeCache.prewarmBuiltIns() }
+        }
+        .confirmationDialog(
+            pendingDeletion.map { "Delete \($0.lut.displayName)?" } ?? "Delete LUT?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let pendingDeletion {
+                Button("Delete LUT", role: .destructive) {
+                    delete(pendingDeletion)
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: {
+            Text("This removes the stored LUT from this device. This action cannot be undone.")
+        }
+        .alert(
+            "Couldn’t Delete LUT",
+            isPresented: Binding(
+                get: { deletionErrorMessage != nil },
+                set: { if !$0 { deletionErrorMessage = nil } })
+        ) {
+            Button("OK") { deletionErrorMessage = nil }
+        } message: {
+            Text(deletionErrorMessage ?? "The LUT could not be deleted.")
         }
     }
 
@@ -2244,7 +2298,15 @@ struct LUTPickerContent: View {
                 }
             ),
             markedValues: defaultRedShortName.map { [$0] } ?? [],
-            wheelHeight: contentHeight - 36
+            wheelHeight: contentHeight - 36,
+            onDeleteOption: { shortName in
+                guard
+                    let lut = filteredRedLUTs.first(where: {
+                        RedPresetName.short($0.fileName) == shortName
+                    })
+                else { return }
+                pendingDeletion = PendingLUTDeletion(category: .red, lut: lut)
+            }
         )
     }
 
@@ -2295,7 +2357,15 @@ struct LUTPickerContent: View {
                             model.setAssist(.lut, visible: true)
                         }
                     ),
-                    wheelHeight: contentHeight - footerHeight - 8
+                    wheelHeight: contentHeight - footerHeight - 8,
+                    onDeleteOption: { displayName in
+                        guard
+                            let lut = model.customLUTs.first(where: {
+                                $0.displayName == displayName
+                            })
+                        else { return }
+                        pendingDeletion = PendingLUTDeletion(category: .custom, lut: lut)
+                    }
                 )
             }
             importButton
@@ -2319,6 +2389,18 @@ struct LUTPickerContent: View {
             allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data]
         ) { result in
             if case .success(let url) = result { model.importCustomLUT(from: url) }
+        }
+    }
+
+    private func delete(_ pending: PendingLUTDeletion) {
+        pendingDeletion = nil
+        do {
+            try model.deleteStoredLUT(pending.lut, from: pending.category)
+            if pending.category == .red, filteredRedLUTs.isEmpty, !model.redLUTs.isEmpty {
+                redFilter = .all
+            }
+        } catch {
+            deletionErrorMessage = error.localizedDescription
         }
     }
 

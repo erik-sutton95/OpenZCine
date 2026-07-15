@@ -78,6 +78,110 @@ final class RunnerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
+    func testLUTFileStoreDeletesStoredLUTAndRejectsBuiltInDeletion() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let custom = root.appendingPathComponent("custom", isDirectory: true)
+        try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lut = StoredLUT(fileName: "Operator Look.cube")
+        let lutURL = custom.appendingPathComponent(lut.fileName)
+        try Data("stored".utf8).write(to: lutURL)
+        let store = LUTFileStore(root: root)
+
+        try store.remove(lut, from: .custom)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lutURL.path))
+        XCTAssertThrowsError(try store.remove(lut, from: .builtIn)) { error in
+            XCTAssertEqual(error as? LUTDeletionError, .builtInProtected)
+        }
+    }
+
+    func testLUTFileStoreRejectsTraversalDeletionAndPreservesOutsideFile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outsideURL = root.appendingPathComponent("outside.cube")
+        try Data("keep".utf8).write(to: outsideURL)
+        let store = LUTFileStore(root: root)
+
+        XCTAssertThrowsError(
+            try store.remove(StoredLUT(fileName: "../outside.cube"), from: .custom)
+        ) { error in
+            XCTAssertEqual(error as? LUTDeletionError, .invalidFileName)
+        }
+        XCTAssertEqual(try Data(contentsOf: outsideURL), Data("keep".utf8))
+    }
+
+    func testLUTCubeCacheInvalidationRebuildsSameNamedStoredLook() throws {
+        let key = "test-stored:\(UUID().uuidString)"
+        var buildCount = 0
+        func makeCube() -> CubeLUT {
+            buildCount += 1
+            return MonitorLUT.monochrome.cube(size: 2)
+        }
+
+        _ = try XCTUnwrap(LUTCubeCache.cube(forKey: key) { makeCube() })
+        _ = try XCTUnwrap(LUTCubeCache.cube(forKey: key) { makeCube() })
+        XCTAssertEqual(buildCount, 1)
+
+        LUTCubeCache.invalidate(forKey: key)
+        _ = try XCTUnwrap(LUTCubeCache.cube(forKey: key) { makeCube() })
+
+        XCTAssertEqual(buildCount, 2)
+    }
+
+    @MainActor
+    func testDeletingSelectedStoredLUTChoosesRemainingLookThenBuiltInFallback() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let custom = root.appendingPathComponent("custom", isDirectory: true)
+        try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for fileName in ["A.cube", "B.cube"] {
+            try Data(fileName.utf8).write(to: custom.appendingPathComponent(fileName))
+        }
+        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        model.refreshCustomLUTs()
+        model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
+
+        try model.deleteStoredLUT(StoredLUT(fileName: "B.cube"), from: .custom)
+
+        XCTAssertEqual(model.customLUTs.map(\.fileName), ["A.cube"])
+        XCTAssertEqual(
+            model.assistConfiguration.selectedLUT,
+            .stored(category: .custom, fileName: "A.cube"))
+
+        try model.deleteStoredLUT(StoredLUT(fileName: "A.cube"), from: .custom)
+
+        XCTAssertTrue(model.customLUTs.isEmpty)
+        XCTAssertEqual(
+            model.assistConfiguration.selectedLUT,
+            .builtIn(.log3G10Rec709))
+    }
+
+    @MainActor
+    func testDeletingNonselectedStoredLUTPreservesSelection() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let custom = root.appendingPathComponent("custom", isDirectory: true)
+        try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for fileName in ["A.cube", "B.cube"] {
+            try Data(fileName.utf8).write(to: custom.appendingPathComponent(fileName))
+        }
+        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        model.refreshCustomLUTs()
+        model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
+
+        try model.deleteStoredLUT(StoredLUT(fileName: "A.cube"), from: .custom)
+
+        XCTAssertEqual(
+            model.assistConfiguration.selectedLUT,
+            .stored(category: .custom, fileName: "B.cube"))
+    }
+
     @MainActor
     func testDemoKeyCatcherRegistersStartupAndInDemoCommands() {
         let commands = DemoKeyCatcherView().keyCommands ?? []
@@ -503,6 +607,12 @@ final class RunnerTests: XCTestCase {
             mapping: ExposureSignalMapping(curve: .redLog3G10))
         // Every scope — vectorscope included — reads the untouched source/log points.
         XCTAssertEqual(bundle.samples, samples)
+    }
+
+    func testWaveformAndParadePaletteUsesCalibratedBrightness() {
+        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 0), 0)
+        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 100), 0.25)
+        XCTAssertEqual(ScopePalette.dataOpacity(brightness: 200), 0.5)
     }
 
     func testVectorscopeDensityRasterUsesRGBAAndFlipsPositiveCrUp() {
