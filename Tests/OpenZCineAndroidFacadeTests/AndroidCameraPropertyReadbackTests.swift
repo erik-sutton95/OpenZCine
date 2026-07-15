@@ -98,6 +98,7 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["storageFreeSpaceBytes"] != nil)
         #expect(fields["resolutionFrameRate"] == "6K · 25p")
         #expect(fields["codecSelection"] == "R3D NE")
+        #expect(fields["tone"] == "Log3G10")
         #expect(fields["whiteBalanceTint"] == "Neutral")
         #expect(fields["options.shutter"] == "90°\u{1F}180°\u{1F}360°")
         #expect(fields["options.codec"] == "R3D NE\u{1F}H.265")

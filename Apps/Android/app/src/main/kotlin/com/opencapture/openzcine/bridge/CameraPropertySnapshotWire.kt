@@ -80,6 +80,7 @@ internal object CameraPropertySnapshotWire {
             resolution = value.optionalString("resolution"),
             frameRate = value.optionalInt("frameRate"),
             codec = value.optionalString("codec"),
+            tone = value.optionalString("tone"),
             resolutionFrameRate = value.optionalString("resolutionFrameRate"),
             codecSelection = value.optionalString("codecSelection"),
             whiteBalanceTint = value.optionalString("whiteBalanceTint"),

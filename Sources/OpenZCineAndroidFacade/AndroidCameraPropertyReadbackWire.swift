@@ -146,6 +146,11 @@ public enum AndroidCameraPropertyReadbackWire {
         append("resolution", value: properties.resolution, to: &fields)
         append("frameRate", value: properties.fps.map { String($0) }, to: &fields)
         append("codec", value: properties.fileType, to: &fields)
+        let activeCodec = readback.controls.codec ?? properties.fileType
+        append(
+            "tone",
+            value: activeCodec.flatMap { PTPCameraPropertyDecoders.toneLabel(fromCodec: $0) },
+            to: &fields)
         append("batteryPercent", value: properties.batteryPercent.map { String($0) }, to: &fields)
         append("externalPower", value: properties.onExternalPower.map { String($0) }, to: &fields)
         append("warningRaw", value: properties.warningRaw.map { String($0) }, to: &fields)

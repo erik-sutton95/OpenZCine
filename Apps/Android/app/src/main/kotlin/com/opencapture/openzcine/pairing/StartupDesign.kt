@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import android.content.Intent
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -7,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,10 +33,17 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
+import com.opencapture.openzcine.diagnostics.AndroidSupportLinks
+import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 
 /**
  * Startup/pairing design tokens — a 1:1 port of the iOS shell's
@@ -108,53 +117,112 @@ public fun StartupHeader(
     statusTitle: String,
     isBusy: Boolean,
     onOpenSettings: (() -> Unit)? = null,
+    onOpenPrivacy: (() -> Unit)? = null,
+    onOpenTerms: (() -> Unit)? = null,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column {
-            Text(
-                "OPENZCINE",
-                color = StartupColors.muted,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.3.sp,
-            )
-            Text(
-                title,
-                color = StartupColors.ink,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
+    val context = LocalContext.current
+    val openPrivacy: () -> Unit =
+        onOpenPrivacy ?: {
+            AndroidSystemSettingsActions.safeLaunch(
+                context,
+                Intent(Intent.ACTION_VIEW, AndroidSupportLinks.PRIVACY.toUri()),
             )
         }
-        Spacer(Modifier.weight(1f))
-        onOpenSettings?.let { openSettings ->
-            StartupOutlineButton(
-                text = "Settings",
-                onClick = openSettings,
-                modifier = Modifier.width(92.dp),
+    val openTerms: () -> Unit =
+        onOpenTerms ?: {
+            AndroidSystemSettingsActions.safeLaunch(
+                context,
+                Intent(Intent.ACTION_VIEW, AndroidSupportLinks.TERMS.toUri()),
             )
+        }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 600.dp
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "OPENZCINE",
+                    color = StartupColors.muted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.3.sp,
+                )
+                if (compact) {
+                    StartupHeaderTitle(title)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        StartupLegalLink("Privacy", openPrivacy)
+                        StartupLegalLink("Terms", openTerms)
+                    }
+                } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        StartupHeaderTitle(title, Modifier.weight(1f, fill = false))
+                        StartupLegalLink("Privacy", openPrivacy)
+                        StartupLegalLink("Terms", openTerms)
+                    }
+                }
+            }
             Spacer(Modifier.width(8.dp))
-        }
-        val statusColor = if (isBusy) StartupColors.accent else StartupColors.ready
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier =
-                Modifier.clip(CircleShape)
-                    .background(StartupColors.surface.copy(alpha = 0.50f))
-                    .border(1.dp, statusColor.copy(alpha = 0.40f), CircleShape)
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
-        ) {
-            Box(Modifier.size(7.dp).background(statusColor, CircleShape))
-            Text(
-                statusTitle,
-                color = statusColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-            )
+            onOpenSettings?.let { openSettings ->
+                StartupOutlineButton(
+                    text = "Settings",
+                    onClick = openSettings,
+                    modifier = Modifier.width(92.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            val statusColor = if (isBusy) StartupColors.accent else StartupColors.ready
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier =
+                    Modifier.clip(CircleShape)
+                        .background(StartupColors.surface.copy(alpha = 0.50f))
+                        .border(1.dp, statusColor.copy(alpha = 0.40f), CircleShape)
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+            ) {
+                Box(Modifier.size(7.dp).background(statusColor, CircleShape))
+                Text(
+                    statusTitle,
+                    color = statusColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun StartupHeaderTitle(title: String, modifier: Modifier = Modifier) {
+    Text(
+        title,
+        color = StartupColors.ink,
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        modifier = modifier,
+    )
+}
+
+/** Quiet policy link matching the iOS startup header without competing with its title. */
+@Composable
+private fun StartupLegalLink(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        color = StartupColors.dim,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        modifier =
+            Modifier.semantics {
+                    contentDescription = "Open the OpenZCine $label page"
+                }
+                .clickable(role = Role.Button, onClick = onClick)
+                .padding(horizontal = 3.dp, vertical = 5.dp),
+    )
 }
 
 /** Wizard progress capsules with the step counter (iOS `StartupWizardProgress`, compact). */

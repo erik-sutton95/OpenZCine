@@ -591,6 +591,11 @@ internal fun commandDashboardPresentation(
                             value = snapshot.cameraGrid,
                             reason = "Camera Grid Display is read-only on Android.",
                         ),
+                        readOnly(
+                            title = "Tone",
+                            value = snapshot.tone,
+                            reason = "Tone follows the active recording codec.",
+                        ),
                         advertisedEditable(
                             title = "VR",
                             value = snapshot.vibrationReduction,

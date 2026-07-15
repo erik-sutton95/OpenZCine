@@ -42,6 +42,7 @@ class CommandMonitorTest {
                         resolution = "6K",
                         frameRate = 25,
                         codec = "R3D NE",
+                        tone = "Log3G10",
                         resolutionFrameRate = "6K · 25p",
                         codecSelection = "R3D NE",
                         temperatureStatus = CameraTemperatureStatus.NORMAL,
@@ -123,6 +124,12 @@ class CommandMonitorTest {
         assertEquals("470 GB · 47%", presentation.storage)
         assertEquals("25.00", presentation.frameRate)
         assertEquals("NIKON ZR", presentation.camera)
+        assertEquals(
+            "Log3G10",
+            presentation.sideSections.first { it.title == "Image" }.cells.first {
+                it.title == "Tone"
+            }.value,
+        )
         assertEquals("ON / OFF", presentation.tiles.first {
             it.kind == CommandTileKind.STABILIZATION
         }.value)
@@ -375,7 +382,7 @@ class CommandMonitorTest {
             listOf("Image", "Exposure", "Focus", "Audio"),
             presentation.sideSections.map { it.title },
         )
-        assertEquals(3, presentation.sideSections.first { it.title == "Image" }.cells.size)
+        assertEquals(4, presentation.sideSections.first { it.title == "Image" }.cells.size)
         val focus = presentation.sideSections.first { it.title == "Focus" }.cells
         assertEquals(CameraControl.FOCUS_MODE, assertNotNull(focus[0].request).control)
         assertEquals(CameraControl.FOCUS_AREA, assertNotNull(focus[1].request).control)

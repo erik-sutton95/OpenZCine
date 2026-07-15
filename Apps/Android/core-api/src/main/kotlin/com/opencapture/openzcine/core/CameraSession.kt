@@ -233,6 +233,8 @@ public data class CameraPropertySnapshot(
     val frameRate: Int? = null,
     /** Camera-reported recording codec label. */
     val codec: String? = null,
+    /** Shared-core tone/gamma label inferred from the active recording codec. */
+    val tone: String? = null,
     /** Shared-core resolution/frame-rate label matching the active advertised option. */
     val resolutionFrameRate: String? = null,
     /** Shared-core short codec label matching the active advertised option. */
