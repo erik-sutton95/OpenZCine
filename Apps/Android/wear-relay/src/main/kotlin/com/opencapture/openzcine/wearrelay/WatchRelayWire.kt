@@ -176,10 +176,7 @@ public data class WatchMediaStatus(
     public val percentFree: Int,
     /** Remaining record time when available; Android currently leaves this unavailable. */
     public val minutesRemaining: Int,
-) {
-    /** Capacity label matching the iOS watch's preferred compact presentation. */
-    public fun capacityLabel(): String = "$gigabytesFree GB · $percentFree%"
-}
+)
 
 /** Phone-to-watch monitor/camera snapshot. */
 public data class WatchRelayState(

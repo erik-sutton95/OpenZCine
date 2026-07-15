@@ -45,6 +45,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -163,11 +164,12 @@ internal fun WearMonitorContent(
         previousCommandMessage = message
     }
     MaterialTheme {
+        val monitorDescription = stringResource(R.string.wear_monitor_description)
         BoxWithConstraints(
             modifier =
                 Modifier.fillMaxSize()
                     .background(Color.Black)
-                    .semantics { contentDescription = "Wear camera monitor" },
+                    .semantics { contentDescription = monitorDescription },
         ) {
             val layout = wearScreenLayout(LocalConfiguration.current.isScreenRound, maxWidth.value)
             val sideSlotWidth =
@@ -234,6 +236,7 @@ internal fun WearMonitorContent(
 
 @Composable
 private fun WearFeed(presentation: WearMonitorPresentation, modifier: Modifier = Modifier) {
+    val livePreviewDescription = stringResource(R.string.wear_live_preview_description)
     Box(
         modifier =
             modifier
@@ -252,7 +255,7 @@ private fun WearFeed(presentation: WearMonitorPresentation, modifier: Modifier =
         presentation.frame?.let { preview ->
             Image(
                 bitmap = preview.asImageBitmap(),
-                contentDescription = "Live camera preview from phone",
+                contentDescription = livePreviewDescription,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
@@ -288,26 +291,41 @@ private fun WearFeed(presentation: WearMonitorPresentation, modifier: Modifier =
     }
 }
 
+@Composable
 private fun placeholderLabel(presentation: WearMonitorPresentation): String? =
     when {
-        !presentation.phoneReachable -> "Open OpenZCine on phone"
-        presentation.state == null -> "Waiting for phone monitor"
-        presentation.state.connection == WatchConnectionState.DISCONNECTED -> "Phone monitor unavailable"
-        presentation.state.connection == WatchConnectionState.NO_CAMERA -> "No camera connected"
-        !presentation.state.feedLive -> "Feed paused (Command mode)"
-        presentation.frame == null -> "Waiting for camera preview"
+        !presentation.phoneReachable -> stringResource(R.string.wear_open_on_phone)
+        presentation.state == null -> stringResource(R.string.wear_waiting_for_phone)
+        presentation.state.connection == WatchConnectionState.DISCONNECTED ->
+            stringResource(R.string.wear_phone_unavailable)
+        presentation.state.connection == WatchConnectionState.NO_CAMERA ->
+            stringResource(R.string.wear_no_camera)
+        !presentation.state.feedLive -> stringResource(R.string.wear_feed_paused)
+        presentation.frame == null -> stringResource(R.string.wear_waiting_for_preview)
         else -> null
     }
 
+@Composable
 private fun timecodeLabel(presentation: WearMonitorPresentation): String {
     val timecode = presentation.frameTimecode ?: presentation.state?.timecode
-    return if (timecode?.on == true) timecode.label() else "--:--:--:--"
+    return if (timecode?.on == true) {
+        timecode.label()
+    } else {
+        stringResource(R.string.wear_timecode_unavailable)
+    }
 }
 
+@Composable
 private fun storageLabel(presentation: WearMonitorPresentation): String =
-    presentation.state?.mediaStatus?.capacityLabel()
+    presentation.state?.mediaStatus?.let { status ->
+        stringResource(
+            R.string.wear_storage_capacity,
+            status.gigabytesFree,
+            status.percentFree,
+        )
+    }
         ?: presentation.state?.media?.takeIf { it.isNotBlank() }
-        ?: "—"
+        ?: stringResource(R.string.wear_unavailable)
 
 /** iOS-parity record glyph: circle + rounded red start/stop tally, not a text control. */
 @Composable
@@ -317,6 +335,14 @@ private fun WearRecordButton(
     onClick: () -> Unit,
 ) {
     val hapticFeedback = LocalHapticFeedback.current
+    val recordDescription =
+        stringResource(
+            if (isRecording) {
+                R.string.wear_stop_recording_description
+            } else {
+                R.string.wear_start_recording_description
+            },
+        )
     val controlColor by
         animateColorAsState(
             if (isRecording) Color(0xFFE24040) else Color.White.copy(alpha = 0.6f),
@@ -331,8 +357,7 @@ private fun WearRecordButton(
             Modifier.size(44.dp)
                 .alpha(if (enabled) 1f else 0.4f)
                 .semantics {
-                    contentDescription =
-                        if (isRecording) "Stop camera recording" else "Start camera recording"
+                    contentDescription = recordDescription
                     role = Role.Button
                 }
                 .clickable(enabled = enabled) {
@@ -357,6 +382,9 @@ private fun WearRecordButton(
 /** Compact battery glyph and honest camera charge readout. */
 @Composable
 private fun WearBatteryReadout(percent: Int?, modifier: Modifier = Modifier) {
+    val batteryLabel =
+        percent?.let { stringResource(R.string.wear_battery_percent, it) }
+            ?: stringResource(R.string.wear_unavailable)
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.End,
@@ -367,7 +395,7 @@ private fun WearBatteryReadout(percent: Int?, modifier: Modifier = Modifier) {
             Spacer(Modifier.width(3.dp))
         }
         Text(
-            text = percent?.let { "$it%" } ?: "—",
+            text = batteryLabel,
             color = Color(0xFFC3C5C8),
             fontSize = 11.sp,
             maxLines = 1,

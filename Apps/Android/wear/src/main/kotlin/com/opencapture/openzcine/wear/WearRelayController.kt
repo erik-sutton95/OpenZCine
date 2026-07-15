@@ -133,7 +133,11 @@ internal class WearRelayController(context: Context) :
         messageClient
             .sendMessage(nodeID, WearRelayTransport.commandPath(token), data)
             .addOnFailureListener {
-                if (token == commandToken) rejectPendingCommand("Phone monitor unavailable.")
+                if (token == commandToken) {
+                    rejectPendingCommand(
+                        applicationContext.getString(R.string.wear_phone_unavailable_error),
+                    )
+                }
             }
         handler.postDelayed(commandTimeout, COMMAND_TIMEOUT_MILLIS)
     }
@@ -277,7 +281,9 @@ internal class WearRelayController(context: Context) :
 
     private val commandTimeout =
         Runnable {
-            if (isSendingCommand) rejectPendingCommand("Phone did not confirm the record command.")
+            if (isSendingCommand) {
+                rejectPendingCommand(applicationContext.getString(R.string.wear_record_timeout))
+            }
         }
 
     private inline fun <reified Payload> decode(data: ByteArray): Payload? =

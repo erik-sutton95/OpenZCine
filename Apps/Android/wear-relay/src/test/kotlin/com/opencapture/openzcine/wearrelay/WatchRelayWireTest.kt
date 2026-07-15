@@ -39,7 +39,8 @@ class WatchRelayWireTest {
         assertEquals(80, state.cameraBatteryPercent)
         assertEquals(WatchConnectionState.CONNECTED, state.connection)
         assertEquals("01:02:03:04", state.timecode.label())
-        assertEquals("521 GB · 47%", assertNotNull(state.mediaStatus).capacityLabel())
+        assertEquals(521, assertNotNull(state.mediaStatus).gigabytesFree)
+        assertEquals(47, assertNotNull(state.mediaStatus).percentFree)
 
         val withoutMedia =
             assertIs<WatchRelayState>(
