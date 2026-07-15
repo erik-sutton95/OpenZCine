@@ -161,38 +161,12 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case fast = "Fast"
         case balanced = "Balanced"
         case quality = "Quality"
-
-        /// Nikon `LiveViewImageSize` (`0xD1AC`) requested for this preset.
-        ///
-        /// The ZR exposes `1` as QVGA, `2` as VGA, and `3` as XGA. A smaller
-        /// value lowers preview bandwidth; callers must still pass this through
-        /// ``LiveViewLoadPolicy`` before configuring an active stream.
-        public var liveViewImageSize: UInt8 {
-            switch self {
-            case .fast: 1
-            case .balanced: 2
-            case .quality: 3
-            }
-        }
     }
 
     public enum QualityBias: String, CaseIterable, Codable, Equatable, Sendable {
         case latency = "Latency"
         case balanced = "Balanced"
         case detail = "Detail"
-
-        /// Nikon `LiveViewImageCompression` (`0xD1BC`) requested for this bias.
-        ///
-        /// The ZR runtime-enumerates the values, so the order remains
-        /// **verify-on-HW**. Higher values are treated as lighter compression
-        /// until a real body proves otherwise; this affects preview detail only.
-        public var liveViewImageCompression: UInt8 {
-            switch self {
-            case .latency: 1
-            case .balanced: 2
-            case .detail: 3
-            }
-        }
     }
 
     public init(

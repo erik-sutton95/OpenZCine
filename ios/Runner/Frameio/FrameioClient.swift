@@ -3,7 +3,7 @@ import os
 
 private let frameioLogger = Logger(subsystem: "OpenZCine", category: "frameio")
 
-/// Reads the Frame.io OAuth configuration from Info.plist. Register an OAuth Native App in the
+/// Reads the Frame.io OAuth configuration from Info.plist. Register an OAuth Single Page App in the
 /// Adobe Developer Console (Frame.io API on the project) and set `FrameioClientID` + `FrameioRedirectURI`.
 enum FrameioConfig {
     static var configuration: FrameioConfiguration? {
@@ -20,20 +20,13 @@ enum FrameioConfig {
 }
 
 /// A persisted token plus its wall-clock receipt time, so access-token expiry can be computed.
-struct StoredFrameioToken: Codable, Equatable, CustomStringConvertible, CustomDebugStringConvertible
-{
+struct StoredFrameioToken: Codable, Equatable {
     var token: FrameioToken
     var receivedAt: Date
 
     var accessExpiry: Date { receivedAt.addingTimeInterval(TimeInterval(token.expiresIn)) }
     /// True within 60s of expiry — refresh early so a token can't expire mid-request.
     var needsRefresh: Bool { Date() >= accessExpiry.addingTimeInterval(-60) }
-
-    /// Avoids exposing the nested bearer token in diagnostics.
-    var description: String { "StoredFrameioToken(redacted)" }
-
-    /// Avoids exposing the nested bearer token in debugger/reflection output.
-    var debugDescription: String { description }
 }
 
 /// Keychain-backed store for the Frame.io token. Never logs token values.
@@ -78,11 +71,11 @@ enum FrameioTokenStore {
 }
 
 /// Errors from the Frame.io API client.
-enum FrameioError: LocalizedError, CustomStringConvertible, CustomDebugStringConvertible {
+enum FrameioError: LocalizedError {
     case notConfigured
     case notConnected
-    case http(Int)
-    case decode
+    case http(Int, String)
+    case decode(String)
     case noUploadURL
     case noProject
     case unsupportedOS
@@ -95,10 +88,9 @@ enum FrameioError: LocalizedError, CustomStringConvertible, CustomDebugStringCon
         case .notConfigured:
             "Frame.io isn't configured (add FrameioClientID / FrameioRedirectURI via Frameio.local.xcconfig)."
         case .notConnected: "Connect Frame.io from the share options first."
-        case .http(let code):
-            "Frame.io request failed (HTTP \(code))."
-        case .decode:
-            "Frame.io returned an unexpected response."
+        case .http(let code, let detail):
+            "Frame.io request failed (HTTP \(code))\(detail.isEmpty ? "" : ": \(detail)")."
+        case .decode(let detail): detail
         case .noUploadURL: "Frame.io didn't return an upload URL."
         case .noProject: "Pick a Frame.io project to upload into."
         case .unsupportedOS: "Frame.io sign-in requires iOS 17.4 or later."
@@ -107,12 +99,6 @@ enum FrameioError: LocalizedError, CustomStringConvertible, CustomDebugStringCon
         case .unsafeMediaFilename: "The camera supplied an unsafe media filename."
         }
     }
-
-    /// HTTP bodies and decoder details can include external-service material.
-    var description: String { "FrameioError(redacted)" }
-
-    /// HTTP bodies and decoder details can include external-service material.
-    var debugDescription: String { description }
 }
 
 /// `URLSession` client for the Frame.io V4 API: token refresh, account/project listing, and clip
@@ -150,40 +136,40 @@ final class FrameioService {
 
     private func exchangeToken(_ request: URLRequest) async throws -> FrameioToken {
         let (data, response) = try await Self.session.data(for: request)
-        try Self.checkStatus(response)
+        try Self.checkStatus(response, data)
         return try JSONDecoder().decode(FrameioToken.self, from: data)
     }
 
     // MARK: - API
 
     func currentUser() async throws -> FrameioUser {
-        let request = try FrameioAPI.currentUser(config: config)
-        return try await get(request, as: FrameioOne<FrameioUser>.self).data
+        try await get("/me", as: FrameioOne<FrameioUser>.self).data
     }
 
     func accounts() async throws -> [FrameioAccount] {
-        let request = try FrameioAPI.accounts(config: config)
-        return try await get(request, as: FrameioList<FrameioAccount>.self).data
+        try await get("/accounts", as: FrameioList<FrameioAccount>.self).data
     }
 
     func workspaces(accountID: String) async throws -> [FrameioWorkspace] {
-        let request = try FrameioAPI.workspaces(config: config, accountID: accountID)
-        return try await get(request, as: FrameioList<FrameioWorkspace>.self).data
+        try await get("/accounts/\(accountID)/workspaces", as: FrameioList<FrameioWorkspace>.self)
+            .data
     }
 
     func projects(accountID: String, workspaceID: String) async throws -> [FrameioProject] {
-        let request = try FrameioAPI.projects(
-            config: config, accountID: accountID, workspaceID: workspaceID)
-        return try await get(request, as: FrameioList<FrameioProject>.self).data
+        try await get(
+            "/accounts/\(accountID)/workspaces/\(workspaceID)/projects",
+            as: FrameioList<FrameioProject>.self
+        ).data
     }
 
     /// Creates a blank project in the given workspace and returns the new project (including root folder).
     func createProject(accountID: String, workspaceID: String, name: String) async throws
         -> FrameioProject
     {
-        let request = try FrameioAPI.createProject(
-            config: config, accountID: accountID, workspaceID: workspaceID, name: name)
-        let created: FrameioOne<FrameioProject> = try await send(request)
+        let body = FrameioCreateProjectRequest(name: name)
+        let created: FrameioOne<FrameioProject> = try await post(
+            "/accounts/\(accountID)/workspaces/\(workspaceID)/projects",
+            body: body)
         return created.data
     }
 
@@ -195,10 +181,9 @@ final class FrameioService {
         progress: @escaping @MainActor (Double) -> Void
     ) async throws -> String {
         progress(0.05)
-        let createRequest = try FrameioAPI.createFile(
-            config: config, accountID: accountID, folderID: folderID, name: name, fileSize: fileSize
-        )
-        let created: FrameioCreateFileResponse = try await send(createRequest)
+        let createBody = FrameioCreateFileRequest(name: name, fileSize: fileSize)
+        let created: FrameioCreateFileResponse = try await post(
+            "/accounts/\(accountID)/folders/\(folderID)/files/local_upload", body: createBody)
         let parts = created.uploadParts
         guard !parts.isEmpty else { throw FrameioError.noUploadURL }
 
@@ -240,8 +225,8 @@ final class FrameioService {
         put.httpMethod = "PUT"
         put.setValue("private", forHTTPHeaderField: "x-amz-acl")
         put.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        let (_, response) = try await Self.session.upload(for: put, from: chunk)
-        try Self.checkStatus(response)
+        let (data, response) = try await Self.session.upload(for: put, from: chunk)
+        try Self.checkStatus(response, data)
     }
 
     private func readExactBytes(count: Int, from handle: FileHandle) throws -> Data {
@@ -265,10 +250,9 @@ final class FrameioService {
     ) async throws {
         let maxAttempts = 45
         for attempt in 0..<maxAttempts {
-            let request = try FrameioAPI.uploadStatus(
-                config: config, accountID: accountID, fileID: fileID)
             let status: FrameioFileUploadStatus = try await get(
-                request, as: FrameioFileUploadStatus.self)
+                "/accounts/\(accountID)/files/\(fileID)/status",
+                as: FrameioFileUploadStatus.self)
             if status.uploadComplete {
                 progress(0.95)
                 return
@@ -281,41 +265,44 @@ final class FrameioService {
 
     // MARK: - HTTP helpers
 
-    private func get<T: Decodable>(_ planned: FrameioAPIRequest, as _: T.Type) async throws -> T {
-        try await send(planned)
+    private func get<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
+        try await send(try await authedRequest(path, method: "GET"))
     }
 
-    private func send<T: Decodable>(_ planned: FrameioAPIRequest) async throws -> T {
-        try await send(try await authedRequest(planned))
+    private func post<Body: Encodable, T: Decodable>(_ path: String, body: Body) async throws -> T {
+        var request = try await authedRequest(path, method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await send(request)
     }
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {
         let (data, response) = try await Self.session.data(for: request)
-        try Self.checkStatus(response)
+        try Self.checkStatus(response, data)
         do {
             return try FrameioJSON.decode(T.self, from: data)
-        } catch is FrameioDecodingError {
-            throw FrameioError.decode
+        } catch let error as FrameioDecodingError {
+            throw FrameioError.decode(error.errorDescription ?? error.localizedDescription)
         }
     }
 
-    private func authedRequest(_ planned: FrameioAPIRequest) async throws -> URLRequest {
+    private func authedRequest(_ path: String, method: String) async throws -> URLRequest {
         let token = try await accessToken()
-        var request = URLRequest(url: planned.url)
-        request.httpMethod = planned.method.rawValue
+        guard let url = URL(string: config.apiBaseURL.absoluteString + path) else {
+            throw FrameioError.http(-1, "bad path")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let body = planned.body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = body
-        }
         return request
     }
 
-    private static func checkStatus(_ response: URLResponse) throws {
+    private static func checkStatus(_ response: URLResponse, _ data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
-            throw FrameioError.http(http.statusCode)
+            throw FrameioError.http(
+                http.statusCode, String(decoding: data.prefix(500), as: UTF8.self))
         }
     }
 }

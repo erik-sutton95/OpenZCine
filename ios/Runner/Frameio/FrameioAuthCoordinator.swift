@@ -76,7 +76,8 @@ final class FrameioAuthCoordinator: NSObject, ASWebAuthenticationPresentationCon
     private func exchange(_ request: URLRequest) async throws -> FrameioToken {
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw FrameioError.http(http.statusCode)
+            throw FrameioError.http(
+                http.statusCode, String(decoding: data.prefix(500), as: UTF8.self))
         }
         return try JSONDecoder().decode(FrameioToken.self, from: data)
     }

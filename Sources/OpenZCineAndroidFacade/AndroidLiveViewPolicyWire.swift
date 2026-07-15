@@ -44,7 +44,7 @@ public enum AndroidLiveViewPolicyWire {
         else { return nil }
 
         let imageSize = LiveViewLoadPolicy.effectiveImageSize(
-            requested: streamPreset.liveViewImageSize,
+            requested: imageSize(for: streamPreset),
             isRecording: isRecording,
             thermalTier: thermalTier,
             cameraOverheating: cameraOverheating)
@@ -52,13 +52,29 @@ public enum AndroidLiveViewPolicyWire {
             (Double(standardFrameIntervalNanoseconds) * thermalTier.cadenceMultiplier).rounded())
         return AndroidLiveViewRequest(
             imageSize: imageSize,
-            compression: qualityBias.liveViewImageCompression,
+            compression: compression(for: qualityBias),
             frameIntervalNanoseconds: max(standardFrameIntervalNanoseconds, interval))
     }
 
     /// Encodes the safe request as `size<TAB>compression<TAB>intervalNanos` for JNI.
     public static func encode(_ request: AndroidLiveViewRequest) -> String {
         "\(request.imageSize)\t\(request.compression)\t\(request.frameIntervalNanoseconds)"
+    }
+
+    private static func imageSize(for preset: OperatorPreferences.StreamPreset) -> UInt8 {
+        switch preset {
+        case .fast: 1
+        case .balanced: 2
+        case .quality: 3
+        }
+    }
+
+    private static func compression(for bias: OperatorPreferences.QualityBias) -> UInt8 {
+        switch bias {
+        case .latency: 1
+        case .balanced: 2
+        case .detail: 3
+        }
     }
 }
 
