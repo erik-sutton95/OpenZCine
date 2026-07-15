@@ -731,6 +731,9 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
 /* ---- Ticks + badges ---- */
 .ticks { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 .ticks li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ticks--cameras li { align-items: flex-start; }
+.ticks--cameras li > :first-child { min-width: 0; }
+.ticks--cameras .badge { flex-shrink: 0; margin-top: 2px; }
 .badge {
   font-family: var(--mono); font-size: 11px; padding: 2px 9px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-soft);

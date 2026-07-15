@@ -127,8 +127,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   where 100% matches the former 25% appearance and saved iOS settings migrate without a visual jump.
 - **Android beta-readiness parity** (planned) — port the diagnostics, support links, and live-view
   guide after the iOS behavior is validated with external testers.
-- **Public launch landing actions** (in progress): keep TestFlight available while Android and the
+- **Public launch landing actions**: keep TestFlight available while Android and the
   public repository are presented as clearly unavailable until their launches.
+- **Landing-page camera compatibility** (in progress): identify the Nikon ZR, Z9, and Z5II as
+  working, and the Z6, Z6II, Z6III, Zf, Z8, Z7, and Z7II as untested.
 
 ## Milestone Success Criteria
 
