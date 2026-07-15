@@ -125,8 +125,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   and downloaded RED LUTs, with built-in looks protected and active selections reconciled safely.
 - **Waveform/parade brightness calibration** (in progress) — a useful 0–200% trace-intensity range
   where 100% matches the former 25% appearance and saved iOS settings migrate without a visual jump.
-- **Classic-notch iPhone layout hardening** (in progress) — keep live-view chrome collision-free on
-  compact landscape devices such as iPhone 11 while preserving full-bleed monitoring.
+- **Classic-notch iPhone layout hardening** (in progress) — center the 16:9 feed clear of the notch
+  and keep live-view chrome collision-free on compact landscape devices such as iPhone 11.
 - **Android beta-readiness parity** (planned) — port the diagnostics, support links, and live-view
   guide after the iOS behavior is validated with external testers.
 

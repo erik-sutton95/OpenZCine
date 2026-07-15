@@ -39,6 +39,20 @@ import Testing
     #expect(MonitorFeedLayout.leadingInset(for: safeArea) == 0)
 }
 
+@Test func feedLayoutCentersInsideClassicNotchLandscapeViewport() {
+    let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
+    let frame = MonitorFeedLayout.fullBleedFrame(
+        viewportWidth: 896,
+        viewportHeight: 414,
+        safeArea: safeArea
+    )
+
+    #expect(frame.x == 80)
+    #expect(frame.x >= safeArea.leading)
+    #expect(frame.x + frame.width <= 896 - safeArea.trailing)
+    #expect(abs(frame.x + frame.width / 2 - 896 / 2) < 0.001)
+}
+
 @Test func horizontalLayoutDirectionUsesDeviceOrientationBeforeSafeAreaFallback() {
     let ambiguousSafeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
 
@@ -457,7 +471,8 @@ import Testing
     let deckCenter = layout.topInfoDeck.x + layout.topInfoDeck.width / 2
     let feedCenter = layout.feed.x + layout.feed.width / 2
 
-    #expect(layout.feed.x == 0)
+    #expect(layout.feed.x == 80)
+    #expect(abs(layout.feed.x + layout.feed.width / 2 - 896 / 2) < 0.001)
     #expect(
         lockRight + MonitorLiveViewModuleLayout.topInfoDeckControlGap
             <= layout.topInfoDeck.x)

@@ -243,7 +243,15 @@ public enum MonitorFeedLayout {
             )
         }
 
-        return MonitorFeedFrame(x: leadingInset, y: 0, width: width, height: viewportHeight)
+        let remainingWidth = max(0, viewportWidth - width)
+        // A classic landscape notch reports equal horizontal safe areas, so keep the image
+        // centered between the two side margins instead of anchoring it beneath either side.
+        let x =
+            MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea)
+            ? remainingWidth / 2
+            : min(remainingWidth, leadingInset)
+
+        return MonitorFeedFrame(x: x, y: 0, width: width, height: viewportHeight)
     }
 
     /// Fits the feed to the visible viewport without expanding the native 16:9 source frame.
