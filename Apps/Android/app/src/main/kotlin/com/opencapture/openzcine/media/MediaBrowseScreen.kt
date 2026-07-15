@@ -122,7 +122,7 @@ import kotlinx.coroutines.withContext
 private const val MEDIA_BROWSE_PAGE_SIZE = 32
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
-private sealed interface BrowseState {
+internal sealed interface BrowseState {
     data object Loading : BrowseState
 
     data class Loaded(
@@ -131,6 +131,17 @@ private sealed interface BrowseState {
     ) : BrowseState
 
     data class Failed(val message: String) : BrowseState
+}
+
+/** A truncated camera enumeration is a failed catalog, never a complete partial listing. */
+internal fun incompleteCameraBrowseState(partialClips: List<MediaClipRecord>): BrowseState.Failed {
+    if (partialClips.isEmpty()) {
+        return BrowseState.Failed("Couldn't finish listing camera media.")
+    }
+    val itemLabel = if (partialClips.size == 1) "item" else "items"
+    return BrowseState.Failed(
+        "Listing stopped after ${partialClips.size} $itemLabel. Retry to load the complete library.",
+    )
 }
 
 /** Outcome of staging the safe subset of a multi-selection for Android sharing. */
@@ -558,11 +569,7 @@ internal fun MediaBrowseScreen(
                             throw error
                         } catch (_: MediaBrowsePagingException) {
                             val partial = (state as? BrowseState.Loaded)?.clips.orEmpty()
-                            if (partial.isEmpty()) {
-                                BrowseState.Failed("Couldn't finish listing camera media.")
-                            } else {
-                                BrowseState.Loaded(partial)
-                            }
+                            incompleteCameraBrowseState(partial)
                         }
                     }
                 }

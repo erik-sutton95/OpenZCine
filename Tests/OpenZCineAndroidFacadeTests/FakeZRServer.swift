@@ -65,6 +65,8 @@ final class FakeZRServer: @unchecked Sendable {
         /// Scripted card contents served by the storage/object operations
         /// (`FakeZRMediaCard.objects` by default; empty = an empty card).
         var mediaObjects: [FakeZRMediaObject] = FakeZRMediaCard.objects
+        /// Drops the command socket instead of answering `GetObjectHandles`.
+        var disconnectsOnGetObjectHandles = false
         /// Optional ignored/local movie file served as the payload for
         /// `mediaPayloadHandle` during the physical-device playback demo.
         var mediaPayloadFileURL: URL?
@@ -582,6 +584,10 @@ final class FakeZRServer: @unchecked Sendable {
                 data: storageInfoDataset(),
                 transactionID: transactionID)
         case .getObjectHandles:
+            if options.disconnectsOnGetObjectHandles {
+                shutdown(connection, Int32(SHUT_RDWR))
+                return
+            }
             let storageID = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
             guard storageID == FakeZRMediaCard.storageID else {
                 // Invalid_StorageID.

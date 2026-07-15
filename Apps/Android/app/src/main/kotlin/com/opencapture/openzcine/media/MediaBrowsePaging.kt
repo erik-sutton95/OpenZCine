@@ -9,8 +9,16 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 
-/** Stable object identity shared by page additions and R3D-pair removals. */
-internal data class MediaObjectIdentity(val storageID: Long, val handle: Long)
+/** Stable persisted identity shared by page additions and R3D-pair removals. */
+internal data class MediaObjectIdentity(
+    val storageID: Long,
+    val handle: Long,
+    val captureDate: String,
+    val filename: String,
+) {
+    constructor(clip: MediaClipRecord) :
+        this(clip.storageId, clip.handle, clip.captureDate, clip.filename)
+}
 
 /** One decoded page from the shared Swift media-browse cursor. */
 internal data class MediaBrowsePage(
@@ -29,7 +37,7 @@ internal data class MediaBrowseSnapshot(
 
 /** Stable parser for `MediaBrowsePageWire` from the Swift facade. */
 internal object MediaBrowsePages {
-    private const val VERSION = "OZCMEDIA1"
+    private const val VERSION = "OZCMEDIA2"
     private const val MAXIMUM_PAGE_SIZE = 128
 
     fun parse(wire: String): MediaBrowsePage? {
@@ -50,10 +58,12 @@ internal object MediaBrowsePages {
         val removedObjects =
             lines.drop(1).take(removalCount).map { line ->
                 val fields = line.split('\t')
-                if (fields.size != 3 || fields[0] != "-") return null
+                if (fields.size != 5 || fields[0] != "-") return null
                 MediaObjectIdentity(
                     storageID = fields[1].unsignedObjectValueOrNull() ?: return null,
                     handle = fields[2].unsignedObjectValueOrNull() ?: return null,
+                    captureDate = fields[3],
+                    filename = fields[4].ifEmpty { return null },
                 )
             }
         val records = lines.drop(1 + removalCount).joinToString(separator = "\n")
@@ -101,11 +111,12 @@ internal suspend fun loadCameraMediaPages(
     onPage: suspend (MediaBrowseSnapshot) -> Unit,
 ): List<MediaClipRecord> {
     require(pageSize in 1..128) { "Camera media page size must be between 1 and 128." }
-    val cursor = withContext(ioContext) { gateway.begin() }
-    if (cursor <= 0) throw MediaBrowsePagingException("Camera media listing could not start.")
-
-    val clipsByIdentity = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
+    var cursor = -1L
     try {
+        withContext(ioContext) { cursor = gateway.begin() }
+        if (cursor <= 0) throw MediaBrowsePagingException("Camera media listing could not start.")
+
+        val clipsByIdentity = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
         while (true) {
             currentCoroutineContext().ensureActive()
             val wire =
@@ -122,7 +133,7 @@ internal suspend fun loadCameraMediaPages(
                 throw MediaBrowsePagingException("Camera exceeded the requested media page size.")
             }
             page.clips.forEach { clip ->
-                clipsByIdentity[MediaObjectIdentity(clip.storageId, clip.handle)] = clip
+                clipsByIdentity[MediaObjectIdentity(clip)] = clip
             }
             page.removedObjects.forEach(clipsByIdentity::remove)
             val clips = MediaClips.newestFirst(clipsByIdentity.values.toList())
@@ -137,7 +148,9 @@ internal suspend fun loadCameraMediaPages(
             yield()
         }
     } finally {
-        withContext(ioContext + NonCancellable) { gateway.cancel(cursor) }
+        if (cursor > 0) {
+            withContext(ioContext + NonCancellable) { gateway.cancel(cursor) }
+        }
     }
 }
 

@@ -233,7 +233,7 @@ class MediaLibraryStateTest {
         index.rememberCameraListing(
             cameraID = "camera",
             clips = listOf(proxy),
-            removedObjects = listOf(MediaObjectIdentity(master.storageId, master.handle)),
+            removedObjects = listOf(MediaObjectIdentity(master)),
         )
 
         assertEquals(listOf(proxy), index.persistedClips("camera"))
@@ -294,6 +294,36 @@ class MediaLibraryStateTest {
                     .map { it.savedCameraID },
             )
         }
+    }
+
+    @Test
+    fun `proxy delta preserves an older cached record whose PTP handle was reused`() {
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val historical =
+            clip(
+                handle = 7,
+                filename = "OLDER.R3D",
+                captureDate = "20260701T120000",
+                kind = MediaContentKind.R3D_MASTER,
+            )
+        val currentMaster =
+            clip(
+                handle = 7,
+                filename = "A001.R3D",
+                captureDate = "20260715T120000",
+                kind = MediaContentKind.R3D_MASTER,
+            )
+        val proxy = clip(handle = 8, filename = "A001.MP4")
+        index.rememberCameraListing("camera", listOf(historical))
+        index.rememberCameraListing("camera", listOf(currentMaster))
+
+        index.rememberCameraListing(
+            cameraID = "camera",
+            clips = listOf(proxy),
+            removedObjects = listOf(MediaObjectIdentity(currentMaster)),
+        )
+
+        assertEquals(listOf(proxy, historical), index.persistedClips("camera"))
     }
 
     @Test

@@ -159,9 +159,9 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         val merged = LinkedHashMap<String, MediaClipRecord>()
         persistedClips(cameraID).forEach { merged[it.libraryKey(cameraID)] = it }
         clips.forEach { merged[it.libraryKey(cameraID)] = it }
-        val removedKeys = removedObjects.map { it.storageID to it.handle }.toSet()
+        val removedKeys = removedObjects.map { it.libraryKey(cameraID) }.toSet()
         if (removedKeys.isNotEmpty()) {
-            merged.entries.removeAll { (_, clip) -> clip.storageId to clip.handle in removedKeys }
+            merged.keys.removeAll(removedKeys)
         }
         val ordered =
             MediaLibraryFiltering.sort(
@@ -391,8 +391,20 @@ internal object MediaLibrarySelection {
 
 /** Stable private favorite/index identity — never a filename-only key. */
 internal fun MediaClipRecord.libraryKey(cameraID: String): String =
+    mediaLibraryKey(cameraID, storageId, handle, captureDate, filename)
+
+private fun MediaObjectIdentity.libraryKey(cameraID: String): String =
+    mediaLibraryKey(cameraID, storageID, handle, captureDate, filename)
+
+private fun mediaLibraryKey(
+    cameraID: String,
+    storageID: Long,
+    handle: Long,
+    captureDate: String,
+    filename: String,
+): String =
     digest(
-        listOf(cameraID, storageId.toString(), handle.toString(), captureDate, filename)
+        listOf(cameraID, storageID.toString(), handle.toString(), captureDate, filename)
             .joinToString(separator = "\u0000"),
     )
 

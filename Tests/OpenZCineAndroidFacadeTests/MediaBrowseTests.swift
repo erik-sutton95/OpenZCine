@@ -27,7 +27,9 @@ struct MediaBrowseTests {
                 clips[MediaObjectHandle(storageID: clip.storageID, handle: clip.handle)] = clip
             }
             for object in page.removedObjects {
-                clips.removeValue(forKey: object)
+                clips.removeValue(
+                    forKey: MediaObjectHandle(
+                        storageID: object.storageID, handle: object.handle))
             }
             if !page.hasMore { return Array(clips.values) }
         }
@@ -114,6 +116,19 @@ struct MediaBrowseTests {
         let page = try session.beginMediaBrowse().nextPage(maxObjects: 32)
         #expect(page.clips.isEmpty)
         #expect(!page.hasMore)
+    }
+
+    @Test func propagatesTransportFailureWhileSnapshottingHandles() throws {
+        var options = FakeZRServer.Options()
+        options.disconnectsOnGetObjectHandles = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(throws: PTPIPClientSessionError.connectionClosed) {
+            try session.beginMediaBrowse()
+        }
     }
 
     @Test func fetchesPerObjectThumbnails() throws {
@@ -226,12 +241,42 @@ struct MediaBrowseTests {
         #expect(second.clips.isEmpty)
         #expect(
             second.removedObjects
-                == [MediaObjectHandle(storageID: master.storageID, handle: master.handle)])
+                == [FacadeMediaClipIdentity(master)])
         #expect(second.hasMore)
         let third = try cursor.nextPage(maxObjects: 1)
         #expect(third.clips.map(\.filename) == [proxy.filename])
+        #expect(third.clips.first?.sourcePixelWidth == master.pixelWidth)
+        #expect(third.clips.first?.sourcePixelHeight == master.pixelHeight)
         #expect(third.removedObjects.isEmpty)
         #expect(!third.hasMore)
+    }
+
+    @Test func enrichesProxyWhenMasterArrivesOnALaterPage() throws {
+        let proxy = FacadeMediaClip(
+            handle: 3, storageID: 1, sizeBytes: 1, captureDate: "", pixelWidth: 1,
+            pixelHeight: 1, filename: "A001_C001.MP4")
+        let master = FacadeMediaClip(
+            handle: 2, storageID: 2, sizeBytes: 2, captureDate: "", pixelWidth: 6_144,
+            pixelHeight: 3_240, filename: "A001_C001.R3D")
+        let clipsByHandle = [proxy.handle: proxy, master.handle: master]
+        let cursor = FacadeMediaBrowseCursor(
+            snapshots: [
+                MediaBrowseStorageSnapshot(storageID: 1, handles: [proxy.handle]),
+                MediaBrowseStorageSnapshot(storageID: 2, handles: [master.handle]),
+            ],
+            fetchClip: { clipsByHandle[$0.handle] })
+
+        let first = try cursor.nextPage(maxObjects: 1)
+        #expect(first.clips == [proxy])
+        #expect(first.hasMore)
+
+        let second = try cursor.nextPage(maxObjects: 1)
+        let enriched = try #require(second.clips.first)
+        #expect(enriched.filename == proxy.filename)
+        #expect(enriched.sourcePixelWidth == master.pixelWidth)
+        #expect(enriched.sourcePixelHeight == master.pixelHeight)
+        #expect(second.removedObjects.isEmpty)
+        #expect(!second.hasMore)
     }
 
     @Test func cancellationStopsTheNextPage() throws {
@@ -254,15 +299,15 @@ struct MediaBrowseTests {
             MediaBrowsePageWire.encode(
                 FacadeMediaBrowsePage(
                     clips: [clip], inspectedObjectCount: 32, hasMore: true))
-                == "OZCMEDIA1\t1\t32\t0\n1\t2\t3\t\t4\t5\t0\t0\t1\tproxy\t\t\tC0001.MOV")
+                == "OZCMEDIA2\t1\t32\t0\n1\t2\t3\t\t4\t5\t0\t0\t1\tproxy\t\t\tC0001.MOV")
         #expect(
             MediaBrowsePageWire.encode(
                 FacadeMediaBrowsePage(
                     clips: [],
-                    removedObjects: [MediaObjectHandle(storageID: 2, handle: 1)],
+                    removedObjects: [FacadeMediaClipIdentity(clip)],
                     inspectedObjectCount: 0,
                     hasMore: false))
-                == "OZCMEDIA1\t0\t0\t1\n-\t2\t1")
+                == "OZCMEDIA2\t0\t0\t1\n-\t2\t1\t\tC0001.MOV")
     }
 
     /// Not a test: an opt-in dev server for the on-device end-to-end. Run

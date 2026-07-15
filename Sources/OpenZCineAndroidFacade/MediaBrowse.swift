@@ -81,12 +81,28 @@ extension FacadeMediaClip {
     }
 }
 
+/// Stable persisted identity for one media clip removed by a later page.
+public struct FacadeMediaClipIdentity: Equatable, Sendable {
+    public let handle: UInt32
+    public let storageID: UInt32
+    public let captureDate: String
+    public let filename: String
+
+    /// Captures the fields Android uses to distinguish reused PTP handles.
+    public init(_ clip: FacadeMediaClip) {
+        handle = clip.handle
+        storageID = clip.storageID
+        captureDate = clip.captureDate
+        filename = clip.filename
+    }
+}
+
 /// One bounded increment from an Android camera-media enumeration cursor.
 public struct FacadeMediaBrowsePage: Equatable, Sendable {
     /// Newly discovered records. A record is emitted exactly once per cursor.
     public let clips: [FacadeMediaClip]
     /// Previously emitted R3D masters hidden by a proxy discovered on this page.
-    public let removedObjects: [MediaObjectHandle]
+    public let removedObjects: [FacadeMediaClipIdentity]
     /// Number of `GetObjectInfo` round trips consumed by this page.
     public let inspectedObjectCount: Int
     /// True while another bounded page is available.
@@ -95,7 +111,7 @@ public struct FacadeMediaBrowsePage: Equatable, Sendable {
     /// Creates one page after a bounded cursor advance.
     public init(
         clips: [FacadeMediaClip],
-        removedObjects: [MediaObjectHandle] = [],
+        removedObjects: [FacadeMediaClipIdentity] = [],
         inspectedObjectCount: Int,
         hasMore: Bool
     ) {
@@ -150,7 +166,7 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
     private var nextStorageIndex = 0
     private var discoveredProxyStems: Set<String> = []
     private struct VisibleR3DMaster {
-        let object: MediaObjectHandle
+        let identity: FacadeMediaClipIdentity
         let width: UInt32
         let height: UInt32
     }
@@ -164,7 +180,7 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
 
     private enum MediaBrowseChange {
         case add(FacadeMediaClip)
-        case remove(MediaObjectHandle)
+        case remove(FacadeMediaClipIdentity)
     }
 
     init(
@@ -199,7 +215,7 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
         }
 
         var clips: [FacadeMediaClip] = []
-        var removedObjects: [MediaObjectHandle] = []
+        var removedObjects: [FacadeMediaClipIdentity] = []
         var inspectedObjectCount = 0
         while clips.count + removedObjects.count < maxObjects {
             drainPendingChanges(
@@ -228,8 +244,7 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
                 } else if !discoveredProxyStems.contains(stem) {
                     visibleMastersByStem[stem, default: []].append(
                         VisibleR3DMaster(
-                            object: MediaObjectHandle(
-                                storageID: clip.storageID, handle: clip.handle),
+                            identity: FacadeMediaClipIdentity(clip),
                             width: clip.pixelWidth,
                             height: clip.pixelHeight))
                     pendingChanges.append(.add(clip))
@@ -246,7 +261,7 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
                 visibleProxiesByStem[stem] = linked
                 pendingChanges.append(
                     contentsOf: pairedMasters.map {
-                        .remove($0.object)
+                        .remove($0.identity)
                     })
                 pendingChanges.append(.add(linked))
             case .stillPhoto:
@@ -292,7 +307,7 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
 
     private func drainPendingChanges(
         clips: inout [FacadeMediaClip],
-        removedObjects: inout [MediaObjectHandle],
+        removedObjects: inout [FacadeMediaClipIdentity],
         limit: Int
     ) {
         while clips.count + removedObjects.count < limit,
@@ -349,10 +364,16 @@ extension PTPIPClientSession {
     /// bounded cursor pages. A card rejecting `GetObjectHandles` is skipped so
     /// another installed card can still be browsed.
     public func beginMediaBrowse() throws -> FacadeMediaBrowseCursor {
-        let snapshots = try usableStorageIDs().map { storageID in
-            MediaBrowseStorageSnapshot(
-                storageID: storageID,
-                handles: (try? objectHandles(storageID: storageID)) ?? [])
+        var snapshots: [MediaBrowseStorageSnapshot] = []
+        for storageID in try usableStorageIDs() {
+            let handles: [UInt32]
+            do {
+                handles = try objectHandles(storageID: storageID)
+            } catch let error as PTPIPClientSessionError {
+                guard case .operationRejected(.getObjectHandles, _) = error else { throw error }
+                handles = []
+            }
+            snapshots.append(MediaBrowseStorageSnapshot(storageID: storageID, handles: handles))
         }
         return FacadeMediaBrowseCursor(snapshots: snapshots) { [weak self] object in
             self?.mediaClip(object)
@@ -462,7 +483,7 @@ public enum MediaListWire {
 /// Versioned JNI wire for one bounded media cursor page.
 public enum MediaBrowsePageWire {
     /// Stable header token mirrored by Android's `MediaBrowsePages` parser.
-    public static let version = "OZCMEDIA1"
+    public static let version = "OZCMEDIA2"
 
     /// Encodes a header, typed removal records, then zero or more
     /// `MediaListWire` additions. Android applies additions before removals so
@@ -475,7 +496,7 @@ public enum MediaBrowsePageWire {
             String(page.removedObjects.count),
         ].joined(separator: "\t")
         let removals = page.removedObjects.map { object in
-            "-\t\(object.storageID)\t\(object.handle)"
+            "-\t\(object.storageID)\t\(object.handle)\t\(object.captureDate)\t\(object.filename)"
         }.joined(separator: "\n")
         let records = MediaListWire.encode(page.clips)
         return [header, removals, records].filter { !$0.isEmpty }.joined(separator: "\n")

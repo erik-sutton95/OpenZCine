@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.media
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -8,14 +10,16 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 
 class MediaBrowsePagingTest {
     @Test
     fun `parses versioned page header and records`() {
         val page =
             MediaBrowsePages.parse(
-                "OZCMEDIA1\t1\t32\t0\n" +
+                "OZCMEDIA2\t1\t32\t0\n" +
                     "4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t0\t0\t1\tproxy\t\t\tC0001.MOV",
             )
 
@@ -27,7 +31,7 @@ class MediaBrowsePagingTest {
 
     @Test
     fun `parses an empty final page`() {
-        val page = MediaBrowsePages.parse("OZCMEDIA1\t0\t0\t0")
+        val page = MediaBrowsePages.parse("OZCMEDIA2\t0\t0\t0")
 
         requireNotNull(page)
         assertFalse(page.hasMore)
@@ -37,11 +41,11 @@ class MediaBrowsePagingTest {
     @Test
     fun `rejects malformed page headers`() {
         assertNull(MediaBrowsePages.parse(""))
-        assertNull(MediaBrowsePages.parse("OZCMEDIA2\t0\t0\t0"))
-        assertNull(MediaBrowsePages.parse("OZCMEDIA1\tmaybe\t0\t0"))
-        assertNull(MediaBrowsePages.parse("OZCMEDIA1\t0\t-1\t0"))
-        assertNull(MediaBrowsePages.parse("OZCMEDIA1\t0\t129\t0"))
-        assertNull(MediaBrowsePages.parse("OZCMEDIA1\t0\t0\t1\n-\t1\t-1"))
+        assertNull(MediaBrowsePages.parse("OZCMEDIA1\t0\t0\t0"))
+        assertNull(MediaBrowsePages.parse("OZCMEDIA2\tmaybe\t0\t0"))
+        assertNull(MediaBrowsePages.parse("OZCMEDIA2\t0\t-1\t0"))
+        assertNull(MediaBrowsePages.parse("OZCMEDIA2\t0\t129\t0"))
+        assertNull(MediaBrowsePages.parse("OZCMEDIA2\t0\t0\t1\n-\t1\t-1\tdate\tA.R3D"))
     }
 
     @Test
@@ -97,7 +101,15 @@ class MediaBrowsePagingTest {
                             hasMore = false,
                             inspected = 1,
                             records = listOf(proxy),
-                            removals = listOf(MediaObjectIdentity(storageID = 1, handle = 7)),
+                            removals =
+                                listOf(
+                                    MediaObjectIdentity(
+                                        storageID = 1,
+                                        handle = 7,
+                                        captureDate = "20260715T120000",
+                                        filename = "A001.R3D",
+                                    ),
+                                ),
                         ),
                     ),
             )
@@ -131,6 +143,53 @@ class MediaBrowsePagingTest {
             )
         }
         assertEquals(listOf(41L), gateway.cancelledCursors)
+    }
+
+    @Test
+    fun `cancellation while begin is blocking still invalidates the returned cursor`() = runTest {
+        val began = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val cancelledCursors = mutableListOf<Long>()
+        val gateway =
+            object : MediaBrowseGateway {
+                override fun begin(): Long {
+                    began.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    return 41
+                }
+
+                override fun next(cursor: Long, maxObjects: Int): String? =
+                    error("A cancelled begin must not request a page.")
+
+                override fun cancel(cursor: Long) {
+                    cancelledCursors += cursor
+                }
+            }
+        val listing =
+            async(Dispatchers.Default) {
+                loadCameraMediaPages(
+                    pageSize = 1,
+                    gateway = gateway,
+                    ioContext = Dispatchers.IO,
+                    onPage = {},
+                )
+            }
+
+        assertTrue(withContext(Dispatchers.IO) { began.await(5, TimeUnit.SECONDS) })
+        listing.cancel()
+        release.countDown()
+
+        assertFailsWith<CancellationException> { listing.await() }
+        assertEquals(listOf(41L), cancelledCursors)
+    }
+
+    @Test
+    fun `partial camera listing is represented as a retryable failure`() {
+        val clip = MediaClips.parse(record(1, 1, "A.MOV")).single()
+
+        val state = incompleteCameraBrowseState(listOf(clip))
+
+        assertEquals("Listing stopped after 1 item. Retry to load the complete library.", state.message)
     }
 
     @Test
@@ -177,8 +236,10 @@ class MediaBrowsePagingTest {
             removals: List<MediaObjectIdentity> = emptyList(),
         ): String =
             buildList {
-                add("OZCMEDIA1\t${if (hasMore) 1 else 0}\t$inspected\t${removals.size}")
-                removals.forEach { add("-\t${it.storageID}\t${it.handle}") }
+                add("OZCMEDIA2\t${if (hasMore) 1 else 0}\t$inspected\t${removals.size}")
+                removals.forEach {
+                    add("-\t${it.storageID}\t${it.handle}\t${it.captureDate}\t${it.filename}")
+                }
                 addAll(records)
             }.joinToString(separator = "\n")
 
