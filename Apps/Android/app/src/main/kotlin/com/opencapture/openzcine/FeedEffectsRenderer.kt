@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.util.Log
@@ -105,6 +106,24 @@ class FeedEffectsRenderer private constructor(
         shader.setFloatUniform("srcScale", frame.width / dstWidth)
         shader.setFloatUniform("sourceSize", frame.width.toFloat(), frame.height.toFloat())
         canvas.drawRect(dstLeft, dstTop, dstLeft + dstWidth, dstTop + dstHeight, paint)
+    }
+
+    /**
+     * Binds this same effect chain to an Android view's RenderNode input.
+     *
+     * Media3 playback uses a TextureView whose local coordinate space is the
+     * decoded video's aspect-fit rectangle. The view supplies the `feed`
+     * shader input, while Swift-baked LUT/false-colour data and the existing
+     * peaking/zebra uniforms remain identical to live view. Returning null for
+     * an empty size keeps the caller from installing an invalid shader during
+     * the initial layout pass.
+     */
+    fun viewRenderEffect(width: Int, height: Int): RenderEffect? {
+        if (width <= 0 || height <= 0) return null
+        shader.setFloatUniform("dstOffset", 0f, 0f)
+        shader.setFloatUniform("srcScale", 1f)
+        shader.setFloatUniform("sourceSize", width.toFloat(), height.toFloat())
+        return RenderEffect.createRuntimeShaderEffect(shader, "feed")
     }
 
     companion object {

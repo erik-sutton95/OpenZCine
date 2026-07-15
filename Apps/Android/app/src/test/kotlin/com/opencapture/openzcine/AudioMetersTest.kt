@@ -35,6 +35,25 @@ class AudioMetersTest {
     }
 
     @Test
+    fun `playback viewport does not apply its chrome clearance twice`() {
+        val viewport = ZoneFrame(0f, 62f, 800f, 194f)
+        val feed = ZoneFrame(81f, 0f, 640f, 360f)
+        val (width, height) = audioMeterPanelSize(isDebugFixture = false)
+
+        val frame =
+            floatingAudioMeterFrame(
+                feed,
+                viewport,
+                width,
+                height,
+                bottomChromeClearance = 0f,
+            )
+
+        assertEquals(78f, frame.y)
+        assertEquals(246f, frame.y + frame.height)
+    }
+
+    @Test
     fun `accessibility distinguishes fixture values from camera data`() {
         val levels =
             LiveAudioMeterLevels(

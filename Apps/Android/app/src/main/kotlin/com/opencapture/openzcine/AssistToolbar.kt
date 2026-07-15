@@ -106,6 +106,7 @@ class AssistState(
     private val persistSelections: (FeedLutSelection, FeedFalseColorScale) -> Unit = { _, _ -> },
     private val persistScopeSelections: (Set<ScopeKind>, List<ScopeKind>) -> Unit = { _, _ -> },
     private val persistAudioMeters: (Boolean) -> Unit = {},
+    private val mirrorFeedEffectsState: Boolean = true,
     private val persist: (FeedEffects, ScopeKind?) -> Unit = { _, _ -> },
 ) {
     var effects: FeedEffects by mutableStateOf(initialEffects)
@@ -144,7 +145,7 @@ class AssistState(
         private set
 
     init {
-        FeedEffectsState.current = initialEffects
+        if (mirrorFeedEffectsState) FeedEffectsState.current = initialEffects
     }
 
     /** Whether [tool]'s pill renders lit. */
@@ -253,6 +254,28 @@ class AssistState(
         }
     }
 
+    /**
+     * Applies configuration owned by another assist context without copying
+     * that context's visibility or persistence. Playback uses this to mirror
+     * iOS's shared LUT/false-colour choices while retaining independent tool
+     * toggles and without replacing the live renderer mirror.
+     */
+    internal fun applySharedSelections(
+        lut: FeedLutSelection,
+        falseColorScale: FeedFalseColorScale,
+    ) {
+        check(!mirrorFeedEffectsState) {
+            "shared selections are only valid for a context-local assist state"
+        }
+        selectedLut = lut
+        selectedFalseColorScale = falseColorScale
+        effects =
+            effects.copy(
+                lut = lut.takeIf { effects.lut != null },
+                falseColor = falseColorScale.takeIf { effects.falseColor != null },
+            )
+    }
+
     private fun toggleScope(kind: ScopeKind, maximumActiveScopes: Int?): Boolean {
         if (kind !in selectedScopes && maximumActiveScopes != null && selectedScopes.size >= maximumActiveScopes) {
             return false
@@ -279,7 +302,7 @@ class AssistState(
 
     private fun update(next: FeedEffects) {
         effects = next
-        FeedEffectsState.current = next
+        if (mirrorFeedEffectsState) FeedEffectsState.current = next
         persistState()
     }
 
@@ -336,6 +359,7 @@ class AssistState(
             intentScope: ScopeKind?,
             intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
             availableStoredLut: (StoredLutSelection) -> Boolean = { true },
+            mirrorFeedEffectsState: Boolean = true,
         ): AssistState {
             val fromIntent = intentEffects != null || intentScopes != null
             val legacyBuiltIn =
@@ -406,6 +430,7 @@ class AssistState(
                 initialLut = effects.lut ?: storedLut,
                 initialFalseColorScale = effects.falseColor ?: storedFalseColorScale,
                 initialAudioMetersEnabled = preferences.getBoolean(AUDIO_METERS_KEY, false),
+                mirrorFeedEffectsState = mirrorFeedEffectsState,
                 persistSelections = { lut, falseColorScale ->
                     val editor = preferences.edit().putString("fcScale", falseColorScale.id)
                     when (lut) {

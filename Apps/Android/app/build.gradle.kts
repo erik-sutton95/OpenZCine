@@ -216,7 +216,7 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.exoplayer)
-    implementation(libs.media3.ui.compose)
+    implementation(libs.media3.ui)
     // Bundled, on-device Latin OCR: the scanner must work without a Play
     // Services model download or sending the camera's Wi-Fi key off-device.
     implementation(libs.mlkit.text.recognition)

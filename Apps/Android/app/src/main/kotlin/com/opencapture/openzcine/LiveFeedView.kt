@@ -356,14 +356,19 @@ fun FalseColorReferenceOverlay(
     feed: ZoneFrame,
     viewport: ZoneFrame,
     modifier: Modifier = Modifier,
+    placementStoreName: String = FalseColorReferencePlacementStore.STORE_NAME,
+    bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
 ) {
     val presentation = effectsState.falseColorReference ?: return
     val default =
-        remember(feed, viewport) {
-            falseColorReferenceDefaultFrame(feed, viewport)
+        remember(feed, viewport, bottomChromeClearance) {
+            falseColorReferenceDefaultFrame(feed, viewport, bottomChromeClearance)
         }
     val context = LocalContext.current.applicationContext
-    val store = remember(context) { FalseColorReferencePlacementStore(context) }
+    val store =
+        remember(context, placementStoreName) {
+            FalseColorReferencePlacementStore(context, placementStoreName)
+        }
     var frame by remember(default, viewport) { mutableStateOf(store.resolve(default, viewport)) }
     var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
     val density = LocalDensity.current
@@ -410,6 +415,7 @@ fun FalseColorReferenceOverlay(
 internal fun falseColorReferenceDefaultFrame(
     feed: ZoneFrame,
     viewport: ZoneFrame,
+    bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
 ): ZoneFrame {
     val feedBottom = feed.y + feed.height
     val outsideTop = feedBottom + FALSE_COLOR_REFERENCE_GAP
@@ -420,7 +426,7 @@ internal fun falseColorReferenceDefaultFrame(
         } else {
             min(
                 feedBottom,
-                viewportBottom - FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
+                viewportBottom - bottomChromeClearance.coerceAtLeast(0f),
             ) - FALSE_COLOR_REFERENCE_GAP - FALSE_COLOR_REFERENCE_HEIGHT
         }
     return clampScopeFrame(
@@ -442,8 +448,8 @@ internal fun snapFalseColorReferenceFrame(frame: ZoneFrame): ZoneFrame =
     )
 
 /** Persists the normalized centre used by iOS's `MovablePanel(id: "fcref")`. */
-private class FalseColorReferencePlacementStore(context: Context) {
-    private val preferences = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+private class FalseColorReferencePlacementStore(context: Context, name: String) {
+    private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
     fun resolve(default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
         if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
@@ -468,7 +474,7 @@ private class FalseColorReferencePlacementStore(context: Context) {
             .apply()
     }
 
-    private companion object {
+    companion object {
         const val STORE_NAME = "falseColorReferencePlacement"
         const val CENTER_X_KEY = "fcref.centerX"
         const val CENTER_Y_KEY = "fcref.centerY"

@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.util.Log
 import android.view.HapticFeedbackConstants
+import android.view.TextureView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,6 +108,8 @@ private const val SCOPE_RESIZE_GRIP_HIT_SIZE = 56f
 private const val SCOPE_RESIZE_GRIP_EXTERIOR_GAP = 2f
 private const val SCOPE_RESIZE_GRIP_PAD =
     SCOPE_RESIZE_GRIP_HIT_SIZE - SCOPE_RESIZE_GRIP_VISUAL_SIZE
+
+private const val PLAYBACK_SCOPE_PLACEMENT_STORE = "playbackScopePanelPlacement"
 
 /** Android mirror of iOS's canonical scope-tool order. */
 enum class ScopeKind(val token: String, val title: String, val chip: String) {
@@ -495,6 +499,79 @@ internal fun ScopePanels(
     }
 }
 
+/**
+ * Playback counterpart to [ScopePanels]. It renders the same panels and asks
+ * the same Swift scope wires for analysis, but the frame tap is Media3's
+ * TextureView rather than a camera JPEG flow. [currentFrameKey] is read on the
+ * main thread and prevents a paused frame from being resampled indefinitely.
+ * TextureView bitmap capture reads the decoded SurfaceTexture content before
+ * the view's RenderEffect, preserving the clean-source scope invariant.
+ */
+@Composable
+internal fun PlaybackScopePanels(
+    selectedScopes: Set<ScopeKind>,
+    crushClipCompensationRaw: Int,
+    histogramTrafficLightsEnabled: Boolean,
+    configuration: ScopeAssistConfiguration,
+    cameraInput: ExposureAssistCameraInput,
+    lutSelection: FeedLutSelection?,
+    lutLibrary: AndroidLutLibrary?,
+    onScaleChange: (ScopeKind, Float) -> Unit,
+    thermalTier: AndroidThermalTier,
+    textureView: TextureView,
+    currentFrameKey: () -> Long,
+    feed: ZoneFrame,
+    infoBar: ZoneFrame,
+    viewport: ZoneFrame,
+) {
+    val displayed = ScopeKind.canonical.filter(selectedScopes::contains)
+    if (displayed.isEmpty()) return
+    val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return
+    val lutRenderGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value ?: 0L
+    LaunchedEffect(lutLibrary, lutSelection) {
+        val stored = (lutSelection as? FeedLutSelection.Stored)?.value
+        if (stored != null) lutLibrary?.prepare(stored)
+    }
+    val vectorLut =
+        remember(lutSelection, mapping.curveOrdinal, lutLibrary, lutRenderGeneration) {
+            scopeVectorLutRequest(lutSelection, mapping.curveOrdinal) { selection ->
+                lutLibrary?.packedCube(selection)
+            }
+        }
+    val latestFrameKey by rememberUpdatedState(currentFrameKey)
+    val snapshot =
+        rememberPlaybackScopeSnapshot(
+            textureView = textureView,
+            currentFrameKey = { latestFrameKey() },
+            selected = displayed.toSet(),
+            crushClipCompensationRaw = crushClipCompensationRaw,
+            histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
+            curveOrdinal = mapping.curveOrdinal,
+            clipNative = mapping.clipNative,
+            vectorscopeZoomOrdinal = configuration.vectorscopeZoom.wireOrdinal,
+            vectorscopeBrightness = configuration.vectorscopeBrightness,
+            vectorLut = vectorLut,
+            thermalTier = thermalTier,
+        )
+    val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
+    val anchors =
+        remember(needsAnchors, mapping.curveOrdinal) {
+            if (needsAnchors) ScopeAnchors.parse(SwiftCore.scopeAnchors(mapping.curveOrdinal)) else null
+        }
+    LandscapeScopePanels(
+        displayed = displayed,
+        feed = feed,
+        infoBar = infoBar,
+        viewport = viewport,
+        anchors = anchors,
+        snapshot = snapshot,
+        histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
+        configuration = configuration,
+        onScaleChange = onScaleChange,
+        placementStoreName = PLAYBACK_SCOPE_PLACEMENT_STORE,
+    )
+}
+
 /** Renders the portrait subset into the shared stack zone from the core layout map. */
 @Composable
 private fun PortraitScopePanels(
@@ -544,9 +621,10 @@ private fun LandscapeScopePanels(
     histogramTrafficLightsEnabled: Boolean,
     configuration: ScopeAssistConfiguration,
     onScaleChange: (ScopeKind, Float) -> Unit,
+    placementStoreName: String = "scopePanelPlacement",
 ) {
     val context = LocalContext.current.applicationContext
-    val store = remember(context) { ScopePanelPlacementStore(context) }
+    val store = remember(context, placementStoreName) { ScopePanelPlacementStore(context, placementStoreName) }
     Box(Modifier.fillMaxSize()) {
         displayed.forEach { kind ->
             val default = floatingScopeFrame(kind, feed, infoBar, viewport, configuration)
@@ -576,8 +654,8 @@ private fun LandscapeScopePanels(
 }
 
 /** Current Android equivalent of iOS's persisted movable panel centre. */
-private class ScopePanelPlacementStore(context: Context) {
-    private val preferences = context.getSharedPreferences("scopePanelPlacement", Context.MODE_PRIVATE)
+private class ScopePanelPlacementStore(context: Context, name: String) {
+    private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
     fun resolve(kind: ScopeKind, default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
         val xKey = "${kind.token}.centerX"
@@ -1012,6 +1090,57 @@ private fun rememberScopeSnapshot(
     return data.value
 }
 
+/** One cancellation-safe scope snapshot sourced from decoded Media3 video. */
+@Composable
+private fun rememberPlaybackScopeSnapshot(
+    textureView: TextureView,
+    currentFrameKey: () -> Long,
+    selected: Set<ScopeKind>,
+    crushClipCompensationRaw: Int,
+    histogramTrafficLightsEnabled: Boolean,
+    curveOrdinal: Int,
+    clipNative: Float,
+    vectorscopeZoomOrdinal: Int,
+    vectorscopeBrightness: Int,
+    vectorLut: ScopeVectorLutRequest?,
+    thermalTier: AndroidThermalTier,
+): ScopeDrawData? {
+    val data = remember { mutableStateOf<ScopeDrawData?>(null) }
+    val tap = remember(textureView) { PlaybackScopeFrameTap() }
+    val ordered = ScopeKind.canonical.filter(selected::contains)
+    LaunchedEffect(
+        textureView,
+        ordered,
+        crushClipCompensationRaw,
+        histogramTrafficLightsEnabled,
+        curveOrdinal,
+        clipNative,
+        vectorscopeZoomOrdinal,
+        vectorscopeBrightness,
+        vectorLut,
+        thermalTier,
+    ) {
+        data.value = null
+        tap.reset()
+        withContext(Dispatchers.Default) {
+            pumpReducedScopes(
+                selected = ordered.toSet(),
+                crushClipCompensationRaw = crushClipCompensationRaw,
+                histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
+                curveOrdinal = curveOrdinal,
+                clipNative = clipNative,
+                vectorscopeZoomOrdinal = vectorscopeZoomOrdinal,
+                vectorscopeBrightness = vectorscopeBrightness,
+                vectorLut = vectorLut,
+                scopePeriodNanos = scopePeriodNanos(ordered.size, thermalTier),
+                nextFrame = { tap.capture(textureView, currentFrameKey) },
+                present = { data.value = it },
+            )
+        }
+    }
+    return data.value
+}
+
 /**
  * Absolute-schedule sampler: never gates by source-frame cadence, so it
  * retains the iOS wall-clock anti-aliasing policy while sharing one decoder.
@@ -1029,8 +1158,61 @@ private suspend fun pumpScopes(
     scopePeriodNanos: Long,
     present: (ScopeDrawData) -> Unit,
 ): Unit = coroutineScope {
+    val latest = AtomicReference<LiveScopeInput?>(null)
+    var generation = 0L
+    val collector =
+        launch {
+            frames.collect { frame ->
+                generation += 1
+                latest.set(LiveScopeInput(generation, frame.jpegData))
+            }
+        }
+    val tap = ScopeFrameTap()
+    var lastGeneration = Long.MIN_VALUE
+    try {
+        pumpReducedScopes(
+            selected = selected,
+            crushClipCompensationRaw = crushClipCompensationRaw,
+            histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
+            curveOrdinal = curveOrdinal,
+            clipNative = clipNative,
+            vectorscopeZoomOrdinal = vectorscopeZoomOrdinal,
+            vectorscopeBrightness = vectorscopeBrightness,
+            vectorLut = vectorLut,
+            scopePeriodNanos = scopePeriodNanos,
+            nextFrame = {
+                val next = latest.get() ?: return@pumpReducedScopes null
+                if (next.generation == lastGeneration) return@pumpReducedScopes null
+                lastGeneration = next.generation
+                tap.reduce(next.jpeg)
+            },
+            present = present,
+        )
+    } finally {
+        collector.cancel()
+    }
+}
+
+/**
+ * Absolute-schedule clean-frame sampler shared by live JPEG and playback
+ * TextureView inputs. All signal analysis and display-axis policy remains in
+ * the Swift core; this loop only owns demand, cadence, and immutable trails.
+ */
+private suspend fun pumpReducedScopes(
+    selected: Set<ScopeKind>,
+    crushClipCompensationRaw: Int,
+    histogramTrafficLightsEnabled: Boolean,
+    curveOrdinal: Int,
+    clipNative: Float,
+    vectorscopeZoomOrdinal: Int,
+    vectorscopeBrightness: Int,
+    vectorLut: ScopeVectorLutRequest?,
+    scopePeriodNanos: Long,
+    nextFrame: suspend () -> ReducedFrame?,
+    present: (ScopeDrawData) -> Unit,
+) {
     val demand = scopeSamplingDemand(selected, histogramTrafficLightsEnabled)
-    if (!demand.traces && !demand.vector) return@coroutineScope
+    if (!demand.traces && !demand.vector) return
 
     val vectorLutHandle =
         if (demand.vector && vectorLut != null) {
@@ -1044,17 +1226,12 @@ private suspend fun pumpScopes(
         }
     if (demand.vector && vectorLutHandle <= 0) {
         Log.w(TAG, "active vectorscope LUT is unavailable; vectorscope rendering disabled")
-        if (!demand.traces) return@coroutineScope
+        if (!demand.traces) return
     }
 
     try {
-        val latest = AtomicReference<ByteArray?>(null)
-        launch { frames.collect { latest.set(it.jpegData) } }
-
-        val tap = ScopeFrameTap()
         val stats = ScopeTickStats { if (BuildConfig.DEBUG) Log.d(TAG, it) }
         val vectorBitmaps = VectorBitmapRing()
-        var lastProcessed: ByteArray? = null
         var previousTraces: ScopeTraces? = null
         var previousHistogram: ScopeTraces? = null
         var previousVector: VectorDensityImage? = null
@@ -1065,12 +1242,8 @@ private suspend fun pumpScopes(
             val waitMillis = (startNanos + tick * scopePeriodNanos - System.nanoTime()) / 1_000_000
             if (waitMillis > 0) delay(waitMillis)
 
-            val jpeg = latest.get() ?: continue
-            if (jpeg === lastProcessed) continue // static feed — retain the last immutable snapshot
-            lastProcessed = jpeg
-
             val tickStart = System.nanoTime()
-            val reduced = tap.reduce(jpeg) ?: continue
+            val reduced = nextFrame() ?: continue
             val traces =
                 if (demand.traces) {
                     try {
@@ -1131,6 +1304,8 @@ private suspend fun pumpScopes(
     }
 }
 
+private data class LiveScopeInput(val generation: Long, val jpeg: ByteArray)
+
 /** One reduced frame ready for the core sampler. */
 private class ReducedFrame(
     val rgba: ByteArray,
@@ -1173,6 +1348,55 @@ private class ScopeFrameTap {
         decoded.copyPixelsToBuffer(ByteBuffer.wrap(rgba))
         return ReducedFrame(rgba, decoded.width, decoded.height, decoded.rowBytes)
     }
+}
+
+/**
+ * Media3 TextureView → small RGBA reduction for playback scopes.
+ *
+ * Capture happens on the main thread as required by TextureView, directly
+ * into a reused 160px-wide bitmap. The bitmap copy is the SurfaceTexture's
+ * decoded image; a RenderEffect attached to the view is composited later by
+ * RenderNode and is therefore absent from this clean scope input.
+ */
+private class PlaybackScopeFrameTap {
+    private var bitmap: Bitmap? = null
+    private var rgba = ByteArray(0)
+    private var lastFrameKey = Long.MIN_VALUE
+
+    /** Allows a restarted analysis pipeline to sample the current paused frame once. */
+    fun reset() {
+        lastFrameKey = Long.MIN_VALUE
+    }
+
+    suspend fun capture(textureView: TextureView, frameKey: () -> Long): ReducedFrame? =
+        withContext(Dispatchers.Main.immediate) {
+            if (!textureView.isAvailable || textureView.width <= 0 || textureView.height <= 0) {
+                return@withContext null
+            }
+            val key = frameKey()
+            if (key == lastFrameKey) return@withContext null
+            val targetWidth = min(REDUCTION_MAX_WIDTH, textureView.width)
+            val targetHeight =
+                max(
+                    1,
+                    (textureView.height.toLong() * targetWidth / textureView.width).toInt(),
+                )
+            val target =
+                bitmap?.takeIf { it.width == targetWidth && it.height == targetHeight }
+                    ?: Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+            val captured =
+                try {
+                    textureView.getBitmap(target)
+                } catch (_: IllegalStateException) {
+                    null
+                } ?: return@withContext null
+            bitmap = captured
+            val byteCount = captured.rowBytes * captured.height
+            if (rgba.size != byteCount) rgba = ByteArray(byteCount)
+            captured.copyPixelsToBuffer(ByteBuffer.wrap(rgba))
+            lastFrameKey = key
+            ReducedFrame(rgba, captured.width, captured.height, captured.rowBytes)
+        }
 }
 
 /**

@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.media
 
 import androidx.media3.common.Player
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -81,6 +82,39 @@ internal fun playbackShareState(
 /** Projects Media3's current state into the replay affordance without latching old end events. */
 internal fun requiresPlaybackReplay(playbackState: Int): Boolean =
     playbackState == Player.STATE_ENDED
+
+/**
+ * Maps iOS-style long-press frame scrubbing onto the whole clip duration: a
+ * full viewport-width drag advances exactly one duration from the gesture's
+ * origin, then clamps at either media edge.
+ */
+internal fun playbackFrameScrubTarget(
+    originMillis: Long,
+    horizontalDeltaPixels: Float,
+    viewportWidthPixels: Int,
+    durationMillis: Long,
+): Long {
+    if (viewportWidthPixels <= 0 || durationMillis <= 0L) {
+        return PlaybackTimeline.clampPosition(originMillis, durationMillis)
+    }
+    val deltaMillis =
+        (horizontalDeltaPixels.toDouble() / viewportWidthPixels * durationMillis).toLong()
+    return PlaybackTimeline.clampPosition(originMillis + deltaMillis, durationMillis)
+}
+
+/**
+ * Mirrors iOS playback chrome swiping: a clearly vertical upward drag reveals
+ * chrome, while a clearly vertical downward drag hides it. Ambiguous or short
+ * drags remain available to playback's pan and frame-scrub gestures.
+ */
+internal fun playbackChromeVisibilityForSwipe(
+    horizontalDeltaDp: Float,
+    verticalDeltaDp: Float,
+): Boolean? {
+    if (abs(verticalDeltaDp) <= 44f) return null
+    if (abs(verticalDeltaDp) <= abs(horizontalDeltaDp) + 8f) return null
+    return verticalDeltaDp < 0f
+}
 
 /** Screen-space pan used for playback zoom without leaking Compose geometry into tests. */
 internal data class PlaybackPan(
