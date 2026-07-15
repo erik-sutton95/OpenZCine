@@ -1306,6 +1306,16 @@
         case transportFailed = 5
     }
 
+    /// Stable scalar results for direct AF-area moves and authoritative resets.
+    private enum FocusCommandResult: jint {
+        case accepted = 0
+        case noSession = 1
+        case mediaBusy = 2
+        case unavailable = 3
+        case rejected = 4
+        case transportFailed = 5
+    }
+
     /// `SwiftCore.sessionSetRecording(recording): Int` — sends Nikon's
     /// `StartMovieRecInCard` / `EndMovieRec` through the active facade
     /// session. The session transaction lock serializes this with live view;
@@ -1371,6 +1381,57 @@
             }
         } catch {
             return ControlCommandResult.transportFailed.rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionChangeAfArea(x, y): Int` — passes semantic scalar
+    /// coordinates into the Swift-owned Nikon transaction layer.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionChangeAfArea")
+    public func swiftCoreSessionChangeAfArea(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, x: jint, y: jint
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return FocusCommandResult.noSession.rawValue
+        }
+        guard x >= 0, y >= 0 else { return FocusCommandResult.unavailable.rawValue }
+        do {
+            try session.changeAfArea(x: UInt32(x), y: UInt32(y))
+            return FocusCommandResult.accepted.rawValue
+        } catch {
+            return focusCommandResult(for: error).rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionResetFocusPoint(): Int` — runs the shared-policy reset
+    /// using camera-owned focus metadata and properties only.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResetFocusPoint")
+    public func swiftCoreSessionResetFocusPoint(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return FocusCommandResult.noSession.rawValue
+        }
+        do {
+            try session.resetFocusPoint()
+            return FocusCommandResult.accepted.rawValue
+        } catch {
+            return focusCommandResult(for: error).rawValue
+        }
+    }
+
+    private func focusCommandResult(for error: Error) -> FocusCommandResult {
+        guard let sessionError = error as? PTPIPClientSessionError else {
+            return .transportFailed
+        }
+        switch sessionError {
+        case .mediaModeActive, .mediaModeRequired:
+            return .mediaBusy
+        case .focusStateUnavailable, .unsupportedControl:
+            return .unavailable
+        case .operationRejected:
+            return .rejected
+        default:
+            return .transportFailed
         }
     }
 

@@ -2,6 +2,8 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PathMeasure
 import android.graphics.Typeface
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -28,15 +31,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.core.LiveCameraLevel
@@ -228,6 +234,20 @@ internal fun liveFocusBoxRect(
     )
 }
 
+/** Clamps the lock badge's complete measured width to the visible feed intersection. */
+internal fun focusLockLabelLeft(
+    feed: LiveOverlayRect,
+    visibleBounds: LiveOverlayRect,
+    preferredLeft: Float,
+    labelWidth: Float,
+    inset: Float,
+): Float {
+    val visible = intersectLiveOverlayRects(feed, visibleBounds) ?: visibleBounds
+    val minimum = visible.left + inset
+    val maximum = maxOf(minimum, visible.right - inset - labelWidth)
+    return maxOf(minimum, preferredLeft).coerceAtMost(maximum)
+}
+
 /** Prefers a valid camera horizon and uses gravity only when the frame lacks one. */
 internal fun resolveLiveLevel(
     camera: LiveCameraLevel?,
@@ -336,6 +356,8 @@ internal fun LiveFrameMetadataOverlay(
     aspectFill: Boolean = false,
     /** Local-pixel height of monitor chrome covering the feed's bottom edge. */
     gaugeBottomChromeInset: Float = 0f,
+    focusPointLocked: Boolean = false,
+    focusLockProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val cameraLevel = presentationState.level
@@ -381,7 +403,12 @@ internal fun LiveFrameMetadataOverlay(
             val debugFixtureShown =
                 presentationState.focus?.isDebugFixture == true ||
                     presentationState.level?.isDebugFixture == true
-            CameraFocusOverlay(focus = presentationState.focus, feed = feed)
+            CameraFocusOverlay(
+                focus = presentationState.focus,
+                feed = feed,
+                locked = focusPointLocked,
+                lockProgress = focusLockProgress,
+            )
             if (levelEnabled) {
                 CameraLevelOverlay(
                     reading = level,
@@ -399,24 +426,110 @@ internal fun LiveFrameMetadataOverlay(
 }
 
 @Composable
-private fun CameraFocusOverlay(focus: LiveFocusInfo?, feed: LiveOverlayRect) {
+private fun CameraFocusOverlay(
+    focus: LiveFocusInfo?,
+    feed: LiveOverlayRect,
+    locked: Boolean,
+    lockProgress: Float,
+) {
     if (focus == null || focus.boxes.isEmpty()) return
-    val description = focus.accessibilityDescription()
-    Canvas(
-        Modifier
-            .fillMaxSize()
-            .clearAndSetSemantics { contentDescription = description },
+    val description =
+        focus.accessibilityDescription() +
+            if (locked) " Focus point position locked in app." else ""
+    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed)
+    BoxWithConstraints(
+        Modifier.fillMaxSize().clearAndSetSemantics { contentDescription = description },
     ) {
-        focus.boxes.forEachIndexed { index, box ->
-            val rect = liveFocusBoxRect(focus, box, feed) ?: return@forEachIndexed
-            val color = focusBoxColor(focus, index)
-            val radius = min(min(rect.width, rect.height) * 0.12f, 7.dp.toPx())
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(rect.left, rect.top),
-                size = Size(rect.width, rect.height),
-                cornerRadius = CornerRadius(radius, radius),
-                style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+        val density = LocalDensity.current
+        val visibleBounds =
+            with(density) {
+                LiveOverlayRect(0f, 0f, maxWidth.toPx(), maxHeight.toPx())
+            }
+        val visibleFeed = intersectLiveOverlayRects(feed, visibleBounds) ?: visibleBounds
+        var lockLabelSize by remember { mutableStateOf(IntSize.Zero) }
+        Canvas(Modifier.fillMaxSize()) {
+            focus.boxes.forEachIndexed { index, box ->
+                val rect = liveFocusBoxRect(focus, box, feed) ?: return@forEachIndexed
+                val color = focusBoxColor(focus, index)
+                val radius = min(min(rect.width, rect.height) * 0.12f, 7.dp.toPx())
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(rect.left, rect.top),
+                    size = Size(rect.width, rect.height),
+                    cornerRadius = CornerRadius(radius, radius),
+                    style =
+                        Stroke(
+                            width = 1.5.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round,
+                        ),
+                )
+            }
+            if (!locked && lockProgress > 0.001f && primaryRect != null) {
+                val progress = lockProgress.coerceIn(0f, 1f)
+                val radius = min(min(primaryRect.width, primaryRect.height) * 0.12f, 7.dp.toPx())
+                drawIntoCanvas { canvas ->
+                    val outline =
+                        Path().apply {
+                            addRoundRect(
+                                primaryRect.left,
+                                primaryRect.top,
+                                primaryRect.right,
+                                primaryRect.bottom,
+                                radius,
+                                radius,
+                                Path.Direction.CW,
+                            )
+                        }
+                    val measure = PathMeasure(outline, false)
+                    val segment = Path()
+                    measure.getSegment(0f, measure.length * progress, segment, true)
+                    val paint =
+                        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = LiveDesign.accent.toArgb()
+                            style = Paint.Style.STROKE
+                            strokeWidth = 2.5.dp.toPx()
+                            strokeCap = Paint.Cap.ROUND
+                            strokeJoin = Paint.Join.ROUND
+                        }
+                    canvas.nativeCanvas.drawPath(segment, paint)
+                }
+            }
+        }
+        if (locked && primaryRect != null) {
+            androidx.compose.material3.Text(
+                text = "AF POINT LOCKED",
+                style = chromeStyle(9.5f, FontWeight.Bold, mono = true),
+                color = LiveDesign.accent,
+                modifier =
+                    Modifier
+                        .widthIn(
+                            max =
+                                with(density) {
+                                    maxOf(0f, visibleFeed.width - 10.dp.toPx()).toDp()
+                                },
+                        )
+                        .onSizeChanged { lockLabelSize = it }
+                        .offset {
+                            val inset = 5.dp.roundToPx()
+                            IntOffset(
+                                x =
+                                    focusLockLabelLeft(
+                                        feed = feed,
+                                        visibleBounds = visibleBounds,
+                                        preferredLeft = primaryRect.left,
+                                        labelWidth = lockLabelSize.width.toFloat(),
+                                        inset = inset.toFloat(),
+                                    ).roundToInt(),
+                                y =
+                                    maxOf(
+                                        feed.top + inset,
+                                        primaryRect.top - 22.dp.toPx(),
+                                    ).roundToInt(),
+                            )
+                        }
+                        .background(LiveDesign.background.copy(alpha = 0.82f), ChromeShape)
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
             )
         }
     }

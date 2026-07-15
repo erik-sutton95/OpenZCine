@@ -17,6 +17,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -122,6 +123,11 @@ private data class LiveFeedPresentation(
 public class LiveFeedPresentationState {
     private var presentation: LiveFeedPresentation? by mutableStateOf(null)
     private var textureSourceGeometry: FeedTextureSourceGeometry? by mutableStateOf(null)
+    private var focusGestureGeometrySignature: FocusGestureGeometrySignature? = null
+
+    /** Changes only when source or camera focus-coordinate geometry changes. */
+    internal var focusGestureGeometryGeneration: Long by mutableLongStateOf(0L)
+        private set
 
     /** Resolution-only state observed by the cached presentation texture. */
     internal val feedTextureSourceGeometry: FeedTextureSourceGeometry?
@@ -148,6 +154,17 @@ public class LiveFeedPresentationState {
         get() = presentation?.level
 
     internal fun present(frame: LiveFrame, bitmap: Bitmap) {
+        val nextGestureGeometry =
+            FocusGestureGeometrySignature(
+                sourceWidth = bitmap.width,
+                sourceHeight = bitmap.height,
+                coordinateWidth = frame.focus?.coordinateWidth ?: 0,
+                coordinateHeight = frame.focus?.coordinateHeight ?: 0,
+            )
+        if (nextGestureGeometry != focusGestureGeometrySignature) {
+            focusGestureGeometrySignature = nextGestureGeometry
+            focusGestureGeometryGeneration += 1
+        }
         presentation =
             LiveFeedPresentation(
                 image = bitmap.asImageBitmap(),
@@ -168,10 +185,21 @@ public class LiveFeedPresentationState {
     }
 
     internal fun clear() {
+        if (focusGestureGeometrySignature != null) {
+            focusGestureGeometrySignature = null
+            focusGestureGeometryGeneration += 1
+        }
         presentation = null
         textureSourceGeometry = null
     }
 }
+
+private data class FocusGestureGeometrySignature(
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+    val coordinateWidth: Int,
+    val coordinateHeight: Int,
+)
 
 @Immutable
 internal data class FalseColorReferencePresentation(

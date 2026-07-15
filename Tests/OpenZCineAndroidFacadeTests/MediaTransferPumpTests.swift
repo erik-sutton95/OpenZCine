@@ -85,7 +85,12 @@ struct MediaTransferPumpTests {
         #expect(collector.offsets == [resumeOffset])
         #expect(collector.combinedData.count == 1_024)
         let requests = server.receivedRequests()
-        #expect(requests.contains(FakeZRRequest(operation: .getObjectSize, parameters: [0x2002])))
+        #expect(
+            requests.contains(
+                FakeZRRequest(
+                    operation: .getObjectSize,
+                    parameters: [0x2002],
+                    dataPhase: .dataIn)))
         let extended = try #require(requests.first { $0.operation == .getPartialObjectEx })
         #expect(
             extended.parameters == [

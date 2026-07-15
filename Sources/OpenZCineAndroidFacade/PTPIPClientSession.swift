@@ -44,6 +44,7 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case liveViewAlreadyActive
     case mediaModeActive
     case mediaModeRequired
+    case focusStateUnavailable
     case eventDrainAlreadyActive
 
     public var errorDescription: String? {
@@ -77,6 +78,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "Live view is unavailable while camera media is open."
         case .mediaModeRequired:
             return "Open camera media before starting an object transfer."
+        case .focusStateUnavailable:
+            return "Camera focus metadata is not available yet."
         case .eventDrainAlreadyActive:
             return "The camera event channel is already being drained."
         }
@@ -147,6 +150,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// recording settings or the camera's card write cadence.
     private var configuredLiveViewFrameIntervalNanoseconds =
         PTPIPClientSession.liveViewFrameIntervalNanoseconds
+
+    /// Latest camera-authored focus header and its live-frame generation. The
+    /// pump updates this independently of `commandLifecycleLock`, allowing a
+    /// reset command to wait for 3...15 genuinely new headers while retaining
+    /// exclusive ownership of high-level camera-changing work.
+    private let focusFrameCondition = NSCondition()
+    private var latestLiveViewFocus: PTPLiveViewFocusInfo?
+    private var focusFrameGeneration: UInt64 = 0
 
     /// Event-channel ownership. PTP-IP events arrive on their own TCP socket,
     /// so a dedicated reader can drain sparse camera pushes without blocking
@@ -711,6 +722,261 @@ public final class PTPIPClientSession: @unchecked Sendable {
             dataOut: write.data)
     }
 
+    // MARK: - Autofocus area
+
+    /// Moves the live-view AF area through Nikon `ChangeAfArea` while keeping
+    /// coordinates semantic at the JNI boundary. The operation carries exactly
+    /// two UINT32 parameters and no host-to-camera payload.
+    public func changeAfArea(x: UInt32, y: UInt32) throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+        try changeAfAreaTransaction(x: x, y: y)
+    }
+
+    /// Recentres the AF area using only current camera-owned focus dimensions,
+    /// live-view tracking state, and freshly read focus properties.
+    ///
+    /// Subject-tracking release mirrors the iOS sequence and shared policies:
+    /// release, optionally suspend/demote, wait 3...15 new headers, recenter,
+    /// release again, then restore only unchanged interim settings. It never
+    /// sends `StartTracking`.
+    public func resetFocusPoint() throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+        guard liveViewIsActive(), let initialFrame = authoritativeFocusFrame(),
+            let initialFocus = initialFrame.focus,
+            initialFocus.coordinateWidth > 0, initialFocus.coordinateHeight > 0,
+            !initialFocus.boxes.isEmpty
+        else {
+            throw PTPIPClientSessionError.focusStateUnavailable
+        }
+
+        let savedProperties = try refreshAuthoritativeFocusProperties()
+        guard let savedFocusMode = savedProperties.focusMode,
+            let savedFocusArea = savedProperties.focusArea,
+            let savedFocusSubject = savedProperties.focusSubject,
+            PTPCameraPropertyDecoders.movieFocusModeCode(for: savedFocusMode) != nil,
+            PTPCameraPropertyDecoders.movieFocusAreaCode(for: savedFocusArea) != nil,
+            PTPCameraPropertyDecoders.movieAFSubjectCode(for: savedFocusSubject) != nil
+        else {
+            throw PTPIPClientSessionError.focusStateUnavailable
+        }
+        let centerX = UInt32(initialFocus.coordinateWidth / 2)
+        let centerY = UInt32(initialFocus.coordinateHeight / 2)
+        let shouldRelease =
+            FocusResetReleasePolicy.isTrackingIndicatedOnHeader(initialFocus)
+            || initialFocus.subjectDetectionActive
+            || initialFocus.selectedBoxIndex != nil
+            || initialFocus.boxes.count > 1
+            || savedFocusArea == "Subject"
+            || savedFocusSubject != "Off"
+            || savedFocusMode == "AF-F"
+
+        guard shouldRelease else {
+            try changeAfAreaTransaction(x: centerX, y: centerY)
+            return
+        }
+
+        let shouldDemote = FocusResetReleasePolicy.shouldDemoteSubjectArea(
+            focusArea: savedFocusArea, liveViewFocus: initialFocus)
+        let shouldSuspend = FocusResetReleasePolicy.shouldSuspendSubjectDetection(
+            focusSubject: savedFocusSubject, liveViewFocus: initialFocus)
+
+        try transactExpectingOK(.endTracking)
+        _ = try? waitForDeviceReady()
+        _ = try? transactExpectingOK(.afDriveCancel)
+        _ = try? waitForDeviceReady()
+
+        var suspended = false
+        if shouldSuspend {
+            if (try? applyFocusProperty(
+                .focusSubject,
+                label: FocusResetRestorePolicy.interimFocusSubject)) != nil
+            {
+                suspended = true
+            }
+            _ = try? waitForDeviceReady()
+        }
+        var demoted = false
+        if shouldDemote {
+            if (try? applyFocusProperty(
+                .focusArea,
+                label: FocusResetRestorePolicy.interimFocusArea)) != nil
+            {
+                demoted = true
+            }
+            _ = try? waitForDeviceReady()
+        }
+
+        guard let releaseFrame = authoritativeFocusFrame() else {
+            throw PTPIPClientSessionError.focusStateUnavailable
+        }
+        _ = try waitForTrackingRelease(
+            after: releaseFrame.generation,
+            coordinateWidth: initialFocus.coordinateWidth,
+            coordinateHeight: initialFocus.coordinateHeight)
+        try changeAfAreaTransaction(x: centerX, y: centerY)
+        _ = try? waitForDeviceReady()
+
+        // ChangeAfArea can re-latch target tracking on ZR hardware. Repeat the
+        // release pair before any guarded mode restoration.
+        _ = try? transactExpectingOK(.endTracking)
+        _ = try? transactExpectingOK(.afDriveCancel)
+        _ = try? waitForDeviceReady()
+
+        let currentProperties = try refreshAuthoritativeFocusProperties()
+        let currentMode = currentProperties.focusMode
+        if let currentArea = currentProperties.focusArea,
+            FocusResetRestorePolicy.shouldRestoreFocusArea(
+                demoted: demoted,
+                currentFocusArea: currentArea,
+                savedFocusArea: savedFocusArea,
+                focusMode: currentMode)
+        {
+            _ = try? applyFocusProperty(.focusArea, label: savedFocusArea)
+            _ = try? waitForDeviceReady()
+        }
+
+        let propertiesAfterAreaRestore = try refreshAuthoritativeFocusProperties()
+        if let currentSubject = propertiesAfterAreaRestore.focusSubject,
+            FocusResetRestorePolicy.shouldRestoreSubjectDetection(
+                suspended: suspended,
+                currentFocusSubject: currentSubject,
+                savedFocusSubject: savedFocusSubject,
+                focusMode: propertiesAfterAreaRestore.focusMode)
+        {
+            _ = try? applyFocusProperty(.focusSubject, label: savedFocusSubject)
+            _ = try? waitForDeviceReady()
+        }
+    }
+
+    private struct AuthoritativeFocusFrame {
+        let focus: PTPLiveViewFocusInfo?
+        let generation: UInt64
+    }
+
+    private func changeAfAreaTransaction(x: UInt32, y: UInt32) throws {
+        try transactExpectingOK(
+            .changeAfArea,
+            parameters: [x, y],
+            dataPhase: .noDataOrDataIn,
+            dataOut: nil)
+    }
+
+    private func applyFocusProperty(_ control: PTPCameraControl, label: String) throws {
+        guard let write = PTPCameraPropertyWrite.request(control: control, label: label) else {
+            throw PTPIPClientSessionError.unsupportedControl(control, label)
+        }
+        try writeCameraProperty(write)
+        androidPropertySnapshot = androidPropertySnapshot.applying(
+            property: write.property, data: write.data)
+    }
+
+    /// Re-reads every reset-sensitive setting so restoration never uses a UI
+    /// default or an old polling label.
+    private func refreshAuthoritativeFocusProperties() throws -> PTPCameraPropertySnapshot {
+        var focusSnapshot = PTPCameraPropertySnapshot()
+        var updatedAndroidSnapshot = androidPropertySnapshot
+        for property in [
+            PTPPropertyCode.movieFocusMode,
+            .movieFocusMeteringMode,
+            .movieAFSubjectDetection,
+        ] {
+            let data: Data
+            do {
+                data = try readProperty(property)
+            } catch let error as PTPIPClientSessionError {
+                switch error {
+                case .operationRejected, .unsupportedProperty:
+                    throw PTPIPClientSessionError.focusStateUnavailable
+                default:
+                    throw error
+                }
+            }
+            focusSnapshot = focusSnapshot.applying(property: property, data: data)
+            updatedAndroidSnapshot = updatedAndroidSnapshot.applying(
+                property: property, data: data)
+        }
+        guard focusSnapshot.focusMode != nil,
+            focusSnapshot.focusArea != nil,
+            focusSnapshot.focusSubject != nil
+        else {
+            throw PTPIPClientSessionError.focusStateUnavailable
+        }
+        androidPropertySnapshot = updatedAndroidSnapshot
+        return focusSnapshot
+    }
+
+    private func liveViewIsActive() -> Bool {
+        liveViewCondition.lock()
+        defer { liveViewCondition.unlock() }
+        return liveViewPumpActive && !liveViewStopRequested
+    }
+
+    private func authoritativeFocusFrame() -> AuthoritativeFocusFrame? {
+        focusFrameCondition.lock()
+        defer { focusFrameCondition.unlock() }
+        guard focusFrameGeneration > 0 else { return nil }
+        return AuthoritativeFocusFrame(
+            focus: latestLiveViewFocus, generation: focusFrameGeneration)
+    }
+
+    private func waitForTrackingRelease(
+        after initialGeneration: UInt64,
+        coordinateWidth: Int,
+        coordinateHeight: Int
+    ) throws -> AuthoritativeFocusFrame {
+        var generation = initialGeneration
+        var framesSinceRelease = 0
+        let deadline = Date().addingTimeInterval(commandTransactionTimeout + 2)
+
+        while framesSinceRelease < FocusResetSettlePolicy.maximumWaitFrames {
+            focusFrameCondition.lock()
+            while focusFrameGeneration <= generation && liveViewIsActive() {
+                guard focusFrameCondition.wait(until: deadline) else {
+                    focusFrameCondition.unlock()
+                    throw PTPIPClientSessionError.focusStateUnavailable
+                }
+            }
+            let next = AuthoritativeFocusFrame(
+                focus: latestLiveViewFocus, generation: focusFrameGeneration)
+            focusFrameCondition.unlock()
+
+            guard liveViewIsActive(), next.generation > generation else {
+                throw PTPIPClientSessionError.focusStateUnavailable
+            }
+            framesSinceRelease += Int(next.generation - generation)
+            generation = next.generation
+            if let focus = next.focus {
+                guard focus.coordinateWidth == coordinateWidth,
+                    focus.coordinateHeight == coordinateHeight
+                else {
+                    throw PTPIPClientSessionError.focusStateUnavailable
+                }
+            }
+            // The iOS shell counts every new header after release. A missing focus object or an
+            // empty box list is authoritative evidence that the prior tracked target is gone, not
+            // a reason to resurrect the pre-release box requirement.
+            let focusBoxStillPresent = next.focus?.boxes.isEmpty == false
+            if FocusResetSettlePolicy.shouldRecenter(
+                framesSinceRelease: framesSinceRelease,
+                isTrackingLatched:
+                    focusBoxStillPresent && (next.focus?.isSubjectTrackingLatched ?? false),
+                trackingAFActive:
+                    focusBoxStillPresent && (next.focus?.trackingAFActive ?? false))
+            {
+                return next
+            }
+        }
+        throw PTPIPClientSessionError.focusStateUnavailable
+    }
+
     // MARK: - Event channel
 
     /// Starts one bounded background reader for the PTP-IP event socket.
@@ -937,6 +1203,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
         mediaModeActive = false
         liveViewCondition.broadcast()
         liveViewCondition.unlock()
+
+        // A reset waiter sleeps on the focus condition. Stopping live view changes its exit gate
+        // after the final focus-frame broadcast above, so wake it again after publishing inactive
+        // state instead of making it wait for the transaction deadline.
+        focusFrameCondition.lock()
+        focusFrameCondition.broadcast()
+        focusFrameCondition.unlock()
     }
 
     /// Whether the media surface currently owns the shared command channel.
@@ -1116,6 +1389,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         liveViewCondition.unlock()
 
         do {
+            focusFrameCondition.lock()
+            latestLiveViewFocus = nil
+            focusFrameGeneration = 0
+            focusFrameCondition.unlock()
             try transactExpectingOK(.startLiveView)
             try waitForDeviceReady()
         } catch {
@@ -1173,6 +1450,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
             do {
                 let result = try transactExpectingOK(.getLiveViewImageEx, dataPhase: .dataIn)
                 let frame = try PTPLiveViewObject.frame(from: result.data)
+                focusFrameCondition.lock()
+                latestLiveViewFocus = frame.focus
+                focusFrameGeneration &+= 1
+                focusFrameCondition.broadcast()
+                focusFrameCondition.unlock()
                 onFrame(frame, Int64(Self.monotonicNanoseconds()))
             } catch is PTPLiveViewObjectError {
                 // A single unparsable frame is stream jitter, not a stream
@@ -1209,6 +1491,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
         liveViewCondition.lock()
         liveViewPumpActive = false
         liveViewStopRequested = false
+        liveViewCondition.unlock()
+
+        // A reset waiter sleeps on the focus condition and checks live-view state while holding
+        // it. Publish inactive state first, then clear/broadcast focus, so the waiter cannot wake,
+        // still see an active pump, and sleep forever after the final frame.
+        focusFrameCondition.lock()
+        latestLiveViewFocus = nil
+        focusFrameCondition.broadcast()
+        focusFrameCondition.unlock()
+
+        // Wake stopLiveView only after the focus waiter has observed the terminal state. This also
+        // preserves the contract that onEnded ran before stopLiveView returns.
+        liveViewCondition.lock()
         liveViewCondition.broadcast()
         liveViewCondition.unlock()
     }

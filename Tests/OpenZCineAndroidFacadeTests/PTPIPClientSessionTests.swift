@@ -23,6 +23,22 @@ struct PTPIPClientSessionTests {
             onPhase: onPhase)
     }
 
+    private func startLiveViewAndWaitForFocus(
+        _ session: PTPIPClientSession,
+        timeout: TimeInterval = 2
+    ) throws {
+        let arrival = FocusFrameArrival()
+        try session.startLiveView(
+            onFrame: { frame, _ in
+                arrival.record(frame)
+            },
+            onEnded: {})
+        if !arrival.wait(timeout: timeout) {
+            session.stopLiveView()
+            throw PTPIPClientSessionError.focusStateUnavailable
+        }
+    }
+
     @Test func connectsWithSavedProfileAndIdentifies() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
@@ -268,6 +284,276 @@ struct PTPIPClientSessionTests {
         #expect(!server.isRecording())
     }
 
+    @Test func changeAfAreaUsesExactParametersWithoutADataOutPhase() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.changeAfArea(x: 1_234, y: 567)
+
+        let request = try #require(
+            server.receivedRequests().last { $0.operation == .changeAfArea })
+        #expect(request.parameters == [1_234, 567])
+        #expect(request.dataPhase == .noDataOrDataIn)
+        #expect(request.dataOut == nil)
+    }
+
+    @Test func changeAfAreaRejectsMediaOwnershipAndCameraRejection() throws {
+        var rejectingOptions = FakeZRServer.Options()
+        rejectingOptions.changeAfAreaResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let rejectingServer = try FakeZRServer(options: rejectingOptions)
+        defer { rejectingServer.stop() }
+        let rejectingSession = try connect(to: rejectingServer)
+        defer { rejectingSession.disconnect() }
+
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(.changeAfArea, .deviceBusy)
+        ) {
+            try rejectingSession.changeAfArea(x: 3_024, y: 1_700)
+        }
+
+        let mediaServer = try FakeZRServer()
+        defer { mediaServer.stop() }
+        let mediaSession = try connect(to: mediaServer)
+        defer { mediaSession.disconnect() }
+        mediaSession.enterMediaMode()
+        #expect(throws: PTPIPClientSessionError.mediaModeActive) {
+            try mediaSession.changeAfArea(x: 3_024, y: 1_700)
+        }
+        #expect(!mediaServer.receivedOperations().contains(.changeAfArea))
+    }
+
+    @Test func resetFocusPointReleasesSettlesRecentresAndRestoresWithoutStartTracking() throws {
+        var options = FakeZRServer.Options()
+        options.liveViewFrameIntervalNanoseconds = 5_000_000
+        options.focusRelatchesAfterChange = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        try startLiveViewAndWaitForFocus(session)
+        defer { session.stopLiveView() }
+        let requestBaseline = server.receivedRequests().count
+
+        try session.resetFocusPoint()
+
+        let resetRequests = Array(server.receivedRequests().dropFirst(requestBaseline))
+        let semanticOperations =
+            resetRequests.compactMap { request -> PTPOperationCode? in
+                switch request.operation {
+                case .endTracking, .afDriveCancel, .setDevicePropValue,
+                    .setDevicePropValueEx, .changeAfArea:
+                    return request.operation
+                default:
+                    return nil
+                }
+            }
+        #expect(
+            semanticOperations == [
+                .endTracking,
+                .afDriveCancel,
+                .setDevicePropValueEx,
+                .setDevicePropValue,
+                .changeAfArea,
+                .endTracking,
+                .afDriveCancel,
+                .setDevicePropValue,
+                .setDevicePropValueEx,
+            ])
+
+        let change = try #require(resetRequests.first { $0.operation == .changeAfArea })
+        #expect(change.parameters == [3_024, 1_700])
+        #expect(change.dataPhase == .noDataOrDataIn)
+        #expect(change.dataOut == nil)
+
+        let writes = server.receivedPropertyWrites()
+        #expect(
+            writes == [
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValueEx,
+                    property: PTPPropertyCode.movieAFSubjectDetection.rawValue,
+                    data: Data([0])),
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValue,
+                    property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                    data: Data([0x10, 0x80])),
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValue,
+                    property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                    data: Data([0x33, 0x80])),
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValueEx,
+                    property: PTPPropertyCode.movieAFSubjectDetection.rawValue,
+                    data: Data([2])),
+            ])
+
+        let firstRelease = try #require(resetRequests.firstIndex { $0.operation == .endTracking })
+        let changeIndex = try #require(resetRequests.firstIndex { $0.operation == .changeAfArea })
+        let framesBeforeChange =
+            resetRequests[firstRelease..<changeIndex]
+            .filter { $0.operation == .getLiveViewImageEx }.count
+        #expect(framesBeforeChange >= FocusResetSettlePolicy.minimumFramesAfterRelease)
+        #expect(framesBeforeChange <= FocusResetSettlePolicy.maximumWaitFrames + 4)
+        #expect(resetRequests.filter { $0.operation == .endTracking }.count == 2)
+        // Nikon StartTracking is 0x9424. Reset restores picker settings but must never re-latch a
+        // tracked target, even though that vendor operation is intentionally absent from our API.
+        #expect(!server.receivedRawOperationCodes().contains(0x9424))
+    }
+
+    @Test func resetFocusPointUsesTheFifteenFrameCeilingWhenTrackingNeverClears() throws {
+        var options = FakeZRServer.Options()
+        options.liveViewFrameIntervalNanoseconds = 5_000_000
+        options.focusTrackingNeverReleases = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        try startLiveViewAndWaitForFocus(session)
+        defer { session.stopLiveView() }
+        let requestBaseline = server.receivedRequests().count
+
+        try session.resetFocusPoint()
+
+        let resetRequests = Array(server.receivedRequests().dropFirst(requestBaseline))
+        let firstRelease = try #require(resetRequests.firstIndex { $0.operation == .endTracking })
+        let changeIndex = try #require(resetRequests.firstIndex { $0.operation == .changeAfArea })
+        let framesBeforeChange =
+            resetRequests[firstRelease..<changeIndex]
+            .filter { $0.operation == .getLiveViewImageEx }.count
+        #expect(framesBeforeChange >= FocusResetSettlePolicy.maximumWaitFrames)
+        #expect(framesBeforeChange <= FocusResetSettlePolicy.maximumWaitFrames + 4)
+    }
+
+    @Test func resetFocusPointTreatsMissingPostReleaseBoxesAsTrackingCleared() throws {
+        for removesWholeFocusObject in [false, true] {
+            var options = FakeZRServer.Options()
+            options.liveViewFrameIntervalNanoseconds = 5_000_000
+            options.focusMetadataDisappearsAfterRelease = removesWholeFocusObject
+            options.focusBoxesDisappearAfterRelease = !removesWholeFocusObject
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            try startLiveViewAndWaitForFocus(session)
+            defer { session.stopLiveView() }
+            let requestBaseline = server.receivedRequests().count
+
+            try session.resetFocusPoint()
+
+            let resetRequests = Array(server.receivedRequests().dropFirst(requestBaseline))
+            let firstRelease = try #require(
+                resetRequests.firstIndex { $0.operation == .endTracking })
+            let changeIndex = try #require(
+                resetRequests.firstIndex { $0.operation == .changeAfArea })
+            let framesBeforeChange =
+                resetRequests[firstRelease..<changeIndex]
+                .filter { $0.operation == .getLiveViewImageEx }.count
+            #expect(framesBeforeChange >= FocusResetSettlePolicy.minimumFramesAfterRelease)
+            #expect(framesBeforeChange < FocusResetSettlePolicy.maximumWaitFrames)
+        }
+    }
+
+    @Test func stoppingLiveViewWakesAResetWaitingForNewFocusHeaders() throws {
+        var options = FakeZRServer.Options()
+        options.liveViewFrameIntervalNanoseconds = 1_000_000_000
+        options.focusTrackingNeverReleases = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        try startLiveViewAndWaitForFocus(session)
+
+        let completion = FocusResetCompletion()
+        Thread.detachNewThread {
+            do {
+                try session.resetFocusPoint()
+                completion.finish(.success(()))
+            } catch {
+                completion.finish(.failure(error))
+            }
+        }
+        let releaseDeadline = Date().addingTimeInterval(2)
+        while !server.receivedOperations().contains(.endTracking), Date() < releaseDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect(server.receivedOperations().contains(.endTracking))
+
+        session.stopLiveView()
+
+        let result = try #require(completion.wait(timeout: 1))
+        switch result {
+        case .success:
+            Issue.record("Focus reset unexpectedly completed after live view stopped")
+        case .failure(let error):
+            #expect(error as? PTPIPClientSessionError == .focusStateUnavailable)
+        }
+    }
+
+    @Test func resetFocusPointFailsClosedWithoutAuthoritativeLiveFocus() throws {
+        let noLiveViewServer = try FakeZRServer()
+        defer { noLiveViewServer.stop() }
+        let noLiveViewSession = try connect(to: noLiveViewServer)
+        defer { noLiveViewSession.disconnect() }
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try noLiveViewSession.resetFocusPoint()
+        }
+        #expect(!noLiveViewServer.receivedOperations().contains(.changeAfArea))
+
+        var noMetadataOptions = FakeZRServer.Options()
+        noMetadataOptions.focusMetadataEnabled = false
+        let noMetadataServer = try FakeZRServer(options: noMetadataOptions)
+        defer { noMetadataServer.stop() }
+        let noMetadataSession = try connect(to: noMetadataServer)
+        defer { noMetadataSession.disconnect() }
+        try noMetadataSession.startLiveView(onFrame: { _, _ in }, onEnded: {})
+        defer { noMetadataSession.stopLiveView() }
+        Thread.sleep(forTimeInterval: 0.1)
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try noMetadataSession.resetFocusPoint()
+        }
+        #expect(!noMetadataServer.receivedOperations().contains(.changeAfArea))
+
+        var unsupportedOptions = FakeZRServer.Options()
+        unsupportedOptions.unsupportedPropertyCodes = [PTPPropertyCode.movieFocusMode.rawValue]
+        let unsupportedServer = try FakeZRServer(options: unsupportedOptions)
+        defer { unsupportedServer.stop() }
+        let unsupportedSession = try connect(to: unsupportedServer)
+        defer { unsupportedSession.disconnect() }
+        try startLiveViewAndWaitForFocus(unsupportedSession)
+        defer { unsupportedSession.stopLiveView() }
+        let baseline = unsupportedServer.receivedOperations().count
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try unsupportedSession.resetFocusPoint()
+        }
+        let resetOperations = unsupportedServer.receivedOperations().dropFirst(baseline)
+        #expect(!resetOperations.contains(.endTracking))
+        #expect(!resetOperations.contains(.changeAfArea))
+
+        var shortOptions = FakeZRServer.Options()
+        shortOptions.shortPropertyCodesAfterFirstRead = [
+            PTPPropertyCode.movieFocusMode.rawValue
+        ]
+        let shortServer = try FakeZRServer(options: shortOptions)
+        defer { shortServer.stop() }
+        let shortSession = try connect(to: shortServer)
+        defer { shortSession.disconnect() }
+        let seeded =
+            shortSession.refreshAndroidPropertySnapshot(
+                .propertyChanged(PTPPropertyCode.movieFocusMode.rawValue))
+        #expect(seeded.result == .accepted)
+        #expect(seeded.properties.focusMode == "AF-C")
+        try startLiveViewAndWaitForFocus(shortSession)
+        defer { shortSession.stopLiveView() }
+        let shortBaseline = shortServer.receivedOperations().count
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try shortSession.resetFocusPoint()
+        }
+        let shortResetOperations = shortServer.receivedOperations().dropFirst(shortBaseline)
+        #expect(!shortResetOperations.contains(.endTracking))
+        #expect(!shortResetOperations.contains(.changeAfArea))
+    }
+
     @Test func rapidFakeServerTurnoverRetainsEachCameraScript() throws {
         func verifyRejectingServer() throws {
             let priorServer = try FakeZRServer()
@@ -337,5 +623,48 @@ struct PTPIPClientSessionTests {
             try PTPIPClientSession.connect(
                 host: "127.0.0.1", port: port, timeoutMilliseconds: 1_000)
         }
+    }
+}
+
+// SAFETY: `@unchecked Sendable` because all mutable state is guarded by `condition`.
+private final class FocusFrameArrival: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var arrived = false
+
+    func record(_ frame: PTPLiveViewFrame) {
+        guard frame.focus != nil else { return }
+        condition.lock()
+        arrived = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func wait(timeout: TimeInterval) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !arrived, condition.wait(until: deadline) {}
+        return arrived
+    }
+}
+
+// SAFETY: `@unchecked Sendable` because all mutable state is guarded by `condition`.
+private final class FocusResetCompletion: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var result: Result<Void, Error>?
+
+    func finish(_ result: Result<Void, Error>) {
+        condition.lock()
+        self.result = result
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func wait(timeout: TimeInterval) -> Result<Void, Error>? {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while result == nil, condition.wait(until: deadline) {}
+        return result
     }
 }

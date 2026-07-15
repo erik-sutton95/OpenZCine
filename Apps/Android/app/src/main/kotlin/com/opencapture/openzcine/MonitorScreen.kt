@@ -6,7 +6,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -21,7 +20,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,17 +46,24 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.platform.testTag
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.lifecycle.Lifecycle
@@ -71,6 +79,8 @@ import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraFocusException
+import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraRecordingException
@@ -327,6 +337,36 @@ fun MonitorScreen(
     var displayMode by remember { mutableStateOf(MonitorDisplayMode.LIVE) }
     val effectiveDisplayMode = operatorSettings.reconciledDisplayMode(displayMode)
     var locked by remember { mutableStateOf(false) }
+    var focusPointLocked by remember(session) { mutableStateOf(false) }
+    var focusLockHolding by remember(session) { mutableStateOf(false) }
+    var focusMoveRequestsInFlight by remember(session) { mutableStateOf(0) }
+    var focusResetPending by remember(session) { mutableStateOf(false) }
+    val focusCommandPending = focusMoveRequestsInFlight > 0 || focusResetPending
+    val focusLockProgress by
+        animateFloatAsState(
+            targetValue = if (focusLockHolding && !focusPointLocked) 1f else 0f,
+            animationSpec =
+                tween(
+                    durationMillis = if (focusLockHolding) 200 else 160,
+                    delayMillis = if (focusLockHolding) 100 else 0,
+                    easing = LinearEasing,
+                ),
+            label = "focusPointLockProgress",
+        )
+    LaunchedEffect(sessionState) {
+        if (sessionState !is CameraSessionState.Connected) {
+            focusPointLocked = false
+            focusLockHolding = false
+            focusMoveRequestsInFlight = 0
+            focusResetPending = false
+        }
+    }
+    DisposableEffect(session) {
+        onDispose {
+            focusPointLocked = false
+            focusLockHolding = false
+        }
+    }
     val recordingState by session.recordingState.collectAsState()
     val recording =
         recordingState == CameraRecordingState.STARTING ||
@@ -399,11 +439,13 @@ fun MonitorScreen(
     val captureSettings = remember(commandPresentation) { monitorCaptureSettings(commandPresentation) }
     val activeMonitorPicker =
         captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
+    val mediaOwnsCommandChannel =
+        (propertyRefreshStatus as? CameraPropertyRefreshStatus.Degraded)?.failure ==
+            CameraPropertyRefreshFailure.MEDIA_BUSY
     val commandControlsEnabled =
         sessionState is CameraSessionState.Connected &&
             !locked &&
-            (propertyRefreshStatus as? CameraPropertyRefreshStatus.Degraded)?.failure !=
-                CameraPropertyRefreshFailure.MEDIA_BUSY
+            !mediaOwnsCommandChannel
     LaunchedEffect(sessionState, activeMonitorPickerKind, activeMonitorPicker) {
         if (sessionState !is CameraSessionState.Connected ||
             (activeMonitorPickerKind != null && activeMonitorPicker == null)
@@ -908,6 +950,7 @@ fun MonitorScreen(
             remember(monitorFrameSource) { LiveFeedPresentationState() }
         val liveFeedEffectsPresentation =
             remember(monitorFrameSource) { LiveFeedEffectsPresentationState() }
+        var feedPointerSize by remember(monitorFrameSource) { mutableStateOf(IntSize.Zero) }
         val audioMetersEnabled = assist.audioMetersEnabled
         var liveAudioLevels by
             remember(monitorFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
@@ -999,41 +1042,164 @@ fun MonitorScreen(
         // Feed at the shared zone-map frame. Fit keeps the whole frame;
         // portrait fill centre-crops the image and every feed-aligned overlay
         // through the same content-rect resolver. Command unmounts the feed.
+        val feedFocus = liveFeedPresentation.focus
+        val feedContent =
+            liveFeedContentRect(
+                containerWidth = feedPointerSize.width.toFloat(),
+                containerHeight = feedPointerSize.height.toFloat(),
+                sourceWidth = liveFeedPresentation.sourceWidth,
+                sourceHeight = liveFeedPresentation.sourceHeight,
+                aspectFill = isPortraitFill,
+            )
+        val focusMetadataAvailable =
+            sessionState is CameraSessionState.Connected &&
+                monitorFrameSource != null &&
+                focusMetadataSupportsDirectInput(feedFocus)
+        val feedPointerViewport =
+            LiveOverlayRect(
+                left = 0f,
+                top = 0f,
+                width = feedPointerSize.width.toFloat(),
+                height = feedPointerSize.height.toFloat(),
+            )
+        val feedGestureGeometry =
+            if (feedContent != null) {
+                focusFeedGeometry(
+                    content = feedContent,
+                    horizontalPresentationScale = localFraming.horizontalPresentationScale,
+                    verticalPresentationScale = localFraming.verticalPresentationScale,
+                    viewport = feedPointerViewport,
+                    coordinateWidth = feedFocus?.coordinateWidth.takeIf {
+                        focusMetadataAvailable
+                    },
+                    coordinateHeight = feedFocus?.coordinateHeight.takeIf {
+                        focusMetadataAvailable
+                    },
+                    generation = liveFeedPresentation.focusGestureGeometryGeneration,
+                )
+            } else {
+                focusFeedViewportGeometry(
+                    viewport = feedPointerViewport,
+                    generation = liveFeedPresentation.focusGestureGeometryGeneration,
+                )
+            }
+        val otherCameraCommandPending = pendingCommandControl != null || recordCommandPending
+        val focusGestureContext =
+            FocusFeedGestureContext(
+                geometry = feedGestureGeometry,
+                interfaceLocked = locked,
+                focusPointLocked = focusPointLocked,
+                focusAvailable = focusMetadataAvailable,
+                commandPending = otherCameraCommandPending || focusResetPending,
+                mediaBusy = mediaOwnsCommandChannel,
+            )
+        val toggleFocusPointLock: () -> Unit = toggleFocusPointLock@{
+            if (!focusGestureContext.canRecognizeFocusGesture) return@toggleFocusPointLock
+            val next = !focusPointLocked
+            focusPointLocked = next
+            focusLockHolding = false
+            if (operatorSettings.hapticsEnabled.value) {
+                view.performHapticFeedback(
+                    if (next) {
+                        HapticFeedbackConstants.LONG_PRESS
+                    } else {
+                        HapticFeedbackConstants.KEYBOARD_TAP
+                    },
+                )
+            }
+        }
+        val handleFocusFeedAction: (FocusFeedGestureAction) -> Unit = handleFocusFeedAction@{ action ->
+            when (action) {
+                is FocusFeedGestureAction.SetFocusPoint -> {
+                    if (!focusGestureContext.canSetFocusPoint) {
+                        return@handleFocusFeedAction
+                    }
+                    focusMoveRequestsInFlight += 1
+                    recordScope.launch {
+                        try {
+                            val accepted =
+                                session.changeAfArea(
+                                    CameraFocusPoint(action.coordinate.x, action.coordinate.y),
+                                )
+                            if (accepted && operatorSettings.hapticsEnabled.value) {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            }
+                        } catch (error: CameraFocusException) {
+                            Toast.makeText(
+                                    appContext,
+                                    error.message ?: "The camera rejected the focus-point change.",
+                                    Toast.LENGTH_SHORT,
+                                )
+                                .show()
+                        } finally {
+                            focusMoveRequestsInFlight =
+                                (focusMoveRequestsInFlight - 1).coerceAtLeast(0)
+                        }
+                    }
+                }
+                is FocusFeedGestureAction.RequestDisplayMode -> {
+                    if (!focusGestureContext.canRecognizeDisplayGesture) {
+                        return@handleFocusFeedAction
+                    }
+                    operatorSettings.displayModeForExplicitRequest(action.mode)?.let { next ->
+                        if (next != effectiveDisplayMode) {
+                            displayMode = next
+                            if (operatorSettings.hapticsEnabled.value) {
+                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            }
+                        }
+                    }
+                }
+                FocusFeedGestureAction.ToggleFocusPointLock -> toggleFocusPointLock()
+            }
+        }
         if (!isCommand) {
             Box(
                 Modifier.zone(zones.feed)
                     .clipToBounds()
+                    .onSizeChanged { feedPointerSize = it }
                     // Canvas content is not exposed as an accessibility node
                     // by every Android view bridge. The feed container is the
                     // stable, descriptive region for TalkBack and UI tests.
                     .semantics {
+                        stateDescription = "Display mode ${effectiveDisplayMode.label}"
                         contentDescription =
-                            if (monitorFrameSource == null) "Live view unavailable" else "Live view active"
-                    }
-                    .pointerInput(isPortrait, portraitAspect) {
-                        if (!isPortrait) return@pointerInput
-                        awaitEachGesture {
-                            awaitFirstDown(
-                                requireUnconsumed = false,
-                                pass = PointerEventPass.Initial,
-                            )
-                            var zoom = 1f
-                            var sawTwoPointers = false
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                if (event.changes.count { it.pressed } >= 2) {
-                                    zoom *= event.calculateZoom()
-                                    sawTwoPointers = true
-                                }
-                                if (event.changes.none { it.pressed }) break
+                            when {
+                                monitorFrameSource == null -> "Live view unavailable"
+                                focusPointLocked ->
+                                    "Live view active. Focus point position locked in app."
+                                focusGestureContext.canRecognizeFocusGesture ->
+                                    "Live view active. Tap to move focus point; hold to lock its position."
+                                else ->
+                                    "Live view active. Camera focus point control unavailable."
                             }
-                            if (sawTwoPointers) {
-                                portraitAspectAfterPinch(zoom, portraitAspect)?.let { next ->
-                                    operatorSettings.portraitFeedAspect = next
-                                }
+                        if (focusGestureContext.canRecognizeFocusGesture) {
+                            onLongClick(
+                                label =
+                                    if (focusPointLocked) {
+                                        "Unlock focus point position"
+                                    } else {
+                                        "Lock focus point position"
+                                    },
+                            ) {
+                                toggleFocusPointLock()
+                                true
                             }
                         }
-                    },
+                    }
+                    .testTag("monitor_live_feed")
+                    .focusFeedGestures(
+                        geometry = feedGestureGeometry,
+                        context = focusGestureContext,
+                        isPortrait = isPortrait,
+                        onHoldingChanged = { focusLockHolding = it },
+                        onAction = handleFocusFeedAction,
+                        onPortraitPinch = { zoom ->
+                            portraitAspectAfterPinch(zoom, portraitAspect)?.let { next ->
+                                operatorSettings.portraitFeedAspect = next
+                            }
+                        },
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 if (monitorFrameSource != null) {
@@ -1089,7 +1255,80 @@ fun MonitorScreen(
                     isPortrait = isPortrait,
                     aspectFill = isPortraitFill,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
+                    focusPointLocked = focusPointLocked,
+                    focusLockProgress = focusLockProgress,
                 )
+                val focusResetVisible =
+                    focusResetAvailable(feedFocus, focusPointLocked) &&
+                        sessionState is CameraSessionState.Connected &&
+                        !locked &&
+                        !mediaOwnsCommandChannel &&
+                        !otherCameraCommandPending
+                if (focusResetVisible) {
+                    IconButton(
+                        onClick = resetFocusPoint@{
+                            if (focusCommandPending) return@resetFocusPoint
+                            focusResetPending = true
+                            recordScope.launch {
+                                try {
+                                    session.resetFocusPoint()
+                                    if (operatorSettings.hapticsEnabled.value) {
+                                        view.performHapticFeedback(
+                                            HapticFeedbackConstants.KEYBOARD_TAP,
+                                        )
+                                    }
+                                } catch (error: CameraFocusException) {
+                                    Toast.makeText(
+                                            appContext,
+                                            error.message ?: "The camera could not reset focus.",
+                                            Toast.LENGTH_SHORT,
+                                        )
+                                        .show()
+                                } finally {
+                                    focusResetPending = false
+                                }
+                            }
+                        },
+                        enabled = !focusCommandPending,
+                        modifier =
+                            Modifier
+                                .align(
+                                    if (isPortrait) {
+                                        Alignment.BottomEnd
+                                    } else {
+                                        Alignment.BottomStart
+                                    },
+                                )
+                                .padding(
+                                    start = 10.dp,
+                                    end = 10.dp,
+                                    bottom =
+                                        with(density) {
+                                            levelGaugeBottomChromeInset.toDp()
+                                        } + 10.dp,
+                                )
+                                .size(40.dp)
+                                .background(Color.Black.copy(alpha = 0.58f), CircleShape)
+                                .border(1.dp, LiveDesign.hairline, CircleShape)
+                                .testTag("focus_reset_button")
+                                .semantics {
+                                    contentDescription =
+                                        when {
+                                            focusResetPending ->
+                                                "Resetting focus point to center"
+                                            focusMoveRequestsInFlight > 0 ->
+                                                "Reset focus point unavailable while moving focus"
+                                            else -> "Reset focus point to center"
+                                        }
+                                },
+                    ) {
+                        Text(
+                            text = if (focusResetPending) "…" else "◎",
+                            style = chromeStyle(18f, FontWeight.SemiBold),
+                            color = LiveDesign.text,
+                        )
+                    }
+                }
             }
         }
         CompositionLocalProvider(LocalMonitorGlass provides glass) {
