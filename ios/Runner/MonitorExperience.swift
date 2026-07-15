@@ -82,6 +82,20 @@ private struct LiveViewShell: View {
                         RecordingBorderModule()
                     }
                 }
+                .overlayPreferenceValue(LiveViewGuideAnchorKey.self) { anchors in
+                    if let step = model.liveViewGuideStep,
+                        model.activePanel == nil,
+                        model.displayMode == .live,
+                        !model.isRecording
+                    {
+                        LiveViewGuideOverlay(
+                            step: step,
+                            anchors: anchors,
+                            isPortrait: context.isPortrait
+                        )
+                        .environment(model)
+                    }
+                }
         }
         // Snappy panel insert/remove so dismissing a popup feels near-instant.
         .animation(.easeOut(duration: 0.10), value: model.activePanel)

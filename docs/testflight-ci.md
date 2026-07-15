@@ -36,9 +36,11 @@ Xcode Cloud replaces most of the GitHub workflow with managed equivalents:
    - **Environment**: latest released Xcode/macOS. Add **secret** environment variables
      `FRAMEIO_CLIENT_ID`, `FRAMEIO_REDIRECT_URI`, `FRAMEIO_URL_SCHEME` (omit to ship with Frame.io
      login disabled).
-   - **Actions**: Archive — iOS, scheme `Runner`, deployment preparation **TestFlight (Internal
-     Testing Only)**. A separate Test action is optional; PR CI already gates tests.
-   - **Post-actions**: TestFlight Internal Testing → your tester group.
+   - **Actions**: Archive — iOS, scheme `Runner`, deployment preparation **TestFlight and App
+     Store**. External TestFlight groups cannot receive an internal-testing-only archive. A separate
+     Test action is optional; PR CI already gates tests.
+   - **Post-actions**: TestFlight External Testing → your external tester group. The first external
+     build for a version must complete TestFlight App Review before testers can install it.
 3. **Next build number**: in the workflow's settings, set it **above the highest existing
    TestFlight build** (GitHub builds reached the 130s; `200` is safe). Xcode Cloud stamps its
    counter into the app automatically — `Version.xcconfig` still owns the marketing version.
@@ -83,7 +85,23 @@ Write for non-developer camera operators:
 For a build with no tester-facing app behavior, write that plainly and ask testers to continue
 their normal camera workflow. `scripts/ios-release-notes-check.sh` enforces the format, character
 limit, and a small denylist of implementation jargon. Pull-request CI also verifies that the notes
-file changed whenever the TestFlight build paths changed.
+
+## Crash reports and tester diagnostics
+
+Apple's TestFlight pipeline is the authoritative crash source. TestFlight testers automatically
+share crash reports with the developer, and Xcode uses the archive's matching dSYM files to
+symbolicate stack traces. Release builds keep `DWARF with dSYM File`; the GitHub fallback also keeps
+symbol upload enabled. Review reports in Xcode Organizer under **Crashes**, or in App Store Connect.
+
+See Apple's guidance on [acquiring crash reports and diagnostic logs](https://developer.apple.com/documentation/xcode/acquiring-crash-reports-and-diagnostic-logs)
+and [including debugging information](https://developer.apple.com/documentation/xcode/building-your-app-to-include-debugging-information).
+
+The app also subscribes to MetricKit and retains a bounded set of Apple-delivered diagnostic
+payloads plus predefined lifecycle events on the device. A tester can open **Operator Setup →
+System → Share Diagnostics**, review the generated text report, and choose where to send it. The
+report intentionally excludes camera frames, media names, camera identities, network addresses,
+Wi-Fi details, pairing data, credentials, and account identifiers. OpenZCine does not add a
+third-party analytics or crash-reporting SDK.
 
 ## GitHub Actions (fallback)
 

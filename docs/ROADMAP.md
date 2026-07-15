@@ -116,6 +116,17 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow.
+- **External beta diagnostics & support** (in progress) — Apple-native crash diagnostics,
+  privacy-safe support reports, and direct System links for help, bugs, feature requests, source,
+  privacy, and terms.
+- **First-live-view control guide** (in progress) — a replayable three-step introduction to camera
+  controls, View Assist tap and press-and-hold behavior, and monitor system controls on iOS.
+- **Stored LUT library management** (in progress) — native long-press deletion for imported Custom
+  and downloaded RED LUTs, with built-in looks protected and active selections reconciled safely.
+- **Waveform/parade brightness calibration** (in progress) — a useful 0–200% trace-intensity range
+  where 100% matches the former 25% appearance and saved iOS settings migrate without a visual jump.
+- **Android beta-readiness parity** (planned) — port the diagnostics, support links, and live-view
+  guide after the iOS behavior is validated with external testers.
 
 ## Milestone Success Criteria
 

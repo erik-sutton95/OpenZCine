@@ -95,7 +95,7 @@ the Watch companion, and the full iPad experience continue to be hardened with r
 
 The roadmap lives in [GitHub Discussions](https://github.com/erik-sutton95/OpenZCine/discussions/22),
 where every proposed feature has its own thread. Browse the
-[Ideas category](https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas) to vote,
+[Ideas category](https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas-feature-requests) to vote,
 add production context, or propose what OpenZCine should tackle next. Roadmap discussions describe
 direction, not promised dates or release commitments. Engineering-phase detail lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md).

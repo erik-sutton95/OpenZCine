@@ -21,6 +21,8 @@ enum DemoHarness {
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
     static let panelTab = value("ZC_DEMO_PANEL_TAB")
+    /// `ZC_DEMO_LIVE_GUIDE_STEP=camera|assist|system` opens a deterministic guide card.
+    static let liveGuideStep = value("ZC_DEMO_LIVE_GUIDE_STEP")
     /// `ZC_DEMO_RED_BLOCKED=ap|off` forces the RED download blocked state for screenshots.
     static let forcedRedAvailability = value("ZC_DEMO_RED_BLOCKED")
     /// `ZC_METAL_FEED=1` opts into the experimental GPU-native feed renderer.
@@ -302,6 +304,9 @@ enum DemoHarness {
                     // ZC_DEMO_PANEL_TAB).
                     model.operatorSettingsTab = OperatorSettingsTab.demoLaunchTab
                     model.activePanel = .settings
+                }
+                if let step = LiveViewGuideStep.demoValue(liveGuideStep) {
+                    model.forceLiveViewGuide(step)
                 }
                 if env["ZC_DEMO_FOCUSBOX"] == "1" {
                     // Synthetic face-tracking boxes so the overlay is visible without a live camera.

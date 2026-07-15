@@ -9,6 +9,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        AppDiagnostics.shared.start()
         if #unavailable(iOS 13.0) {
             let window = UIWindow(frame: UIScreen.main.bounds)
             window.insetsLayoutMarginsFromSafeArea = false

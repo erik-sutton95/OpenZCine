@@ -1,9 +1,14 @@
 What's changed
 
-- Find and pair no longer gets stuck on "Looking for cameras" when using your iPhone's Personal Hotspot.
+- System settings now links to support, bug reports, feature requests, source, privacy, and terms.
+- You can create and review a privacy-safe troubleshooting report from System settings.
+- The first live preview now opens with a short guide to camera, View Assist, and system controls.
+- Imported Custom and downloaded RED LUTs can now be deleted by pressing and holding them.
+- Waveform and RGB parade brightness now use a more practical 0–200% scale.
 
 Please test
 
-- Connect your Nikon camera to your iPhone's Personal Hotspot, then open Find and pair.
-- Confirm the camera appears and completes pairing.
-- Report any camera that does not appear, disconnects, or repeatedly asks to pair.
+- Open a live preview and complete or skip the three guide cards.
+- In Operator Setup > System, open the support links and create a troubleshooting report.
+- Choose Show Again and confirm the live-view guide returns.
+- Delete a Custom or RED LUT with a press and hold, confirm built-ins stay protected, then compare waveform and RGB parade at 100% with roughly 25% in the previous build.
