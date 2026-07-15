@@ -173,7 +173,7 @@ Please also read our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). For security is
 
 [Apache 2.0](LICENSE). Third-party licenses are listed in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The app's privacy policy lives at
-[`website/public/privacy/`](website/public/privacy/index.html).
+[openzcine.app/privacy](https://openzcine.app/privacy/).
 
 "Nikon", "Nikon Z", "ZR", and "Z Cinema" are trademarks of Nikon Corporation, used here for
 identification only.

@@ -37,7 +37,6 @@ Install local tooling with `just setup` (macOS / Homebrew).
 - `docs/design/` — design specs, implementation plans, and archived browser prototypes.
 - `docs/investigations/` — resolved or pending engineering investigations and debugging records.
 - `site/` — deploy-ready GitHub Pages landing page; no raw design sources.
-- `website/` — Vercel-hosted OAuth callback, app-link association, and privacy policy.
 - `.local/` — **gitignored** demo feeds, raw marketing sources, and local tooling migrations.
 - `.github/` — CI workflows, issue/PR templates.
 
