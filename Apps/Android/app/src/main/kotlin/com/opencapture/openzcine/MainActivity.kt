@@ -49,6 +49,9 @@ import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.media.MediaCacheStore
+import com.opencapture.openzcine.media.MediaLibraryCameraBucket
+import com.opencapture.openzcine.media.MediaLibraryIndex
+import com.opencapture.openzcine.media.SharedPreferencesMediaLibraryPreferences
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
@@ -65,6 +68,7 @@ import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -152,6 +156,12 @@ class MainActivity : ComponentActivity() {
                             applicationContext.noBackupFilesDir.resolve("media-cache").toPath(),
                         )
                     }
+                val mediaLibraryIndex =
+                    remember {
+                        MediaLibraryIndex(
+                            SharedPreferencesMediaLibraryPreferences(applicationContext),
+                        )
+                    }
                 val frameioController =
                     remember { frameioDeliveryController(applicationContext, lutLibrary) }
                 val liveViewGuide =
@@ -175,6 +185,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
+                var offlineMediaBucket by
+                    remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
+                var completedMediaBuckets by
+                    remember { mutableStateOf(emptyMap<String, MediaLibraryCameraBucket>()) }
+                LaunchedEffect(savedCameras, monitorSession, offlineMediaBucket) {
+                    if (monitorSession != null) return@LaunchedEffect
+                    completedMediaBuckets =
+                        withContext(Dispatchers.IO) {
+                            mediaLibraryIndex
+                                .completedCameraBuckets(
+                                    savedCameras.map(SavedCameraRecord::id),
+                                    mediaCacheStore,
+                                ).associateBy(MediaLibraryCameraBucket::savedCameraID)
+                        }
+                }
                 // Keep the process-wide camera-AP binding alive while its
                 // handed-off session is active, then release it alongside the
                 // PTP slot when this activity or session leaves composition.
@@ -231,7 +256,7 @@ class MainActivity : ComponentActivity() {
                 // The monitor is immersive; the pairing screens keep the
                 // (transparent, dark-styled) system bars, like the iOS
                 // startup screens keep the status bar.
-                val immersive = monitorSession != null
+                val immersive = monitorSession != null || offlineMediaBucket != null
                 LaunchedEffect(immersive) { setSystemBarsHidden(immersive) }
                 LaunchedEffect(immersive, operatorSettings.keepScreenAwake.value) {
                     if (operatorSettings.shouldKeepScreenAwake(immersive)) {
@@ -241,7 +266,33 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val active = monitorSession
-                if (active == null) {
+                val offlineBucket = offlineMediaBucket
+                if (active == null && offlineBucket != null) {
+                    val offlineAssist =
+                        remember(offlineBucket.cameraID) {
+                            AssistState.restore(
+                                applicationContext,
+                                intentEffects = null,
+                                intentScope = null,
+                                availableStoredLut = lutLibrary::contains,
+                            )
+                        }
+                    LaunchedEffect(offlineAssist) { offlineAssist.activateEffectsMirror() }
+                    MediaBrowseScreen(
+                        cameraID = offlineBucket.cameraID,
+                        cameraConnected = false,
+                        cameraSessionAvailable = false,
+                        savedCameraID = offlineBucket.savedCameraID,
+                        cameraDisplayName = offlineBucket.displayName,
+                        liveAssistState = offlineAssist,
+                        exposureAssistCameraInput = ExposureAssistCameraInput(),
+                        operatorSettings = operatorSettings,
+                        lutLibrary = lutLibrary,
+                        frameioController = frameioController,
+                        selectedLut = offlineAssist.selectedLut,
+                        onClose = { offlineMediaBucket = null },
+                    )
+                } else if (active == null) {
                     BackHandler(enabled = standaloneSettingsPresented) {
                         standaloneSettingsPresented = false
                     }
@@ -262,6 +313,10 @@ class MainActivity : ComponentActivity() {
                                     onPaired = ::acceptPairedCamera,
                                     onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
                                     onOpenSettings = { standaloneSettingsPresented = true },
+                                    cachedMediaCameraIDs = completedMediaBuckets.keys,
+                                    onOpenCachedMedia = { record ->
+                                        offlineMediaBucket = completedMediaBuckets[record.id]
+                                    },
                                     requestedReconnectID = requestedReconnectID,
                                     onReconnectRequestConsumed = { requestedReconnectID = null },
                                     suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts,
@@ -505,6 +560,8 @@ class MainActivity : ComponentActivity() {
                                         cameraID = cameraID,
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
+                                        savedCameraID = activeSavedCamera?.id,
+                                        cameraDisplayName = activeSavedCamera?.displayTitle,
                                         liveAssistState = assist,
                                         exposureAssistCameraInput = playbackExposureAssistCameraInput,
                                         operatorSettings = operatorSettings,

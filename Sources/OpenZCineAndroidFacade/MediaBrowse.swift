@@ -24,6 +24,10 @@ public struct FacadeMediaClip: Equatable, Sendable {
     /// Full-image pixel size (0 when the camera omits it).
     public let pixelWidth: UInt32
     public let pixelHeight: UInt32
+    /// Pixel size of a same-stem R3D master represented by this playable proxy.
+    /// Nil for unpaired proxies and non-proxy objects.
+    public let sourcePixelWidth: UInt32?
+    public let sourcePixelHeight: UInt32?
     /// Sanitized on-card filename (`MediaClipFilename.safeCameraBasename`).
     public let filename: String
     /// Shared-core browser action and still-preview policy for this object.
@@ -43,6 +47,8 @@ public struct FacadeMediaClip: Equatable, Sendable {
         captureDate: String,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        sourcePixelWidth: UInt32? = nil,
+        sourcePixelHeight: UInt32? = nil,
         filename: String
     ) {
         let contentClassification = MediaClipFilename.mediaClassification(for: filename)
@@ -52,9 +58,26 @@ public struct FacadeMediaClip: Equatable, Sendable {
         self.captureDate = captureDate
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
+        self.sourcePixelWidth = sourcePixelWidth
+        self.sourcePixelHeight = sourcePixelHeight
         self.filename = filename
         self.contentClassification = contentClassification
         isPlayableProxy = contentClassification.kind == .playableProxy
+    }
+}
+
+extension FacadeMediaClip {
+    fileprivate func withSourceDimensions(width: UInt32, height: UInt32) -> FacadeMediaClip {
+        FacadeMediaClip(
+            handle: handle,
+            storageID: storageID,
+            sizeBytes: sizeBytes,
+            captureDate: captureDate,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            sourcePixelWidth: width,
+            sourcePixelHeight: height,
+            filename: filename)
     }
 }
 
@@ -126,7 +149,14 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
     private var positions: [Int]
     private var nextStorageIndex = 0
     private var discoveredProxyStems: Set<String> = []
-    private var visibleMastersByStem: [String: [MediaObjectHandle]] = [:]
+    private struct VisibleR3DMaster {
+        let object: MediaObjectHandle
+        let width: UInt32
+        let height: UInt32
+    }
+
+    private var visibleMastersByStem: [String: [VisibleR3DMaster]] = [:]
+    private var visibleProxiesByStem: [String: FacadeMediaClip] = [:]
     private var pendingChanges: [MediaBrowseChange] = []
     private var nextPendingChangeIndex = 0
     private var cancelled = false
@@ -188,20 +218,37 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
             switch clip.contentClassification.kind {
             case .r3dMaster:
                 let stem = MediaClipFilename.stem(of: clip.filename)
-                if !discoveredProxyStems.contains(stem) {
+                if let proxy = visibleProxiesByStem[stem], clip.pixelWidth > 0,
+                    clip.pixelHeight > 0
+                {
+                    let linked = proxy.withSourceDimensions(
+                        width: clip.pixelWidth, height: clip.pixelHeight)
+                    visibleProxiesByStem[stem] = linked
+                    pendingChanges.append(.add(linked))
+                } else if !discoveredProxyStems.contains(stem) {
                     visibleMastersByStem[stem, default: []].append(
-                        MediaObjectHandle(storageID: clip.storageID, handle: clip.handle))
+                        VisibleR3DMaster(
+                            object: MediaObjectHandle(
+                                storageID: clip.storageID, handle: clip.handle),
+                            width: clip.pixelWidth,
+                            height: clip.pixelHeight))
                     pendingChanges.append(.add(clip))
                 }
             case .playableProxy:
                 let stem = MediaClipFilename.stem(of: clip.filename)
                 discoveredProxyStems.insert(stem)
                 let pairedMasters = visibleMastersByStem.removeValue(forKey: stem) ?? []
+                let source = pairedMasters.first { $0.width > 0 && $0.height > 0 }
+                let linked =
+                    source.map {
+                        clip.withSourceDimensions(width: $0.width, height: $0.height)
+                    } ?? clip
+                visibleProxiesByStem[stem] = linked
                 pendingChanges.append(
                     contentsOf: pairedMasters.map {
-                        .remove($0)
+                        .remove($0.object)
                     })
-                pendingChanges.append(.add(clip))
+                pendingChanges.append(.add(linked))
             case .stillPhoto:
                 pendingChanges.append(.add(clip))
             case .unsupported:
@@ -213,6 +260,7 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
         if !hasMore {
             finished = true
             visibleMastersByStem.removeAll(keepingCapacity: false)
+            visibleProxiesByStem.removeAll(keepingCapacity: false)
         }
         return FacadeMediaBrowsePage(
             clips: clips,
@@ -383,22 +431,31 @@ extension PTPIPClientSession {
 /// Flat wire format for the media listing crossing the JNI seam — one clip
 /// per line, tab-separated fields with the (sanitized, tab/newline-free)
 /// filename last:
-/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t playable \t kind \t strategy \t formatLabel \t filename`.
+/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t sourceWidth \t sourceHeight \t playable \t kind \t strategy \t formatLabel \t filename`.
 /// The Kotlin mirror lives in
 /// `Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/media/MediaClips.kt`.
 public enum MediaListWire {
     public static func encode(_ clips: [FacadeMediaClip]) -> String {
-        clips.map { clip in
-            [
-                String(clip.handle), String(clip.storageID), String(clip.sizeBytes),
-                clip.captureDate, String(clip.pixelWidth), String(clip.pixelHeight),
-                clip.isPlayableProxy ? "1" : "0",
-                clip.contentClassification.kind.rawValue,
-                clip.contentClassification.stillPreview?.strategy.rawValue ?? "",
-                clip.contentClassification.stillPreview?.formatLabel ?? "",
-                clip.filename,
-            ].joined(separator: "\t")
-        }.joined(separator: "\n")
+        clips.map(encode).joined(separator: "\n")
+    }
+
+    private static func encode(_ clip: FacadeMediaClip) -> String {
+        let fields: [String] = [
+            String(clip.handle),
+            String(clip.storageID),
+            String(clip.sizeBytes),
+            clip.captureDate,
+            String(clip.pixelWidth),
+            String(clip.pixelHeight),
+            String(clip.sourcePixelWidth ?? 0),
+            String(clip.sourcePixelHeight ?? 0),
+            clip.isPlayableProxy ? "1" : "0",
+            clip.contentClassification.kind.rawValue,
+            clip.contentClassification.stillPreview?.strategy.rawValue ?? "",
+            clip.contentClassification.stillPreview?.formatLabel ?? "",
+            clip.filename,
+        ]
+        return fields.joined(separator: "\t")
     }
 }
 

@@ -91,6 +91,7 @@ private const val PROGRESSIVE_DECODE_STEP_BYTES = 256L * 1_024L
 internal fun MediaStillViewer(
     clip: MediaClipRecord,
     cameraID: String,
+    cameraTransferAvailable: Boolean = true,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -102,7 +103,7 @@ internal fun MediaStillViewer(
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
         }
     val coordinator =
-        remember(cacheStore, cameraID, clip) {
+        remember(cacheStore, cameraID, clip, cameraTransferAvailable) {
             MediaTransferCoordinator(
                 prepareTransfer = {
                     withContext(Dispatchers.IO) {
@@ -111,11 +112,14 @@ internal fun MediaStillViewer(
                             cameraID = cameraID,
                             clip = clip,
                             objectLabel = "image",
+                            cameraTransferAvailable = cameraTransferAvailable,
                         )
                     }
                 },
                 stopTransfer = {
-                    withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+                    if (cameraTransferAvailable) {
+                        withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+                    }
                 },
             )
         }
@@ -131,7 +135,7 @@ internal fun MediaStillViewer(
         val requestGeneration = loadGate.begin()
         val cameraThumbnail =
             withContext(Dispatchers.IO) {
-                if (SwiftCore.isAvailable) {
+                if (cameraTransferAvailable && SwiftCore.isAvailable) {
                     SwiftCore.sessionThumbnail(clip.handle.toInt())?.let { jpeg ->
                         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
                     }

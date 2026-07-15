@@ -169,6 +169,7 @@ internal fun MediaPlaybackScreen(
     initialClip: MediaClipRecord,
     filteredClips: List<MediaClipRecord>,
     cameraID: String,
+    cameraTransferAvailable: Boolean = true,
     favoriteIDs: Set<String>,
     framingConfiguration: LocalFramingAssistConfiguration,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
@@ -193,6 +194,7 @@ internal fun MediaPlaybackScreen(
         PlaybackClipSession(
             clip = activeClip,
             cameraID = cameraID,
+            cameraTransferAvailable = cameraTransferAvailable,
             favorite = favorite,
             previous = previous,
             next = next,
@@ -215,6 +217,7 @@ internal fun MediaPlaybackScreen(
 private fun PlaybackClipSession(
     clip: MediaClipRecord,
     cameraID: String,
+    cameraTransferAvailable: Boolean,
     favorite: Boolean,
     previous: MediaClipRecord?,
     next: MediaClipRecord?,
@@ -242,7 +245,7 @@ private fun PlaybackClipSession(
             AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
         }
     val coordinator =
-        remember(cacheStore, cameraID, clip) {
+        remember(cacheStore, cameraID, clip, cameraTransferAvailable) {
             MediaTransferCoordinator(
                 prepareTransfer = {
                     withContext(Dispatchers.IO) {
@@ -251,11 +254,14 @@ private fun PlaybackClipSession(
                             cameraID = cameraID,
                             clip = clip,
                             objectLabel = "clip",
+                            cameraTransferAvailable = cameraTransferAvailable,
                         )
                     }
                 },
                 stopTransfer = {
-                    withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+                    if (cameraTransferAvailable) {
+                        withContext(Dispatchers.IO) { SwiftCore.sessionStopMediaTransfer() }
+                    }
                 },
             )
         }

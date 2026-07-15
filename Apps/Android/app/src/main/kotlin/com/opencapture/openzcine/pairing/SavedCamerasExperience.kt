@@ -111,6 +111,8 @@ public fun SavedCamerasExperience(
     onPairNewCamera: () -> Unit,
     onOpenSettings: () -> Unit,
     onRecordsChanged: (List<SavedCameraRecord>) -> Unit,
+    cachedMediaCameraIDs: Set<String> = emptySet(),
+    onOpenCachedMedia: (SavedCameraRecord) -> Unit = {},
     requestedReconnectID: String? = null,
     onReconnectRequestConsumed: () -> Unit = {},
     suppressedUsbAutoReconnectHosts: Set<String> = emptySet(),
@@ -373,7 +375,9 @@ public fun SavedCamerasExperience(
                             discoveredCameras = discoveredCameras,
                             usbCameras = usbCameras,
                             phase = phase,
+                            cachedMediaCameraIDs = cachedMediaCameraIDs,
                             onConnect = ::reconnect,
+                            onOpenCachedMedia = onOpenCachedMedia,
                             onRename = { record ->
                                 renameTarget = record
                                 renameDraft = record.customName.orEmpty()
@@ -404,7 +408,9 @@ public fun SavedCamerasExperience(
                                 discoveredCameras = discoveredCameras,
                                 usbCameras = usbCameras,
                                 phase = phase,
+                                cachedMediaCameraIDs = cachedMediaCameraIDs,
                                 onConnect = ::reconnect,
+                                onOpenCachedMedia = onOpenCachedMedia,
                                 onRename = { record ->
                                     renameTarget = record
                                     renameDraft = record.customName.orEmpty()
@@ -528,7 +534,9 @@ private fun SavedCameraList(
     discoveredCameras: List<DiscoveredCamera>,
     usbCameras: List<UsbPtpCamera>,
     phase: SavedCameraPhase,
+    cachedMediaCameraIDs: Set<String>,
     onConnect: (SavedCameraRecord) -> Unit,
+    onOpenCachedMedia: (SavedCameraRecord) -> Unit,
     onRename: (SavedCameraRecord) -> Unit,
     onRemove: (SavedCameraRecord) -> Unit,
     onCancel: () -> Unit,
@@ -597,8 +605,10 @@ private fun SavedCameraList(
                     SavedCameraRow(
                         record = record,
                         isDiscovered = isDiscovered,
+                        hasCachedMedia = record.id in cachedMediaCameraIDs,
                         enabled = !busy,
                         onConnect = { onConnect(record) },
+                        onOpenCachedMedia = { onOpenCachedMedia(record) },
                         onRename = { onRename(record) },
                         onRemove = { onRemove(record) },
                     )
@@ -628,11 +638,13 @@ private fun SavedCameraList(
 }
 
 @Composable
-private fun SavedCameraRow(
+internal fun SavedCameraRow(
     record: SavedCameraRecord,
     isDiscovered: Boolean,
+    hasCachedMedia: Boolean,
     enabled: Boolean,
     onConnect: () -> Unit,
+    onOpenCachedMedia: () -> Unit,
     onRename: () -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -703,6 +715,13 @@ private fun SavedCameraRow(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.clickable(enabled = enabled, onClick = onRemove).padding(8.dp),
+            )
+        }
+        if (hasCachedMedia && enabled) {
+            StartupOutlineButton(
+                text = "Browse cached media",
+                onClick = onOpenCachedMedia,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }

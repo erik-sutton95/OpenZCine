@@ -12,8 +12,8 @@ import kotlin.test.assertTrue
  */
 class MediaClipsTest {
     private val wire =
-        "4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t1\tproxy\t\t\tC0001.MOV\n" +
-            "4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\tstill\tprogressive\tJPEG\tDSC_0007.JPG"
+        "4097\t65537\t1284505600\t20260713T101010\t1920\t1080\t6048\t3402\t1\tproxy\t\t\tC0001.MOV\n" +
+            "4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\t0\t0\tstill\tprogressive\tJPEG\tDSC_0007.JPG"
 
     @Test
     fun `parses records from the facade wire format`() {
@@ -26,11 +26,13 @@ class MediaClipsTest {
                 storageId = 65537,
                 sizeBytes = 1_284_505_600,
                 captureDate = "20260713T101010",
-                pixelWidth = 5760,
-                pixelHeight = 3240,
+                pixelWidth = 1920,
+                pixelHeight = 1080,
                 filename = "C0001.MOV",
                 contentKind = MediaContentKind.PLAYABLE_PROXY,
                 stillPhoto = null,
+                sourcePixelWidth = 6048,
+                sourcePixelHeight = 3402,
             ),
             clips[0],
         )
@@ -46,12 +48,12 @@ class MediaClipsTest {
     fun `skips malformed lines instead of failing the listing`() {
         val clips =
             MediaClips.parse(
-                "not-a-number\t65537\t1\t20260713T101010\t1\t1\t1\tproxy\t\t\tC0001.MOV\n" +
+                "not-a-number\t65537\t1\t20260713T101010\t1\t1\t0\t0\t1\tproxy\t\t\tC0001.MOV\n" +
                     "too\tfew\tfields\n" +
                     "\n" +
-                    "4097\t65537\t1\t\t0\t0\t1\tstill\t\t\tC0002.MOV\n" +
-                    "4098\t65537\t1\t\t0\t0\t0\tproxy\t\t\tC0003.MOV\n" +
-                    "4099\t65537\t1\t\t0\t0\t1\tproxy\t\t\tC0002.MOV",
+                    "4097\t65537\t1\t\t0\t0\t0\t0\t1\tstill\t\t\tC0002.MOV\n" +
+                    "4098\t65537\t1\t\t0\t0\t0\t0\t0\tproxy\t\t\tC0003.MOV\n" +
+                    "4099\t65537\t1\t\t0\t0\t0\t0\t1\tproxy\t\t\tC0002.MOV",
             )
 
         assertEquals(listOf("C0002.MOV"), clips.map { it.filename })
@@ -66,8 +68,8 @@ class MediaClipsTest {
     fun `rejects unknown core content and still-policy codes`() {
         val clips =
             MediaClips.parse(
-                "1\t1\t1\t\t0\t0\t0\tfuture\t\t\tUNKNOWN.BIN\n" +
-                    "2\t1\t1\t\t0\t0\t0\tstill\tfuture\tJPEG\tUNKNOWN.BIN",
+                "1\t1\t1\t\t0\t0\t0\t0\t0\tfuture\t\t\tUNKNOWN.BIN\n" +
+                    "2\t1\t1\t\t0\t0\t0\t0\t0\tstill\tfuture\tJPEG\tUNKNOWN.BIN",
             )
 
         assertTrue(clips.isEmpty())
@@ -88,18 +90,18 @@ class MediaClipsTest {
     @Test
     fun `renders only the still policy encoded by the shared core`() {
         val jpeg =
-            MediaClips.parse("1\t1\t1\t\t0\t0\t0\tstill\tprogressive\tJPEG\tCAMERA_OBJECT.001")
+            MediaClips.parse("1\t1\t1\t\t0\t0\t0\t0\t0\tstill\tprogressive\tJPEG\tCAMERA_OBJECT.001")
                 .single()
         val png =
-            MediaClips.parse("2\t1\t1\t\t0\t0\t0\tstill\tprogressive\tPNG\tFRAME.UNKNOWN")
+            MediaClips.parse("2\t1\t1\t\t0\t0\t0\t0\t0\tstill\tprogressive\tPNG\tFRAME.UNKNOWN")
                 .single()
         val heif =
-            MediaClips.parse("3\t1\t1\t\t0\t0\t0\tstill\tcomplete\tHEIF\tSTILL.BIN")
+            MediaClips.parse("3\t1\t1\t\t0\t0\t0\t0\t0\tstill\tcomplete\tHEIF\tSTILL.BIN")
                 .single()
         val raw =
-            MediaClips.parse("4\t1\t1\t\t0\t0\t0\tstill\tthumbnail\tNikon RAW\tOBJECT.DATA")
+            MediaClips.parse("4\t1\t1\t\t0\t0\t0\t0\t0\tstill\tthumbnail\tNikon RAW\tOBJECT.DATA")
                 .single()
-        val r3d = MediaClips.parse("5\t1\t1\t\t0\t0\t0\tr3d\t\t\tA001.R3D").single()
+        val r3d = MediaClips.parse("5\t1\t1\t\t0\t0\t0\t0\t0\tr3d\t\t\tA001.R3D").single()
 
         assertEquals(MediaContentKind.STILL_PHOTO, jpeg.contentKind)
         assertEquals(StillPreviewStrategy.PROGRESSIVE, jpeg.stillPhoto?.previewStrategy)
@@ -117,9 +119,9 @@ class MediaClipsTest {
     fun `newest first orders by capture date then filename`() {
         val clips =
             MediaClips.parse(
-                "1\t1\t1\t20260713T101010\t0\t0\t1\tproxy\t\t\tC0001.MOV\n" +
-                    "2\t1\t1\t20260714T090000\t0\t0\t1\tproxy\t\t\tA001.MP4\n" +
-                    "3\t1\t1\t20260714T090000\t0\t0\t1\tproxy\t\t\tB001.MP4",
+                "1\t1\t1\t20260713T101010\t0\t0\t0\t0\t1\tproxy\t\t\tC0001.MOV\n" +
+                    "2\t1\t1\t20260714T090000\t0\t0\t0\t0\t1\tproxy\t\t\tA001.MP4\n" +
+                    "3\t1\t1\t20260714T090000\t0\t0\t0\t0\t1\tproxy\t\t\tB001.MP4",
             )
 
         assertEquals(

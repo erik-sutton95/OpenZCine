@@ -6,6 +6,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /** Regression coverage for the one generic cache listener used by clips and stills. */
 class MediaObjectTransferTest {
@@ -66,6 +67,60 @@ class MediaObjectTransferTest {
         }
     }
 
+    @Test
+    fun `complete cache opens while disconnected and a stale artifact fails closed`() {
+        val root = createTempDirectory("openzcine-offline-object")
+        try {
+            val cacheStore = MediaCacheStore(root)
+            val clip =
+                mediaRecord(
+                    handle = 0x2001,
+                    filename = "OFFLINE.MOV",
+                    contentKind = MediaContentKind.PLAYABLE_PROXY,
+                )
+            val identity = MediaCacheObjectIdentity(clip)
+            val complete = cacheStore.openEntry("camera", identity, clip.sizeBytes)
+            complete.append(0, byteArrayOf(1, 2, 3, 4))
+            complete.complete()
+            val disconnected = UnavailableTransferBridge()
+
+            val ready =
+                assertIs<MediaTransferPreparation.Ready>(
+                    prepareMediaObjectTransfer(
+                        cacheStore,
+                        "camera",
+                        clip,
+                        "clip",
+                        disconnected,
+                        cameraTransferAvailable = false,
+                    ),
+                )
+
+            assertEquals(complete.finalPath, ready.entry.finalPath)
+            assertEquals(0, disconnected.resolveCalls)
+            Files.delete(ready.entry.finalPath)
+
+            val stale =
+                assertIs<MediaTransferPreparation.Failed>(
+                    prepareMediaObjectTransfer(
+                        cacheStore,
+                        "camera",
+                        clip,
+                        "clip",
+                        disconnected,
+                        cameraTransferAvailable = false,
+                    ),
+                )
+            assertTrue(stale.message.contains("no longer available"))
+            assertEquals(0, disconnected.resolveCalls)
+            assertEquals(0, Files.walk(root).use { paths -> paths.filter(Files::isRegularFile).count() })
+        } finally {
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
     private fun mediaRecord(
         handle: Long,
         filename: String,
@@ -101,6 +156,23 @@ class MediaObjectTransferTest {
             check(listener.onChunk(resumeOffset, byteArrayOf(1, 2, 3, 4)))
             listener.onCompleted(reportedSize)
         }
+    }
+
+    private class UnavailableTransferBridge : MediaObjectTransferBridge {
+        override val isAvailable: Boolean = false
+        var resolveCalls = 0
+
+        override fun resolveMediaSize(handle: Int, reportedSize: Long): Long {
+            resolveCalls += 1
+            return reportedSize
+        }
+
+        override fun startMediaTransfer(
+            handle: Int,
+            reportedSize: Long,
+            resumeOffset: Long,
+            listener: SwiftCore.MediaTransferListener,
+        ) = error("A disconnected cache must never start a camera transfer.")
     }
 
     private data class StartedTransfer(

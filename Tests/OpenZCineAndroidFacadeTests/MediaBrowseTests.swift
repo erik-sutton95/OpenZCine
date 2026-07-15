@@ -59,6 +59,13 @@ struct MediaBrowseTests {
         #expect(newest.pixelHeight == 3240)
         #expect(newest.contentClassification.kind == .playableProxy)
 
+        let pairedProxy = try #require(
+            clips.first(where: { $0.filename == "A001_C003_0713RC.MP4" }))
+        #expect(pairedProxy.pixelWidth == 1920)
+        #expect(pairedProxy.pixelHeight == 1080)
+        #expect(pairedProxy.sourcePixelWidth == 6144)
+        #expect(pairedProxy.sourcePixelHeight == 3240)
+
         let still = try #require(clips.first(where: { $0.filename == "DSC_0007.JPG" }))
         #expect(still.contentClassification.kind == .stillPhoto)
         #expect(still.contentClassification.stillPreview?.formatLabel == "JPEG")
@@ -133,6 +140,7 @@ struct MediaBrowseTests {
             FacadeMediaClip(
                 handle: 0x1001, storageID: 0x0001_0001, sizeBytes: 1_284_505_600,
                 captureDate: "20260713T101010", pixelWidth: 5760, pixelHeight: 3240,
+                sourcePixelWidth: 6048, sourcePixelHeight: 3402,
                 filename: "C0001.MOV"),
             FacadeMediaClip(
                 handle: 0x1008, storageID: 0x0001_0001, sizeBytes: 8_400_000,
@@ -149,10 +157,10 @@ struct MediaBrowseTests {
         ]
         #expect(
             MediaListWire.encode(clips) == """
-                4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t1\tproxy\t\t\tC0001.MOV
-                4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\tstill\tprogressive\tJPEG\tDSC_0007.JPG
-                4106\t65537\t10400000\t20260714T103030\t8256\t5504\t0\tstill\tcomplete\tHEIF\tDSC_0008.HEIC
-                4107\t65537\t50400000\t20260714T104030\t8256\t5504\t0\tstill\tthumbnail\tNikon RAW\tDSC_0009.NEF
+                4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t6048\t3402\t1\tproxy\t\t\tC0001.MOV
+                4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\t0\t0\tstill\tprogressive\tJPEG\tDSC_0007.JPG
+                4106\t65537\t10400000\t20260714T103030\t8256\t5504\t0\t0\t0\tstill\tcomplete\tHEIF\tDSC_0008.HEIC
+                4107\t65537\t50400000\t20260714T104030\t8256\t5504\t0\t0\t0\tstill\tthumbnail\tNikon RAW\tDSC_0009.NEF
                 """)
         #expect(MediaListWire.encode([]).isEmpty)
     }
@@ -246,7 +254,7 @@ struct MediaBrowseTests {
             MediaBrowsePageWire.encode(
                 FacadeMediaBrowsePage(
                     clips: [clip], inspectedObjectCount: 32, hasMore: true))
-                == "OZCMEDIA1\t1\t32\t0\n1\t2\t3\t\t4\t5\t1\tproxy\t\t\tC0001.MOV")
+                == "OZCMEDIA1\t1\t32\t0\n1\t2\t3\t\t4\t5\t0\t0\t1\tproxy\t\t\tC0001.MOV")
         #expect(
             MediaBrowsePageWire.encode(
                 FacadeMediaBrowsePage(

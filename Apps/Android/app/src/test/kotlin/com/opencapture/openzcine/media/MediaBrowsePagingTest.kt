@@ -16,7 +16,7 @@ class MediaBrowsePagingTest {
         val page =
             MediaBrowsePages.parse(
                 "OZCMEDIA1\t1\t32\t0\n" +
-                    "4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t1\tproxy\t\t\tC0001.MOV",
+                    "4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t0\t0\t1\tproxy\t\t\tC0001.MOV",
             )
 
         requireNotNull(page)
@@ -86,7 +86,7 @@ class MediaBrowsePagingTest {
 
     @Test
     fun `later proxy removal wins over an earlier R3D addition`() = runTest {
-        val master = "7\t1\t2\t20260715T120000\t6144\t3240\t0\tr3d\t\t\tA001.R3D"
+        val master = "7\t1\t2\t20260715T120000\t6144\t3240\t0\t0\t0\tr3d\t\t\tA001.R3D"
         val proxy = record(8, 2, "A001.MP4")
         val gateway =
             FakeMediaBrowseGateway(
@@ -183,6 +183,6 @@ class MediaBrowsePagingTest {
             }.joinToString(separator = "\n")
 
         fun record(handle: Long, storageID: Long, filename: String): String =
-            "$handle\t$storageID\t1\t20260715T12000$handle\t1920\t1080\t1\tproxy\t\t\t$filename"
+            "$handle\t$storageID\t1\t20260715T12000$handle\t1920\t1080\t0\t0\t1\tproxy\t\t\t$filename"
     }
 }
