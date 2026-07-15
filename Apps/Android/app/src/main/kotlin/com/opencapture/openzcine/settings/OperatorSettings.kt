@@ -602,6 +602,26 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         }
     }
 
+    /** Whether [tool] is currently visible in the live monitor's local framing layer. */
+    public fun isLocalFramingToolVisible(tool: AssistTool): Boolean =
+        when (tool) {
+            AssistTool.GUIDES -> guidesVisible.value
+            AssistTool.GRID -> localGridVisible.value
+            AssistTool.CROSS -> centerCrosshairEnabled.value
+            AssistTool.DESQ -> desqueezeEnabled.value
+            else -> false
+        }
+
+    /**
+     * Sets one live-monitor framing tool without sending a camera command.
+     * Newly shown guides and grids retain the same useful first-use defaults as
+     * [toggleLocalFramingTool].
+     */
+    public fun setLocalFramingToolVisible(tool: AssistTool, visible: Boolean) {
+        if (tool !in AssistTool.framingTools || isLocalFramingToolVisible(tool) == visible) return
+        toggleLocalFramingTool(tool)
+    }
+
     /**
      * Traffic Lights crush/clip tolerance, persisted as the shared Swift
      * enum's stable raw value. It changes the Swift meter on the next scope
@@ -776,17 +796,16 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .apply()
     }
 
-    /** Moves [tool] one supported toolbar slot in [direction] (`-1` or `1`). */
-    public fun moveAssistToolbarTool(tool: AssistTool, direction: Int) {
-        require(direction == -1 || direction == 1) { "direction must be -1 or 1." }
+    /** Moves [tool] directly to [targetIndex] and persists the normalized order. */
+    public fun moveAssistToolbarTool(tool: AssistTool, targetIndex: Int) {
         val current = assistToolbarOrderState.value
         val index = current.indexOf(tool)
-        val target = index + direction
-        if (index < 0 || target !in current.indices) return
+        if (index < 0) return
 
         val next = current.toMutableList()
-        next[index] = next[target]
-        next[target] = tool
+        next.removeAt(index)
+        next.add(targetIndex.coerceIn(0, next.size), tool)
+        if (next == current) return
         assistToolbarOrderState.value = next
         preferences.edit()
             .putString(ASSIST_TOOLBAR_ORDER_KEY, next.joinToString(separator = ",") { it.name })

@@ -10,9 +10,12 @@ import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -28,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -35,6 +39,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -50,24 +55,37 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.AndroidThermalTier
 import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.AssistState
@@ -108,9 +126,11 @@ import com.opencapture.openzcine.lut.StoredLutEntry
 import com.opencapture.openzcine.lut.StoredLutFailure
 import com.opencapture.openzcine.rememberAndroidThermalTier
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /**
@@ -558,37 +578,52 @@ private fun SettingsContentPane(
             // Fresh scroll position per tab. ponytail: iOS persists per-tab
             // offsets across panel dismissal; add if the rows ever grow that long.
             key(tab) {
-                Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                val scrollState = rememberScrollState()
+                var viewportBounds by remember { mutableStateOf<Rect?>(null) }
+                Box(
+                    Modifier.fillMaxSize()
+                        .onGloballyPositioned { viewportBounds = it.boundsInRoot() },
                 ) {
-                    when (tab) {
-                        OperatorSettingsTab.LINK ->
-                            LinkRows(
-                                session = session,
-                                settings = settings,
-                                linkHealth = linkHealth,
-                                liveViewSource = liveViewSource,
-                                activeTransportLabel = activeTransportLabel,
-                                onDisconnect = onDisconnect,
-                                onReconnect = onReconnect,
-                                onInteraction = onInteraction,
-                            )
-                        OperatorSettingsTab.ASSIST ->
-                            AssistRows(
-                                settings,
-                                assistState,
-                                lutLibrary,
-                                cameraInput,
-                                onSettingToggle,
-                                onAssistToggle,
-                                onInteraction,
-                            )
-                        OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
-                        OperatorSettingsTab.DISPLAY ->
-                            DisplayRows(settings, compact, onSettingToggle, onInteraction)
-                        OperatorSettingsTab.STORAGE -> StorageRows(mediaCacheStore, frameioController, condensed)
-                        OperatorSettingsTab.SYSTEM -> SystemRows()
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(scrollState),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        when (tab) {
+                            OperatorSettingsTab.LINK ->
+                                LinkRows(
+                                    session = session,
+                                    settings = settings,
+                                    linkHealth = linkHealth,
+                                    liveViewSource = liveViewSource,
+                                    activeTransportLabel = activeTransportLabel,
+                                    onDisconnect = onDisconnect,
+                                    onReconnect = onReconnect,
+                                    onInteraction = onInteraction,
+                                )
+                            OperatorSettingsTab.ASSIST ->
+                                AssistRows(
+                                    settings,
+                                    assistState,
+                                    lutLibrary,
+                                    cameraInput,
+                                    onSettingToggle,
+                                    onAssistToggle,
+                                    onInteraction,
+                                )
+                            OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
+                            OperatorSettingsTab.DISPLAY ->
+                                DisplayRows(
+                                    settings,
+                                    compact,
+                                    onSettingToggle,
+                                    onInteraction,
+                                    scrollState,
+                                    viewportBounds,
+                                )
+                            OperatorSettingsTab.STORAGE ->
+                                StorageRows(mediaCacheStore, frameioController, condensed)
+                            OperatorSettingsTab.SYSTEM -> SystemRows()
+                        }
                     }
                 }
             }
@@ -1993,6 +2028,273 @@ private fun ControlsRows(
     }
 }
 
+/** Maps a vertical settings drag to a clamped row index. */
+internal fun settingsReorderIndex(pointerY: Float, rowHeight: Float, itemCount: Int): Int {
+    require(rowHeight > 0f && itemCount > 0) { "settings reorder list must contain positive rows" }
+    return floor(pointerY / rowHeight).toInt().coerceIn(0, itemCount - 1)
+}
+
+/** Only the trailing handle lane can begin a settings reorder. */
+internal fun settingsReorderGripHit(
+    pointerX: Float,
+    containerWidth: Float,
+    gripWidth: Float,
+): Boolean {
+    require(containerWidth >= 0f && gripWidth > 0f) { "settings reorder grip must be positive" }
+    return pointerX >= (containerWidth - gripWidth).coerceAtLeast(0f) &&
+        pointerX <= containerWidth
+}
+
+/** Signed per-frame parent-scroll step while a reorder finger rides a viewport edge. */
+internal fun settingsReorderAutoScrollDelta(
+    pointerRootY: Float,
+    viewportTop: Float,
+    viewportBottom: Float,
+    edgeThreshold: Float,
+    maximumStep: Float,
+): Float {
+    require(viewportBottom >= viewportTop && edgeThreshold > 0f && maximumStep >= 0f) {
+        "settings reorder viewport must be valid"
+    }
+    val topDistance = pointerRootY - viewportTop
+    if (topDistance < edgeThreshold) {
+        return -maximumStep * ((edgeThreshold - topDistance) / edgeThreshold).coerceIn(0f, 1f)
+    }
+    val bottomDistance = viewportBottom - pointerRootY
+    if (bottomDistance < edgeThreshold) {
+        return maximumStep * ((edgeThreshold - bottomDistance) / edgeThreshold).coerceIn(0f, 1f)
+    }
+    return 0f
+}
+
+/** Direct-drag assist order with a TalkBack-equivalent move action on every handle. */
+@Composable
+internal fun AssistToolbarOrderList(
+    settings: OperatorSettings,
+    onInteraction: () -> Unit,
+    parentScrollState: ScrollState? = null,
+    viewportBounds: Rect? = null,
+) {
+    val tools = settings.assistToolbarOrder
+    val latestTools by rememberUpdatedState(tools)
+    val latestOnInteraction by rememberUpdatedState(onInteraction)
+    var draggingTool by remember { mutableStateOf<AssistTool?>(null) }
+    var dragPosition by remember { mutableStateOf(Offset.Zero) }
+    var dragRootY by remember { mutableStateOf<Float?>(null) }
+    var listBounds by remember { mutableStateOf<Rect?>(null) }
+    val rowHeight = 50.dp
+    val gripWidth = 48.dp
+    val density = LocalDensity.current
+    val rowHeightPx = with(density) { rowHeight.toPx() }
+    val gripWidthPx = with(density) { gripWidth.toPx() }
+    val edgeThresholdPx = with(density) { 48.dp.toPx() }
+    val maximumScrollStepPx = with(density) { 12.dp.toPx() }
+
+    LaunchedEffect(draggingTool, dragRootY, viewportBounds, parentScrollState) {
+        val scrollState = parentScrollState ?: return@LaunchedEffect
+        val rootY = dragRootY ?: return@LaunchedEffect
+        val viewport = viewportBounds ?: return@LaunchedEffect
+        while (draggingTool != null) {
+            val delta =
+                settingsReorderAutoScrollDelta(
+                    pointerRootY = rootY,
+                    viewportTop = viewport.top,
+                    viewportBottom = viewport.bottom,
+                    edgeThreshold = edgeThresholdPx,
+                    maximumStep = maximumScrollStepPx,
+                )
+            if (delta == 0f) return@LaunchedEffect
+            scrollState.scrollBy(delta)
+            delay(16)
+            val tool = draggingTool ?: return@LaunchedEffect
+            val bounds = listBounds ?: continue
+            val current = latestTools
+            if (current.isNotEmpty()) {
+                val target = settingsReorderIndex(rootY - bounds.top, rowHeightPx, current.size)
+                if (current.indexOf(tool) != target) {
+                    settings.moveAssistToolbarTool(tool, target)
+                }
+            }
+        }
+    }
+
+    BoxWithConstraints(
+        Modifier.fillMaxWidth()
+            .height(rowHeight * tools.size)
+            .onGloballyPositioned { listBounds = it.boundsInRoot() }
+            .pointerInput(Unit) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { start ->
+                        if (settingsReorderGripHit(start.x, size.width.toFloat(), gripWidthPx)) {
+                            val current = latestTools
+                            if (current.isNotEmpty()) {
+                                val index = settingsReorderIndex(start.y, rowHeightPx, current.size)
+                                draggingTool = current[index]
+                                dragPosition = start
+                                dragRootY = listBounds?.top?.plus(start.y)
+                                latestOnInteraction()
+                            }
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        val tool = draggingTool
+                        if (tool != null) {
+                            change.consume()
+                            dragPosition = change.position
+                            dragRootY = listBounds?.top?.plus(change.position.y)
+                            val current = latestTools
+                            if (current.isNotEmpty()) {
+                                val target =
+                                    settingsReorderIndex(
+                                        change.position.y,
+                                        rowHeightPx,
+                                        current.size,
+                                    )
+                                if (current.indexOf(tool) != target) {
+                                    settings.moveAssistToolbarTool(tool, target)
+                                }
+                            }
+                        }
+                    },
+                    onDragEnd = {
+                        draggingTool = null
+                        dragRootY = null
+                    },
+                    onDragCancel = {
+                        draggingTool = null
+                        dragRootY = null
+                    },
+                )
+            },
+    ) {
+        val listHeightPx = constraints.maxHeight.toFloat()
+        tools.forEachIndexed { index, tool ->
+            key(tool) {
+                val dragging = tool == draggingTool
+                val y =
+                    if (dragging) {
+                        (dragPosition.y - rowHeightPx / 2f)
+                            .coerceIn(0f, (listHeightPx - rowHeightPx).coerceAtLeast(0f))
+                    } else {
+                        index * rowHeightPx
+                    }
+                val accessibilityActions =
+                    buildList {
+                        if (index > 0) {
+                            add(
+                                CustomAccessibilityAction("Move ${tool.settingsTitle} earlier") {
+                                    settings.moveAssistToolbarTool(tool, index - 1)
+                                    onInteraction()
+                                    true
+                                },
+                            )
+                        }
+                        if (index < tools.lastIndex) {
+                            add(
+                                CustomAccessibilityAction("Move ${tool.settingsTitle} later") {
+                                    settings.moveAssistToolbarTool(tool, index + 1)
+                                    onInteraction()
+                                    true
+                                },
+                            )
+                        }
+                    }
+                Column(
+                    Modifier.offset { IntOffset(0, y.roundToInt()) }
+                        .fillMaxWidth()
+                        .height(rowHeight)
+                        .graphicsLayer {
+                            scaleX = if (dragging) 1.02f else 1f
+                            scaleY = if (dragging) 1.02f else 1f
+                            shadowElevation = if (dragging) 12.dp.toPx() else 0f
+                            shape = ChromeShape
+                        }
+                        .zIndex(if (dragging) 1f else 0f)
+                        .background(if (dragging) LiveDesign.surface else androidx.compose.ui.graphics.Color.Transparent),
+                ) {
+                    if (index != 0) {
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(22.dp)
+                                .background(LiveDesign.surface, CircleShape)
+                                .semantics { contentDescription = "Position ${index + 1}" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "${index + 1}",
+                                style = chromeStyle(9f, FontWeight.Medium, mono = true),
+                                color = LiveDesign.muted,
+                            )
+                        }
+                        Text(
+                            tool.settingsTitle,
+                            style = chromeStyle(12.5f, FontWeight.SemiBold),
+                            color =
+                                if (settings.isAssistToolbarToolVisible(tool)) {
+                                    LiveDesign.text
+                                } else {
+                                    LiveDesign.muted
+                                },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (tool == AssistTool.LUT) {
+                            SettingsValueText("PINNED")
+                        } else {
+                            Box(
+                                Modifier.settingsClickable(role = Role.Switch) {
+                                    settings.toggleAssistToolbarToolVisibility(tool)
+                                    onInteraction()
+                                }.semantics {
+                                    contentDescription = "Show ${tool.settingsTitle} in monitor toolbar"
+                                    stateDescription =
+                                        if (settings.isAssistToolbarToolVisible(tool)) {
+                                            "Visible"
+                                        } else {
+                                            "Hidden"
+                                        }
+                                },
+                            ) {
+                                SettingsSwitchGraphic(settings.isAssistToolbarToolVisible(tool))
+                            }
+                        }
+                        Box(
+                            Modifier.width(gripWidth)
+                                .fillMaxHeight()
+                                .semantics {
+                                    contentDescription =
+                                        "Reorder ${tool.settingsTitle}, position ${index + 1}"
+                                    customActions = accessibilityActions
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Canvas(Modifier.size(18.dp, 14.dp)) {
+                                val stroke = 1.6.dp.toPx()
+                                listOf(2f, 7f, 12f).forEach { yOffset ->
+                                    drawLine(
+                                        LiveDesign.faint,
+                                        Offset(1.dp.toPx(), yOffset.dp.toPx()),
+                                        Offset(size.width - 1.dp.toPx(), yOffset.dp.toPx()),
+                                        strokeWidth = stroke,
+                                        cap = StrokeCap.Round,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /**
  * Display tab. Every exposed toggle maps to Android monitor chrome rather
  * than merely recording an intent for a later shell pass.
@@ -2003,6 +2305,8 @@ private fun DisplayRows(
     compact: Boolean,
     onToggle: (OperatorSettings.Toggle) -> Unit,
     onInteraction: () -> Unit,
+    parentScrollState: ScrollState,
+    viewportBounds: Rect?,
 ) {
     SettingsGroupCard(
         title = "Monitor Chrome",
@@ -2050,40 +2354,14 @@ private fun DisplayRows(
     }
     SettingsGroupCard(
         title = "View Assist Toolbar",
-        caption = "Show or hide tools, then use arrows to set their monitor order.",
+        caption = "Show or hide tools, then drag a trailing handle to set their monitor order.",
     ) {
-        settings.assistToolbarOrder.forEachIndexed { index, tool ->
-            SettingsInlineRow(
-                title = "${index + 1}. ${tool.settingsTitle}",
-                showTopDivider = index != 0,
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (tool == AssistTool.LUT) {
-                        SettingsValueText("PINNED")
-                    } else {
-                        Box(
-                            Modifier.settingsClickable(role = Role.Switch) {
-                                settings.toggleAssistToolbarToolVisibility(tool)
-                                onInteraction()
-                            },
-                        ) {
-                            SettingsSwitchGraphic(settings.isAssistToolbarToolVisible(tool))
-                        }
-                    }
-                    SettingsLinkAction("↑") {
-                        settings.moveAssistToolbarTool(tool, direction = -1)
-                        onInteraction()
-                    }
-                    SettingsLinkAction("↓") {
-                        settings.moveAssistToolbarTool(tool, direction = 1)
-                        onInteraction()
-                    }
-                }
-            }
-        }
+        AssistToolbarOrderList(
+            settings = settings,
+            onInteraction = onInteraction,
+            parentScrollState = parentScrollState,
+            viewportBounds = viewportBounds,
+        )
         SettingsLinkAction("Reset toolbar") {
             settings.resetAssistToolbarPreferences()
             onInteraction()

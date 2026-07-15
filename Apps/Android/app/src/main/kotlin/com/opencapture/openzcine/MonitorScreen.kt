@@ -1,6 +1,8 @@
 package com.opencapture.openzcine
 
+import android.view.HapticFeedbackConstants
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -43,6 +45,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -79,6 +82,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.lut.AndroidLutLibrary
+import com.opencapture.openzcine.media.LiveAssistOptionsOverlay
+import com.opencapture.openzcine.media.retainLiveAssistOptions
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
@@ -101,6 +106,19 @@ internal object DemoMonitorState {
     const val FRAME_RATE = 25
     const val CAMERA_BATTERY = 80
     const val PHONE_BATTERY = 84
+}
+
+/** One measured live-toolbar tool and the orientation in which its anchor is valid. */
+private data class LiveAssistOptionsRequest(
+    val tool: AssistTool,
+    val anchorBounds: Rect,
+    val portrait: Boolean,
+)
+
+/** Gives the live quick-settings panel first refusal on the system Back action. */
+@Composable
+internal fun LiveAssistOptionsBackHandler(visible: Boolean, onDismiss: () -> Unit) {
+    BackHandler(enabled = visible, onBack = onDismiss)
 }
 
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
@@ -304,6 +322,10 @@ fun MonitorScreen(
     }
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
     var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
+    var activeAssistOptions by remember { mutableStateOf<LiveAssistOptionsRequest?>(null) }
+    LiveAssistOptionsBackHandler(visible = activeAssistOptions != null) {
+        activeAssistOptions = null
+    }
     var pendingCommandControl by remember { mutableStateOf<CameraControl?>(null) }
     var commandControlFeedback by remember { mutableStateOf<CommandControlFeedback?>(null) }
     val commandPresentation =
@@ -337,13 +359,13 @@ fun MonitorScreen(
             activeMonitorPickerKind = null
         }
     }
-    val moveCommandTileLater: (CommandTileKind) -> Unit = { kind ->
+    val moveCommandTileTo: (CommandTileKind, Int) -> Unit = { kind, target ->
         val current = commandTileOrder
-        val index = current.indexOf(kind)
-        val target = if (index == current.lastIndex) 0 else index + 1
         val next = moveCommandTile(current, kind, target)
-        commandTileOrder = next
-        commandTileOrderStore.save(next)
+        if (next != current) {
+            commandTileOrder = next
+            commandTileOrderStore.save(next)
+        }
     }
     val applyCameraControl: (CommandControlRequest, String) -> Unit = applyCameraControl@{ request, label ->
         if (!commandControlsEnabled || pendingCommandControl != null) return@applyCameraControl
@@ -630,6 +652,37 @@ fun MonitorScreen(
 
         val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
         val cameraValuesVisible = operatorSettings.cameraValuesVisible.value
+        val visibleAssistTools = operatorSettings.visibleAssistToolbarTools
+        val openAssistOptions: (AssistTool, Rect) -> Unit = { tool, anchor ->
+            if (!locked) {
+                activeMonitorPickerKind = null
+                activeCommandControl = null
+                commandControlFeedback = null
+                activeAssistOptions = LiveAssistOptionsRequest(tool, anchor, isPortrait)
+            }
+        }
+        LaunchedEffect(
+            activeAssistOptions,
+            isPortrait,
+            isClean,
+            isCommand,
+            locked,
+            lifecycleState,
+            visibleAssistTools,
+            assistToolbarVisible,
+        ) {
+            val request = activeAssistOptions ?: return@LaunchedEffect
+            val retained =
+                request.portrait == isPortrait &&
+                    retainLiveAssistOptions(
+                        tool = request.tool,
+                        visibleTools = visibleAssistTools,
+                        liveMode = !isClean && !isCommand && assistToolbarVisible,
+                        locked = locked,
+                        resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+                    )
+            if (!retained) activeAssistOptions = null
+        }
         val bottomBarHeight =
             when {
                 isPortrait && assistToolbarVisible -> LiveDesign.CONTROL_HEIGHT_DP
@@ -935,19 +988,23 @@ fun MonitorScreen(
                     recordEnabled = recordControlEnabled,
                     onRecord = requestRecordToggle,
                     onDisp = {
+                        activeAssistOptions = null
                         activeMonitorPickerKind = null
                         commandControlFeedback = null
                         dispIndex = nextMonitorDispIndex(dispIndex)
                     },
                     onOpenMedia = {
+                        activeAssistOptions = null
                         activeMonitorPickerKind = null
                         onOpenMedia()
                     },
                     onOpenSettings = {
+                        activeAssistOptions = null
                         activeMonitorPickerKind = null
                         onOpenSettings()
                     },
                     onOpenMonitorPicker = { kind ->
+                        activeAssistOptions = null
                         activeCommandControl = null
                         activeMonitorPickerKind =
                             nextMonitorPicker(
@@ -959,11 +1016,18 @@ fun MonitorScreen(
                         commandControlFeedback = null
                     },
                     onOpenCommandControl = {
+                        activeAssistOptions = null
                         activeMonitorPickerKind = null
                         activeCommandControl = it
                         commandControlFeedback = null
                     },
-                    onMoveCommandTileLater = moveCommandTileLater,
+                    onMoveCommandTile = moveCommandTileTo,
+                    onReorderStarted = {
+                        if (operatorSettings.hapticsEnabled.value) {
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        }
+                    },
+                    onOpenAssistOptions = openAssistOptions,
                 )
             } else {
                 if (isCommand) {
@@ -980,11 +1044,17 @@ fun MonitorScreen(
                         controlsEnabled = commandControlsEnabled,
                         pendingControl = pendingCommandControl,
                         onOpenControl = {
+                            activeAssistOptions = null
                             activeMonitorPickerKind = null
                             activeCommandControl = it
                             commandControlFeedback = null
                         },
-                        onMoveTileLater = moveCommandTileLater,
+                        onMoveTile = moveCommandTileTo,
+                        onReorderStarted = {
+                            if (operatorSettings.hapticsEnabled.value) {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            }
+                        },
                         modifier =
                             Modifier.zone(
                                 ZoneFrame(
@@ -1045,6 +1115,7 @@ fun MonitorScreen(
                                     onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
                                     enabled = !locked,
+                                    onLongPressToolAnchored = openAssistOptions,
                                 )
                             }
                         }
@@ -1229,6 +1300,19 @@ fun MonitorScreen(
                     .border(4.dp, LiveDesign.rec, RoundedCornerShape(24.dp)),
             )
         }
+        activeAssistOptions?.let { request ->
+            CompositionLocalProvider(LocalMonitorGlass provides glass) {
+                LiveAssistOptionsOverlay(
+                    tool = request.tool,
+                    anchorBounds = request.anchorBounds,
+                    assistState = assist,
+                    settings = operatorSettings,
+                    cameraInput = exposureAssistCameraInput,
+                    lutLibrary = lutLibrary,
+                    onDismiss = { activeAssistOptions = null },
+                )
+            }
+        }
     }
     pendingRecordTarget?.let { target ->
         AlertDialog(
@@ -1346,7 +1430,9 @@ private fun PortraitChrome(
     onOpenSettings: () -> Unit,
     onOpenMonitorPicker: (MonitorPickerKind) -> Unit,
     onOpenCommandControl: (CommandControlRequest) -> Unit,
-    onMoveCommandTileLater: (CommandTileKind) -> Unit,
+    onMoveCommandTile: (CommandTileKind, Int) -> Unit,
+    onReorderStarted: () -> Unit,
+    onOpenAssistOptions: (AssistTool, Rect) -> Unit,
 ) {
     val context = LocalContext.current
     var railExpanded by remember { mutableStateOf(false) }
@@ -1384,6 +1470,7 @@ private fun PortraitChrome(
                         Toast.LENGTH_SHORT,
                     ).show()
                 },
+                onLongPressToolAnchored = onOpenAssistOptions,
             )
         }
     }
@@ -1397,7 +1484,8 @@ private fun PortraitChrome(
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
                 onOpenControl = onOpenCommandControl,
-                onMoveTileLater = onMoveCommandTileLater,
+                onMoveTile = onMoveCommandTile,
+                onReorderStarted = onReorderStarted,
                 modifier =
                     Modifier.zone(grid)
                         .alpha(if (locked) 0.4f else 1f),
@@ -1412,7 +1500,8 @@ private fun PortraitChrome(
                         ?.let(onOpenMonitorPicker)
                         ?: onOpenCommandControl(request)
                 },
-                onMoveTileLater = onMoveCommandTileLater,
+                onMoveTile = onMoveCommandTile,
+                onReorderStarted = onReorderStarted,
                 modifier =
                     Modifier.zone(
                         ZoneFrame(
@@ -1466,6 +1555,7 @@ private fun PortraitChrome(
             onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
             hapticsEnabled = operatorSettings.hapticsEnabled.value,
             enabled = !locked,
+            onLongPressToolAnchored = onOpenAssistOptions,
         )
     }
 

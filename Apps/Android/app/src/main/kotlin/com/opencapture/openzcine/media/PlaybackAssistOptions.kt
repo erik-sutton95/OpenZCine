@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -48,6 +49,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
@@ -65,6 +68,7 @@ import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.lut.AndroidLutLibrary
+import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
 import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
@@ -88,6 +92,68 @@ import kotlinx.coroutines.launch
 internal fun hasPlaybackAssistOptions(tool: AssistTool): Boolean =
     tool.hasConfiguration
 
+/** Returns whether a live quick-settings panel still belongs to the visible monitor lifecycle. */
+internal fun retainLiveAssistOptions(
+    tool: AssistTool?,
+    visibleTools: List<AssistTool>,
+    liveMode: Boolean,
+    locked: Boolean,
+    resumed: Boolean,
+): Boolean =
+    tool != null && tool.hasConfiguration && tool in visibleTools && liveMode && !locked && resumed
+
+/**
+ * Pixel-space panel placement shared by live and playback overlays.
+ * The popup prefers the space above its measured tool, falls below when that
+ * is the only complete fit, and clamps every edge into [margin].
+ */
+internal fun assistOptionsPanelOffset(
+    viewportWidth: Float,
+    viewportHeight: Float,
+    anchorBounds: Rect?,
+    panelWidth: Float,
+    panelHeight: Float,
+    margin: Float = 12f,
+    gap: Float = 10f,
+): androidx.compose.ui.geometry.Offset {
+    require(viewportWidth >= 0f && viewportHeight >= 0f) {
+        "assist options viewport must be non-negative"
+    }
+    require(panelWidth >= 0f && panelHeight >= 0f) {
+        "assist options panel must be non-negative"
+    }
+    val anchor = anchorBounds?.takeIf { it.width > 1f && it.height > 1f }
+    val maximumX = (viewportWidth - panelWidth - margin).coerceAtLeast(margin)
+    val maximumY = (viewportHeight - panelHeight - margin).coerceAtLeast(margin)
+    val desiredX = anchor?.right?.minus(panelWidth) ?: margin
+    val x = desiredX.coerceIn(margin, maximumX)
+    if (anchor == null) {
+        return androidx.compose.ui.geometry.Offset(x, maximumY)
+    }
+
+    val above = anchor.top - gap - panelHeight
+    val below = anchor.bottom + gap
+    val y =
+        when {
+            above >= margin -> above
+            below <= maximumY -> below
+            anchor.top >= viewportHeight - anchor.bottom -> above.coerceIn(margin, maximumY)
+            else -> below.coerceIn(margin, maximumY)
+        }
+    return androidx.compose.ui.geometry.Offset(x, y)
+}
+
+private data class AssistOptionsActions(
+    val sharedAssistState: AssistState,
+    val isOn: (AssistTool) -> Boolean,
+    val setVisible: (AssistTool, Boolean) -> Unit,
+    val selectLut: (FeedLut) -> Unit,
+    val selectStoredLut: (StoredLutSelection) -> Unit,
+    val selectFalseColorScale: (FeedFalseColorScale) -> Unit,
+    val resetFalseColorScale: () -> Unit,
+    val contextLabel: String,
+)
+
 /**
  * Backdrop-dismissible quick settings anchored above the measured playback assist toolbar.
  * Configuration writes through the live/shared models while visibility remains in [playbackState].
@@ -103,20 +169,95 @@ internal fun PlaybackAssistOptionsOverlay(
     lutLibrary: AndroidLutLibrary?,
     onDismiss: () -> Unit,
 ) {
+    AssistOptionsOverlay(
+        tool = tool,
+        anchorBounds = toolbarBounds,
+        actions =
+            AssistOptionsActions(
+                sharedAssistState = sharedAssistState,
+                isOn = playbackState::isOn,
+                setVisible = playbackState::setVisible,
+                selectLut = { playbackState.selectSharedLut(sharedAssistState, it) },
+                selectStoredLut = {
+                    playbackState.selectSharedStoredLut(sharedAssistState, it)
+                },
+                selectFalseColorScale = {
+                    playbackState.selectSharedFalseColorScale(sharedAssistState, it)
+                },
+                resetFalseColorScale = {
+                    playbackState.resetSharedFalseColorScale(sharedAssistState)
+                },
+                contextLabel = "playback",
+            ),
+        settings = settings,
+        cameraInput = cameraInput,
+        lutLibrary = lutLibrary,
+        onDismiss = onDismiss,
+    )
+}
+
+/** Live-monitor counterpart using the same real persisted configuration surface. */
+@Composable
+internal fun LiveAssistOptionsOverlay(
+    tool: AssistTool,
+    anchorBounds: Rect?,
+    assistState: AssistState,
+    settings: OperatorSettings,
+    cameraInput: ExposureAssistCameraInput,
+    lutLibrary: AndroidLutLibrary?,
+    onDismiss: () -> Unit,
+) {
+    val isOn: (AssistTool) -> Boolean = { candidate ->
+        if (candidate in AssistTool.framingTools) {
+            settings.isLocalFramingToolVisible(candidate)
+        } else {
+            assistState.isOn(candidate)
+        }
+    }
+    val setVisible: (AssistTool, Boolean) -> Unit = { candidate, visible ->
+        if (candidate in AssistTool.framingTools) {
+            settings.setLocalFramingToolVisible(candidate, visible)
+        } else if (assistState.isOn(candidate) != visible) {
+            assistState.toggle(candidate)
+        }
+    }
+    AssistOptionsOverlay(
+        tool = tool,
+        anchorBounds = anchorBounds,
+        actions =
+            AssistOptionsActions(
+                sharedAssistState = assistState,
+                isOn = isOn,
+                setVisible = setVisible,
+                selectLut = assistState::selectLut,
+                selectStoredLut = assistState::selectStoredLut,
+                selectFalseColorScale = assistState::selectFalseColorScale,
+                resetFalseColorScale = assistState::resetFalseColorSelection,
+                contextLabel = "live monitor",
+            ),
+        settings = settings,
+        cameraInput = cameraInput,
+        lutLibrary = lutLibrary,
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun AssistOptionsOverlay(
+    tool: AssistTool,
+    anchorBounds: Rect?,
+    actions: AssistOptionsActions,
+    settings: OperatorSettings,
+    cameraInput: ExposureAssistCameraInput,
+    lutLibrary: AndroidLutLibrary?,
+    onDismiss: () -> Unit,
+) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
-        val toolbarTop =
-            toolbarBounds?.top?.let { with(density) { it.toDp() } }
-                ?: (maxHeight - 90.dp)
-        val toolbarRight =
-            toolbarBounds?.right?.let { with(density) { it.toDp() } }
-                ?: (maxWidth - 82.dp)
         val preferredWidth = if (tool == AssistTool.GUIDES) 472.dp else 400.dp
         val panelWidth = minOf(preferredWidth, (maxWidth - 24.dp).coerceAtLeast(0.dp))
-        val maxPanelHeight = (toolbarTop - 16.dp).coerceAtLeast(120.dp)
-        val bottomClearance = (maxHeight - toolbarTop + 10.dp).coerceAtLeast(70.dp)
-        val maximumLeading = (maxWidth - panelWidth - 12.dp).coerceAtLeast(12.dp)
-        val panelLeading = (toolbarRight - panelWidth).coerceIn(12.dp, maximumLeading)
+        val maxPanelHeight = (maxHeight - 24.dp).coerceAtLeast(0.dp)
+        var panelSize by remember(tool) { mutableStateOf(IntSize.Zero) }
         var revealed by remember(tool) { mutableStateOf(false) }
         val revealOffset by
             animateDpAsState(
@@ -125,6 +266,19 @@ internal fun PlaybackAssistOptionsOverlay(
                 label = "playback assist panel reveal",
             )
         LaunchedEffect(tool) { revealed = true }
+        val viewportWidthPx = with(density) { maxWidth.toPx() }
+        val viewportHeightPx = with(density) { maxHeight.toPx() }
+        val panelOffset =
+            assistOptionsPanelOffset(
+                viewportWidth = viewportWidthPx,
+                viewportHeight = viewportHeightPx,
+                anchorBounds = anchorBounds,
+                panelWidth = panelSize.width.toFloat(),
+                panelHeight = panelSize.height.toFloat(),
+                margin = with(density) { 12.dp.toPx() },
+                gap = with(density) { 10.dp.toPx() },
+            )
+        val revealOffsetPx = with(density) { revealOffset.toPx() }
 
         Box(
             Modifier.fillMaxSize()
@@ -134,10 +288,15 @@ internal fun PlaybackAssistOptionsOverlay(
                 }.chromeClickable(onDismiss),
         )
         Column(
-            Modifier.align(Alignment.BottomStart)
-                .offset(x = panelLeading, y = -bottomClearance + revealOffset)
+            Modifier.offset {
+                IntOffset(
+                    panelOffset.x.roundToInt(),
+                    (panelOffset.y + revealOffsetPx).roundToInt(),
+                )
+            }
                 .width(panelWidth)
                 .heightIn(max = maxPanelHeight)
+                .onSizeChanged { panelSize = it }
                 .alpha(if (revealed) 1f else 0f)
                 .glass(ChromeShape)
                 .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
@@ -169,8 +328,7 @@ internal fun PlaybackAssistOptionsOverlay(
             ) {
                 PlaybackAssistOptionsContent(
                     tool = tool,
-                    playbackState = playbackState,
-                    sharedAssistState = sharedAssistState,
+                    actions = actions,
                     settings = settings,
                     cameraInput = cameraInput,
                     lutLibrary = lutLibrary,
@@ -183,15 +341,14 @@ internal fun PlaybackAssistOptionsOverlay(
 @Composable
 private fun PlaybackAssistOptionsContent(
     tool: AssistTool,
-    playbackState: PlaybackAssistState,
-    sharedAssistState: AssistState,
+    actions: AssistOptionsActions,
     settings: OperatorSettings,
     cameraInput: ExposureAssistCameraInput,
     lutLibrary: AndroidLutLibrary?,
 ) {
     when (tool) {
-        AssistTool.LUT -> LutOptions(playbackState, sharedAssistState, lutLibrary)
-        AssistTool.FALSE -> FalseColorOptions(playbackState, sharedAssistState, settings)
+        AssistTool.LUT -> LutOptions(actions, lutLibrary)
+        AssistTool.FALSE -> FalseColorOptions(actions, settings)
         AssistTool.PEAK -> PeakingOptions(settings)
         AssistTool.ZEBRA -> ZebraOptions(settings, cameraInput)
         AssistTool.WAVE -> WaveformOptions(settings)
@@ -199,11 +356,13 @@ private fun PlaybackAssistOptionsContent(
         AssistTool.HISTO -> HistogramOptions(settings)
         AssistTool.VECTOR -> VectorscopeOptions(settings)
         AssistTool.LIGHTS -> TrafficLightsOptions(settings)
-        AssistTool.GUIDES -> GuideOptions(playbackState, settings)
+        AssistTool.GUIDES -> GuideOptions(actions, settings)
         AssistTool.GRID -> GridOptions(settings)
         AssistTool.CROSS ->
-            OptionCopy("Tap the toolbar button to show or hide the centre crosshair in playback.")
-        AssistTool.DESQ -> DesqueezeOptions(playbackState, settings)
+            OptionCopy(
+                "Tap the toolbar button to show or hide the centre crosshair in ${actions.contextLabel}.",
+            )
+        AssistTool.DESQ -> DesqueezeOptions(actions, settings)
         AssistTool.AUDIO ->
             OptionCopy("Meters the playing clip's audio. iOS exposes this as a tap-only tool.")
     }
@@ -211,8 +370,7 @@ private fun PlaybackAssistOptionsContent(
 
 @Composable
 private fun LutOptions(
-    playbackState: PlaybackAssistState,
-    sharedAssistState: AssistState,
+    actions: AssistOptionsActions,
     lutLibrary: AndroidLutLibrary?,
 ) {
     val storedEntries = lutLibrary?.entries?.collectAsState()?.value.orEmpty()
@@ -222,10 +380,10 @@ private fun LutOptions(
         ChoiceRow(
             options = FeedLut.entries.toList(),
             label = FeedLut::label,
-            selected = { sharedAssistState.selectedLut == FeedLutSelection.BuiltIn(it) },
+            selected = { actions.sharedAssistState.selectedLut == FeedLutSelection.BuiltIn(it) },
         ) { lut ->
-            playbackState.selectSharedLut(sharedAssistState, lut)
-            playbackState.setVisible(AssistTool.LUT, true)
+            actions.selectLut(lut)
+            actions.setVisible(AssistTool.LUT, true)
             feedback = null
         }
     }
@@ -235,14 +393,16 @@ private fun LutOptions(
                 storedEntries.forEach { entry ->
                     OptionChoice(
                         label = "${entry.selection.category.label}: ${entry.displayName}",
-                        selected = sharedAssistState.selectedLut == FeedLutSelection.Stored(entry.selection),
+                        selected =
+                            actions.sharedAssistState.selectedLut ==
+                                FeedLutSelection.Stored(entry.selection),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         val library = lutLibrary ?: return@OptionChoice
                         scope.launch {
                             if (library.prepare(entry.selection)) {
-                                playbackState.selectSharedStoredLut(sharedAssistState, entry.selection)
-                                playbackState.setVisible(AssistTool.LUT, true)
+                                actions.selectStoredLut(entry.selection)
+                                actions.setVisible(AssistTool.LUT, true)
                                 feedback = "${entry.displayName} selected."
                             } else {
                                 feedback =
@@ -262,21 +422,20 @@ private fun LutOptions(
 
 @Composable
 private fun FalseColorOptions(
-    playbackState: PlaybackAssistState,
-    sharedAssistState: AssistState,
+    actions: AssistOptionsActions,
     settings: OperatorSettings,
 ) {
     val configuration = settings.feedEffectsConfiguration
     ResetRow {
-        playbackState.resetSharedFalseColorScale(sharedAssistState)
+        actions.resetFalseColorScale()
         settings.resetFalseColorConfiguration()
     }
     OptionSection("Scale") {
         ChoiceRow(
             options = FeedFalseColorScale.entries.toList(),
             label = FeedFalseColorScale::label,
-            selected = { sharedAssistState.selectedFalseColorScale == it },
-        ) { scale -> playbackState.selectSharedFalseColorScale(sharedAssistState, scale) }
+            selected = { actions.sharedAssistState.selectedFalseColorScale == it },
+        ) { scale -> actions.selectFalseColorScale(scale) }
     }
     SettingsSwitchRow(
         title = "Reference Display",
@@ -286,7 +445,7 @@ private fun FalseColorOptions(
         val enabled = !settings.feedEffectsConfiguration.falseColorReferenceEnabled
         settings.feedEffectsConfiguration =
             settings.feedEffectsConfiguration.copy(falseColorReferenceEnabled = enabled)
-        if (enabled) playbackState.setVisible(AssistTool.FALSE, true)
+        if (enabled) actions.setVisible(AssistTool.FALSE, true)
     }
 }
 
@@ -457,7 +616,7 @@ private fun CompensationChoices(settings: OperatorSettings) {
 }
 
 @Composable
-private fun GuideOptions(playbackState: PlaybackAssistState, settings: OperatorSettings) {
+private fun GuideOptions(actions: AssistOptionsActions, settings: OperatorSettings) {
     OptionSection("Family") {
         ChoiceRow(
             LocalFramingGuideFamily.entries.toList(),
@@ -480,7 +639,7 @@ private fun GuideOptions(playbackState: PlaybackAssistState, settings: OperatorS
                             modifier = Modifier.weight(1f),
                         ) {
                             val next = settings.toggleGuideRatioConfiguration(ratio)
-                            playbackState.setVisible(AssistTool.GUIDES, next.isNotEmpty())
+                            actions.setVisible(AssistTool.GUIDES, next.isNotEmpty())
                         }
                     }
                     repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
@@ -522,12 +681,12 @@ private fun GridOptions(settings: OperatorSettings) {
 }
 
 @Composable
-private fun DesqueezeOptions(playbackState: PlaybackAssistState, settings: OperatorSettings) {
+private fun DesqueezeOptions(actions: AssistOptionsActions, settings: OperatorSettings) {
     SettingsSwitchRow(
         "Enable",
-        playbackState.isOn(AssistTool.DESQ),
+        actions.isOn(AssistTool.DESQ),
         showTopDivider = false,
-    ) { playbackState.toggle(AssistTool.DESQ) }
+    ) { actions.setVisible(AssistTool.DESQ, !actions.isOn(AssistTool.DESQ)) }
     OptionSection("Ratio") {
         ChoiceRow(
             LocalDesqueezeRatio.entries.toList(),

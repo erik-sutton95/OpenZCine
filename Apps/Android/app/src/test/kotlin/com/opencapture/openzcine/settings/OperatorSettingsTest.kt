@@ -162,15 +162,61 @@ class OperatorSettingsTest {
         assertEquals(AssistTool.LUT, settings.assistToolbarOrder[1])
         assertEquals(AssistTool.entries.toSet(), settings.assistToolbarOrder.toSet())
 
-        settings.moveAssistToolbarTool(AssistTool.LUT, direction = -1)
+        settings.moveAssistToolbarTool(AssistTool.LUT, targetIndex = 0)
         assertEquals(AssistTool.LUT, OperatorSettings(store).assistToolbarOrder.first())
+
+        settings.moveAssistToolbarTool(AssistTool.VECTOR, targetIndex = AssistTool.entries.lastIndex)
+        assertEquals(AssistTool.VECTOR, OperatorSettings(store).assistToolbarOrder.last())
+    }
+
+    @Test
+    fun `settings reorder geometry accepts only the handle and clamps direct destinations`() {
+        assertFalse(settingsReorderGripHit(pointerX = 250f, containerWidth = 320f, gripWidth = 48f))
+        assertTrue(settingsReorderGripHit(pointerX = 280f, containerWidth = 320f, gripWidth = 48f))
+        assertEquals(0, settingsReorderIndex(pointerY = -40f, rowHeight = 50f, itemCount = 14))
+        assertEquals(6, settingsReorderIndex(pointerY = 349f, rowHeight = 50f, itemCount = 14))
+        assertEquals(13, settingsReorderIndex(pointerY = 900f, rowHeight = 50f, itemCount = 14))
+    }
+
+    @Test
+    fun `settings reorder auto scroll follows viewport edges and stops in the middle`() {
+        assertEquals(
+            -12f,
+            settingsReorderAutoScrollDelta(
+                pointerRootY = 90f,
+                viewportTop = 100f,
+                viewportBottom = 500f,
+                edgeThreshold = 40f,
+                maximumStep = 12f,
+            ),
+        )
+        assertEquals(
+            6f,
+            settingsReorderAutoScrollDelta(
+                pointerRootY = 480f,
+                viewportTop = 100f,
+                viewportBottom = 500f,
+                edgeThreshold = 40f,
+                maximumStep = 12f,
+            ),
+        )
+        assertEquals(
+            0f,
+            settingsReorderAutoScrollDelta(
+                pointerRootY = 300f,
+                viewportTop = 100f,
+                viewportBottom = 500f,
+                edgeThreshold = 40f,
+                maximumStep = 12f,
+            ),
+        )
     }
 
     @Test
     fun `toolbar reset restores every currently supported tool`() {
         val settings = OperatorSettings(store)
         settings.toggleAssistToolbarToolVisibility(AssistTool.WAVE)
-        settings.moveAssistToolbarTool(AssistTool.VECTOR, direction = -1)
+        settings.moveAssistToolbarTool(AssistTool.VECTOR, targetIndex = 0)
         settings.resetAssistToolbarPreferences()
 
         assertEquals(AssistTool.entries.toList(), settings.assistToolbarOrder)
@@ -180,9 +226,7 @@ class OperatorSettingsTest {
     @Test
     fun `audio remains in the trailing toolbar section when its stored order moves`() {
         val settings = OperatorSettings(store)
-        while (settings.assistToolbarOrder.indexOf(AssistTool.AUDIO) > 0) {
-            settings.moveAssistToolbarTool(AssistTool.AUDIO, direction = -1)
-        }
+        settings.moveAssistToolbarTool(AssistTool.AUDIO, targetIndex = 0)
 
         assertEquals(AssistTool.AUDIO, settings.assistToolbarOrder.first())
         assertEquals(AssistTool.AUDIO, settings.visibleAssistToolbarTools.last())
