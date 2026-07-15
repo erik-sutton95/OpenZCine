@@ -25,6 +25,41 @@ the same branded fallback on the app's API 29-30 floor before restoring the full
 edge-to-edge runtime theme. Do not replace either raster with an Android-specific redraw.
 
 - **Build:** `just android-build` from the repo root (or `just android-check` for build + tests + lint).
+- **Wear OS companion (OPE-67):** `wear-relay/` is a camera-free, pure Android wire module that
+  mirrors the canonical Swift `WatchRelayProtocol.swift` v1 `[kind byte] + JSON` envelope and its
+  golden fixtures. `wear/` is a non-standalone, foreground-only wrist monitor: it receives a
+  bounded display-baked JPEG, camera timecode, measured frame cadence, honest phone monitor state,
+  and one guarded record-toggle result through the Wear Data Layer. It declares no camera, network,
+  Bluetooth, or storage permission. The handheld relay (`app/.../wear/`) consumes only the existing
+  `LiveFeedView` presentation callback; it never creates a `LiveFrameSource`, touches pairing/saved
+  cameras, or opens a direct camera/network path. The visible phone shader also renders the relay
+  snapshot, so LUT, false colour, peaking, and zebra do not disappear on the wrist. Up to three
+  previews are in flight, matching watchOS; watch-receipt acknowledgements measure actual round-trip
+  latency and adapt JPEG width, quality, and cadence while retaining only the freshest waiting
+  frame. The Wear launcher density variants are mechanical resizes of
+  `ios/Runner/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`, and its launch screen uses
+  mechanical resizes of `ios/Runner/Assets.xcassets/AppLogo.imageset/AppLogo.png`; there is no
+  Wear-specific redraw. When the phone backgrounds or leaves the monitor, the pump is invalidated
+  and an explicit disconnected snapshot is published. A resumed watch clears its frame/state cache,
+  requires a fresh two-second phone heartbeat, and expires state after six seconds. Capability
+  reachability proves only companion
+  reachability, never a camera or foreground monitor. Record commands use a v1 request-ID path
+  suffix solely for reply correlation; their payload remains canonical and reaches the same phone
+  `CameraSession.setRecording` seam after monitor/lifecycle/session/pending-work gates pass. Like
+  watchOS, Record remains available while the phone is in Command mode and its feed is paused. The
+  animated control provides click, success, and failure haptics; timecode and side readouts auto-fit
+  with round-screen corner padding. Both capability declarations are retained by dedicated raw
+  `tools:keep` files (and their `values/wear.xml` declarations), and the Wear manifest sets
+  `com.google.android.wearable.standalone=false`. Phone and Wear release artifacts share the
+  `com.opencapture.openzcine` package and signing configuration, but the Wear bundle receives a
+  collision-free version-code offset and uploads to Play's dedicated Wear track. Run
+  `just android-check` for JVM wire/lifecycle coverage and `just android-release-check` for the
+  phone/Wear package, signer, capability, and AAB checks.
+  **[VERIFY-ON-HW]** No Wear emulator or physical watch was used here: pair a signed phone/watch
+  build, open the phone monitor, confirm display-baked preview, timecode/FPS/state/record correlation
+  and acknowledgement adaptation, exercise Command-mode recording, background or leave the monitor
+  to confirm the wrist UI becomes unavailable, resume to confirm it waits for a fresh heartbeat,
+  feel all haptic outcomes, and inspect the tightest round/square watch layout for clipping.
 - **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
   startup flow (`ios/Runner/StartupDesign.swift`) in its design language: permissions → choose
   path → prepare → network (→ find and pair). Three hard-separated paths: **camera-AP** (the phone

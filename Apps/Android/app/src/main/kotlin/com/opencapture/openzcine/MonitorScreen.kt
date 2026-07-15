@@ -83,6 +83,11 @@ import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
+import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
+import com.opencapture.openzcine.wear.WearRecordCommandSafety
+import com.opencapture.openzcine.wear.androidWatchRelayState
+import com.opencapture.openzcine.wear.executeWearRecordCommand
+import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -213,6 +218,9 @@ fun MonitorScreen(
     onOpenMedia: () -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
+    // A monitor-scoped relay means the wearable never becomes an independent
+    // LiveFrameSource subscriber or a background camera owner.
+    val wearRelay = remember(appContext) { AndroidWearPhoneRelay(appContext) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val sessionState by session.state.collectAsState()
     val monitorAccessibilityState =
@@ -390,6 +398,45 @@ fun MonitorScreen(
             } else {
                 sendRecordCommand(target)
             }
+        }
+    }
+    // Match the iOS watch's intentional confirmation bypass only after all
+    // Android monitor/session/pending-command safety gates still hold. A watch
+    // never owns a camera path; this reaches the same CameraSession seam as
+    // the on-phone record control.
+    val latestWearRecordCommand =
+        rememberUpdatedState<suspend () -> WatchCommandResult>(
+            newValue = {
+                val safety =
+                    WearRecordCommandSafety(
+                        monitorFront = isMonitorFront,
+                        applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+                        cameraConnected = sessionState is CameraSessionState.Connected,
+                        recordCommandPending = recordCommandPending,
+                        recordConfirmationPending = pendingRecordTarget != null,
+                        cameraControlPending = pendingCommandControl != null,
+                    )
+                executeWearRecordCommand(safety, recording, session::setRecording)
+            },
+        )
+    DisposableEffect(wearRelay) {
+        wearRelay.setCommandHandler { latestWearRecordCommand.value.invoke() }
+        onDispose {
+            wearRelay.publishDisconnected()
+            wearRelay.close()
+        }
+    }
+    // Data Layer listeners exist only while the foreground monitor is
+    // resumable. Backgrounding publishes one unavailable state before
+    // detaching, and no relay-owned callback retains a live-frame source.
+    val wearRelayForeground =
+        isMonitorFront && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    LaunchedEffect(wearRelay, wearRelayForeground) {
+        if (wearRelayForeground) {
+            wearRelay.activate()
+        } else {
+            wearRelay.publishDisconnected()
+            wearRelay.deactivate()
         }
     }
     val mediaRemoteShutterShouldArm =
@@ -660,9 +707,31 @@ fun MonitorScreen(
                         }
             }
         // Every preview consumer takes this monitor-only path. In DISP 3 it
-        // becomes null before feed, audio, scope, or health effects can hold
-        // the shared Swift source open, so its final collector ends live view.
+        // becomes null before feed, audio, scope, health, or wearable effects
+        // can hold the shared Swift source open, so its final collector ends
+        // live view.
         val monitorFrameSource = monitorPreviewFrameSource(activeFrameSource, isCommand)
+        val watchRelayState =
+            remember(
+                sessionState,
+                cameraProperties,
+                recording,
+                isMonitorFront,
+                lifecycleState,
+                monitorFrameSource,
+            ) {
+                androidWatchRelayState(
+                    sessionState = sessionState,
+                    cameraProperties = cameraProperties,
+                    isRecording = recording,
+                    monitorFront = isMonitorFront,
+                    applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+                    liveFeedActive = monitorFrameSource != null && isMonitorFront,
+                )
+            }
+        LaunchedEffect(wearRelay, watchRelayState) {
+            wearRelay.publishState(watchRelayState)
+        }
         // Health collection deliberately owns no demo or command-dashboard
         // subscription: only the real Swift live source is evidence of a
         // camera stream, and DISP 3 must still send EndLiveView when it loses
@@ -769,6 +838,7 @@ fun MonitorScreen(
                             scaleY = localFraming.verticalPresentationScale
                         },
                         onFrame = glass::submit,
+                        onPresentedFrame = wearRelay::ingestPresentedFrame,
                         presentationState = liveFeedPresentation,
                         effects = assist.effects,
                         configuration = operatorSettings.feedEffectsConfiguration,
@@ -837,8 +907,8 @@ fun MonitorScreen(
                     val top = maxOf(14f, safeTop)
                     CommandDashboard(
                         recording = recording,
-                        // Android has no authoritative live-view timecode bridge yet.
-                        // Keep the command dashboard neutral rather than show the shell clock.
+                        // The dashboard does not yet own the per-frame timecode state.
+                        // Keep it neutral rather than showing the shell clock.
                         frameCount = null,
                         presentation = commandPresentation,
                         controlsEnabled = commandControlsEnabled,

@@ -1,0 +1,59 @@
+{
+  "protocolVersion": 1,
+  "state": {
+    "recordState": "recording",
+    "timecode": {
+      "on": true,
+      "hour": 1,
+      "minute": 2,
+      "second": 3,
+      "frame": 4
+    },
+    "mediaStatus": {
+      "gigabytesFree": 521,
+      "percentFree": 47,
+      "minutesRemaining": 47
+    },
+    "media": "521 GB · 47 min",
+    "cameraBatteryPercent": 80,
+    "cameraName": "Nikon ZR",
+    "isRecording": true,
+    "connection": "connected",
+    "feedLive": true,
+    "liveFPS": "25.00"
+  },
+  "stateWithoutMediaStatus": {
+    "recordState": "standby",
+    "timecode": {
+      "on": false,
+      "hour": 0,
+      "minute": 0,
+      "second": 0,
+      "frame": 0
+    },
+    "media": "—",
+    "cameraBatteryPercent": 0,
+    "cameraName": "",
+    "isRecording": false,
+    "connection": "noCamera",
+    "feedLive": false,
+    "liveFPS": "0.00"
+  },
+  "frame": {
+    "jpeg": "/9j/4AAQ",
+    "timecode": {
+      "on": true,
+      "hour": 12,
+      "minute": 34,
+      "second": 56,
+      "frame": 7
+    },
+    "isRecording": true
+  },
+  "command": "toggleRecord",
+  "result": {
+    "accepted": false,
+    "isRecording": true,
+    "error": "not reachable"
+  }
+}

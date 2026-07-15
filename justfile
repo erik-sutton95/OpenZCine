@@ -174,7 +174,7 @@ android-ui-test:
 
 # Run all Android checks: build, unit tests, and Android lint.
 android-check:
-    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug :app:assembleDebugAndroidTest test lint
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest test lint
 
 # Generate the Play upload keystore into gitignored .local/ (never committed;
 # refuses to overwrite). keytool prompts for the store password interactively.
@@ -210,10 +210,10 @@ android-keystore:
 android-core:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew :app:stageSwiftCore
 
-# Build both release artifact shapes and verify their Swift runtime closure
-# without extracting the APK/AAB. Use this before uploading a Play build.
+# Build both phone and Wear release artifact shapes, verify the phone's Swift
+# runtime closure, and verify the signed/package-compatible Data Layer pair.
 android-release-check:
-    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew :app:verifyReleaseNativeLibraries
+    cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact
 
 # Device-only JNI load check. Builds the generated arm64 debug APK, installs it
 # over the existing app without clearing data, and requires SwiftCoreSmoke's

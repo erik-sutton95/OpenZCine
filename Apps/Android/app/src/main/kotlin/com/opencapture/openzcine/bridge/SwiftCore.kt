@@ -682,6 +682,63 @@ object SwiftCore {
         }
 
         /**
+         * Newest additive live-frame callback. Camera timecode is decoded by
+         * Swift from the same header as image/focus/level metadata. The
+         * facade falls back to [onFrameWithMetadata] or [onFrame] when this
+         * descriptor is absent, preserving the established JNI boundary.
+         */
+        fun onFrameWithFullMetadata(
+            jpeg: ByteArray,
+            timestampNanos: Long,
+            isRecording: Boolean,
+            leftLevelDb: Double,
+            leftPeakDb: Double,
+            rightLevelDb: Double,
+            rightPeakDb: Double,
+            hasAudioLevels: Boolean,
+            hasFocus: Boolean,
+            focusCoordinateWidth: Int,
+            focusCoordinateHeight: Int,
+            focusResult: Int,
+            subjectDetectionActive: Boolean,
+            trackingAFActive: Boolean,
+            selectedBoxIndex: Int,
+            focusBoxes: IntArray,
+            hasLevel: Boolean,
+            levelRollDegrees: Double,
+            levelPitchDegrees: Double,
+            levelYawDegrees: Double,
+            timecodeOn: Boolean,
+            timecodeHour: Int,
+            timecodeMinute: Int,
+            timecodeSecond: Int,
+            timecodeFrame: Int,
+        ) {
+            onFrameWithMetadata(
+                jpeg = jpeg,
+                timestampNanos = timestampNanos,
+                isRecording = isRecording,
+                leftLevelDb = leftLevelDb,
+                leftPeakDb = leftPeakDb,
+                rightLevelDb = rightLevelDb,
+                rightPeakDb = rightPeakDb,
+                hasAudioLevels = hasAudioLevels,
+                hasFocus = hasFocus,
+                focusCoordinateWidth = focusCoordinateWidth,
+                focusCoordinateHeight = focusCoordinateHeight,
+                focusResult = focusResult,
+                subjectDetectionActive = subjectDetectionActive,
+                trackingAFActive = trackingAFActive,
+                selectedBoxIndex = selectedBoxIndex,
+                focusBoxes = focusBoxes,
+                hasLevel = hasLevel,
+                levelRollDegrees = levelRollDegrees,
+                levelPitchDegrees = levelPitchDegrees,
+                levelYawDegrees = levelYawDegrees,
+            )
+        }
+
+        /**
          * The stream ended — stop, disconnect, a transport error, or an
          * immediately-failed start. Called exactly once per
          * [sessionStartLiveView].

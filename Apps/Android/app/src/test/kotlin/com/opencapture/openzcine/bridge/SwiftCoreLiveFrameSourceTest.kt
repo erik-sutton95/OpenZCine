@@ -153,6 +153,68 @@ class SwiftCoreLiveFrameSourceTest {
     }
 
     @Test
+    fun `full callback carries camera timecode with its frame`() = runTest {
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener = it },
+                stop = {},
+                configurePreview = { true },
+                sharingScope = backgroundScope,
+            )
+
+        val result = async { source.frames.first() }
+        runCurrent()
+        listener.onFrameWithFullMetadata(
+            jpeg = byteArrayOf(4, 5, 6),
+            timestampNanos = 1_000_000_000L,
+            isRecording = true,
+            leftLevelDb = -60.0,
+            leftPeakDb = -60.0,
+            rightLevelDb = -60.0,
+            rightPeakDb = -60.0,
+            hasAudioLevels = false,
+            hasFocus = false,
+            focusCoordinateWidth = 0,
+            focusCoordinateHeight = 0,
+            focusResult = 0,
+            subjectDetectionActive = false,
+            trackingAFActive = false,
+            selectedBoxIndex = -1,
+            focusBoxes = intArrayOf(),
+            hasLevel = false,
+            levelRollDegrees = 0.0,
+            levelPitchDegrees = 0.0,
+            levelYawDegrees = 0.0,
+            timecodeOn = true,
+            timecodeHour = 1,
+            timecodeMinute = 2,
+            timecodeSecond = 3,
+            timecodeFrame = 4,
+        )
+        runCurrent()
+
+        val frame = result.await()
+        assertEquals(true, frame.timecode?.on)
+        assertEquals(1, frame.timecode?.hour)
+        assertEquals(2, frame.timecode?.minute)
+        assertEquals(3, frame.timecode?.second)
+        assertEquals(4, frame.timecode?.frame)
+        assertNull(frame.measuredFramesPerSecond)
+    }
+
+    @Test
+    fun `frame rate estimator reports measured monotonic cadence`() {
+        val estimator = LiveFrameRateEstimator()
+
+        assertNull(estimator.record(1_000_000_000L))
+        assertEquals(25.0, estimator.record(1_040_000_000L))
+        assertEquals(25.0, estimator.record(1_080_000_000L))
+        assertNull(estimator.record(1_080_000_000L))
+    }
+
+    @Test
     fun `two collectors share one pump and the last cancellation stops it`() = runTest {
         var starts = 0
         var stops = 0

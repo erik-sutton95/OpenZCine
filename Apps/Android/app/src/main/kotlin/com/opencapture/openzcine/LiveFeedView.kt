@@ -10,6 +10,7 @@ import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -18,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -226,6 +228,12 @@ class JpegFrameDecoder {
  * [onFrame] observes each presented frame on the decode thread — the glass
  * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
+ * [onPresentedFrame] observes the exact source [LiveFrame], decoded bitmap,
+ * and optional [LiveFramePreviewBaker] accepted for display. The
+ * phone-mediated Wear relay uses this callback rather than collecting [source]
+ * itself, so it cannot keep camera live view running while the monitor is
+ * hidden or backgrounded. When image assists are visible, the baker reuses the
+ * exact phone shader so the wrist preview is display-baked too.
  * [presentationState], when supplied, retains the same frame's camera
  * metadata and image dimensions for feed-aligned overlays.
  *
@@ -242,6 +250,7 @@ fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
+    onPresentedFrame: ((LiveFrame, Bitmap, LiveFramePreviewBaker?) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects = FeedEffectsState.current,
     configuration: FeedEffectsConfiguration = FeedEffectsConfiguration(),
@@ -250,6 +259,7 @@ fun LiveFeedView(
     effectsPresentationState: LiveFeedEffectsPresentationState? = null,
 ) {
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
+    val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
     // Stored selections are prepared off the UI thread. Until the shared Swift parser has produced
     // a packed payload, the renderer remains fail-closed (plain feed), then rebuilds on generation.
     val lutRenderGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value ?: 0L
@@ -291,6 +301,13 @@ fun LiveFeedView(
             if (reference != null) effectsPresentationState?.present(scale, reference)
         }
     }
+    val ownedRenderer = renderer
+    val latestPreviewBaker = rememberUpdatedState<LiveFramePreviewBaker?>(ownedRenderer)
+    DisposableEffect(ownedRenderer) {
+        onDispose {
+            if (Build.VERSION.SDK_INT >= 33) ownedRenderer?.close()
+        }
+    }
 
     LaunchedEffect(source, presentationState) {
         presentationState?.clear()
@@ -314,6 +331,11 @@ fun LiveFeedView(
                         fallbackFrame.value = bitmap.asImageBitmap()
                     }
                     onFrame?.invoke(bitmap)
+                    latestPresentedFrame.value?.invoke(
+                        sourceFrame,
+                        bitmap,
+                        latestPreviewBaker.value,
+                    )
                 },
             )
         }

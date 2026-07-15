@@ -682,7 +682,7 @@ internal fun PortraitCommandDashboard(
                 contentAlignment = Alignment.Center,
             ) {
                 CommandTimecode(
-                    // Android has no authoritative live-view timecode bridge yet.
+                    // This dashboard does not yet own the per-frame timecode state.
                     frameCount = null,
                     frameRate = presentation.frameRateValue,
                     sizeSp = 52f,

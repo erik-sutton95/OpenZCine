@@ -5,6 +5,26 @@ import Testing
 
 @Suite("Watch relay wire protocol")
 struct WatchRelayProtocolTests {
+    private var goldenFixtureURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/WatchRelayProtocolV1.json")
+    }
+
+    private func goldenPayload(named name: String) throws -> Data {
+        let data = try Data(contentsOf: goldenFixtureURL)
+        let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let payload = try #require(root[name])
+        if let string = payload as? String {
+            return try JSONEncoder().encode(string)
+        }
+        return try JSONSerialization.data(withJSONObject: payload)
+    }
+
+    private func goldenEnvelope(kind: WatchRelayProtocol.Kind, named name: String) throws -> Data {
+        Data([kind.rawValue]) + (try goldenPayload(named: name))
+    }
+
     private func sampleState() -> WatchRelayState {
         WatchRelayState(
             recordState: .recording,
@@ -77,6 +97,41 @@ struct WatchRelayProtocolTests {
         #expect(try WatchRelayEnvelope.kind(of: envelope) == .result)
         let decoded = try WatchRelayEnvelope.decode(WatchCommandResult.self, from: envelope)
         #expect(decoded == result)
+    }
+
+    @Test("v1 golden fixtures stay compatible with the canonical Swift models")
+    func v1GoldenFixturesRemainCanonical() throws {
+        let fixture = try Data(contentsOf: goldenFixtureURL)
+        let root = try #require(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
+        #expect(root["protocolVersion"] as? Int == 1)
+
+        let stateEnvelope = try goldenEnvelope(kind: .state, named: "state")
+        let state = try WatchRelayEnvelope.decode(WatchRelayState.self, from: stateEnvelope)
+        #expect(state == sampleState())
+
+        let stateWithoutMediaEnvelope =
+            try goldenEnvelope(kind: .state, named: "stateWithoutMediaStatus")
+        let stateWithoutMedia =
+            try WatchRelayEnvelope.decode(WatchRelayState.self, from: stateWithoutMediaEnvelope)
+        #expect(stateWithoutMedia.mediaStatus == nil)
+
+        let frameEnvelope = try goldenEnvelope(kind: .frame, named: "frame")
+        let frame = try WatchRelayEnvelope.decode(WatchRelayFrame.self, from: frameEnvelope)
+        #expect(frame.jpeg == Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]))
+        #expect(frame.timecode == Timecode(on: true, hour: 12, minute: 34, second: 56, frame: 7))
+
+        let commandEnvelope = try goldenEnvelope(kind: .command, named: "command")
+        let command = try WatchRelayEnvelope.decode(WatchRelayCommand.self, from: commandEnvelope)
+        #expect(command == .toggleRecord)
+
+        let resultEnvelope = try goldenEnvelope(kind: .result, named: "result")
+        let result = try WatchRelayEnvelope.decode(WatchCommandResult.self, from: resultEnvelope)
+        let expectedResult = WatchCommandResult(
+            accepted: false,
+            isRecording: true,
+            error: "not reachable"
+        )
+        #expect(result == expectedResult)
     }
 
     @Test("Empty envelope reports an empty error")

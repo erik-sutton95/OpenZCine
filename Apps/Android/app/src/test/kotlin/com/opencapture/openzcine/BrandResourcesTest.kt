@@ -82,6 +82,35 @@ class BrandResourcesTest {
         assertTrue(theme.contains("postSplashScreenTheme"))
     }
 
+    @Test
+    fun wearResourcesStayDerivedFromTheCanonicalIconAndLogo() {
+        val canonicalIcon =
+            repositoryRoot.resolve(
+                "ios/Runner/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png",
+            )
+        val canonicalLogo =
+            repositoryRoot.resolve("ios/Runner/Assets.xcassets/AppLogo.imageset/AppLogo.png")
+        assertEquals(CANONICAL_APP_ICON_SHA256, canonicalIcon.sha256())
+        assertEquals(CANONICAL_APP_LOGO_SHA256, canonicalLogo.sha256())
+
+        val resources = repositoryRoot.resolve("Apps/Android/wear/src/main/res")
+        WEAR_LAUNCHERS.forEach { (density, expected) ->
+            val launcher = resources.resolve("mipmap-$density/ic_launcher.png")
+            assertSize(launcher, width = expected.size, height = expected.size)
+            assertEquals(expected.sha256, launcher.sha256())
+        }
+        WEAR_LOGOS.forEach { (density, expected) ->
+            val logo = resources.resolve("drawable-$density/openzcine_app_logo.png")
+            assertSize(logo, width = expected.size, height = expected.size)
+            assertEquals(expected.sha256, logo.sha256())
+        }
+        assertContentEquals(
+            Files.readAllBytes(canonicalLogo),
+            Files.readAllBytes(resources.resolve("drawable-xxxhdpi/openzcine_app_logo.png")),
+            "The full-density Wear launch logo must remain the byte-exact canonical AppLogo",
+        )
+    }
+
     private fun assertCenteredPixelsMatch(sourcePath: Path, canvasPath: Path) {
         val source = sourcePath.readImage()
         val canvas = canvasPath.readImage()
@@ -160,6 +189,73 @@ class BrandResourcesTest {
                         size = 192,
                         sha256 =
                             "bc9a4b8a7c2baaa874b1706cd03f9ea2436c7b1fc14c1f677216794b9f8015cd",
+                    ),
+            )
+
+        val WEAR_LAUNCHERS =
+            mapOf(
+                "mdpi" to
+                    ExpectedLauncher(
+                        size = 48,
+                        sha256 =
+                            "d8aaab574cc730fc6add64215dd7be4d4c9e3c75704b52c49cbcebfaeeeced5d",
+                    ),
+                "hdpi" to
+                    ExpectedLauncher(
+                        size = 72,
+                        sha256 =
+                            "0ff2860b418b38546e9e6627d87e158b23d41546ed86bf63ca0e10b23067a073",
+                    ),
+                "xhdpi" to
+                    ExpectedLauncher(
+                        size = 96,
+                        sha256 =
+                            "0d523de01cc22fb2abbc36abf5b98c0c5c820851e13fd9b26edc4107d5635612",
+                    ),
+                "xxhdpi" to
+                    ExpectedLauncher(
+                        size = 144,
+                        sha256 =
+                            "486a604bc32e9b31799b86961600e3cd5e1dabffb9ae519e526d3a8f1750b3f5",
+                    ),
+                "xxxhdpi" to
+                    ExpectedLauncher(
+                        size = 192,
+                        sha256 =
+                            "6eb852523ea1f7721552aa1bfb3bf69bd443a4a3ca71e1be84b8ce943fdc8516",
+                    ),
+            )
+
+        val WEAR_LOGOS =
+            mapOf(
+                "mdpi" to
+                    ExpectedLauncher(
+                        size = 128,
+                        sha256 =
+                            "f159ce3e65b10d074c83bfa98253abf9d77f3a68588a317fab758d8dab542ff2",
+                    ),
+                "hdpi" to
+                    ExpectedLauncher(
+                        size = 192,
+                        sha256 =
+                            "97dee875a152217f52fe63f41417271cbe1d8afba28c8be9944683196267528a",
+                    ),
+                "xhdpi" to
+                    ExpectedLauncher(
+                        size = 256,
+                        sha256 =
+                            "64fd85f34a682d6c46cfa40c97e62bc63ac296ef5fa4ff79e8a5f8ef8697a469",
+                    ),
+                "xxhdpi" to
+                    ExpectedLauncher(
+                        size = 384,
+                        sha256 =
+                            "4b7227009da915b66e1e829f10451ed48e2e94794a5e4c3d42ff3195076c85e5",
+                    ),
+                "xxxhdpi" to
+                    ExpectedLauncher(
+                        size = 512,
+                        sha256 = CANONICAL_APP_LOGO_SHA256,
                     ),
             )
     }
