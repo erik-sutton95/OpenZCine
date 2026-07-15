@@ -61,6 +61,26 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `offline-only browser never fabricates a camera from retained Frameio state`() {
+        assertFalse(
+            effectiveMediaCameraConnection(
+                cameraSessionAvailable = false,
+                cameraConnected = false,
+                frameioInternetHopState = FrameioInternetHopState.LeavingCamera,
+                rejoinedConnectionObserved = false,
+            ),
+        )
+        assertFalse(
+            effectiveMediaCameraConnection(
+                cameraSessionAvailable = false,
+                cameraConnected = false,
+                frameioInternetHopState = rejoinedState(),
+                rejoinedConnectionObserved = false,
+            ),
+        )
+    }
+
+    @Test
     fun `Frameio dialog cannot close while the camera network handoff is unsettled`() {
         val blocked =
             listOf(
@@ -175,7 +195,9 @@ class MediaLibraryStateTest {
         val preferences = MemoryPreferences()
         val index = MediaLibraryIndex(preferences)
         val still = clip(handle = 12, filename = "OBJECT.DATA", kind = MediaContentKind.STILL_PHOTO)
-        val proxy = clip(handle = 13, filename = "UNUSUAL.NAME", kind = MediaContentKind.PLAYABLE_PROXY)
+        val proxy =
+            clip(handle = 13, filename = "UNUSUAL.NAME", kind = MediaContentKind.PLAYABLE_PROXY)
+                .copy(sourcePixelWidth = 6_048, sourcePixelHeight = 3_402)
 
         index.rememberCameraListing("ZR-6001234", listOf(still, proxy))
 
@@ -185,6 +207,8 @@ class MediaLibraryStateTest {
             StillPreviewStrategy.PROGRESSIVE,
             index.persistedClips("ZR-6001234")[1].stillPhoto?.previewStrategy,
         )
+        assertEquals(6_048, index.persistedClips("ZR-6001234")[0].sourcePixelWidth)
+        assertEquals(3_402, index.persistedClips("ZR-6001234")[0].sourcePixelHeight)
     }
 
     @Test
@@ -197,6 +221,63 @@ class MediaLibraryStateTest {
         index.rememberCameraListing("camera", listOf(latest))
 
         assertEquals(listOf(latest, older), index.persistedClips("camera"))
+    }
+
+    @Test
+    fun `camera index retains history beyond the former 1024 record cap`() {
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val clips =
+            (1L..1_300L).map { handle ->
+                clip(
+                    handle = handle,
+                    filename = "C${handle.toString().padStart(4, '0')}.MOV",
+                    captureDate = "20260715T${(handle % 24).toString().padStart(2, '0')}0000",
+                )
+            }
+
+        index.rememberCameraListing("camera", clips)
+
+        assertEquals(1_300, index.persistedClips("camera").size)
+        assertTrue(index.persistedClips("camera").any { it.handle == 1L })
+        assertTrue(index.persistedClips("camera").any { it.handle == 1_300L })
+    }
+
+    @Test
+    fun `disconnected buckets preserve saved camera order and reject stale cache entries`() {
+        withStore { _, store ->
+            val index = MediaLibraryIndex(MemoryPreferences())
+            val first = clip(handle = 1, filename = "A001.MOV").copy(sizeBytes = 3)
+            val second =
+                clip(handle = 2, filename = "B001.JPG", kind = MediaContentKind.STILL_PHOTO)
+                    .copy(sizeBytes = 4)
+            index.rememberCameraListing("serial-a", listOf(first))
+            index.rememberCameraListing("serial-b", listOf(second))
+            index.rememberCameraBucket("saved-a", "serial-a", "Camera A")
+            index.rememberCameraBucket("saved-b", "serial-b", "Camera B")
+            store.openEntry("serial-a", MediaCacheObjectIdentity(first), 3).apply {
+                append(0, byteArrayOf(1, 2, 3))
+                complete()
+            }
+            store.openEntry("serial-b", MediaCacheObjectIdentity(second), 4).apply {
+                append(0, byteArrayOf(1, 2, 3, 4))
+                complete()
+            }
+
+            val available =
+                index.completedCameraBuckets(listOf("saved-b", "saved-a", "removed"), store)
+
+            assertEquals(listOf("saved-b", "saved-a"), available.map { it.savedCameraID })
+            assertEquals(listOf("serial-b", "serial-a"), available.map { it.cameraID })
+            val stale =
+                store.completedEntryOrNull("serial-a", MediaCacheObjectIdentity(first), 3)
+            assertNotNull(stale)
+            Files.delete(stale.finalPath)
+            assertEquals(
+                listOf("saved-b"),
+                index.completedCameraBuckets(listOf("saved-a", "saved-b"), store)
+                    .map { it.savedCameraID },
+            )
+        }
     }
 
     @Test
@@ -303,7 +384,7 @@ class MediaLibraryStateTest {
     }
 
     @Test
-    fun `container resolution today and slot filters compose without guessing metadata`() {
+    fun `container resolution today and slot filters follow shared metadata fallbacks`() {
         val todayMov =
             clip(1, "A001.MOV", captureDate = "20260715T101010")
                 .copy(storageId = 11, pixelWidth = 3_840)
@@ -339,7 +420,26 @@ class MediaLibraryStateTest {
         assertEquals(4, filters.activeCount)
         assertEquals(MediaContainerFilter.MOV, todayMov.containerFilter())
         assertEquals(MediaContainerFilter.MOV, todayMov.copy(filename = "A001.M4V").containerFilter())
-        assertNull(missingWidth.resolutionFilter())
+        assertEquals(MediaResolutionFilter.SIX_K, missingWidth.resolutionFilter())
+    }
+
+    @Test
+    fun `resolution prefers paired R3D source then proxy pixels then filename`() {
+        val paired =
+            clip(1, "SHOT_4K.MP4")
+                .copy(pixelWidth = 1_920, sourcePixelWidth = 6_048, sourcePixelHeight = 3_402)
+        val proxyOnly = clip(2, "SHOT_6K.MP4").copy(pixelWidth = 3_840)
+        val filenameOnly = clip(3, "SHOT_5.4K.MP4").copy(pixelWidth = 0)
+        val filename54Token = clip(4, "SHOT_54K.MOV").copy(pixelWidth = 0)
+        val filenameUhd = clip(5, "SHOT_UHD.MOV").copy(pixelWidth = 0)
+        val filenameHd = clip(6, "SHOT_1080.MOV").copy(pixelWidth = 0)
+
+        assertEquals(MediaResolutionFilter.SIX_K, paired.resolutionFilter())
+        assertEquals(MediaResolutionFilter.FOUR_K, proxyOnly.resolutionFilter())
+        assertEquals(MediaResolutionFilter.FIVE_FOUR_K, filenameOnly.resolutionFilter())
+        assertEquals(MediaResolutionFilter.FIVE_FOUR_K, filename54Token.resolutionFilter())
+        assertEquals(MediaResolutionFilter.FOUR_K, filenameUhd.resolutionFilter())
+        assertEquals(MediaResolutionFilter.HD, filenameHd.resolutionFilter())
     }
 
     @Test

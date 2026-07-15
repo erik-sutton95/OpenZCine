@@ -368,6 +368,21 @@ internal fun frameioHopKeepsCameraLibraryMounted(
         -> false
     }
 
+/** Prevents a retained Frame.io hop state from fabricating a camera in offline-only browsing. */
+internal fun effectiveMediaCameraConnection(
+    cameraSessionAvailable: Boolean,
+    cameraConnected: Boolean,
+    frameioInternetHopState: FrameioInternetHopState,
+    rejoinedConnectionObserved: Boolean,
+): Boolean {
+    if (!cameraSessionAvailable) return false
+    return cameraConnected ||
+        frameioHopKeepsCameraLibraryMounted(
+            frameioInternetHopState,
+            rejoinedConnectionObserved,
+        )
+}
+
 /**
  * Full-screen Android media library.
  *
@@ -381,6 +396,9 @@ internal fun frameioHopKeepsCameraLibraryMounted(
 internal fun MediaBrowseScreen(
     cameraID: String,
     cameraConnected: Boolean,
+    cameraSessionAvailable: Boolean = true,
+    savedCameraID: String? = null,
+    cameraDisplayName: String? = null,
     liveAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
@@ -411,6 +429,13 @@ internal fun MediaBrowseScreen(
         remember(context, galleryFailureInjection) {
             AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
         }
+    LaunchedEffect(cameraID, savedCameraID, cameraDisplayName) {
+        val savedID = savedCameraID ?: return@LaunchedEffect
+        val displayName = cameraDisplayName ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            libraryIndex.rememberCameraBucket(savedID, cameraID, displayName)
+        }
+    }
     val internetHopState = frameioController.internetHopState
     var rejoinedConnectionObserved by remember(cameraID) { mutableStateOf(false) }
     LaunchedEffect(internetHopState, cameraConnected) {
@@ -428,11 +453,12 @@ internal fun MediaBrowseScreen(
         }
     }
     val effectiveCameraConnected =
-        cameraConnected ||
-            frameioHopKeepsCameraLibraryMounted(
-                internetHopState,
-                rejoinedConnectionObserved,
-            )
+        effectiveMediaCameraConnection(
+            cameraSessionAvailable,
+            cameraConnected,
+            internetHopState,
+            rejoinedConnectionObserved,
+        )
     val defaultSource =
         if (effectiveCameraConnected) MediaLibrarySource.CAMERA else MediaLibrarySource.LOCAL
     var options by
@@ -932,7 +958,9 @@ internal fun MediaBrowseScreen(
         if (frameioController.isInternetHopActive) {
             withContext(NonCancellable) { frameioController.endInternetHop() }
         }
-        withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode() }
+        if (effectiveCameraConnected) {
+            withContext(Dispatchers.IO) { SwiftCore.sessionExitMediaMode() }
+        }
         onClose()
     }
     BackHandler(enabled = playingClip == null && viewingPhoto == null) {
@@ -1175,6 +1203,7 @@ internal fun MediaBrowseScreen(
                 initialClip = clip,
                 filteredClips = displayedClips,
                 cameraID = cameraID,
+                cameraTransferAvailable = cameraConnected,
                 favoriteIDs = favorites,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
                 galleryFailureInjection = galleryFailureInjection,
@@ -1195,6 +1224,7 @@ internal fun MediaBrowseScreen(
             MediaStillViewer(
                 clip = clip,
                 cameraID = cameraID,
+                cameraTransferAvailable = cameraConnected,
                 onClose = {
                     viewingPhoto = null
                     reloadKey += 1

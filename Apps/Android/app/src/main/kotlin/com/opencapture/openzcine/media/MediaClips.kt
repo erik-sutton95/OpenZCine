@@ -70,6 +70,9 @@ data class MediaClipRecord(
     val contentKind: MediaContentKind,
     /** Shared-core still decoder policy; null for non-still browser actions. */
     val stillPhoto: StillPhotoClassification?,
+    /** Same-stem R3D master dimensions retained before the master is hidden. */
+    val sourcePixelWidth: Int = 0,
+    val sourcePixelHeight: Int = 0,
 ) {
     /** Uppercased file extension, e.g. `MOV`; empty when the name has none. */
     val codecLabel: String =
@@ -97,8 +100,8 @@ data class MediaClipRecord(
 object MediaClips {
     /**
      * Parses the facade's wire format — one record per line, tab-separated
-     * `handle, storageID, sizeBytes, captureDate, width, height, playable,
-     * kind, stillStrategy, stillFormatLabel, filename`
+     * `handle, storageID, sizeBytes, captureDate, width, height, sourceWidth,
+     * sourceHeight, playable, kind, stillStrategy, stillFormatLabel, filename`
      * (filename last; it is sanitized tab/newline-free by the facade).
      * Malformed lines are skipped, never fatal: the listing is network input.
      */
@@ -106,14 +109,14 @@ object MediaClips {
         wire.lineSequence()
             .mapNotNull { line ->
                 val fields = line.split('\t')
-                if (fields.size != 11) return@mapNotNull null
+                if (fields.size != 13) return@mapNotNull null
                 val isPlayableProxy =
-                    when (fields[6]) {
+                    when (fields[8]) {
                         "1" -> true
                         "0" -> false
                         else -> return@mapNotNull null
                     }
-                val contentKind = MediaContentKind.fromWire(fields[7]) ?: return@mapNotNull null
+                val contentKind = MediaContentKind.fromWire(fields[9]) ?: return@mapNotNull null
                 if (isPlayableProxy != (contentKind == MediaContentKind.PLAYABLE_PROXY)) {
                     return@mapNotNull null
                 }
@@ -121,30 +124,45 @@ object MediaClips {
                     when (contentKind) {
                         MediaContentKind.STILL_PHOTO -> {
                             val previewStrategy =
-                                StillPreviewStrategy.fromWire(fields[8]) ?: return@mapNotNull null
-                            val formatLabel = fields[9].ifEmpty { return@mapNotNull null }
+                                StillPreviewStrategy.fromWire(fields[10]) ?: return@mapNotNull null
+                            val formatLabel = fields[11].ifEmpty { return@mapNotNull null }
                             StillPhotoClassification(formatLabel, previewStrategy)
                         }
                         MediaContentKind.PLAYABLE_PROXY,
                         MediaContentKind.R3D_MASTER,
                         MediaContentKind.UNSUPPORTED,
                         -> {
-                            if (fields[8].isNotEmpty() || fields[9].isNotEmpty()) {
+                            if (fields[10].isNotEmpty() || fields[11].isNotEmpty()) {
                                 return@mapNotNull null
                             }
                             null
                         }
                     }
+                val handle = fields[0].toLongOrNull() ?: return@mapNotNull null
+                val storageId = fields[1].toLongOrNull() ?: return@mapNotNull null
+                val sizeBytes = fields[2].toLongOrNull() ?: return@mapNotNull null
+                val pixelWidth = fields[4].toIntOrNull() ?: return@mapNotNull null
+                val pixelHeight = fields[5].toIntOrNull() ?: return@mapNotNull null
+                val sourcePixelWidth = fields[6].toIntOrNull() ?: return@mapNotNull null
+                val sourcePixelHeight = fields[7].toIntOrNull() ?: return@mapNotNull null
+                if (
+                    handle < 0 || storageId < 0 || sizeBytes < 0 || pixelWidth < 0 ||
+                        pixelHeight < 0 || sourcePixelWidth < 0 || sourcePixelHeight < 0
+                ) {
+                    return@mapNotNull null
+                }
                 MediaClipRecord(
-                    handle = fields[0].toLongOrNull() ?: return@mapNotNull null,
-                    storageId = fields[1].toLongOrNull() ?: return@mapNotNull null,
-                    sizeBytes = fields[2].toLongOrNull() ?: return@mapNotNull null,
+                    handle = handle,
+                    storageId = storageId,
+                    sizeBytes = sizeBytes,
                     captureDate = fields[3],
-                    pixelWidth = fields[4].toIntOrNull() ?: return@mapNotNull null,
-                    pixelHeight = fields[5].toIntOrNull() ?: return@mapNotNull null,
-                    filename = fields[10].ifEmpty { return@mapNotNull null },
+                    pixelWidth = pixelWidth,
+                    pixelHeight = pixelHeight,
+                    filename = fields[12].ifEmpty { return@mapNotNull null },
                     contentKind = contentKind,
                     stillPhoto = stillPhoto,
+                    sourcePixelWidth = sourcePixelWidth,
+                    sourcePixelHeight = sourcePixelHeight,
                 )
             }
             .toList()

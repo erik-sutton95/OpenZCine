@@ -234,11 +234,15 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   unsupported HEIF/RAW decoders). Android playback-assist parity is tracked by OPE-69.
 - **Android media-library delivery parity** (OPE-87, in progress): the browser persists small,
   medium, and large grid densities and composes container, resolution, Today, and camera-slot
-  filters from authoritative clip metadata. Native Share, Save to Gallery, and Frame.io use one
-  explicit non-destructive export configuration for an optional approved LUT bake, MOV/MP4 output,
-  and bounded metadata inclusion. Frame.io records confirmed uploads by stable clip identity,
-  skips completed clips by default, and offers an explicit re-upload override with accurate batch
-  counts. All delivery paths accept only finalized approved-cache artifacts and never mutate the
+  filters from authoritative clip metadata. Paired proxies retain their R3D source dimensions before
+  the master is hidden, with proxy-pixel and filename fallbacks matching the shared policy. Saved
+  camera cards expose only validated complete cache buckets, so clips and stills remain browsable,
+  playable, favoritable, and deliverable without a live session; stale cache files fail closed and
+  the persisted index no longer drops history at 1,024 records. Native Share, Save to Gallery, and
+  Frame.io use one explicit non-destructive export configuration for an optional approved LUT bake,
+  MOV/MP4 output, and bounded metadata inclusion. Frame.io records confirmed uploads by stable clip
+  identity, skips completed clips by default, and offers an explicit re-upload override with accurate
+  batch counts. All delivery paths accept only finalized approved-cache artifacts and never mutate the
   camera or cached original. **[VERIFY-ON-HW]** Exercise MOV and MP4 export, LUT baking, Android
   chooser and MediaStore publication, and persisted Frame.io history with configured credentials.
 - **Android Frame.io delivery options and camera-AP hop parity** (OPE-64, in progress): Adobe IMS

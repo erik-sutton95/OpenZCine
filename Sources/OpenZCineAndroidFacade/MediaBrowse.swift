@@ -24,6 +24,10 @@ public struct FacadeMediaClip: Equatable, Sendable {
     /// Full-image pixel size (0 when the camera omits it).
     public let pixelWidth: UInt32
     public let pixelHeight: UInt32
+    /// Pixel size of a same-stem R3D master represented by this playable proxy.
+    /// Nil for unpaired proxies and non-proxy objects.
+    public let sourcePixelWidth: UInt32?
+    public let sourcePixelHeight: UInt32?
     /// Sanitized on-card filename (`MediaClipFilename.safeCameraBasename`).
     public let filename: String
     /// Shared-core browser action and still-preview policy for this object.
@@ -43,6 +47,8 @@ public struct FacadeMediaClip: Equatable, Sendable {
         captureDate: String,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        sourcePixelWidth: UInt32? = nil,
+        sourcePixelHeight: UInt32? = nil,
         filename: String
     ) {
         let contentClassification = MediaClipFilename.mediaClassification(for: filename)
@@ -52,6 +58,8 @@ public struct FacadeMediaClip: Equatable, Sendable {
         self.captureDate = captureDate
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
+        self.sourcePixelWidth = sourcePixelWidth
+        self.sourcePixelHeight = sourcePixelHeight
         self.filename = filename
         self.contentClassification = contentClassification
         isPlayableProxy = contentClassification.kind == .playableProxy
@@ -120,8 +128,32 @@ extension PTPIPClientSession {
                         filename: filename))
             }
         }
-        let proxyStems = MediaClipFilename.playableProxyStems(in: clips.map(\.filename))
-        return clips.filter {
+        var r3dIndex = R3DClipIndex()
+        for clip in clips {
+            if MediaClipFilename.isR3D(clip.filename), clip.pixelWidth > 0, clip.pixelHeight > 0 {
+                r3dIndex.registerR3D(
+                    filename: clip.filename, width: clip.pixelWidth, height: clip.pixelHeight)
+            } else if clip.isPlayableProxy {
+                r3dIndex.noteProxy(clip.filename)
+            }
+        }
+        let linked = clips.map { clip in
+            guard clip.isPlayableProxy, let source = r3dIndex.siblingForProxy(clip.filename) else {
+                return clip
+            }
+            return FacadeMediaClip(
+                handle: clip.handle,
+                storageID: clip.storageID,
+                sizeBytes: clip.sizeBytes,
+                captureDate: clip.captureDate,
+                pixelWidth: clip.pixelWidth,
+                pixelHeight: clip.pixelHeight,
+                sourcePixelWidth: source.width,
+                sourcePixelHeight: source.height,
+                filename: clip.filename)
+        }
+        let proxyStems = MediaClipFilename.playableProxyStems(in: linked.map(\.filename))
+        return linked.filter {
             MediaClipFilename.shouldShowInMediaBrowser(
                 filename: $0.filename, playableProxyStems: proxyStems)
         }
@@ -176,21 +208,30 @@ extension PTPIPClientSession {
 /// Flat wire format for the media listing crossing the JNI seam — one clip
 /// per line, tab-separated fields with the (sanitized, tab/newline-free)
 /// filename last:
-/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t playable \t kind \t strategy \t formatLabel \t filename`.
+/// `handle \t storageID \t sizeBytes \t captureDate \t width \t height \t sourceWidth \t sourceHeight \t playable \t kind \t strategy \t formatLabel \t filename`.
 /// The Kotlin mirror lives in
 /// `Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/media/MediaClips.kt`.
 public enum MediaListWire {
     public static func encode(_ clips: [FacadeMediaClip]) -> String {
-        clips.map { clip in
-            [
-                String(clip.handle), String(clip.storageID), String(clip.sizeBytes),
-                clip.captureDate, String(clip.pixelWidth), String(clip.pixelHeight),
-                clip.isPlayableProxy ? "1" : "0",
-                clip.contentClassification.kind.rawValue,
-                clip.contentClassification.stillPreview?.strategy.rawValue ?? "",
-                clip.contentClassification.stillPreview?.formatLabel ?? "",
-                clip.filename,
-            ].joined(separator: "\t")
-        }.joined(separator: "\n")
+        clips.map(encode).joined(separator: "\n")
+    }
+
+    private static func encode(_ clip: FacadeMediaClip) -> String {
+        let fields: [String] = [
+            String(clip.handle),
+            String(clip.storageID),
+            String(clip.sizeBytes),
+            clip.captureDate,
+            String(clip.pixelWidth),
+            String(clip.pixelHeight),
+            String(clip.sourcePixelWidth ?? 0),
+            String(clip.sourcePixelHeight ?? 0),
+            clip.isPlayableProxy ? "1" : "0",
+            clip.contentClassification.kind.rawValue,
+            clip.contentClassification.stillPreview?.strategy.rawValue ?? "",
+            clip.contentClassification.stillPreview?.formatLabel ?? "",
+            clip.filename,
+        ]
+        return fields.joined(separator: "\t")
     }
 }

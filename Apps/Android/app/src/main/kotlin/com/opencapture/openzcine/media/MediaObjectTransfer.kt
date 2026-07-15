@@ -101,7 +101,27 @@ internal fun prepareMediaObjectTransfer(
     clip: MediaClipRecord,
     objectLabel: String,
     bridge: MediaObjectTransferBridge = SwiftCoreMediaObjectTransferBridge,
+    cameraTransferAvailable: Boolean = true,
 ): MediaTransferPreparation {
+    val cached =
+        try {
+            cacheStore.completedEntryOrNull(
+                cameraID,
+                MediaCacheObjectIdentity(clip),
+                clip.sizeBytes,
+            )
+        } catch (error: Exception) {
+            return MediaTransferPreparation.Failed(
+                error.message ?: "Cached $objectLabel could not be opened.",
+            )
+        }
+    // A validated final artifact is self-contained. Opening it must not depend
+    // on a native library or active camera session, which is what makes the
+    // saved-camera library useful after relaunch and while disconnected.
+    if (cached != null) return MediaTransferPreparation.Ready(cached)
+    if (!cameraTransferAvailable) {
+        return MediaTransferPreparation.Failed("Cached $objectLabel is no longer available.")
+    }
     if (!bridge.isAvailable) {
         return MediaTransferPreparation.Failed("Camera core is not bundled in this build.")
     }

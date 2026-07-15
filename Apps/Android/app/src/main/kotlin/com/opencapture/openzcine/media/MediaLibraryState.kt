@@ -129,11 +129,18 @@ internal class SharedPreferencesMediaLibraryPreferences(context: Context) : Medi
     }
 }
 
+/** Stable link from one saved-camera card to its existing media cache bucket. */
+internal data class MediaLibraryCameraBucket(
+    val savedCameraID: String,
+    val cameraID: String,
+    val displayName: String,
+)
+
 /**
  * Camera-scoped metadata and favorite persistence for the Android media
  * library.
  *
- * Local browsing intentionally reads only this bounded, camera-derived index
+ * Local browsing intentionally reads only this camera-derived index
  * and then asks [MediaCacheStore] for each identity-derived final path. It
  * never searches no-backup storage, so a stray file can never become a media
  * item or share candidate.
@@ -144,12 +151,12 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         val merged = LinkedHashMap<String, MediaClipRecord>()
         persistedClips(cameraID).forEach { merged[it.libraryKey(cameraID)] = it }
         clips.forEach { merged[it.libraryKey(cameraID)] = it }
-        val bounded =
+        val ordered =
             MediaLibraryFiltering.sort(
                 merged.values.toList(),
                 MediaLibrarySortOrder.NEWEST,
-            ).take(MAXIMUM_PERSISTED_RECORDS)
-        preferences.putString(indexKey(cameraID), MediaLibraryRecordCodec.encode(bounded))
+            )
+        preferences.putString(indexKey(cameraID), MediaLibraryRecordCodec.encode(ordered))
     }
 
     /** Returns only records previously received from the shared-core listing wire. */
@@ -157,6 +164,47 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         preferences.getString(indexKey(cameraID))
             ?.let(MediaLibraryRecordCodec::decode)
             .orEmpty()
+
+    /** Remembers which durable saved profile owns an already-established cache bucket. */
+    fun rememberCameraBucket(savedCameraID: String, cameraID: String, displayName: String) {
+        val savedID = normalizedRegistryValue(savedCameraID) ?: return
+        val bucketID = normalizedRegistryValue(cameraID) ?: return
+        val label = normalizedRegistryValue(displayName) ?: return
+        val merged = LinkedHashMap<String, MediaLibraryCameraBucket>()
+        registeredCameraBuckets().forEach { merged[it.savedCameraID] = it }
+        merged[savedID] = MediaLibraryCameraBucket(savedID, bucketID, label)
+        preferences.putString(
+            CAMERA_BUCKETS_KEY,
+            MediaLibraryCameraBucketCodec.encode(merged.values.toList()),
+        )
+    }
+
+    /** Returns registered buckets in saved-camera card order, excluding removed profiles. */
+    fun registeredCameraBuckets(savedCameraIDs: List<String>): List<MediaLibraryCameraBucket> {
+        val bySavedID = registeredCameraBuckets().associateBy(MediaLibraryCameraBucket::savedCameraID)
+        return savedCameraIDs.mapNotNull(bySavedID::get)
+    }
+
+    /**
+     * Returns only saved-camera buckets that still contain at least one exact,
+     * complete cache artifact. Missing, symlinked, truncated, or stale files
+     * fail closed and never create an offline entry point.
+     */
+    fun completedCameraBuckets(
+        savedCameraIDs: List<String>,
+        cacheStore: MediaCacheStore,
+    ): List<MediaLibraryCameraBucket> =
+        registeredCameraBuckets(savedCameraIDs).filter { bucket ->
+            persistedClips(bucket.cameraID).any { clip ->
+                runCatching {
+                    cacheStore.completedEntryOrNull(
+                        bucket.cameraID,
+                        MediaCacheObjectIdentity(clip),
+                        clip.sizeBytes,
+                    )
+                }.getOrNull() != null
+            }
+        }
 
     /** Reads the persisted favorite identities for the given camera bucket. */
     fun favoriteIDs(cameraID: String): Set<String> =
@@ -206,8 +254,13 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
 
     private fun favoritesKey(cameraID: String): String = "favorites.${digest(cameraID)}"
 
+    private fun registeredCameraBuckets(): List<MediaLibraryCameraBucket> =
+        preferences.getString(CAMERA_BUCKETS_KEY)
+            ?.let(MediaLibraryCameraBucketCodec::decode)
+            .orEmpty()
+
     private companion object {
-        const val MAXIMUM_PERSISTED_RECORDS = 1_024
+        const val CAMERA_BUCKETS_KEY = "camera-buckets"
         const val PREF_SOURCE = "view.source"
         const val PREF_CATEGORY = "view.category"
         const val PREF_LAYOUT = "view.layout"
@@ -283,8 +336,13 @@ internal fun MediaClipRecord.containerFilter(): MediaContainerFilter? =
         else -> null
     }
 
-/** Resolution filtering never guesses from a filename when camera pixel metadata is absent. */
+/** Resolution filtering follows shared source, proxy, then filename precedence. */
 internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
+    resolutionFilter(sourcePixelWidth)
+        ?: resolutionFilter(pixelWidth)
+        ?: resolutionFilter(filename)
+
+private fun resolutionFilter(pixelWidth: Int): MediaResolutionFilter? =
     when (pixelWidth) {
         in 6_000..Int.MAX_VALUE -> MediaResolutionFilter.SIX_K
         in 5_300..<6_000 -> MediaResolutionFilter.FIVE_FOUR_K
@@ -292,6 +350,17 @@ internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
         in 1_000..<3_500 -> MediaResolutionFilter.HD
         else -> null
     }
+
+private fun resolutionFilter(filename: String): MediaResolutionFilter? {
+    val upper = filename.uppercase(Locale.US)
+    return when {
+        upper.contains("6K") -> MediaResolutionFilter.SIX_K
+        upper.contains("5.4K") || upper.contains("54K") -> MediaResolutionFilter.FIVE_FOUR_K
+        upper.contains("4K") || upper.contains("UHD") -> MediaResolutionFilter.FOUR_K
+        upper.contains("HD") || upper.contains("1080") -> MediaResolutionFilter.HD
+        else -> null
+    }
+}
 
 /** Pure set updates used by long-press, tap, and sweep selection. */
 internal object MediaLibrarySelection {
@@ -318,8 +387,10 @@ internal fun MediaClipRecord.libraryKey(cameraID: String): String =
 /** Serialized records remain core-authorized metadata, never inferred locally from filenames. */
 private object MediaLibraryRecordCodec {
     private const val MAGIC = 0x4F5A434D // OZCM
-    private const val VERSION = 1
-    private const val MAXIMUM_RECORDS = 1_024
+    private const val VERSION = 2
+    private const val LEGACY_VERSION = 1
+    private const val LEGACY_MINIMUM_RECORD_BYTES = 39
+    private const val CURRENT_MINIMUM_RECORD_BYTES = 47
 
     fun encode(clips: List<MediaClipRecord>): String {
         val bytes =
@@ -340,10 +411,17 @@ private object MediaLibraryRecordCodec {
             val bytes = Base64.getUrlDecoder().decode(encoded)
             DataInputStream(ByteArrayInputStream(bytes)).use { input ->
                 check(input.readInt() == MAGIC)
-                check(input.readInt() == VERSION)
+                val version = input.readInt()
+                check(version == LEGACY_VERSION || version == VERSION)
                 val count = input.readInt()
-                check(count in 0..MAXIMUM_RECORDS)
-                val clips = List(count) { readClip(input) }
+                val minimumRecordBytes =
+                    if (version == LEGACY_VERSION) {
+                        LEGACY_MINIMUM_RECORD_BYTES
+                    } else {
+                        CURRENT_MINIMUM_RECORD_BYTES
+                    }
+                check(count >= 0 && count <= input.available() / minimumRecordBytes)
+                val clips = List(count) { readClip(input, version) }
                 check(input.available() == 0)
                 clips
             }
@@ -358,6 +436,8 @@ private object MediaLibraryRecordCodec {
         output.writeUTF(clip.captureDate)
         output.writeInt(clip.pixelWidth)
         output.writeInt(clip.pixelHeight)
+        output.writeInt(clip.sourcePixelWidth)
+        output.writeInt(clip.sourcePixelHeight)
         output.writeUTF(clip.filename)
         output.writeUTF(clip.contentKind.name)
         val stillPhoto = clip.stillPhoto
@@ -368,13 +448,15 @@ private object MediaLibraryRecordCodec {
         }
     }
 
-    private fun readClip(input: DataInputStream): MediaClipRecord {
+    private fun readClip(input: DataInputStream, version: Int): MediaClipRecord {
         val handle = input.readLong()
         val storageID = input.readLong()
         val sizeBytes = input.readLong()
         val captureDate = input.readUTF()
         val pixelWidth = input.readInt()
         val pixelHeight = input.readInt()
+        val sourcePixelWidth = if (version >= VERSION) input.readInt() else 0
+        val sourcePixelHeight = if (version >= VERSION) input.readInt() else 0
         val filename = input.readUTF()
         val contentKind = MediaContentKind.valueOf(input.readUTF())
         val stillPhoto =
@@ -388,6 +470,8 @@ private object MediaLibraryRecordCodec {
         check(sizeBytes >= 0)
         check(pixelWidth >= 0)
         check(pixelHeight >= 0)
+        check(sourcePixelWidth >= 0)
+        check(sourcePixelHeight >= 0)
         check(isSafePersistedFilename(filename))
         check((contentKind == MediaContentKind.STILL_PHOTO) == (stillPhoto != null))
         return MediaClipRecord(
@@ -400,6 +484,8 @@ private object MediaLibraryRecordCodec {
             filename = filename,
             contentKind = contentKind,
             stillPhoto = stillPhoto,
+            sourcePixelWidth = sourcePixelWidth,
+            sourcePixelHeight = sourcePixelHeight,
         )
     }
 
@@ -413,6 +499,42 @@ private object MediaLibraryRecordCodec {
             !filename.contains('\\') &&
             filename.none { character -> character.code < 0x20 || character.code == 0x7F }
 }
+
+/** Small, corruption-tolerant registry codec; fields are URL-safe Base64, one bucket per line. */
+private object MediaLibraryCameraBucketCodec {
+    fun encode(buckets: List<MediaLibraryCameraBucket>): String =
+        buckets.joinToString(separator = "\n") { bucket ->
+            listOf(bucket.savedCameraID, bucket.cameraID, bucket.displayName)
+                .joinToString(separator = "\t", transform = ::encodeField)
+        }
+
+    fun decode(encoded: String): List<MediaLibraryCameraBucket> =
+        encoded.lineSequence().mapNotNull { line ->
+            val fields = line.split('\t')
+            if (fields.size != 3) return@mapNotNull null
+            val values = fields.map(::decodeField)
+            val savedCameraID = values[0] ?: return@mapNotNull null
+            val cameraID = values[1] ?: return@mapNotNull null
+            val displayName = values[2] ?: return@mapNotNull null
+            MediaLibraryCameraBucket(savedCameraID, cameraID, displayName)
+        }.distinctBy(MediaLibraryCameraBucket::savedCameraID).toList()
+
+    private fun encodeField(value: String): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray(Charsets.UTF_8))
+
+    private fun decodeField(value: String): String? =
+        runCatching {
+            val decoded = Base64.getUrlDecoder().decode(value).toString(Charsets.UTF_8)
+            normalizedRegistryValue(decoded)
+        }.getOrNull()
+}
+
+private fun normalizedRegistryValue(value: String): String? =
+    value.trim().takeIf { candidate ->
+        candidate.isNotEmpty() &&
+            candidate.length <= 1_024 &&
+            candidate.none { character -> character == '\u0000' || character.code < 0x20 }
+    }
 
 private fun digest(value: String): String {
     val hex = "0123456789abcdef"
