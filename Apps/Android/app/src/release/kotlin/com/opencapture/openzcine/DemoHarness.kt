@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import android.content.Intent
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 
 /**
@@ -30,6 +31,11 @@ object DemoHarness {
     /** Release builds cannot auto-open debug surfaces. */
     @Suppress("UNUSED_PARAMETER")
     fun autoPlaysMedia(intent: Intent): Boolean = false
+
+    /** Release builds cannot inject Gallery failures. */
+    @Suppress("UNUSED_PARAMETER")
+    internal fun galleryFailureInjection(intent: Intent): MediaGalleryFailureInjection =
+        MediaGalleryFailureInjection.NONE
 
     /** Always null: release builds carry no demo frame source. */
     @Suppress("UNUSED_PARAMETER")

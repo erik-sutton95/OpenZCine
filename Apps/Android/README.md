@@ -217,7 +217,7 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   the facade's bounded
   `sessionListMedia`/`sessionThumbnail` (`GetObjectHandles`/`GetObjectInfo`/`GetThumb`). MOV/MP4/M4V
   proxies open `MediaPlaybackScreen`; within the current filtered result it provides previous/next
-  playable-proxy navigation, persisted favorite state, complete-cache-only native sharing,
+  playable-proxy navigation, persisted favorite state, complete-cache-only native delivery,
   play/pause/replay and ±15-second transport, throttled preview plus final precise seeking,
   player-local mute with Media3 movie-audio focus, and 1×–4× pinch/pan. Its View Assist switch
   applies only the already-local framing/desqueeze overlay: the Media3 Surface does not expose
@@ -240,8 +240,16 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   scans arbitrary filesystem paths or exposes partial files. One or more selected completed entries
   can be copied into app-scoped `cacheDir/share/ready` and opened through Android's native single or
   multi-item share chooser via a narrowly scoped `FileProvider`; the no-backup camera cache and
-  growing `.part` files remain provider-invisible. Frame.io delivery uses that same finalized staging
-  boundary: Settings → Storage owns Adobe PKCE sign-in, Android Keystore holds token/PKCE material,
+  growing `.part` files remain provider-invisible. The shared **Deliver** chooser keeps Android's
+  native Share flow separate from **Save to Gallery**. Gallery delivery accepts only verified
+  MOV/MP4/M4V videos, writes sequentially to scoped `MediaStore.Video` rows under
+  `Movies/OpenZCine`, and clears `IS_PENDING` only after the exact staged byte count is copied.
+  Failed or cancelled writes delete only the row created for that attempt. Batch results retain the
+  current selection when any video fails or any non-video, incomplete, or unprepared item is skipped,
+  so the operator can correct or retry without losing context. This API 29+ path does not request
+  broad storage access and never scans, modifies, or deletes unrelated media. Frame.io delivery uses
+  that same finalized staging boundary: Settings → Storage owns Adobe PKCE sign-in, Android Keystore
+  holds token/PKCE material,
   and multi-select media delivery creates a Frame.io file, streams each HTTPS upload part, then polls
   completion. The feature is intentionally unavailable until a maintainer supplies an approved Adobe
   Native App client ID and exact redirect URI through ignored/local build configuration; it never
@@ -253,5 +261,8 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   `ZC_FAKE_ZR_MEDIA=/absolute/path/to/a/playable.mp4` alongside `ZC_FAKE_ZR_PORT=15740` when running
   `swift test --filter servesFakeZRForMediaBrowse`, then `adb reverse tcp:15740 tcp:15740`, launch
   with `--es zc.session.host 127.0.0.1`, and open `C0008.MOV`. The file is local-only and must stay
-  under an ignored path; `ZC_FAKE_ZR_CLIPS=0` still serves the empty-card state.
+  under an ignored path; `ZC_FAKE_ZR_CLIPS=0` still serves the empty-card state. Debug builds can
+  exercise pending-row cleanup with `--es zc.gallery.failOnce write`: the first Gallery write after
+  insertion fails, its pending row is deleted, and a retry through the same screen can succeed. The
+  release harness ignores this extra.
 - **Local SDK:** put `sdk.dir=<your Android SDK path>` in `Apps/Android/local.properties` (gitignored).

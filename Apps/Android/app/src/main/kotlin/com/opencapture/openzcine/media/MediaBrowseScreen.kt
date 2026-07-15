@@ -92,6 +92,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -119,16 +120,23 @@ private data class BatchShareResult(
     val firstFailure: String?,
 )
 
+/** Gallery writer result paired with the selection items omitted before writing. */
+private data class GalleryDelivery(
+    val result: MediaGalleryBatchResult,
+    val omissions: MediaGalleryOmissions,
+)
+
 /**
- * Stages the exact same immutable ready copies for native share and Frame.io
- * delivery. This is intentionally the only bridge from a camera cache entry
- * to either external destination; progressive `.part` files never reach it.
+ * Stages the exact same immutable ready copies for native Share, Gallery, and
+ * Frame.io delivery. This is intentionally the only bridge from a camera cache
+ * entry to an external destination; progressive `.part` files never reach it.
  */
 private fun stageSelectedMedia(
     context: Context,
     cacheStore: MediaCacheStore,
     cameraID: String,
     selection: List<MediaClipRecord>,
+    cancellationCheck: () -> Unit = {},
 ): BatchShareResult {
     val stager = MediaShareStager(context.cacheDir.toPath())
     val staged = mutableListOf<StagedMediaShare>()
@@ -136,6 +144,7 @@ private fun stageSelectedMedia(
     var failed = 0
     var firstFailure: String? = null
     selection.forEach { clip ->
+        cancellationCheck()
         val entry =
             runCatching {
                 cacheStore.completedEntryOrNull(
@@ -149,7 +158,9 @@ private fun stageSelectedMedia(
             return@forEach
         }
         try {
-            staged += stager.stage(entry, clip)
+            staged += stager.stage(entry, clip, cancellationCheck)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             failed += 1
             if (firstFailure == null) firstFailure = error.message
@@ -196,6 +207,7 @@ internal fun MediaBrowseScreen(
     operatorSettings: OperatorSettings,
     frameioController: FrameioDeliveryController,
     autoPlayFirstProxy: Boolean = false,
+    galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -207,6 +219,10 @@ internal fun MediaBrowseScreen(
     val libraryIndex =
         remember(context) {
             MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
+        }
+    val galleryGateway =
+        remember(context, galleryFailureInjection) {
+            AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
         }
     val defaultSource = if (cameraConnected) MediaLibrarySource.CAMERA else MediaLibrarySource.LOCAL
     var options by
@@ -231,6 +247,7 @@ internal fun MediaBrowseScreen(
     var shareJob by remember { mutableStateOf<Job?>(null) }
     var frameioDeliveryPresented by remember { mutableStateOf(false) }
     var frameioPreparationInProgress by remember { mutableStateOf(false) }
+    var nativeDeliveryPresented by remember { mutableStateOf(false) }
 
     fun updateOptions(updated: MediaLibraryViewOptions) {
         options = updated
@@ -239,12 +256,14 @@ internal fun MediaBrowseScreen(
         selectedIDs = emptySet()
         readySelectionIDs = emptySet()
         shareMessage = null
+        nativeDeliveryPresented = false
     }
 
     fun exitSelection() {
         isSelecting = false
         selectedIDs = emptySet()
         readySelectionIDs = emptySet()
+        nativeDeliveryPresented = false
     }
 
     LaunchedEffect(cameraID) {
@@ -335,6 +354,11 @@ internal fun MediaBrowseScreen(
                 }.toSet()
             }
     }
+    val readyGalleryCount =
+        selectedClips.count { clip ->
+            clip.contentKind == MediaContentKind.PLAYABLE_PROXY &&
+                clip.libraryKey(cameraID) in readySelectionIDs
+        }
 
     fun toggleFavorite(clip: MediaClipRecord) {
         favorites = libraryIndex.toggleFavorite(cameraID, clip)
@@ -368,10 +392,16 @@ internal fun MediaBrowseScreen(
         shareMessage = null
         shareJob =
             scope.launch {
+                val stageContext = coroutineContext
                 try {
                     val result =
                         withContext(Dispatchers.IO) {
-                            stageSelectedMedia(context, cacheStore, cameraID, selectionSnapshot)
+                            stageSelectedMedia(
+                                context,
+                                cacheStore,
+                                cameraID,
+                                selectionSnapshot,
+                            ) { stageContext.ensureActive() }
                         }
                     if (result.staged.isEmpty()) {
                         shareMessage =
@@ -402,6 +432,81 @@ internal fun MediaBrowseScreen(
             }
     }
 
+    fun presentNativeDelivery() {
+        if (shareInProgress || selectedClips.isEmpty()) return
+        nativeDeliveryPresented = true
+    }
+
+    fun beginBatchGallerySave() {
+        if (shareInProgress || selectedClips.isEmpty()) return
+        val selectionSnapshot = selectedClips
+        val videoSelection =
+            selectionSnapshot.filter { clip ->
+                clip.contentKind == MediaContentKind.PLAYABLE_PROXY
+            }
+        val nonVideoCount = selectionSnapshot.size - videoSelection.size
+        nativeDeliveryPresented = false
+        if (videoSelection.isEmpty()) {
+            shareMessage =
+                MediaGalleryBatchResult(savedCount = 0, failures = emptyList())
+                    .operatorMessage(MediaGalleryOmissions(nonVideoCount = nonVideoCount))
+            return
+        }
+        shareInProgress = true
+        shareMessage = null
+        shareJob =
+            scope.launch {
+                val stageContext = coroutineContext
+                try {
+                    val delivery =
+                        withContext(Dispatchers.IO) {
+                            val staged =
+                                stageSelectedMedia(
+                                    context,
+                                    cacheStore,
+                                    cameraID,
+                                    videoSelection,
+                                ) { stageContext.ensureActive() }
+                            var artifactFailures = 0
+                            val artifacts =
+                                staged.staged.mapNotNull { share ->
+                                    runCatching { MediaGalleryArtifact.fromStagedShare(share) }
+                                        .onFailure { artifactFailures += 1 }
+                                        .getOrNull()
+                                }
+                            val result =
+                                MediaGallerySaver(galleryGateway).save(artifacts) {
+                                    stageContext.ensureActive()
+                                }
+                            GalleryDelivery(
+                                result = result,
+                                omissions =
+                                    MediaGalleryOmissions(
+                                        nonVideoCount = nonVideoCount,
+                                        incompleteCount = staged.incompleteCount,
+                                        preparationFailureCount = staged.failedCount + artifactFailures,
+                                    ),
+                            )
+                        }
+                    shareMessage = delivery.result.operatorMessage(delivery.omissions)
+                    if (
+                        delivery.result.savedCount == videoSelection.size &&
+                            delivery.result.failedCount == 0 &&
+                            delivery.omissions.totalCount == 0
+                    ) {
+                        exitSelection()
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    shareMessage = "Couldn't prepare the selected videos for Gallery."
+                } finally {
+                    shareInProgress = false
+                    shareJob = null
+                }
+            }
+    }
+
     fun presentFrameioDelivery() {
         if (shareInProgress || selectedClips.isEmpty()) return
         frameioController.refresh()
@@ -417,10 +522,16 @@ internal fun MediaBrowseScreen(
         shareMessage = null
         shareJob =
             scope.launch {
+                val stageContext = coroutineContext
                 try {
                     val result =
                         withContext(Dispatchers.IO) {
-                            stageSelectedMedia(context, cacheStore, cameraID, selectionSnapshot)
+                            stageSelectedMedia(
+                                context,
+                                cacheStore,
+                                cameraID,
+                                selectionSnapshot,
+                            ) { stageContext.ensureActive() }
                         }
                     if (result.staged.isEmpty()) {
                         shareMessage =
@@ -517,7 +628,7 @@ internal fun MediaBrowseScreen(
                         layout = options.layout,
                         sortOrder = options.sortOrder,
                         onExitSelection = ::exitSelection,
-                        onShare = ::beginBatchShare,
+                        onShare = ::presentNativeDelivery,
                         onFrameioDelivery = ::presentFrameioDelivery,
                         onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
                         onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
@@ -570,7 +681,7 @@ internal fun MediaBrowseScreen(
                             layout = options.layout,
                             sortOrder = options.sortOrder,
                             onExitSelection = ::exitSelection,
-                            onShare = ::beginBatchShare,
+                            onShare = ::presentNativeDelivery,
                             onFrameioDelivery = ::presentFrameioDelivery,
                             onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
                             onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
@@ -613,6 +724,21 @@ internal fun MediaBrowseScreen(
             )
         }
 
+        if (nativeDeliveryPresented) {
+            NativeMediaDeliveryDialog(
+                selectedCount = selectedClips.size,
+                shareReadyCount = readySelectionIDs.size,
+                galleryReadyCount = readyGalleryCount,
+                busy = shareInProgress,
+                onDismiss = { nativeDeliveryPresented = false },
+                onShare = {
+                    nativeDeliveryPresented = false
+                    beginBatchShare()
+                },
+                onSaveToGallery = ::beginBatchGallerySave,
+            )
+        }
+
         if (frameioDeliveryPresented) {
             FrameioDeliveryDialog(
                 controller = frameioController,
@@ -629,6 +755,7 @@ internal fun MediaBrowseScreen(
                 cameraID = cameraID,
                 favoriteIDs = favorites,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
+                galleryFailureInjection = galleryFailureInjection,
                 onToggleFavorite = ::toggleFavorite,
                 onClose = {
                     playingClip = null
@@ -897,16 +1024,17 @@ private fun SelectionHeader(
         )
         Text(
             if (shareInProgress && !frameioPreparationInProgress && upload == null) {
-                "PREPARING…"
+                "WORKING…"
             } else {
-                "SHARE $readyCount"
+                "DELIVER"
             },
             style = chromeStyle(11f, FontWeight.Bold, mono = true),
             color = if (enabled) LiveDesign.accent else LiveDesign.faint,
             modifier =
                 Modifier.glass(CapsuleShape)
                     .semantics {
-                        contentDescription = "Share $readyCount complete cached media items"
+                        contentDescription =
+                            "Choose delivery for $readyCount complete cached media items"
                         role = Role.Button
                     }.chromeClickable(enabled) { onShare() }
                     .padding(horizontal = 12.dp, vertical = 9.dp),

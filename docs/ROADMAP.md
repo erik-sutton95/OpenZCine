@@ -107,8 +107,12 @@ Android.
   (in progress). **[VERIFY-ON-HW]** Nikon live-view compression values and warning-state behavior
   require a supported camera pass; this policy must never alter recording configuration or card writes.
 - Media browse, full progressive-proxy playback, still viewing, and complete-cache-only Android
-  sharing, including Camera/On-device library sources, categories, sorting, favorites, grid/list
-  layouts, filtered playback navigation, transport/scrub/mute, and batch selection (in progress).
+  delivery, including Camera/On-device library sources, categories, sorting, favorites, grid/list
+  layouts, filtered playback navigation, transport/scrub/mute, batch selection, native Share, and
+  scoped-storage Save to Gallery for verified MOV/MP4/M4V videos (in progress). Gallery writes stay
+  hidden with `IS_PENDING` until their exact byte count is copied, clean up failed or cancelled rows,
+  and report skipped non-video or incomplete selections without exposing camera paths or `.part`
+  files.
 - Standalone Operator Setup and app-owned progressive-media cache management (in progress).
 
 **Status:** In progress. Android follows the same product shell while platform-specific USB-camera
