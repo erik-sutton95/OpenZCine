@@ -989,13 +989,16 @@ struct AssistToolButtonRow: View {
     @Environment(NativeAppModel.self) private var model
     let tool: MonitorAssistTool
     var context: ViewAssistContext = .liveView
+    var compact = false
     /// When set, long-press routes here instead of the live-monitor assist popup (e.g. media playback).
     var onConfigure: ((MonitorAssistTool) -> Void)? = nil
     @State private var buildup: Task<Void, Never>?
 
     var body: some View {
         AssistToolButton(
-            tool: tool, isOn: model.preferences.visibleAssistTools(for: context).contains(tool)
+            tool: tool,
+            isOn: model.preferences.visibleAssistTools(for: context).contains(tool),
+            compact: compact
         )
         // Fit-mode scope cap (R7): a scope that can't activate renders grayed but stays tappable —
         // the tap routes to `toggleAssist`, which refuses and fires the toast. Inert in landscape
@@ -1077,6 +1080,7 @@ struct ScrollEdgeFades: Equatable {
 struct AssistToolButton: View {
     let tool: MonitorAssistTool
     let isOn: Bool
+    var compact = false
 
     var body: some View {
         // Mirrors the mockup's `.tool` box model; the 52pt floor keeps comfortable touch targets
@@ -1091,8 +1095,8 @@ struct AssistToolButton: View {
         }
         .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
         .padding(.vertical, 5)
-        .padding(.horizontal, 8)
-        .frame(minWidth: 52)
+        .padding(.horizontal, compact ? 5 : 8)
+        .frame(minWidth: compact ? 48 : 52)
         // `.tool.on`: a dim-accent fill and a same-tone dim border (no bright outline) —
         // only the icon and label read as full gold. No drop shadow: a glow would extend
         // past the frame and get clipped hard by the scroll container at the leading edge.

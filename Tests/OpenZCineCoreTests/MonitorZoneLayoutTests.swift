@@ -548,7 +548,7 @@ private enum PadMiniViewport {
     #expect(map.batteryCluster?.frame.width == MonitorBatteryRailLayout.indicatorWidth)
 }
 
-@Test func iphone11LandscapeZoneMapKeepsInfoBarClearOfLock() {
+@Test func iphone11LandscapeZoneMapKeepsInfoAndAssistBarsClear() throws {
     let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
     let map = MonitorZoneLayout.map(
         viewportWidth: 896,
@@ -568,6 +568,18 @@ private enum PadMiniViewport {
         lockRight + MonitorLiveViewModuleLayout.topInfoDeckControlGap
             <= map.infoBar.frame.x)
     #expect(map.infoBar.frame.x + map.infoBar.frame.width <= 896)
+
+    let batteryCluster = try #require(map.batteryCluster?.frame)
+    let battery = MonitorBatteryRailLayout.fit(
+        railHeight: batteryCluster.height,
+        safeArea: safeArea
+    )
+    let cameraRight =
+        batteryCluster.x + battery.cameraCenterX
+        + MonitorBatteryRailLayout.indicatorWidth / 2
+    #expect(
+        cameraRight + MonitorLiveViewModuleLayout.bottomModuleSpacing
+            <= (map.assistStrip?.frame.x ?? 0))
 }
 
 @Test func landscapeSystemSlotsCenterOnLegacyRailCenters() {

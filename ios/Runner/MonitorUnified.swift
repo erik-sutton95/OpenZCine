@@ -384,6 +384,8 @@ struct MonitorAssistStrip: View {
     /// Documents intent at call sites; `collapsible` always co-varies with `axis` today
     /// (horizontal → false, vertical → true), so the body branches on `axis` alone.
     var collapsible: Bool
+    /// Horizontal-only: packs the default tool set into the reduced classic-notch lane.
+    var compactHorizontal: Bool
     /// Vertical-only: height of the feed zone the rail should span when expanded.
     var feedHeight: CGFloat = 0
     /// Vertical-only: expand/collapse state, owned by the parent (`MonitorShell` sizes around it).
@@ -393,11 +395,12 @@ struct MonitorAssistStrip: View {
     @State private var edgeFades = ScrollEdgeFades(leading: false, trailing: true)
 
     init(
-        axis: Axis, collapsible: Bool, feedHeight: CGFloat = 0,
+        axis: Axis, collapsible: Bool, compactHorizontal: Bool = false, feedHeight: CGFloat = 0,
         expanded: Binding<Bool> = .constant(false)
     ) {
         self.axis = axis
         self.collapsible = collapsible
+        self.compactHorizontal = compactHorizontal
         self.feedHeight = feedHeight
         self._expanded = expanded
     }
@@ -488,7 +491,7 @@ struct MonitorAssistStrip: View {
     }
 
     private var toolRow: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: compactHorizontal ? 2 : 4) {
             ForEach(
                 Array(visibleToolbarTools.enumerated()),
                 id: \.element.id
@@ -496,7 +499,7 @@ struct MonitorAssistStrip: View {
                 if index > 0 && index.isMultiple(of: 3) {
                     assistDivider
                 }
-                AssistToolButtonRow(tool: tool)
+                AssistToolButtonRow(tool: tool, compact: compactHorizontal)
             }
             // Audio monitoring rides in its own section at the end of the strip, separated from
             // the exposure-tool groups regardless of how the groups-of-three chunking lands.
@@ -504,7 +507,7 @@ struct MonitorAssistStrip: View {
                 if !visibleToolbarTools.isEmpty {
                     assistDivider
                 }
-                AssistToolButtonRow(tool: .audioMeters)
+                AssistToolButtonRow(tool: .audioMeters, compact: compactHorizontal)
             }
         }
     }
@@ -525,7 +528,7 @@ struct MonitorAssistStrip: View {
         Rectangle()
             .fill(LiveDesign.hairlineStrong)
             .frame(width: 1, height: 28)
-            .padding(.horizontal, 4)
+            .padding(.horizontal, compactHorizontal ? 3 : 4)
     }
 
     // MARK: - axis: .vertical, collapsible: true (former `PortraitAssistRail`)
@@ -1034,15 +1037,21 @@ struct MonitorShell: View {
                         // The core map sets `collapsible` on the landscape assist zone, but there
                         // it denotes the edge-fade scroll strip — NOT a collapse pill (that is the
                         // vertical portrait rail). Rendering stays `axis`-driven (D5).
-                        MonitorAssistStrip(axis: .horizontal, collapsible: false)
-                            .environment(model)
-                            .liveViewGuideAnchor(.viewAssist)
-                            .frame(
-                                maxWidth: captureVisible ? .infinity : CGFloat(assist.frame.width),
-                                alignment: .leading
+                        MonitorAssistStrip(
+                            axis: .horizontal,
+                            collapsible: false,
+                            compactHorizontal: MonitorBatteryRailLayout.usesClassicSideNotch(
+                                safeArea: context.feedSafeArea
                             )
-                            .layoutPriority(0)
-                            .frame(maxHeight: .infinity)
+                        )
+                        .environment(model)
+                        .liveViewGuideAnchor(.viewAssist)
+                        .frame(
+                            maxWidth: captureVisible ? .infinity : CGFloat(assist.frame.width),
+                            alignment: .leading
+                        )
+                        .layoutPriority(0)
+                        .frame(maxHeight: .infinity)
                     }
                     if captureVisible {
                         MonitorCaptureStrip(fitsWidth: true)

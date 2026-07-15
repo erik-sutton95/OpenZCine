@@ -518,10 +518,11 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
                 width: max(0, deckRight - deckLeft),
                 height: topInfoDeckHeight
             ),
-            bottomAssistTools: bottomRegion.place(
+            bottomAssistTools: Self.bottomAssistFrame(
+                in: bottomRegion,
                 width: bottomModuleWidth,
-                height: bottomRegion.height,
-                anchor: .leading
+                batteryRail: batteryRail,
+                safeArea: feedSafeArea
             ),
             bottomCaptureSettings: bottomCaptureRegion.place(
                 width: bottomModuleWidth,
@@ -543,6 +544,32 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
 
     private static func rightRailWidth(for chromeWidth: Double) -> Double {
         min(max(0, chromeWidth), MonitorSideRailControlLayout.recordButtonSize)
+    }
+
+    private static func bottomAssistFrame(
+        in region: MonitorLayoutRegion,
+        width: Double,
+        batteryRail: MonitorModuleFrame,
+        safeArea: MonitorEdgeInsets
+    ) -> MonitorModuleFrame {
+        let defaultFrame = region.place(
+            width: width,
+            height: region.height,
+            anchor: .leading
+        )
+        guard MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) else {
+            return defaultFrame
+        }
+
+        let defaultRight = defaultFrame.x + defaultFrame.width
+        let clearLeft = batteryRail.x + batteryRail.width + bottomModuleSpacing
+        let adjustedLeft = min(defaultRight, max(defaultFrame.x, clearLeft))
+        return MonitorModuleFrame(
+            x: adjustedLeft,
+            y: defaultFrame.y,
+            width: defaultRight - adjustedLeft,
+            height: defaultFrame.height
+        )
     }
 
     private static func rightRailFrame(
@@ -716,12 +743,14 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     }
 
     private static func sideNotchHeight(for safeArea: MonitorEdgeInsets) -> Double {
+        usesClassicSideNotch(safeArea: safeArea) ? classicSideNotchHeight : sideNotchHeight
+    }
+
+    /// Whether symmetric landscape safe areas identify the wider pre-Dynamic-Island notch.
+    public static func usesClassicSideNotch(safeArea: MonitorEdgeInsets) -> Bool {
         let leading = max(0, safeArea.leading)
         let trailing = max(0, safeArea.trailing)
-        let hasSymmetricClassicNotch =
-            min(leading, trailing) >= 40 && abs(leading - trailing) < 4
-
-        return hasSymmetricClassicNotch ? classicSideNotchHeight : sideNotchHeight
+        return min(leading, trailing) >= 40 && abs(leading - trailing) < 4
     }
 }
 

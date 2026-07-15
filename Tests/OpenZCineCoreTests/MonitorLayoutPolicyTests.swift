@@ -463,6 +463,17 @@ import Testing
             <= layout.topInfoDeck.x)
     #expect(abs(deckCenter - feedCenter) < 0.001)
     #expect(layout.topInfoDeck.x + layout.topInfoDeck.width <= 896)
+
+    let battery = MonitorBatteryRailLayout.fit(
+        railHeight: layout.batteryRail.height,
+        safeArea: safeArea
+    )
+    let cameraRight =
+        layout.batteryRail.x + battery.cameraCenterX
+        + MonitorBatteryRailLayout.indicatorWidth / 2
+    #expect(
+        cameraRight + MonitorLiveViewModuleLayout.bottomModuleSpacing
+            <= layout.bottomAssistTools.x)
 }
 
 @Test func liveViewLockButtonAlignsWithTopDeckBand() {
@@ -569,6 +580,8 @@ import Testing
     #expect(
         dynamicIsland.notchBottom - dynamicIsland.notchTop
             == MonitorBatteryRailLayout.sideNotchHeight)
+    #expect(MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: classicSafeArea))
+    #expect(!MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: dynamicIslandSafeArea))
     #expect(classic.phoneBottom == classic.notchTop - MonitorBatteryRailLayout.notchPadding)
     #expect(classic.cameraTop == classic.notchBottom + MonitorBatteryRailLayout.notchPadding)
 }
