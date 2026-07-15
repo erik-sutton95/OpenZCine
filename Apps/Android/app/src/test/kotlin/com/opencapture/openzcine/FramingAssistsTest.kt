@@ -136,6 +136,35 @@ class FramingAssistsTest {
         assertEquals(live.presentationRect, clean.presentationRect)
     }
 
+    @Test
+    fun `portrait fill framing remains registered to the complete cropped feed`() {
+        val feed = FramingAssistRect(left = -333f, top = 0f, width = 1_067f, height = 600f)
+        val plan =
+            localFramingRenderPlan(
+                feed = feed,
+                configuration =
+                    framingConfiguration(
+                        guidesVisible = true,
+                        selectedGuideRatios = setOf(LocalFramingAspectRatio.RATIO_239),
+                        guideMaskEnabled = true,
+                        gridVisible = true,
+                        thirds = true,
+                        crosshair = true,
+                        desqueezeEnabled = true,
+                        desqueezeRatio = LocalDesqueezeRatio.X200,
+                    ),
+                cleanMode = false,
+            )
+
+        // iOS scales the complete camera-pixel feed first and lets the screen
+        // crop it. Rebasing this rectangle to 0...400 would move the guides.
+        assertEquals(FramingAssistRect(-66.25f, 0f, 533.5f, 600f), plan.presentationRect)
+        assertEquals(plan.presentationRect.width, plan.guideFrames.single().rect.width)
+        assertTrue(plan.drawsInverseGuideMask)
+        assertTrue(plan.drawsRuleOfThirds)
+        assertTrue(plan.drawsCenterCrosshair)
+    }
+
     private fun framingConfiguration(
         guidesVisible: Boolean = false,
         selectedGuideRatios: Set<LocalFramingAspectRatio> = emptySet(),

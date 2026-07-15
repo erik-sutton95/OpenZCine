@@ -20,6 +20,7 @@ import com.opencapture.openzcine.FeedEffectsRenderPlan
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -92,7 +93,27 @@ class PlaybackFeedEffectGlTest {
         }
     }
 
-    private fun render(plan: FeedEffectsRenderPlan, input: Bitmap): ByteArray {
+    @Test
+    fun peakingUsesSourcePixelsWhenTheDisplayExtentChanges() {
+        val plan = peakingPlan()
+        val sourceSized = render(plan, peakingEdgeBitmap(), 64f, 64f)
+        val displayScaled = render(plan, peakingEdgeBitmap(), 320f, 180f)
+
+        assertArrayEquals(sourceSized, displayScaled)
+        assertTrue(
+            "peaking fixture did not produce a coloured edge",
+            sourceSized.indices.step(4).any { offset ->
+                sourceSized[offset].unsigned() > sourceSized[offset + 1].unsigned() + 20
+            },
+        )
+    }
+
+    private fun render(
+        plan: FeedEffectsRenderPlan,
+        input: Bitmap,
+        displayWidth: Float = input.width.toFloat(),
+        displayHeight: Float = input.height.toFloat(),
+    ): ByteArray {
         val display = GlUtil.getDefaultEglDisplay()
         val eglContext = GlUtil.createEglContext(display)
         val surface = GlUtil.createFocusedPlaceholderEglSurface(eglContext, display)
@@ -113,7 +134,7 @@ class PlaybackFeedEffectGlTest {
                 input.height,
             )
             val displaySize = PlaybackEffectDisplaySize().apply {
-                update(input.width.toFloat(), input.height.toFloat())
+                update(displayWidth, displayHeight)
             }
             program =
                 PlaybackFeedEffect(plan, displaySize).toGlShaderProgram(context, false)
@@ -168,6 +189,38 @@ class PlaybackFeedEffectGlTest {
             limitsPaintCube = null,
             limitsWeightCube = null,
         )
+
+    private fun peakingPlan(): FeedEffectsRenderPlan =
+        FeedEffectsRenderPlan(
+            effects = FeedEffects(peaking = true),
+            configuration =
+                FeedEffectsRenderConfiguration(
+                    curveOrdinal = 0,
+                    clipNative = 255f,
+                    deLogCurve = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f),
+                    peakingThreshold = 0.01f,
+                    peakingRamp = 24f,
+                    peakingColor = floatArrayOf(1f, 0f, 0f),
+                    highlightEnabled = false,
+                    highlightCode = 1f,
+                    highlightColor = floatArrayOf(1f, 1f, 1f),
+                    midtoneEnabled = false,
+                    midtoneCode = 0.5f,
+                    midtoneColor = floatArrayOf(1f, 1f, 1f),
+                ),
+            baseCube = null,
+            limitsPaintCube = null,
+            limitsWeightCube = null,
+        )
+
+    private fun peakingEdgeBitmap(): Bitmap =
+        Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply {
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    setPixel(x, y, if (x < width / 2) Color.BLACK else Color.WHITE)
+                }
+            }
+        }
 
     private fun greenAxisCube(): FeedEffectsCube {
         val size = 2

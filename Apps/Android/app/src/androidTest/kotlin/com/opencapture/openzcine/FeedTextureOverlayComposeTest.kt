@@ -32,6 +32,7 @@ class FeedTextureOverlayComposeTest {
         presentation.present(
             frame = LiveFrame(timestampNanos = 0L, jpegData = ByteArray(0)),
             bitmap = Bitmap.createBitmap(1_920, 1_080, Bitmap.Config.ARGB_8888),
+            colorMode = LiveFeedColorMode.SDR,
         )
         val neutral = Color(0xFF808080)
         composeRule.setContent {

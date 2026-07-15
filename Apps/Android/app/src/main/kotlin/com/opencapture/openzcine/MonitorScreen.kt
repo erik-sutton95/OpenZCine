@@ -229,6 +229,17 @@ internal fun monitorBottomInsetDp(rawInsetDp: Float, isPortrait: Boolean): Float
         rawInsetDp
     }
 
+/** Seats fail-closed feed feedback below any status deck mounted over the live image. */
+internal fun liveFeedColorNoticeTopInsetDp(
+    feed: ZoneFrame,
+    infoBar: ZoneFrame,
+    statusBarVisible: Boolean,
+): Float {
+    val edgeGap = 8f
+    if (!statusBarVisible) return edgeGap
+    return maxOf(edgeGap, infoBar.y + infoBar.height - feed.y + edgeGap)
+}
+
 /** Unwraps the owning [android.app.Activity] (a ComposeView's context is a wrapper). */
 private tailrec fun android.content.Context.findActivity(): android.app.Activity? =
     when (this) {
@@ -847,6 +858,12 @@ fun MonitorScreen(
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
         val localFraming = operatorSettings.localFramingAssistConfiguration
+        val liveFeedColorNoticeTopInset =
+            liveFeedColorNoticeTopInsetDp(
+                feed = zones.feed,
+                infoBar = zones.infoBar,
+                statusBarVisible = operatorSettings.statusBarVisible.value,
+            )
         // The gauge is a HUD instrument, so its lower track must clear the
         // bottom strips actually mounted over the feed. Pass this local pixel
         // inset into the overlay rather than guessing from a device class or
@@ -1298,6 +1315,13 @@ fun MonitorScreen(
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
+                )
+                LiveFeedColorModeNotice(
+                    colorMode = liveFeedPresentation.colorMode,
+                    effectsActive = !assist.effects.isIdentity,
+                    modifier =
+                        Modifier.align(Alignment.TopCenter)
+                            .padding(top = liveFeedColorNoticeTopInset.dp),
                 )
             }
         }

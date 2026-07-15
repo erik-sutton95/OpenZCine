@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.bridge.ZoneFrame
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -55,5 +56,25 @@ class MonitorInsetsTest {
     fun landscapeBottomInsetRemainsThePhysicalInset() {
         assertEquals(0f, monitorBottomInsetDp(rawInsetDp = 0f, isPortrait = false))
         assertEquals(42f, monitorBottomInsetDp(rawInsetDp = 42f, isPortrait = false))
+    }
+
+    @Test
+    fun liveColorNoticeClearsAnOverlaidLandscapeInfoDeck() {
+        assertEquals(
+            62f,
+            liveFeedColorNoticeTopInsetDp(
+                feed = ZoneFrame(59f, 0f, 734f, 393f),
+                infoBar = ZoneFrame(100f, 8f, 500f, 46f),
+                statusBarVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun liveColorNoticeUsesItsEdgeGapWhenTheDeckIsOutsideOrHidden() {
+        val feed = ZoneFrame(0f, 52f, 400f, 622f)
+        val infoBar = ZoneFrame(0f, 0f, 400f, 52f)
+        assertEquals(8f, liveFeedColorNoticeTopInsetDp(feed, infoBar, statusBarVisible = true))
+        assertEquals(8f, liveFeedColorNoticeTopInsetDp(feed, infoBar, statusBarVisible = false))
     }
 }

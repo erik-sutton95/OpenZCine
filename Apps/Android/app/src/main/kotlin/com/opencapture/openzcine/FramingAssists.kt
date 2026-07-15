@@ -68,9 +68,10 @@ internal data class LocalFramingRenderPlan(
 /**
  * Resolves local framing geometry inside the exact visible feed content.
  *
- * [feed] is supplied by the live-feed layout seam, after aspect fit and any
- * viewport clipping. This keeps guides, grids, and de-squeeze aligned with
- * camera pixels rather than a parent screen estimate.
+ * [feed] is the exact fit/fill image rectangle before the host canvas clips
+ * it. Keeping the complete over-wide portrait-fill rectangle matches iOS:
+ * guides, grids, crosshair, de-squeeze, and AF all remain registered to camera
+ * pixels while the physical viewport clips only their visible portions.
  */
 internal fun localFramingRenderPlan(
     feed: FramingAssistRect,

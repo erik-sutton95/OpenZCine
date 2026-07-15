@@ -32,8 +32,10 @@ import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFocusResult
 import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
-import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.LocalDesqueezeRatio
+import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.OperatorSettings
+import com.opencapture.openzcine.settings.PortraitFeedAspect
 import java.io.ByteArrayOutputStream
 import java.util.Collections
 import kotlinx.coroutines.delay
@@ -205,6 +207,46 @@ class FocusFeedComposeTest {
         assertEquals(null, session.lastFocusPoint)
     }
 
+    @Test
+    fun portraitFillFramingRemainsPixelAlignedToTheCroppedFeed() {
+        setDeviceRotation(ROTATION_PORTRAIT)
+        try {
+            val session = FocusSession()
+            val settings =
+                setMonitor(
+                    session,
+                    FocusFrameSource(testJpeg()),
+                    "focus-feed-ope91-portrait-fill-test",
+                )
+            settings.portraitFeedAspect = PortraitFeedAspect.FILL
+            if (LocalFramingAspectRatio.RATIO_239 !in settings.selectedGuideRatios) {
+                settings.toggleGuideRatioConfiguration(LocalFramingAspectRatio.RATIO_239)
+            }
+            settings.guidesVisible.value = true
+            settings.guideMaskEnabled.value = true
+            settings.localGridVisible.value = true
+            settings.ruleOfThirdsEnabled.value = true
+            settings.centerCrosshairEnabled.value = true
+            settings.desqueezeEnabled.value = true
+            settings.desqueezeRatio = LocalDesqueezeRatio.X200
+
+            composeRule.waitUntil(5_000) {
+                composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeRule
+                .onNodeWithContentDescription(
+                    settings.localFramingAssistConfiguration.accessibilitySummary,
+                )
+                .assertIsDisplayed()
+            saveDeviceScreenshot(
+                "portrait-fill-guides-feed-aligned.png",
+                album = "OpenZCine-OPE91",
+            )
+        } finally {
+            setDeviceRotation(ROTATION_LANDSCAPE_LEFT)
+        }
+    }
+
     private fun setMonitor(
         session: CameraSession,
         source: LiveFrameSource,
@@ -230,9 +272,15 @@ class FocusFeedComposeTest {
         return settings
     }
 
-    private fun saveDeviceScreenshot(name: String) {
+    private fun saveDeviceScreenshot(
+        name: String,
+        album: String = "OpenZCine-OPE71",
+    ) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        if (InstrumentationRegistry.getArguments().getString(SCREENSHOT_ARGUMENT) != "true") {
+        val arguments = InstrumentationRegistry.getArguments()
+        if (arguments.getString(SCREENSHOT_ARGUMENT) != "true" &&
+            arguments.getString(OPE91_SCREENSHOT_ARGUMENT) != "true"
+        ) {
             return
         }
         val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
@@ -242,7 +290,7 @@ class FocusFeedComposeTest {
                 put(MediaStore.Images.Media.MIME_TYPE, "image/png")
                 put(
                     MediaStore.Images.Media.RELATIVE_PATH,
-                    "${Environment.DIRECTORY_PICTURES}/OpenZCine-OPE71",
+                    "${Environment.DIRECTORY_PICTURES}/$album",
                 )
             }
         val resolver = instrumentation.targetContext.contentResolver
@@ -383,5 +431,6 @@ class FocusFeedComposeTest {
         const val ROTATION_PORTRAIT = 0
         const val ROTATION_LANDSCAPE_LEFT = 1
         const val SCREENSHOT_ARGUMENT = "ope71Screenshots"
+        const val OPE91_SCREENSHOT_ARGUMENT = "ope91Screenshots"
     }
 }

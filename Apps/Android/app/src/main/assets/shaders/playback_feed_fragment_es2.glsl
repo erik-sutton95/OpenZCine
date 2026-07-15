@@ -6,10 +6,12 @@ uniform sampler2D uTexSampler;
 uniform sampler2D uLut;
 uniform sampler2D uLimitsPaintCube;
 uniform sampler2D uLimitsWeightCube;
+uniform float uFlipInputY;
 uniform float uLutSize;
 uniform float uLimitsPaintSize;
 uniform float uLimitsWeightSize;
 uniform float uLimitsOn;
+uniform vec2 uSourceSize;
 uniform vec2 uDisplaySize;
 
 uniform float uPeakingOn;
@@ -71,6 +73,11 @@ vec3 grade(vec3 color) {
     return sampleLut(uLutSize, color);
 }
 
+vec3 sampleSource(vec2 coordinate) {
+    float y = mix(coordinate.y, 1.0 - coordinate.y, uFlipInputY);
+    return texture2D(uTexSampler, vec2(coordinate.x, y)).rgb;
+}
+
 vec3 limitsPaint(vec3 color) {
     if (uLimitsPaintSize < 2.0) {
         return color;
@@ -121,7 +128,7 @@ float monotoneTone(float y0, float y1, float y2, float y3, float fraction) {
 }
 
 float deLogGrey(vec2 coordinate) {
-    vec3 color = texture2D(uTexSampler, coordinate).rgb;
+    vec3 color = sampleSource(coordinate);
     float position = clamp((color.r + color.g + color.b) / 3.0, 0.0, 1.0) * 4.0;
     float segment = min(floor(position), 3.0);
     float fraction = position - segment;
@@ -161,8 +168,8 @@ float deLogGrey(vec2 coordinate) {
     );
 }
 
-float gradientMagnitude(vec2 coordinate, float displayRadius) {
-    vec2 delta = vec2(displayRadius) / max(uDisplaySize, vec2(1.0));
+float gradientMagnitude(vec2 coordinate, float sourceRadius) {
+    vec2 delta = vec2(sourceRadius) / max(uSourceSize, vec2(1.0));
     float topLeft = deLogGrey(coordinate + vec2(-delta.x, -delta.y));
     float topCenter = deLogGrey(coordinate + vec2(0.0, -delta.y));
     float topRight = deLogGrey(coordinate + vec2(delta.x, -delta.y));
@@ -177,11 +184,11 @@ float gradientMagnitude(vec2 coordinate, float displayRadius) {
     float gy =
         -topLeft - 2.0 * topCenter - topRight
         + bottomLeft + 2.0 * bottomCenter + bottomRight;
-    return length(vec2(gx, gy)) / (8.0 * displayRadius);
+    return length(vec2(gx, gy)) / (8.0 * sourceRadius);
 }
 
 void main() {
-    vec3 source = texture2D(uTexSampler, vTexSamplingCoord).rgb;
+    vec3 source = sampleSource(vTexSamplingCoord);
     vec3 color = grade(source);
 
     if (uLimitsOn > 0.5) {
@@ -189,7 +196,7 @@ void main() {
     }
 
     if (uPeakingOn > 0.5) {
-        vec2 inset = vec2(PEAKING_EDGE_INSET) / max(uDisplaySize, vec2(1.0));
+        vec2 inset = vec2(PEAKING_EDGE_INSET) / max(uSourceSize, vec2(1.0));
         if (
             vTexSamplingCoord.x >= inset.x
             && vTexSamplingCoord.y >= inset.y

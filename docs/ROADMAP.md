@@ -195,6 +195,13 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   letterbox and chrome and leaves clean-source analysis plus framing/focus/horizon geometry
   unchanged. **[VERIFY-ON-HW]** Confirm the presentation ordering with every API 33 effect and a
   supported Nikon live stream.
+- **Android legacy live-assist and portrait-crop parity** (OPE-91, in progress): API 29–32 renders
+  LUT, false color, peaking, and zebra through the same shared Swift plan and GLES shader used by
+  playback, with clean source frames retained for scopes. Live color input is pinned to original
+  SDR and future HDR or unsupported formats fail closed with visible feedback. Portrait-fill
+  guides, masks, grids, crosshair, and AF inverse mapping all retain the complete cropped camera
+  coordinates, with the physical viewport clipping them exactly as on iOS. **[VERIFY-ON-HW]**
+  Confirm all four effects on API 29 and API 32 hardware plus a real supported Nikon stream.
 - **Android custom and RED LUT library parity** (in review) — operator-selected `.cube` imports
   are strictly parsed by the shared Swift core, copied into app-private storage under generated
   names, and restored as stored monitor selections. The RED surface is deliberately fail-closed
