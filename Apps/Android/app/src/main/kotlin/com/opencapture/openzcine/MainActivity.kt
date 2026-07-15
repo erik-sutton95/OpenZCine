@@ -32,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -92,6 +93,7 @@ class MainActivity : ComponentActivity() {
     private val frameioRedirectCallback = MutableStateFlow<FrameioRedirectCallback?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
         publishFrameioRedirect(intent)

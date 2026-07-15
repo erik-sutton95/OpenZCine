@@ -35,7 +35,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        android:theme="@style/Theme.OpenZCine">
         <!-- Shares only ready copies in cacheDir/share/ready. The progressive
           no-backup cache and the transient share/staging directory never have
           a provider path, so external apps cannot receive a growing .part. -->
@@ -58,6 +58,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:theme="@style/Theme.OpenZCine.Starting"
             android:screenOrientation="user"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter>
