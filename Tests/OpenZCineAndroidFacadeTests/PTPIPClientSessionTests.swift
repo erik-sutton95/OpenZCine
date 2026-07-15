@@ -115,6 +115,34 @@ struct PTPIPClientSessionTests {
         #expect(operations.contains(.endMovieRec))
     }
 
+    @Test func configuresOnlyPreviewPropertiesBeforeLiveViewStarts() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(
+            session.configureLiveView(
+                imageSize: 1,
+                compression: 3,
+                frameIntervalNanoseconds: 49_500_000))
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.liveViewImageSize.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.liveViewImageCompression.rawValue,
+                        data: Data([3])),
+                ])
+        let operations = server.receivedOperations()
+        #expect(!operations.contains(.startMovieRecInCard))
+        #expect(!operations.contains(.endMovieRec))
+    }
+
     @Test func rejectsRecordingWhileMediaOwnsTheCommandChannel() throws {
         let server = try FakeZRServer()
         defer { server.stop() }

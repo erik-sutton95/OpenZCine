@@ -488,6 +488,60 @@
                 isOnCameraAccessPoint: isOnCameraAccessPoint != 0))
     }
 
+    // MARK: - Link health and preview policy
+
+    /// `SwiftCore.resolveLiveViewRequest(...)` — resolves persisted Android
+    /// stream choices through `OperatorPreferences` plus
+    /// `LiveViewLoadPolicy`. Kotlin receives a validated preview request but
+    /// never maps choices to Nikon properties itself.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_resolveLiveViewRequest")
+    public func swiftCoreResolveLiveViewRequest(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, streamPreset: jint,
+        qualityBias: jint, thermalTier: jint, isRecording: jboolean,
+        cameraOverheating: jboolean
+    ) -> jstring? {
+        guard
+            let request = AndroidLiveViewPolicyWire.resolve(
+                streamPresetRaw: Int(streamPreset),
+                qualityBiasRaw: Int(qualityBias),
+                thermalTierRaw: Int(thermalTier),
+                isRecording: isRecording != 0,
+                cameraOverheating: cameraOverheating != 0)
+        else { return nil }
+        return javaString(env, AndroidLiveViewPolicyWire.encode(request))
+    }
+
+    /// `SwiftCore.linkHealthSnapshot(...)` — scores actual Android connection
+    /// and frame-delivery observations through the portable health scorer and
+    /// its hysteretic signal bars. Presence booleans keep unknown values
+    /// distinct from a fabricated zero.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_linkHealthSnapshot")
+    public func swiftCoreLinkHealthSnapshot(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, phase: jint,
+        roundTripMilliseconds: jdouble, hasRoundTrip: jboolean, liveViewFPS: jdouble,
+        hasLiveViewFPS: jboolean, targetLiveViewFPS: jdouble,
+        secondsSinceLastGoodFrame: jdouble, hasLastGoodFrame: jboolean,
+        consecutiveBadFrames: jint, recentCommandFailures: jint,
+        isRecoveringStream: jboolean, isUSBTransport: jboolean, resetSignalBars: jboolean
+    ) -> jstring? {
+        guard
+            let snapshot = AndroidLinkHealthWire.snapshot(
+                phaseRaw: Int(phase),
+                roundTripMilliseconds: hasRoundTrip != 0 ? Double(roundTripMilliseconds) : nil,
+                liveViewFPS: hasLiveViewFPS != 0 ? Double(liveViewFPS) : nil,
+                targetLiveViewFPS: Double(targetLiveViewFPS),
+                secondsSinceLastGoodFrame:
+                    hasLastGoodFrame != 0 ? Double(secondsSinceLastGoodFrame) : nil,
+                consecutiveBadFrames: Int(consecutiveBadFrames),
+                recentCommandFailures: Int(recentCommandFailures),
+                isRecoveringStream: isRecoveringStream != 0,
+                isUSBTransport: isUSBTransport != 0,
+                resetSignalBars: resetSignalBars != 0),
+            let encoded = AndroidLinkHealthWire.encode(snapshot)
+        else { return nil }
+        return javaString(env, encoded)
+    }
+
     // MARK: - Callback / streaming shape
 
     /// Listener state that crosses to the pushing thread.
@@ -945,6 +999,28 @@
             env,
             AndroidCameraPropertyReadbackWire.encode(
                 session.refreshAndroidPropertySnapshot(refreshRequest)))
+    }
+
+    /// `SwiftCore.sessionConfigureLiveView(...)` — applies a shared-policy
+    /// request before the Android live-view pump starts. The PTP writes are
+    /// limited to preview size/compression and the interval only paces preview
+    /// pulls, so no recording setting can change through this entry point.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConfigureLiveView")
+    public func swiftCoreSessionConfigureLiveView(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, imageSize: jint,
+        compression: jint, frameIntervalNanoseconds: jlong
+    ) -> jboolean {
+        guard
+            let size = UInt8(exactly: imageSize),
+            let compression = UInt8(exactly: compression),
+            frameIntervalNanoseconds >= 0
+        else { return 0 }
+        let applied =
+            ActiveSessionSlot.shared.current()?.configureLiveView(
+                imageSize: size,
+                compression: compression,
+                frameIntervalNanoseconds: UInt64(frameIntervalNanoseconds)) ?? false
+        return applied ? 1 : 0
     }
 
     /// `SwiftCore.sessionStartEventStream(listener)` — starts the active

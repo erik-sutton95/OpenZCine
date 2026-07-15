@@ -36,6 +36,8 @@ class OperatorSettingsTest {
         assertFalse(settings.desqueezeEnabled.value)
         assertEquals(LocalDesqueezeRatio.X100, settings.desqueezeRatio)
         assertEquals(LocalDesqueezeOrientation.HORIZONTAL, settings.desqueezeOrientation)
+        assertEquals(LiveViewStreamPreset.FAST, settings.streamPreset)
+        assertEquals(LiveViewQualityBias.LATENCY, settings.qualityBias)
     }
 
     @Test
@@ -45,6 +47,20 @@ class OperatorSettingsTest {
         }
         val reloaded = OperatorSettings(store)
         assertEquals(false, reloaded.fpsReadoutVisible.value)
+    }
+
+    @Test
+    fun `link preview choices persist separately from camera settings`() {
+        OperatorSettings(store).apply {
+            streamPreset = LiveViewStreamPreset.QUALITY
+            qualityBias = LiveViewQualityBias.DETAIL
+        }
+
+        val restored = OperatorSettings(store)
+        assertEquals(LiveViewStreamPreset.QUALITY, restored.streamPreset)
+        assertEquals(LiveViewQualityBias.DETAIL, restored.qualityBias)
+        assertEquals("QUALITY", store.getString("link.streamPreset.v1", null))
+        assertEquals("DETAIL", store.getString("link.qualityBias.v1", null))
     }
 
     @Test
