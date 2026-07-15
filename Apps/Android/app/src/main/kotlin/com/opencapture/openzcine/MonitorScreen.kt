@@ -55,9 +55,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
+import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
+import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
@@ -67,6 +70,7 @@ import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -200,6 +204,9 @@ fun MonitorScreen(
     glassTierOverride: String? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
     isMonitorFront: Boolean = true,
+    linkHealth: AndroidLinkHealthMonitor? = null,
+    activeTransportIsUsb: Boolean = false,
+    isDemoSession: Boolean = false,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
 ) {
@@ -214,6 +221,14 @@ fun MonitorScreen(
         }
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
+    val thermalTier = rememberAndroidThermalTier()
+    val actualLinkHealth = linkHealth ?: remember(session) { AndroidLinkHealthMonitor() }
+    val swiftLiveFrameSource =
+        (session as? SwiftCoreCameraSession)?.liveFrames as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+    val liveViewController =
+        remember(swiftLiveFrameSource) {
+            swiftLiveFrameSource?.let(::AndroidLiveViewController)
+        }
     LaunchedEffect(session) { session.connect() }
 
     // Shared glass state: the active tier plus the one blurred backdrop
@@ -244,6 +259,30 @@ fun MonitorScreen(
     val recording =
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.RECORDING
+    // The Android shell stores operator intent only. Swift resolves that
+    // intent against the portable stream/thermal policy, then the active
+    // source restarts just its preview pump when the approved request moves.
+    // A camera warning becomes an overheating input only for the explicit HOT
+    // state; WARNING remains informational until Nikon hardware proves it is
+    // safe to treat as a thermal stop signal.
+    LaunchedEffect(
+        liveViewController,
+        operatorSettings.streamPreset,
+        operatorSettings.qualityBias,
+        thermalTier,
+        recording,
+        cameraProperties.temperatureStatus,
+    ) {
+        liveViewController?.apply(
+            SwiftLiveViewPolicyInput(
+                streamPreset = operatorSettings.streamPreset.wireValue,
+                qualityBias = operatorSettings.qualityBias.wireValue,
+                thermalTier = thermalTier.wireValue,
+                isRecording = recording,
+                cameraOverheating = cameraProperties.temperatureStatus == CameraTemperatureStatus.HOT,
+            ),
+        )
+    }
     val recordCommandPending =
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.STOPPING
@@ -605,6 +644,43 @@ fun MonitorScreen(
                                 lifecycleState.isAtLeast(Lifecycle.State.STARTED)
                         }
             }
+        // Health collection deliberately owns no demo or command-dashboard
+        // subscription: only the real Swift live source is evidence of a
+        // camera stream, and DISP 3 must still send EndLiveView when it loses
+        // the final preview consumer.
+        val healthFrameSource =
+            activeFrameSource?.takeIf { !isCommand && it === swiftLiveFrameSource }
+        val healthTargetFramesPerSecond =
+            liveViewController?.request?.targetFramesPerSecond ?: 30.0
+        LaunchedEffect(
+            actualLinkHealth,
+            sessionState,
+            healthFrameSource,
+            frameSource,
+            isDemoSession,
+            activeTransportIsUsb,
+            healthTargetFramesPerSecond,
+        ) {
+            actualLinkHealth.updateSession(
+                state = sessionState,
+                streamRequested = healthFrameSource != null,
+                transportIsUsb = activeTransportIsUsb,
+                targetFramesPerSecond = healthTargetFramesPerSecond,
+                isDemoSession = isDemoSession || frameSource != null,
+            )
+        }
+        LaunchedEffect(actualLinkHealth, healthFrameSource) {
+            healthFrameSource?.frames?.collect(actualLinkHealth::recordFrame)
+        }
+        LaunchedEffect(actualLinkHealth, propertyRefreshStatus) {
+            actualLinkHealth.reportPropertyRefresh(propertyRefreshStatus)
+        }
+        LaunchedEffect(actualLinkHealth, healthFrameSource) {
+            while (true) {
+                delay(1_000)
+                actualLinkHealth.refresh()
+            }
+        }
         val liveFeedPresentation =
             remember(activeFrameSource) { LiveFeedPresentationState() }
         val audioMetersEnabled = assist.audioMetersEnabled
@@ -765,6 +841,7 @@ fun MonitorScreen(
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
                                     fpsReadoutVisible = operatorSettings.fpsReadoutVisible.value,
+                                    signalBars = actualLinkHealth.presentation.signalBars,
                                 )
                             }
                         }
@@ -928,6 +1005,7 @@ private fun InfoPill(
     codecReadoutVisible: Boolean,
     mediaReadoutVisible: Boolean,
     fpsReadoutVisible: Boolean,
+    signalBars: Int,
 ) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -950,7 +1028,7 @@ private fun InfoPill(
             }
         }
         if (fpsReadoutVisible) {
-            FpsChip(DemoMonitorState.SIGNAL_BARS, DemoMonitorState.FPS)
+            FpsChip(signalBars, DemoMonitorState.FPS)
         }
     }
 }

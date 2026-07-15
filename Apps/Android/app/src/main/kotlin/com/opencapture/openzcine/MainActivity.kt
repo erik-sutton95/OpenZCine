@@ -27,6 +27,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -35,6 +36,7 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
+import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
@@ -44,6 +46,8 @@ import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
 import com.opencapture.openzcine.pairing.SavedCameraRecords
+import com.opencapture.openzcine.pairing.SavedCameraRecord
+import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SavedCamerasExperience
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
@@ -56,6 +60,7 @@ import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private enum class MonitorOverlay {
@@ -108,6 +113,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             OpenZCineTheme {
                 var monitorSession by remember { mutableStateOf(debugSession) }
+                // A monitor reached from a saved card retains that exact
+                // profile. Link settings may then leave the monitor without
+                // guessing a topology or constructing a second session.
+                var activeSavedCamera by remember { mutableStateOf<SavedCameraRecord?>(null) }
+                var requestedReconnectID by rememberSaveable { mutableStateOf<String?>(null) }
+                val connectionScope = rememberCoroutineScope()
                 val savedCameraStore =
                     remember { SharedPreferencesSavedCameraStore(applicationContext) }
                 val operatorSettings = remember { OperatorSettings(applicationContext) }
@@ -171,6 +182,17 @@ class MainActivity : ComponentActivity() {
                         )
                     savedCameras = updated
                     savedCameraStore.replace(updated)
+                    activeSavedCamera =
+                        updated.firstOrNull { candidate ->
+                            candidate.transport == saved.transport &&
+                                (
+                                    candidate.host == saved.host ||
+                                        SavedCameraRecords.cameraNamesMatch(
+                                            candidate.cameraName,
+                                            saved.cameraName,
+                                        )
+                                )
+                        } ?: saved
                     monitorSession = paired.session
                 }
                 // The monitor is immersive; the pairing screens keep the
@@ -207,6 +229,8 @@ class MainActivity : ComponentActivity() {
                                     onPaired = ::acceptPairedCamera,
                                     onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
                                     onOpenSettings = { standaloneSettingsPresented = true },
+                                    requestedReconnectID = requestedReconnectID,
+                                    onReconnectRequestConsumed = { requestedReconnectID = null },
                                     onRecordsChanged = { updated ->
                                         savedCameras = updated
                                         savedCameraStore.replace(updated)
@@ -282,6 +306,27 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val currentSessionState by active.state.collectAsState()
+                        val monitorLinkHealth = remember(active) { AndroidLinkHealthMonitor() }
+                        val disconnectToSavedCameraHome: (Boolean) -> Unit = { reconnect ->
+                            val exitingSession = active
+                            val reconnectID = activeSavedCamera?.id
+                            connectionScope.launch {
+                                // Finish this exact profile's slot and AP
+                                // lease before SavedCamerasExperience gets a
+                                // chance to own a reconnect. Its cleanup is
+                                // idempotent with the monitor lifecycle
+                                // effect directly above.
+                                withContext(NonCancellable) {
+                                    exitingSession.disconnect()
+                                    pairingEnvironment.releaseCameraAp()
+                                }
+                                if (monitorSession === exitingSession) {
+                                    monitorSession = null
+                                    startupSurface = StartupSurface.SAVED_CAMERAS
+                                    requestedReconnectID = if (reconnect) reconnectID else null
+                                }
+                            }
+                        }
                         val cameraID =
                             (currentSessionState as? CameraSessionState.Connected)
                                 ?.identity
@@ -302,6 +347,10 @@ class MainActivity : ComponentActivity() {
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == MonitorOverlay.NONE,
+                                linkHealth = monitorLinkHealth,
+                                activeTransportIsUsb =
+                                    activeSavedCamera?.transport == SavedCameraTransport.USB_C,
+                                isDemoSession = pairingScript != null || demo?.second != null,
                                 onOpenSettings = {
                                     mediaRemoteShutter.disarm()
                                     overlay = MonitorOverlay.SETTINGS
@@ -321,6 +370,16 @@ class MainActivity : ComponentActivity() {
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
                                         lutLibrary = lutLibrary,
+                                        linkHealth = monitorLinkHealth,
+                                        activeTransportLabel = activeSavedCamera?.transport?.displayName,
+                                        onDisconnect =
+                                            activeSavedCamera?.let {
+                                                { disconnectToSavedCameraHome(false) }
+                                            },
+                                        onReconnect =
+                                            activeSavedCamera?.let {
+                                                { disconnectToSavedCameraHome(true) }
+                                            },
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                                 MonitorOverlay.MEDIA ->

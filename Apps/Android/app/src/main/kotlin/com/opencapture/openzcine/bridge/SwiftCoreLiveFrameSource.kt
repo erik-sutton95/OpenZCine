@@ -4,6 +4,7 @@ import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveAudioMeterChannel
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFrameSource
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.withContext
 
 private class LiveViewEndedException : IllegalStateException("The native live-view pump ended.")
 
@@ -36,6 +38,17 @@ class SwiftCoreLiveFrameSource(
     private val available: () -> Boolean = { SwiftCore.isAvailable },
     private val start: (SwiftCore.LiveFrameListener) -> Unit = SwiftCore::sessionStartLiveView,
     private val stop: () -> Unit = SwiftCore::sessionStopLiveView,
+    private val configurePreview: (SwiftLiveViewRequest) -> Boolean = { request ->
+        if (!SwiftCore.isAvailable) {
+            false
+        } else {
+            SwiftCore.sessionConfigureLiveView(
+                imageSize = request.imageSize,
+                compression = request.compression,
+                frameIntervalNanoseconds = request.frameIntervalNanoseconds,
+            )
+        }
+    },
     private val sharingScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val restartDelayMillis: Long = 250L,
@@ -53,8 +66,16 @@ class SwiftCoreLiveFrameSource(
                     close()
                     return@callbackFlow
                 }
-                start(
-                    object : SwiftCore.LiveFrameListener {
+                // Resolve/write the latest request on the same source start
+                // that follows it. If a body rejects a verify-on-HW preview
+                // enum, keep iOS's best-effort behavior: attempt the monitor
+                // stream rather than touching any recording property.
+                val previewRequest = synchronized(previewRequestLock) { requestedPreview }
+                runCatching { configurePreview(previewRequest) }
+                liveViewPumpActive.set(true)
+                try {
+                    start(
+                        object : SwiftCore.LiveFrameListener {
                         override fun onFrame(
                             jpeg: ByteArray,
                             timestampNanos: Long,
@@ -166,9 +187,15 @@ class SwiftCoreLiveFrameSource(
                         override fun onEnded() {
                             close(LiveViewEndedException())
                         }
-                    },
-                )
-                awaitClose { stop() }
+                        },
+                    )
+                } catch (error: Throwable) {
+                    liveViewPumpActive.set(false)
+                    throw error
+                }
+                awaitClose {
+                    if (liveViewPumpActive.getAndSet(false)) stop()
+                }
             }
             .buffer(Channel.CONFLATED)
             .retryWhen { cause, _ ->
@@ -176,6 +203,36 @@ class SwiftCoreLiveFrameSource(
                 delay(restartDelayMillis)
                 true
             }
+
+    private val previewRequestLock = Any()
+    private var requestedPreview = SwiftLiveViewRequest.DEFAULT
+    private val liveViewPumpActive = AtomicBoolean(false)
+
+    /** Current Swift-approved preview request, retained for the next stream start. */
+    internal val previewRequest: SwiftLiveViewRequest
+        get() = synchronized(previewRequestLock) { requestedPreview }
+
+    /**
+     * Updates the next Swift-owned preview request and restarts only an active
+     * monitor stream so the camera receives it immediately. `stop()` sends
+     * `EndLiveView`; retry then configures the latest request before starting
+     * again. The request contains preview size/compression/pull cadence only.
+     */
+    internal suspend fun updatePreviewRequest(request: SwiftLiveViewRequest): Boolean {
+        val changed =
+            synchronized(previewRequestLock) {
+                if (requestedPreview == request) {
+                    false
+                } else {
+                    requestedPreview = request
+                    true
+                }
+            }
+        if (changed && liveViewPumpActive.compareAndSet(true, false)) {
+            withContext(Dispatchers.IO) { stop() }
+        }
+        return changed
+    }
 
     override val frames: Flow<LiveFrame> =
         upstream.shareIn(

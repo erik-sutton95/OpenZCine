@@ -77,6 +77,8 @@ public fun SavedCamerasExperience(
     onPairNewCamera: () -> Unit,
     onOpenSettings: () -> Unit,
     onRecordsChanged: (List<SavedCameraRecord>) -> Unit,
+    requestedReconnectID: String? = null,
+    onReconnectRequestConsumed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
@@ -119,6 +121,9 @@ public fun SavedCamerasExperience(
     fun reconnect(record: SavedCameraRecord) {
         if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
         handedOff.value = false
+        // Mark synchronously so an explicit Link-tab reconnect and the USB
+        // attachment observer cannot race into two profile-owned sessions.
+        phase = SavedCameraPhase.Connecting(record.displayTitle)
         work.value =
             scope.launch {
                 var session: com.opencapture.openzcine.core.CameraSession? = null
@@ -268,6 +273,17 @@ public fun SavedCamerasExperience(
             } ?: return@LaunchedEffect
         attemptedUsbReconnectHosts += match.host
         reconnect(match)
+    }
+
+    // Link settings returns here after it has released the active monitor
+    // session. Keep reconnection in this saved-profile owner so camera AP,
+    // hotspot, and USB routes retain their established lifecycle rules.
+    LaunchedEffect(requestedReconnectID, cameras, phase) {
+        val requestedID = requestedReconnectID ?: return@LaunchedEffect
+        if (phase != SavedCameraPhase.Idle) return@LaunchedEffect
+        val requested = cameras.firstOrNull { it.id == requestedID }
+        onReconnectRequestConsumed()
+        requested?.let(::reconnect)
     }
 
     val busy = phase is SavedCameraPhase.Joining || phase is SavedCameraPhase.Connecting

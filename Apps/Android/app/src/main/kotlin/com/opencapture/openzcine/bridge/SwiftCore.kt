@@ -264,6 +264,48 @@ object SwiftCore {
         isOnCameraAccessPoint: Boolean,
     ): String?
 
+    // ── Link health and preview policy (Swift owns the policy) ──
+
+    /**
+     * Resolves Android's persisted stream choices through the shared Swift
+     * preview policy. The result is `imageSize<TAB>compression<TAB>intervalNanos`;
+     * Kotlin stores/presents the choices but never maps them to Nikon bytes or
+     * applies thermal caps itself. Null rejects an unknown wire value.
+     *
+     * This affects only the live-view JPEG preview. It never changes camera
+     * recording format, codec, frame rate, or an active card write.
+     */
+    external fun resolveLiveViewRequest(
+        streamPreset: Int,
+        qualityBias: Int,
+        thermalTier: Int,
+        isRecording: Boolean,
+        cameraOverheating: Boolean,
+    ): String?
+
+    /**
+     * Scores current Android link observations through `CameraLinkHealthScorer`
+     * and the shared `LinkSignalBars` hysteresis filter. Optional floating
+     * values use an explicit presence flag, so an unavailable transport
+     * measurement is never fabricated as zero. Returns
+     * `score<TAB>bars<TAB>detail`, or null for an invalid phase.
+     */
+    external fun linkHealthSnapshot(
+        phase: Int,
+        roundTripMilliseconds: Double,
+        hasRoundTrip: Boolean,
+        liveViewFps: Double,
+        hasLiveViewFps: Boolean,
+        targetLiveViewFps: Double,
+        secondsSinceLastGoodFrame: Double,
+        hasLastGoodFrame: Boolean,
+        consecutiveBadFrames: Int,
+        recentCommandFailures: Int,
+        isRecoveringStream: Boolean,
+        isUsbTransport: Boolean,
+        resetSignalBars: Boolean,
+    ): String?
+
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 
     /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */
@@ -407,6 +449,19 @@ object SwiftCore {
         recording: Boolean,
         propertyCode: Long,
     ): String?
+
+    /**
+     * Configures the next Android live-view run with a Swift-policy-approved
+     * preview request. It writes only Nikon live-view JPEG properties and the
+     * preview-pull cadence; it cannot change recording settings. Call before
+     * [sessionStartLiveView] on an IO dispatcher. Returns false when no active
+     * session accepts the request.
+     */
+    external fun sessionConfigureLiveView(
+        imageSize: Int,
+        compression: Int,
+        frameIntervalNanoseconds: Long,
+    ): Boolean
 
     /**
      * Starts (`true`) or stops (`false`) movie recording on the active camera

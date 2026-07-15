@@ -103,6 +103,9 @@ Android.
 - Swift SDK for Android integration verified for the current core build and runtime path.
 - Saved-camera reconnect and Wi-Fi pairing, plus Compose monitor record/live-view control surfaces.
 - Camera-property readback, command dashboard, and monitor-assist controls (in progress).
+- Link health, transport presentation, and Swift-owned preview size/compression/thermal policy
+  (in progress). **[VERIFY-ON-HW]** Nikon live-view compression values and warning-state behavior
+  require a supported camera pass; this policy must never alter recording configuration or card writes.
 - Media browse, full progressive-proxy playback, still viewing, and complete-cache-only Android
   sharing, including Camera/On-device library sources, categories, sorting, favorites, grid/list
   layouts, filtered playback navigation, transport/scrub/mute, and batch selection (in progress).

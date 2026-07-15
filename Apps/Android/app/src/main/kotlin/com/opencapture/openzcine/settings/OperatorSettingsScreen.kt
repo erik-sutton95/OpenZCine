@@ -59,14 +59,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.openzcine.AndroidThermalTier
 import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
+import com.opencapture.openzcine.bridge.LinkHealthPresentation
 import com.opencapture.openzcine.core.CameraSession
+import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
@@ -82,6 +87,7 @@ import com.opencapture.openzcine.lut.RedLutDownloadGate
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutEntry
 import com.opencapture.openzcine.lut.StoredLutFailure
+import com.opencapture.openzcine.rememberAndroidThermalTier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -90,9 +96,8 @@ import kotlinx.coroutines.withContext
 /**
  * Operator Setup rail tabs — the Android v1 subset of the iOS
  * `OperatorSettingsTab` set (Link / View Assist / Controls / Display /
- * Storage / System). Android exposes every tab whose current controls are
- * locally actionable; camera-property and integration tabs arrive with their
- * underlying platform adapters.
+ * Storage / System). The Link tab is bound to the active Android session;
+ * every other tab exposes controls the shell can already honor.
  */
 public enum class OperatorSettingsTab(
     public val title: String,
@@ -101,6 +106,7 @@ public enum class OperatorSettingsTab(
     public val subtitle: String,
     public val pill: String,
 ) {
+    LINK("Link", "Link", "Connection", "Transport & preview", "LIVE"),
     ASSIST("View Assist", "Assist", "Scopes & overlays", "Behavior for live-view tools.", "ASSIST"),
     CONTROLS("Controls", "Controls", "Dials & safety", "Touch behavior and safety.", "TOUCH"),
     DISPLAY("Display", "Display", "Live view", "Live view buttons and chrome.", "VISIBILITY"),
@@ -128,6 +134,10 @@ internal fun OperatorSettingsScreen(
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
     lutLibrary: AndroidLutLibrary? = null,
+    linkHealth: AndroidLinkHealthMonitor? = null,
+    activeTransportLabel: String? = null,
+    onDisconnect: (() -> Unit)? = null,
+    onReconnect: (() -> Unit)? = null,
     initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
     onClose: () -> Unit,
 ) {
@@ -173,16 +183,21 @@ internal fun OperatorSettingsScreen(
             // The floating PanelCloseButton overlays this row's leading corner
             // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
             // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
-            SettingsHeader(session, compact)
+            SettingsHeader(session, linkHealth, compact)
             if (compact) {
                 SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
                 SettingsContentPane(
                     selectedTab,
+                    session,
                     settings,
                     assistState,
                     mediaCacheStore,
                     frameioController,
                     lutLibrary,
+                    linkHealth,
+                    activeTransportLabel,
+                    onDisconnect,
+                    onReconnect,
                     onSettingToggle = toggleSetting,
                     onAssistToggle = toggleAssist,
                     onInteraction = emitHaptic,
@@ -197,11 +212,16 @@ internal fun OperatorSettingsScreen(
                     SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
                     SettingsContentPane(
                         selectedTab,
+                        session,
                         settings,
                         assistState,
                         mediaCacheStore,
                         frameioController,
                         lutLibrary,
+                        linkHealth,
+                        activeTransportLabel,
+                        onDisconnect,
+                        onReconnect,
                         onSettingToggle = toggleSetting,
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
@@ -219,14 +239,18 @@ internal fun OperatorSettingsScreen(
 
 /** Eyebrow + title with the live tile pinned trailing (iOS `settingsTop`). */
 @Composable
-private fun SettingsHeader(session: CameraSession?, compact: Boolean) {
+private fun SettingsHeader(
+    session: CameraSession?,
+    linkHealth: AndroidLinkHealthMonitor?,
+    compact: Boolean,
+) {
     if (compact) {
         Column(
             Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             SettingsTitle(Modifier.padding(start = 45.dp))
-            SettingsLiveTile(session, Modifier.fillMaxWidth(), expanded = true)
+            SettingsLiveTile(session, linkHealth, Modifier.fillMaxWidth(), expanded = true)
         }
     } else {
         Row(
@@ -235,7 +259,7 @@ private fun SettingsHeader(session: CameraSession?, compact: Boolean) {
         ) {
             SettingsTitle()
             Spacer(Modifier.weight(1f))
-            SettingsLiveTile(session, expanded = false)
+            SettingsLiveTile(session, linkHealth, expanded = false)
         }
     }
 }
@@ -262,6 +286,7 @@ private fun SettingsTitle(modifier: Modifier = Modifier) {
 @Composable
 private fun SettingsLiveTile(
     session: CameraSession?,
+    linkHealth: AndroidLinkHealthMonitor?,
     modifier: Modifier = Modifier,
     expanded: Boolean,
 ) {
@@ -269,13 +294,21 @@ private fun SettingsLiveTile(
     val state by (session?.state ?: disconnectedState).collectAsState()
     val standalone = session == null
     val linked = state is CameraSessionState.Connected
-    val tint = if (linked) LiveDesign.good else LiveDesign.faint
+    val health = linkHealth?.presentation ?: LinkHealthPresentation()
+    val tint =
+        when {
+            !linked -> LiveDesign.faint
+            health.signalBars >= 3 -> LiveDesign.good
+            health.signalBars == 2 -> LiveDesign.accent
+            else -> LiveDesign.rec
+        }
     val detail =
         if (standalone) {
             "No camera · local setup only"
         } else {
             when (val current = state) {
-                is CameraSessionState.Connected -> "${current.identity.name} · PTP-IP"
+                is CameraSessionState.Connected ->
+                    health.detail.ifBlank { "${current.identity.name} · PTP-IP" }
                 CameraSessionState.Connecting -> "Connecting…"
                 CameraSessionState.Disconnected -> "No camera"
             }
@@ -305,14 +338,12 @@ private fun SettingsLiveTile(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // ponytail: bars are binary (4 or 0) until Android grows the iOS
-        // linkHealth score; swap in the quartile mapping with it.
         Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
             repeat(4) { index ->
                 Box(
                     Modifier.size(width = 3.dp, height = (6 + index * 3).dp)
                         .background(
-                            if (linked) tint.copy(alpha = 0.52f + index * 0.12f)
+                            if (index < health.signalBars) tint.copy(alpha = 0.52f + index * 0.12f)
                             else LiveDesign.hairline,
                             CircleShape,
                         )
@@ -419,11 +450,16 @@ private fun SettingsTabButton(tab: OperatorSettingsTab, active: Boolean, onClick
 @Composable
 private fun SettingsContentPane(
     tab: OperatorSettingsTab,
+    session: CameraSession?,
     settings: OperatorSettings,
     assistState: AssistState,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController?,
     lutLibrary: AndroidLutLibrary?,
+    linkHealth: AndroidLinkHealthMonitor?,
+    activeTransportLabel: String?,
+    onDisconnect: (() -> Unit)?,
+    onReconnect: (() -> Unit)?,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
@@ -482,6 +518,16 @@ private fun SettingsContentPane(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     when (tab) {
+                        OperatorSettingsTab.LINK ->
+                            LinkRows(
+                                session = session,
+                                settings = settings,
+                                linkHealth = linkHealth,
+                                activeTransportLabel = activeTransportLabel,
+                                onDisconnect = onDisconnect,
+                                onReconnect = onReconnect,
+                                onInteraction = onInteraction,
+                            )
                         OperatorSettingsTab.ASSIST ->
                             AssistRows(
                                 settings,
@@ -499,6 +545,153 @@ private fun SettingsContentPane(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Active camera transport, health, and Swift-owned preview policy. */
+@Composable
+private fun LinkRows(
+    session: CameraSession?,
+    settings: OperatorSettings,
+    linkHealth: AndroidLinkHealthMonitor?,
+    activeTransportLabel: String?,
+    onDisconnect: (() -> Unit)?,
+    onReconnect: (() -> Unit)?,
+    onInteraction: () -> Unit,
+) {
+    val disconnectedProperties = remember { MutableStateFlow(CameraPropertySnapshot()) }
+    val cameraProperties by (session?.cameraProperties ?: disconnectedProperties).collectAsState()
+    val health = linkHealth?.presentation ?: LinkHealthPresentation()
+    val thermalTier = rememberAndroidThermalTier()
+    val warningLabel =
+        when (cameraProperties.temperatureStatus) {
+            CameraTemperatureStatus.NORMAL -> "OK"
+            CameraTemperatureStatus.WARNING -> "CHECK"
+            CameraTemperatureStatus.HOT -> "HOT"
+            null -> "Not reported"
+        }
+    val thermalPreviewLabel =
+        when (thermalTier) {
+            AndroidThermalTier.NOMINAL -> "Nominal · full preview request"
+            AndroidThermalTier.FAIR -> "Fair · full preview request"
+            AndroidThermalTier.SERIOUS -> "Serious · preview reduced"
+            AndroidThermalTier.CRITICAL -> "Critical · preview minimized"
+        }
+
+    SettingsGroupCard(
+        title = "Link Health",
+        caption =
+            if (session == null) {
+                "No active camera. Link measurements appear only after a session connects."
+            } else {
+                health.detail
+            },
+    ) {
+        LinkHealthMeter(score = health.score, signalBars = health.signalBars)
+        SettingsInlineRow(title = "Health", showTopDivider = false) {
+            SettingsValueText(if (session == null) "No Link" else "${health.score}%")
+        }
+        SettingsInlineRow(title = "Current Transport") {
+            SettingsValueText(activeTransportLabel ?: "Not reported")
+        }
+    }
+
+    SettingsGroupCard(
+        title = "Preview Stream",
+        caption =
+            "These choices restart only the disposable live-view JPEG stream through Swift. Recording format and card writes stay unchanged.",
+    ) {
+        Text(
+            "Stream Preset",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        Row(
+            Modifier.fillMaxWidth().selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            LiveViewStreamPreset.entries.forEach { preset ->
+                FramingAssistChoice(
+                    label = preset.label,
+                    selected = settings.streamPreset == preset,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    settings.streamPreset = preset
+                    onInteraction()
+                }
+            }
+        }
+        Text(
+            "Quality Bias",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        Row(
+            Modifier.fillMaxWidth().selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            LiveViewQualityBias.entries.forEach { bias ->
+                FramingAssistChoice(
+                    label = bias.label,
+                    selected = settings.qualityBias == bias,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    settings.qualityBias = bias
+                    onInteraction()
+                }
+            }
+        }
+        SettingsInlineRow(title = "Thermal Preview", showTopDivider = false) {
+            SettingsValueText(thermalPreviewLabel)
+        }
+        SettingsInlineRow(title = "Camera Warning") { SettingsValueText(warningLabel) }
+    }
+
+    SettingsGroupCard(
+        title = "Connection",
+        caption =
+            "Reconnect returns to the saved-camera owner so Wi-Fi and USB cleanup stay scoped to the active profile.",
+    ) {
+        SettingsInlineRow(title = "Disconnect", showTopDivider = false) {
+            if (onDisconnect == null) {
+                SettingsValueText(if (session == null) "No active camera" else "No saved profile")
+            } else {
+                SettingsLinkAction("Disconnect", onDisconnect)
+            }
+        }
+        SettingsInlineRow(title = "Reconnect") {
+            if (onReconnect == null) {
+                SettingsValueText("No saved profile")
+            } else {
+                SettingsLinkAction("Reconnect", onReconnect)
+            }
+        }
+    }
+}
+
+/** Compact iOS-style dash meter backed by the shared Swift score and bars. */
+@Composable
+private fun LinkHealthMeter(score: Int, signalBars: Int) {
+    val tint =
+        when {
+            signalBars >= 3 -> LiveDesign.good
+            signalBars == 2 -> LiveDesign.accent
+            signalBars == 1 -> LiveDesign.rec
+            else -> LiveDesign.faint
+        }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(12) { index ->
+            val threshold = (index + 1) * 100 / 12
+            Box(
+                Modifier.weight(1f)
+                    .height(6.dp)
+                    .background(if (score >= threshold) tint else LiveDesign.hairline, CircleShape),
+            )
         }
     }
 }
