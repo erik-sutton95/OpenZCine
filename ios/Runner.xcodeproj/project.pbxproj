@@ -15,6 +15,7 @@
 		0F8144A1310FEEE9A63795A8 /* MetalLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43398C0B64AE0344D7602746 /* MetalLiveView.swift */; };
 		157EA76CF9AF666C94A66343 /* LUTLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E264D06796DCA124FB4D87 /* LUTLibrary.swift */; };
 		16C4F9FED363497072C19ACC /* FrameioModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 381B085F758DD57850E6CFAE /* FrameioModels.swift */; };
+		F10A110B2A3B4C5D6E7F8A90 /* FrameioAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10A110A2A3B4C5D6E7F8A90 /* FrameioAPI.swift */; };
 		1D22C3C5DAA147DC1A7F2057 /* InternetReachability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */; };
 		200294648F339E5403B98101 /* FrameioModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */; };
 		223A328A28F6A9969245C3A0 /* FrameioClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 953D4988DD8F529689A672A9 /* FrameioClient.swift */; };
@@ -186,6 +187,7 @@
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		381B085F758DD57850E6CFAE /* FrameioModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModels.swift; path = ../Sources/OpenZCineCore/Frameio/FrameioModels.swift; sourceTree = SOURCE_ROOT; };
+		F10A110A2A3B4C5D6E7F8A90 /* FrameioAPI.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioAPI.swift; path = ../Sources/OpenZCineCore/Frameio/FrameioAPI.swift; sourceTree = SOURCE_ROOT; };
 		3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPopup.swift; sourceTree = "<group>"; };
 		43398C0B64AE0344D7602746 /* MetalLiveView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalLiveView.swift; sourceTree = "<group>"; };
 		4705C589D7D31926D41CEF6A /* LiveFrameProcessor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveFrameProcessor.swift; sourceTree = "<group>"; };
@@ -395,6 +397,7 @@
 				829F835A9A819D7AC6992CDE /* MediaLUTExport.swift */,
 				4F754633AC5090E76E19F5CD /* FrameioOAuth.swift */,
 				381B085F758DD57850E6CFAE /* FrameioModels.swift */,
+				F10A110A2A3B4C5D6E7F8A90 /* FrameioAPI.swift */,
 				953D4988DD8F529689A672A9 /* FrameioClient.swift */,
 				58822FE5CB612396F3D33712 /* FrameioAuthCoordinator.swift */,
 				B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */,
@@ -725,6 +728,7 @@
 				947DA2098F211AFA82954980 /* MediaLUTExport.swift in Sources */,
 				314BDCD7FD3C538AA88BFC57 /* FrameioOAuth.swift in Sources */,
 				16C4F9FED363497072C19ACC /* FrameioModels.swift in Sources */,
+				F10A110B2A3B4C5D6E7F8A90 /* FrameioAPI.swift in Sources */,
 				223A328A28F6A9969245C3A0 /* FrameioClient.swift in Sources */,
 				FE72B160881FCAA3A5BAE57C /* FrameioAuthCoordinator.swift in Sources */,
 				200294648F339E5403B98101 /* FrameioModel.swift in Sources */,

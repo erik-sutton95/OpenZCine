@@ -1,3 +1,6 @@
+import java.net.URI
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -14,6 +17,43 @@ val releaseAabDirectory = layout.buildDirectory.dir("outputs/bundle/release")
 val repositoryRoot = rootProject.projectDir.parentFile.parentFile
 val stageSwiftCoreScript = repositoryRoot.resolve("scripts/android-stage-swift-core.sh")
 val verifyNativeLibrariesScript = repositoryRoot.resolve("scripts/verify-android-native-libs.sh")
+
+// Frame.io uses an Adobe IMS public PKCE client. These values are not a client
+// secret, but each Android redirect registration is deployment-specific, so a
+// fresh clone is deliberately unconfigured. Resolve explicit Gradle properties
+// first, then environment values, then the ignored local properties file.
+val frameioLocalProperties =
+    Properties().also { properties ->
+        val localFile = rootProject.projectDir.resolve("frameio.local.properties")
+        if (localFile.isFile) {
+            localFile.inputStream().use(properties::load)
+        }
+    }
+fun frameioValue(property: String, environment: String): String =
+    (findProperty(property) as? String)
+        ?: System.getenv(environment)
+        ?: frameioLocalProperties.getProperty(property)
+        ?: ""
+
+val frameioClientID = frameioValue("frameio.clientId", "FRAMEIO_CLIENT_ID")
+val frameioRedirectURI = frameioValue("frameio.redirectUri", "FRAMEIO_REDIRECT_URI")
+val frameioRedirect = runCatching { URI(frameioRedirectURI) }.getOrNull()
+val configuredFrameioScheme = frameioRedirect?.scheme?.takeIf { scheme ->
+    scheme.matches(Regex("[A-Za-z][A-Za-z0-9+.-]*"))
+}
+val configuredFrameioHost = frameioRedirect?.host?.takeIf { host -> host.isNotBlank() }
+// This intentionally unusable fallback lets Android compile a manifest
+// without implying a registered Adobe redirect in unconfigured builds.
+val frameioRedirectScheme = configuredFrameioScheme ?: "openzcine-frameio-unconfigured"
+val frameioRedirectHost = configuredFrameioHost ?: "unconfigured"
+fun quotedBuildConfig(value: String): String =
+    "\"" +
+        value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r") +
+        "\""
 
 // Single version source: gradle.properties (mirrors ios/Config/Version.xcconfig).
 // CI overrides the code per build with `-PversionCode=<n>`; the name changes only
@@ -41,6 +81,16 @@ android {
         versionCode = resolvedVersionCode
         versionName = resolvedVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        manifestPlaceholders["frameioRedirectScheme"] = frameioRedirectScheme
+        manifestPlaceholders["frameioRedirectHost"] = frameioRedirectHost
+        buildConfigField("String", "FRAMEIO_CLIENT_ID", quotedBuildConfig(frameioClientID))
+        buildConfigField("String", "FRAMEIO_REDIRECT_URI", quotedBuildConfig(frameioRedirectURI))
+        buildConfigField(
+            "String",
+            "FRAMEIO_REDIRECT_SCHEME",
+            quotedBuildConfig(frameioRedirectScheme),
+        )
 
         ndk {
             abiFilters += supportedAndroidAbi

@@ -141,7 +141,8 @@ Date — the swift-foundation rewrite) plus optional Internationalization/Networ
 - Everything the core uses (`Data`, `Codable`, `URLComponents`, `Date`) is `FoundationEssentials`.
   The known Android Foundation gaps — `URLSession` CA-certificate discovery, `FileManager` quirks,
   bionic libc differences — are **all in APIs this core does not use**. Frame.io HTTP calls stay
-  in the shell (OkHttp on Android), exactly as they use `URLSession` in the iOS shell today.
+  in the shell (the Android adapter uses `HttpURLConnection`; iOS uses `URLSession`), while the
+  portable core owns PKCE, OAuth form construction, endpoint paths, and Codable models.
 - `CryptoKit` becomes `swift-crypto`: one conditional import.
 - ICU is the headline size risk (`lib_FoundationICU.so` historically ~40 MB,
   [forums thread](https://forums.swift.org/t/android-app-size-and-lib-foundationicu-so/78399)) —
@@ -336,7 +337,7 @@ whole package — all 55 core files plus the 58 test files — after a three-fil
    file) lives in FoundationNetworking on non-Darwin. Importing FoundationNetworking works but
    drags libcurl/ICU into the payload and its static variant is missing from the 6.3.3 bundle
    (`-l_CFURLSessionInterface` link failure under `--static-swift-stdlib`). Since the Android
-   shell owns HTTP (OkHttp) and would never consume `URLRequest`, the three builders are now
+   shell owns HTTP through its platform adapter and would never consume `URLRequest`, the three builders are now
    `#if !os(Android)` instead; the pure PKCE/URL/parse logic compiles everywhere.
 3. `Tests/OpenZCineCoreTests/FrameioOAuthTests.swift` — the two tests covering those builders get
    the same gate.

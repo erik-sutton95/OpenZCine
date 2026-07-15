@@ -185,7 +185,15 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   scans arbitrary filesystem paths or exposes partial files. One or more selected completed entries
   can be copied into app-scoped `cacheDir/share/ready` and opened through Android's native single or
   multi-item share chooser via a narrowly scoped `FileProvider`; the no-backup camera cache and
-  growing `.part` files remain provider-invisible. Frame.io/OAuth delivery remains a later, separate Android integration. The Nikon large-object operations still
+  growing `.part` files remain provider-invisible. Frame.io delivery uses that same finalized staging
+  boundary: Settings → Storage owns Adobe PKCE sign-in, Android Keystore holds token/PKCE material,
+  and multi-select media delivery creates a Frame.io file, streams each HTTPS upload part, then polls
+  completion. The feature is intentionally unavailable until a maintainer supplies an approved Adobe
+  Native App client ID and exact redirect URI through ignored/local build configuration; it never
+  fabricates an identity. A camera-AP process binding hard-blocks cloud traffic rather than silently
+  releasing camera control, and native Share remains an independent fallback. See
+  [`docs/frameio-setup.md`](../../docs/frameio-setup.md) for the external **[VERIFY-ON-HW]** Adobe
+  registration, browser callback, and real-upload checklist. The Nikon large-object operations still
   require real-ZR verification. For an on-device fake-ZR playback run, set
   `ZC_FAKE_ZR_MEDIA=/absolute/path/to/a/playable.mp4` alongside `ZC_FAKE_ZR_PORT=15740` when running
   `swift test --filter servesFakeZRForMediaBrowse`, then `adb reverse tcp:15740 tcp:15740`, launch
