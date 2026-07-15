@@ -43,9 +43,10 @@ vec2 atlasCoordinate(float slice, vec2 redGreen, float cubeSize) {
         tileX * cubeSize + clamp(redGreen.x, 0.0, 1.0) * (cubeSize - 1.0) + 0.5,
         tileY * cubeSize + clamp(redGreen.y, 0.0, 1.0) * (cubeSize - 1.0) + 0.5
     );
-    vec2 coordinate = pixel / (cubeSize * ATLAS_COLUMNS);
-    // Android Bitmap row zero uploads at the top of the GL texture.
-    return vec2(coordinate.x, 1.0 - coordinate.y);
+    // GLUtils uploads Android bitmap row zero at v=0 for sampler coordinates.
+    // Flipping here would address an unused atlas row instead of the selected
+    // green row, which collapses the upper green axis to black on hardware.
+    return pixel / (cubeSize * ATLAS_COLUMNS);
 }
 
 vec3 sampleLut(float cubeSize, vec3 color) {

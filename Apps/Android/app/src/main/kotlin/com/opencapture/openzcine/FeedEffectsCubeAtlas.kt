@@ -11,7 +11,7 @@ internal data class FeedEffectsCubeAtlas(
 )
 
 /**
- * Converts the core's `width = size², height = size` red-fastest layout into an 8×8 atlas.
+ * Converts the core's packed `width = size², height = size` bitmap into an 8×8 atlas.
  *
  * The maximum 64³ cube becomes exactly 512×512, avoiding a 4096-pixel texture-width dependency
  * on GLES2 devices while retaining adjacent red/green texels for hardware bilinear filtering.

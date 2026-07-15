@@ -33,7 +33,7 @@ internal class FeedEffectsRenderPlan(
             }
 }
 
-/** One validated red-fastest RGBA8 cube from the shared core. */
+/** One validated packed-2D RGBA8 cube from the shared core. */
 internal class FeedEffectsCube(
     val size: Int,
     val rgba: ByteArray,

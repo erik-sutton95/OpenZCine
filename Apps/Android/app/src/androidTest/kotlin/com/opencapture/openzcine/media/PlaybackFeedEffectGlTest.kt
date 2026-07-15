@@ -62,6 +62,36 @@ class PlaybackFeedEffectGlTest {
         assertNear(255, output[4].unsigned(), "green-axis high")
     }
 
+    @Test
+    fun cubeAtlasPreservesAllRgbAxesAcrossTiles() {
+        val input = Bitmap.createBitmap(8, 1, Bitmap.Config.ARGB_8888)
+        val expected = mutableListOf<IntArray>()
+        var x = 0
+        for (blue in 0..1) {
+            for (green in 0..1) {
+                for (red in 0..1) {
+                    val color =
+                        intArrayOf(
+                            red * 255,
+                            green * 255,
+                            blue * 255,
+                        )
+                    expected += color
+                    input.setPixel(x++, 0, Color.rgb(color[0], color[1], color[2]))
+                }
+            }
+        }
+
+        val output = render(identityPlan(identityCube()), input)
+
+        expected.forEachIndexed { index, color ->
+            val offset = index * 4
+            assertNear(color[0], output[offset].unsigned(), "red[$index]")
+            assertNear(color[1], output[offset + 1].unsigned(), "green[$index]")
+            assertNear(color[2], output[offset + 2].unsigned(), "blue[$index]")
+        }
+    }
+
     private fun render(plan: FeedEffectsRenderPlan, input: Bitmap): ByteArray {
         val display = GlUtil.getDefaultEglDisplay()
         val eglContext = GlUtil.createEglContext(display)
@@ -150,6 +180,23 @@ class PlaybackFeedEffectGlTest {
                     rgba[offset] = value
                     rgba[offset + 1] = value
                     rgba[offset + 2] = value
+                    rgba[offset + 3] = 0xff.toByte()
+                }
+            }
+        }
+        return FeedEffectsCube(size, rgba)
+    }
+
+    private fun identityCube(): FeedEffectsCube {
+        val size = 2
+        val rgba = ByteArray(size * size * size * 4)
+        for (green in 0 until size) {
+            for (blue in 0 until size) {
+                for (red in 0 until size) {
+                    val offset = (green * size * size + blue * size + red) * 4
+                    rgba[offset] = (red * 255).toByte()
+                    rgba[offset + 1] = (green * 255).toByte()
+                    rgba[offset + 2] = (blue * 255).toByte()
                     rgba[offset + 3] = 0xff.toByte()
                 }
             }
