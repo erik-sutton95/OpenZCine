@@ -67,6 +67,7 @@ internal fun AudioMetersOverlay(
     viewport: ZoneFrame,
     placementStoreName: String = "audioMeterPlacement",
     bottomChromeClearance: Float = AUDIO_PANEL_BOTTOM_CHROME_CLEARANCE,
+    trailingEdgeGap: Float = AUDIO_PANEL_EDGE_GAP,
 ) {
     val context = LocalContext.current.applicationContext
     val store =
@@ -82,6 +83,7 @@ internal fun AudioMetersOverlay(
             width,
             height,
             bottomChromeClearance,
+            trailingEdgeGap,
         )
     var frame by remember(default, viewport) { mutableStateOf(store.resolve(default, viewport)) }
     val density = LocalDensity.current
@@ -117,6 +119,7 @@ internal fun floatingAudioMeterFrame(
     width: Float,
     height: Float,
     bottomChromeClearance: Float = AUDIO_PANEL_BOTTOM_CHROME_CLEARANCE,
+    trailingEdgeGap: Float = AUDIO_PANEL_EDGE_GAP,
 ): ZoneFrame {
     val bottomEdge =
         min(
@@ -125,7 +128,7 @@ internal fun floatingAudioMeterFrame(
         )
     return clampScopeFrame(
         ZoneFrame(
-            x = feed.x + feed.width - width - AUDIO_PANEL_EDGE_GAP,
+            x = feed.x + feed.width - width - trailingEdgeGap.coerceAtLeast(0f),
             y = bottomEdge - height - AUDIO_PANEL_EDGE_GAP,
             width = width,
             height = height,

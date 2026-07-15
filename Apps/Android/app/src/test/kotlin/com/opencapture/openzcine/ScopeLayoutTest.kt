@@ -144,6 +144,15 @@ class ScopeLayoutTest {
 
         assertEquals(216f, frame.y)
         assertEquals(268f, frame.y + frame.height)
+
+        val trailing =
+            falseColorReferenceDefaultFrame(
+                feed,
+                viewport,
+                bottomChromeClearance = 0f,
+                horizontalFraction = 1f,
+            )
+        assertEquals(feed.x + feed.width - trailing.width, trailing.x)
     }
 
     @Test

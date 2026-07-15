@@ -358,11 +358,17 @@ fun FalseColorReferenceOverlay(
     modifier: Modifier = Modifier,
     placementStoreName: String = FalseColorReferencePlacementStore.STORE_NAME,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
+    defaultHorizontalFraction: Float = 0f,
 ) {
     val presentation = effectsState.falseColorReference ?: return
     val default =
-        remember(feed, viewport, bottomChromeClearance) {
-            falseColorReferenceDefaultFrame(feed, viewport, bottomChromeClearance)
+        remember(feed, viewport, bottomChromeClearance, defaultHorizontalFraction) {
+            falseColorReferenceDefaultFrame(
+                feed,
+                viewport,
+                bottomChromeClearance,
+                defaultHorizontalFraction,
+            )
         }
     val context = LocalContext.current.applicationContext
     val store =
@@ -416,6 +422,7 @@ internal fun falseColorReferenceDefaultFrame(
     feed: ZoneFrame,
     viewport: ZoneFrame,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
+    horizontalFraction: Float = 0f,
 ): ZoneFrame {
     val feedBottom = feed.y + feed.height
     val outsideTop = feedBottom + FALSE_COLOR_REFERENCE_GAP
@@ -431,7 +438,10 @@ internal fun falseColorReferenceDefaultFrame(
         }
     return clampScopeFrame(
         ZoneFrame(
-            x = feed.x,
+            x =
+                feed.x +
+                    maxOf(0f, feed.width - min(FALSE_COLOR_REFERENCE_WIDTH, feed.width)) *
+                    horizontalFraction.coerceIn(0f, 1f),
             y = top,
             width = min(FALSE_COLOR_REFERENCE_WIDTH, feed.width),
             height = FALSE_COLOR_REFERENCE_HEIGHT,

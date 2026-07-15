@@ -51,6 +51,17 @@ class AudioMetersTest {
 
         assertEquals(78f, frame.y)
         assertEquals(246f, frame.y + frame.height)
+
+        val portraitClearance =
+            floatingAudioMeterFrame(
+                feed,
+                viewport,
+                width,
+                height,
+                bottomChromeClearance = 0f,
+                trailingEdgeGap = 70f,
+            )
+        assertEquals(feed.x + feed.width - width - 70f, portraitClearance.x)
     }
 
     @Test
