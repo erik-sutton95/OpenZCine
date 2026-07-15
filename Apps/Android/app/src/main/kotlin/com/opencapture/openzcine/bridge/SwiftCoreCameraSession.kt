@@ -577,7 +577,12 @@ class SwiftCoreCameraSession internal constructor(
                     }
 
                     override fun onEnded(message: String?) {
-                        if (message != null) markEventChannelEnded(attempt, message)
+                        if (message == null) return
+                        if (usbTransport == null) {
+                            reportEventChannelDegraded(attempt, message)
+                        } else {
+                            markTerminalEventChannelEnded(attempt, message)
+                        }
                     }
                 },
             )
@@ -589,25 +594,68 @@ class SwiftCoreCameraSession internal constructor(
     }
 
     /**
-     * Makes an unexpected event-channel loss terminal for this session. The
-     * native reader has already closed the command socket before this callback,
-     * so dropping to disconnected cannot leave a hidden, usable control link.
+     * Records a PTP-IP event-channel loss without dropping a still-healthy
+     * command or live-view socket. PTP-IP owns those sockets independently,
+     * matching the iOS session behavior; a later command or frame failure
+     * remains responsible for recovery.
      */
-    private fun markEventChannelEnded(attempt: Long, message: String) {
-        val ownsAttempt =
+    private fun reportEventChannelDegraded(attempt: Long, message: String) {
+        if (isCurrentAttempt(attempt)) phaseLogger("eventChannelEnded", message)
+    }
+
+    /**
+     * Tears down a USB session after an interrupt-endpoint failure. USB events
+     * share the claimed transport with commands, so this is terminal unlike a
+     * PTP-IP event-socket failure.
+     */
+    private fun markTerminalEventChannelEnded(attempt: Long, message: String) {
+        val connectionOwner =
             synchronized(attemptLock) {
-                if (activeAttempt != attempt) return@synchronized false
+                if (activeAttempt != attempt) return@synchronized null
                 activeAttempt = null
+                val owner = activeConnectionOwner
                 activeConnectionOwner = null
-                _state.value = CameraSessionState.Disconnected
-                true
+                // Keep monitor recovery paused until teardown releases the
+                // claimed USB transport. A reconnect before that point can
+                // contend for the body while its previous PTP slot is live.
+                _state.value = CameraSessionState.Connecting
+                owner
             }
-        if (!ownsAttempt) return
+        if (connectionOwner == null) return
         ignoreLiveRecordingStateUntilNanos = 0L
         cameraRecordingEventVersion = 0L
         _recordingState.value = CameraRecordingState.STANDBY
         stopPropertyRefresh(clearSnapshot = true)
         phaseLogger("eventChannelEnded", message)
+        propertyRefreshScope.launch {
+            try {
+                // The native event reader marks itself inactive before this
+                // callback, so this owned teardown cannot wait for its own
+                // reader thread. Match normal disconnect ownership: wait for
+                // any in-flight command, use IO for JNI, and only then allow
+                // monitor recovery to begin another USB attempt.
+                withContext(NonCancellable) {
+                    cameraCommandMutex.withLock {
+                        if (core.isAvailable) {
+                            withContext(propertyRefreshDispatcher) {
+                                core.disconnect(connectionOwner)
+                            }
+                        }
+                    }
+                }
+            } catch (error: Throwable) {
+                phaseLogger(
+                    "eventChannelCleanupFailed",
+                    error.message ?: "Camera event-channel cleanup failed.",
+                )
+            } finally {
+                synchronized(attemptLock) {
+                    if (activeAttempt == null && _state.value is CameraSessionState.Connecting) {
+                        _state.value = CameraSessionState.Disconnected
+                    }
+                }
+            }
+        }
     }
 
     /** Maps only established event codes; all other camera data remains raw. */

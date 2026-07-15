@@ -2064,11 +2064,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// event that the shared core has not classified yet.
     ///
     /// Idle reads time out normally and keep draining. Any other transport
-    /// failure ends the stream, closes the command socket (the session is no
-    /// longer trustworthy), and is passed to [onEnded] as an operator-facing
-    /// message. The callback is delivered at most once. A session owns one
-    /// drain for its lifetime; disconnect closes the event socket and joins its
-    /// reader before tearing down the command socket.
+    /// failure ends only this event stream and is passed to [onEnded] as an
+    /// operator-facing message. PTP-IP owns independent command and event
+    /// sockets: a closed event socket does not by itself prove that the
+    /// command or live-view channel has failed. Those paths retain their own
+    /// health checks and stay available until they fail or the owner tears the
+    /// session down. The callback is delivered at most once. A session owns
+    /// one drain for its lifetime; disconnect closes the event socket and
+    /// joins its reader before tearing down the command socket.
     public func startEventDrain(
         onEvent: @escaping @Sendable (PTPEvent) -> Void,
         onEnded: @escaping @Sendable (String?) -> Void
@@ -2141,7 +2144,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 return
             }
         #endif
-        guard let event, let command else {
+        guard let event, command != nil else {
             finishEventDrain(
                 onEnded: onEnded,
                 failure: PTPIPClientSessionError.connectionClosed.localizedDescription
@@ -2171,17 +2174,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
         }
 
-        if failure != nil {
-            // A broken event channel means this PTP-IP session can no longer
-            // guarantee camera-authoritative state. Close the command socket
-            // too, waking any in-flight transaction before Kotlin receives the
-            // terminal callback and is allowed to reconnect.
-            command.close()
-            transactionLock.lock()
-            isClosed = true
-            transactionLock.unlock()
-        }
-
+        // The event reader is permanently finished for this socket. Release
+        // its descriptor now while preserving the independent command link.
+        if failure != nil { event.close() }
         finishEventDrain(onEnded: onEnded, failure: failure)
     }
 
