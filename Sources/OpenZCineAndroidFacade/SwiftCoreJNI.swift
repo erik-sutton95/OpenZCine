@@ -111,6 +111,22 @@
         return array
     }
 
+    /// Copies a bounded JVM `float[]` into Swift-owned storage.
+    private func swiftFloats(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ value: jfloatArray?, maximumCount: Int
+    ) -> [Float]? {
+        guard let value else { return nil }
+        let fns = table(env)
+        let length = Int(fns.GetArrayLength!(env, value))
+        guard length <= maximumCount else { return nil }
+        guard length > 0 else { return [] }
+        var values = [Float](repeating: 0, count: length)
+        values.withUnsafeMutableBufferPointer { buffer in
+            fns.GetFloatArrayRegion!(env, value, 0, jsize(length), buffer.baseAddress)
+        }
+        return values
+    }
+
     /// Closes a Kotlin-owned raw USB transport before a Swift handle exists.
     ///
     /// `sessionConnectUsb` receives an already-claimed Android interface. If
@@ -164,6 +180,26 @@
             let arch = "unknown"
         #endif
         return javaString(env, "OpenZCineCore swift-android/\(arch)")
+    }
+
+    /// `SwiftCore.playbackAudioMeterStep(...)` — advances decoded-playback stereo
+    /// peaks through the shared dBFS conversion and attack/decay/peak-hold policy.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_playbackAudioMeterStep")
+    public func swiftCorePlaybackAudioMeterStep(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, previousPayload: jfloatArray?,
+        leftPeakLinear: jfloat, rightPeakLinear: jfloat, deltaTimeSeconds: jfloat
+    ) -> jfloatArray? {
+        let previous =
+            swiftFloats(
+                env, previousPayload, maximumCount: PlaybackAudioMeterWire.scalarCount)
+            ?? []
+        let next = PlaybackAudioMeterWire.advance(
+            previousPayload: previous,
+            leftPeakLinear: leftPeakLinear,
+            rightPeakLinear: rightPeakLinear,
+            deltaTimeSeconds: deltaTimeSeconds
+        )
+        return javaFloatArray(env, next.payload)
     }
 
     // MARK: - Protocol logic
