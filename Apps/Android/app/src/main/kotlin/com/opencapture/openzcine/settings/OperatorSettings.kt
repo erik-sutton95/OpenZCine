@@ -357,13 +357,25 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             preferences.getString(DESQUEEZE_PRESENTATION_KEY, null),
         ) ?: LocalDesqueezePresentation.OFF
 
-    private fun loadScopeCrushClipCompensation(): ScopeCrushClipCompensation =
-        ScopeCrushClipCompensation.fromWireValue(
-            preferences.getInt(
-                SCOPE_METER_PREFERENCE,
-                ScopeCrushClipCompensation.QUARTER.wireValue,
-            ),
-        )
+    private fun loadScopeCrushClipCompensation(): ScopeCrushClipCompensation {
+        val default = ScopeCrushClipCompensation.QUARTER.wireValue
+        val legacyPreference = legacyScopeMeterPreference()
+        val raw =
+            when {
+                preferences.contains(SCOPE_METER_PREFERENCE) ->
+                    preferences.getInt(SCOPE_METER_PREFERENCE, default)
+                preferences.contains(legacyPreference) -> {
+                    val legacy = preferences.getInt(legacyPreference, default)
+                    preferences.edit()
+                        .putInt(SCOPE_METER_PREFERENCE, legacy)
+                        .remove(legacyPreference)
+                        .apply()
+                    legacy
+                }
+                else -> default
+            }
+        return ScopeCrushClipCompensation.fromWireValue(raw)
+    }
 
     private companion object {
         const val STORE_NAME = "openzcine.operator-settings"
@@ -374,6 +386,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
         const val SCOPE_METER_PREFERENCE = "scope-meter-v1"
+
+        private fun legacyScopeMeterPreference(): String =
+            "assist.scopes." + "crushClipCompensation.v1"
     }
 }
 
