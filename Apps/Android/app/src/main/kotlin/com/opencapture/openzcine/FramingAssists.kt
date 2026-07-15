@@ -191,10 +191,9 @@ internal fun centeredGuideRect(
  *
  * [presentationState] carries the decoded frame dimensions used by
  * [LiveFeedView], so the live monitor resolves the same `LiveFeedContentRect`
- * rather than estimating against its enclosing zone. [feedRect] remains for
- * a caller that already owns an exact content rect. A Media3 playback caller
- * has neither seam today and intentionally falls back to its viewport until
- * OPE-69 replaces that renderer.
+ * rather than estimating against its enclosing zone. [feedRect] is the exact
+ * pixel-space seam for callers such as Media3 playback that already own the
+ * decoded image's aspect-fit rectangle.
  */
 @Composable
 internal fun LocalFramingAssistOverlay(

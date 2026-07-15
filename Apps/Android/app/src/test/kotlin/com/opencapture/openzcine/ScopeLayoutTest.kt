@@ -131,6 +131,31 @@ class ScopeLayoutTest {
     }
 
     @Test
+    fun `playback reference uses its already chrome-safe viewport directly`() {
+        val viewport = ZoneFrame(0f, 52f, 800f, 226f)
+        val feed = ZoneFrame(81f, 0f, 640f, 360f)
+
+        val frame =
+            falseColorReferenceDefaultFrame(
+                feed,
+                viewport,
+                bottomChromeClearance = 0f,
+            )
+
+        assertEquals(216f, frame.y)
+        assertEquals(268f, frame.y + frame.height)
+
+        val trailing =
+            falseColorReferenceDefaultFrame(
+                feed,
+                viewport,
+                bottomChromeClearance = 0f,
+                horizontalFraction = 1f,
+            )
+        assertEquals(feed.x + feed.width - trailing.width, trailing.x)
+    }
+
+    @Test
     fun `false color panel movement snaps to the iOS four point grid`() {
         assertEquals(
             ZoneFrame(60f, 100f, 264f, 52f),

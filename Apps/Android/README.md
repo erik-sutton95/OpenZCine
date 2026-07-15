@@ -225,10 +225,19 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   proxies open `MediaPlaybackScreen`; within the current filtered result it provides previous/next
   playable-proxy navigation, persisted favorite state, complete-cache-only native delivery,
   play/pause/replay and ±15-second transport, throttled preview plus final precise seeking,
-  player-local mute with Media3 movie-audio focus, and 1×–4× pinch/pan. Its View Assist switch
-  applies only the already-local framing/desqueeze overlay: the Media3 Surface does not expose
-  decoded pixels or an audio tap, so LUT/false-colour/peaking/zebra, scopes, and audio meters are
-  explicitly not represented as playback effects. JPEG/PNG stills open `MediaStillViewer`, which shows the
+  player-local mute with Media3 movie-audio focus, 1×–4× pinch/pan, tap-to-toggle transport,
+  and long-press frame scrubbing. Its playback-only View Assist toolbar persists independently
+  from the live monitor and applies LUT, false colour, peaking, zebra, framing/desqueeze, and
+  false-colour reference overlays to Media3's `TextureView`. Waveform and vectorscope panels
+  sample the decoded texture before those display effects, preserving clean-source analysis.
+  Tapping a toolbar tool still toggles only playback visibility. Long-pressing a configurable tool
+  opens a compact panel anchored above that toolbar, with outside-tap and Back dismissal plus
+  TalkBack long-click semantics. The panels reuse the live operator's LUT, false-colour, peaking,
+  zebra, scope, and framing configuration without copying persistence; audio remains tap-only
+  because the iOS playback meter has no operator options.
+  A passthrough Media3 PCM processor meters decoded movie audio through the shared Swift dBFS
+  ballistics and continues metering when only player output is muted. JPEG/PNG stills open
+  `MediaStillViewer`, which shows the
   camera thumbnail first, progressively refreshes a decoded cache preview, and supports 1×–4×
   pinch zoom/pan. HEIF/TIFF is attempted only after its complete cache publishes; unsupported
   HEIF decoders and Nikon RAW (`NEF`/`NRW`/`DNG`) remain an explicitly labelled camera-thumbnail

@@ -6,7 +6,9 @@ import android.os.Build
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +76,10 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
 
     ;
 
+    /** Whether a long press opens the iOS-equivalent quick-configuration panel. */
+    val hasConfiguration: Boolean
+        get() = this != AUDIO
+
     companion object {
         /** Local framing tools rendered from [OperatorSettings], never camera state. */
         val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, DESQ)
@@ -106,6 +113,7 @@ class AssistState(
     private val persistSelections: (FeedLutSelection, FeedFalseColorScale) -> Unit = { _, _ -> },
     private val persistScopeSelections: (Set<ScopeKind>, List<ScopeKind>) -> Unit = { _, _ -> },
     private val persistAudioMeters: (Boolean) -> Unit = {},
+    private val mirrorFeedEffectsState: Boolean = true,
     private val persist: (FeedEffects, ScopeKind?) -> Unit = { _, _ -> },
 ) {
     var effects: FeedEffects by mutableStateOf(initialEffects)
@@ -144,7 +152,7 @@ class AssistState(
         private set
 
     init {
-        FeedEffectsState.current = initialEffects
+        if (mirrorFeedEffectsState) FeedEffectsState.current = initialEffects
     }
 
     /** Whether [tool]'s pill renders lit. */
@@ -253,6 +261,28 @@ class AssistState(
         }
     }
 
+    /**
+     * Applies configuration owned by another assist context without copying
+     * that context's visibility or persistence. Playback uses this to mirror
+     * iOS's shared LUT/false-colour choices while retaining independent tool
+     * toggles and without replacing the live renderer mirror.
+     */
+    internal fun applySharedSelections(
+        lut: FeedLutSelection,
+        falseColorScale: FeedFalseColorScale,
+    ) {
+        check(!mirrorFeedEffectsState) {
+            "shared selections are only valid for a context-local assist state"
+        }
+        selectedLut = lut
+        selectedFalseColorScale = falseColorScale
+        effects =
+            effects.copy(
+                lut = lut.takeIf { effects.lut != null },
+                falseColor = falseColorScale.takeIf { effects.falseColor != null },
+            )
+    }
+
     private fun toggleScope(kind: ScopeKind, maximumActiveScopes: Int?): Boolean {
         if (kind !in selectedScopes && maximumActiveScopes != null && selectedScopes.size >= maximumActiveScopes) {
             return false
@@ -279,7 +309,7 @@ class AssistState(
 
     private fun update(next: FeedEffects) {
         effects = next
-        FeedEffectsState.current = next
+        if (mirrorFeedEffectsState) FeedEffectsState.current = next
         persistState()
     }
 
@@ -336,6 +366,8 @@ class AssistState(
             intentScope: ScopeKind?,
             intentScopes: List<ScopeKind>? = intentScope?.let(::listOf),
             availableStoredLut: (StoredLutSelection) -> Boolean = { true },
+            mirrorFeedEffectsState: Boolean = true,
+            persistConfigurationSelections: Boolean = true,
         ): AssistState {
             val fromIntent = intentEffects != null || intentScopes != null
             val legacyBuiltIn =
@@ -406,25 +438,28 @@ class AssistState(
                 initialLut = effects.lut ?: storedLut,
                 initialFalseColorScale = effects.falseColor ?: storedFalseColorScale,
                 initialAudioMetersEnabled = preferences.getBoolean(AUDIO_METERS_KEY, false),
+                mirrorFeedEffectsState = mirrorFeedEffectsState,
                 persistSelections = { lut, falseColorScale ->
-                    val editor = preferences.edit().putString("fcScale", falseColorScale.id)
-                    when (lut) {
-                        is FeedLutSelection.BuiltIn ->
-                            editor
-                                .putString("lut", lut.value.id)
-                                .putString(LUT_SELECTION_KIND_KEY, LUT_SELECTION_BUILT_IN)
-                                .remove(LUT_SELECTION_CATEGORY_KEY)
-                                .remove(LUT_SELECTION_FILE_KEY)
-                        is FeedLutSelection.Stored ->
-                            // Keep a legacy built-in fallback for an older app build, but only this
-                            // version reads the category/file pair. No external URI/path is stored.
-                            editor
-                                .putString("lut", FeedLut.LOG3G10_709.id)
-                                .putString(LUT_SELECTION_KIND_KEY, LUT_SELECTION_STORED)
-                                .putString(LUT_SELECTION_CATEGORY_KEY, lut.value.category.name)
-                                .putString(LUT_SELECTION_FILE_KEY, lut.value.fileName)
+                    if (persistConfigurationSelections) {
+                        val editor = preferences.edit().putString("fcScale", falseColorScale.id)
+                        when (lut) {
+                            is FeedLutSelection.BuiltIn ->
+                                editor
+                                    .putString("lut", lut.value.id)
+                                    .putString(LUT_SELECTION_KIND_KEY, LUT_SELECTION_BUILT_IN)
+                                    .remove(LUT_SELECTION_CATEGORY_KEY)
+                                    .remove(LUT_SELECTION_FILE_KEY)
+                            is FeedLutSelection.Stored ->
+                                // Keep a legacy built-in fallback for an older app build, but only this
+                                // version reads the category/file pair. No external URI/path is stored.
+                                editor
+                                    .putString("lut", FeedLut.LOG3G10_709.id)
+                                    .putString(LUT_SELECTION_KIND_KEY, LUT_SELECTION_STORED)
+                                    .putString(LUT_SELECTION_CATEGORY_KEY, lut.value.category.name)
+                                    .putString(LUT_SELECTION_FILE_KEY, lut.value.fileName)
+                        }
+                        editor.apply()
                     }
-                    editor.apply()
                 },
                 persistAudioMeters = { enabled ->
                     preferences.edit().putBoolean(AUDIO_METERS_KEY, enabled).apply()
@@ -454,15 +489,17 @@ fun AssistToolbar(
     state: AssistState,
     modifier: Modifier = Modifier,
     visibleTools: List<AssistTool> = AssistTool.entries.toList(),
+    imageEffectsAvailable: Boolean = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable,
     framingConfiguration: LocalFramingAssistConfiguration? = null,
     onToggleFramingTool: (AssistTool) -> Unit = {},
     hapticsEnabled: Boolean = true,
     enabled: Boolean = true,
     maximumActiveScopes: Int? = null,
     onScopeLimitReached: () -> Unit = {},
+    onLongPressTool: ((AssistTool) -> Unit)? = null,
 ) {
     val supportedTools =
-        if (Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable) {
+        if (imageEffectsAvailable) {
             visibleTools
         } else {
             visibleTools.filterNot { it in imageEffectTools }
@@ -521,7 +558,20 @@ fun AssistToolbar(
                     } else {
                         state.isOn(tool)
                     }
-                AssistToolCell(tool, isOn, enabled) {
+                AssistToolCell(
+                    tool = tool,
+                    isOn = isOn,
+                    enabled = enabled,
+                    onLongClick =
+                        onLongPressTool?.takeIf { tool.hasConfiguration }?.let { callback ->
+                            {
+                                if (hapticsEnabled) {
+                                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                }
+                                callback(tool)
+                            }
+                        },
+                ) {
                     var changed = true
                     if (isFramingTool) {
                         onToggleFramingTool(tool)
@@ -591,13 +641,24 @@ private fun ScrollChevron(leading: Boolean, visible: Boolean, modifier: Modifier
  * `AssistToolButton`, the mockup `.tool` box model with its 52pt floor).
  */
 @Composable
-private fun AssistToolCell(tool: AssistTool, isOn: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun AssistToolCell(
+    tool: AssistTool,
+    isOn: Boolean,
+    enabled: Boolean,
+    onLongClick: (() -> Unit)?,
+    onClick: () -> Unit,
+) {
     val tint = if (isOn) LiveDesign.accent else LiveDesign.muted
     Column(
         modifier =
             Modifier
                 .background(if (isOn) LiveDesign.accentDim else Color.Transparent, ChromeShape)
-                .chromeClickable(enabled, onClick)
+                .assistToolClickable(
+                    enabled = enabled,
+                    title = tool.settingsTitle,
+                    onLongClick = onLongClick,
+                    onClick = onClick,
+                )
                 .semantics {
                     contentDescription = tool.settingsTitle
                     stateDescription = if (isOn) "On" else "Off"
@@ -617,6 +678,28 @@ private fun AssistToolCell(tool: AssistTool, isOn: Boolean, enabled: Boolean, on
         )
     }
 }
+
+/** Keeps live-view tap behavior unchanged while adding explicit TalkBack long-click semantics. */
+@Composable
+private fun Modifier.assistToolClickable(
+    enabled: Boolean,
+    title: String,
+    onLongClick: (() -> Unit)?,
+    onClick: () -> Unit,
+): Modifier =
+    if (onLongClick == null) {
+        chromeClickable(enabled, onClick)
+    } else {
+        combinedClickable(
+            enabled = enabled,
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClickLabel = "Toggle $title",
+            onLongClickLabel = "Configure $title",
+            onLongClick = onLongClick,
+            onClick = onClick,
+        )
+    }
 
 /** Canvas stand-ins for the iOS SF Symbol per tool (`MonitorAssistTool.icon`). */
 @Composable

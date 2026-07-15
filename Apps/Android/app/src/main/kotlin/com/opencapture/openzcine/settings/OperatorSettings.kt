@@ -488,10 +488,21 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     /** Toggles one delivery ratio and keeps the guide tool's visibility truthful. */
     public fun toggleGuideRatio(ratio: LocalFramingAspectRatio) {
+        val next = toggleGuideRatioConfiguration(ratio)
+        guidesVisible.value = next.isNotEmpty()
+    }
+
+    /**
+     * Toggles only the shared guide configuration, leaving live/playback visibility to its caller.
+     * Playback uses this seam so changing a ratio cannot silently turn on the live-view overlay.
+     */
+    public fun toggleGuideRatioConfiguration(
+        ratio: LocalFramingAspectRatio,
+    ): Set<LocalFramingAspectRatio> {
         val next = selectedGuideRatiosState.value.toMutableSet()
         if (!next.add(ratio)) next.remove(ratio)
         setSelectedGuideRatios(next)
-        guidesVisible.value = next.isNotEmpty()
+        return selectedGuideRatiosState.value
     }
 
     /** The selected local anamorphic factor; it applies only when [desqueezeEnabled] is on. */

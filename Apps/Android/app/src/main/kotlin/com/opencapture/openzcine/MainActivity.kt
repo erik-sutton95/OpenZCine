@@ -319,6 +319,19 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val currentSessionState by active.state.collectAsState()
+                        val currentCameraProperties by active.cameraProperties.collectAsState()
+                        val playbackExposureAssistCameraInput =
+                            remember(
+                                currentCameraProperties.codec,
+                                currentCameraProperties.iso,
+                                currentCameraProperties.baseIso,
+                            ) {
+                                ExposureAssistCameraInput(
+                                    codec = currentCameraProperties.codec,
+                                    iso = currentCameraProperties.iso,
+                                    baseIso = currentCameraProperties.baseIso,
+                                )
+                            }
                         val monitorLinkHealth = remember(active) { AndroidLinkHealthMonitor() }
                         val disconnectToSavedCameraHome: (Boolean) -> Unit = { reconnect ->
                             val exitingSession = active
@@ -409,7 +422,10 @@ class MainActivity : ComponentActivity() {
                                         cameraID = cameraID,
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
+                                        liveAssistState = assist,
+                                        exposureAssistCameraInput = playbackExposureAssistCameraInput,
                                         operatorSettings = operatorSettings,
+                                        lutLibrary = lutLibrary,
                                         frameioController = frameioController,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         galleryFailureInjection =

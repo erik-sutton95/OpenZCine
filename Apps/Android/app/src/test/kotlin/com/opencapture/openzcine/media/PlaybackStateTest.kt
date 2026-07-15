@@ -74,6 +74,30 @@ class PlaybackStateTest {
     }
 
     @Test
+    fun `frame scrub maps one screen width to one clip duration and clamps`() {
+        assertEquals(
+            45_000L,
+            playbackFrameScrubTarget(
+                originMillis = 30_000L,
+                horizontalDeltaPixels = 250f,
+                viewportWidthPixels = 1_000,
+                durationMillis = 60_000L,
+            ),
+        )
+        assertEquals(60_000L, playbackFrameScrubTarget(30_000L, 1_000f, 1_000, 60_000L))
+        assertEquals(0L, playbackFrameScrubTarget(30_000L, -1_000f, 1_000, 60_000L))
+        assertEquals(30_000L, playbackFrameScrubTarget(30_000L, 500f, 0, 60_000L))
+    }
+
+    @Test
+    fun `vertical playback swipe reveals and hides chrome without stealing ambiguous drags`() {
+        assertEquals(true, playbackChromeVisibilityForSwipe(horizontalDeltaDp = 4f, verticalDeltaDp = -60f))
+        assertEquals(false, playbackChromeVisibilityForSwipe(horizontalDeltaDp = -4f, verticalDeltaDp = 60f))
+        assertNull(playbackChromeVisibilityForSwipe(horizontalDeltaDp = 0f, verticalDeltaDp = 44f))
+        assertNull(playbackChromeVisibilityForSwipe(horizontalDeltaDp = 50f, verticalDeltaDp = 55f))
+    }
+
+    @Test
     fun `pan remains inside the zoomed presentation including desqueeze`() {
         assertEquals(
             PlaybackPan(x = 0f, y = 300f),

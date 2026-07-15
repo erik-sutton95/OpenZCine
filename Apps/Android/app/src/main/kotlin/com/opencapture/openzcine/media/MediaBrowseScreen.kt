@@ -75,6 +75,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.openzcine.AssistState
+import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FilmGlyph
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -84,6 +86,7 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -204,7 +207,10 @@ private fun frameioDeliverySummary(
 internal fun MediaBrowseScreen(
     cameraID: String,
     cameraConnected: Boolean,
+    liveAssistState: AssistState,
+    exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
+    lutLibrary: AndroidLutLibrary? = null,
     frameioController: FrameioDeliveryController,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
@@ -212,6 +218,12 @@ internal fun MediaBrowseScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val playbackAssistState =
+        remember(context, lutLibrary) {
+            PlaybackAssistState.restore(context, liveAssistState) { selection ->
+                lutLibrary?.contains(selection) == true
+            }
+        }
     val cacheStore =
         remember(context) {
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
@@ -756,6 +768,11 @@ internal fun MediaBrowseScreen(
                 favoriteIDs = favorites,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
                 galleryFailureInjection = galleryFailureInjection,
+                playbackAssistState = playbackAssistState,
+                sharedAssistState = liveAssistState,
+                exposureAssistCameraInput = exposureAssistCameraInput,
+                operatorSettings = operatorSettings,
+                lutLibrary = lutLibrary,
                 onToggleFavorite = ::toggleFavorite,
                 onClose = {
                     playingClip = null

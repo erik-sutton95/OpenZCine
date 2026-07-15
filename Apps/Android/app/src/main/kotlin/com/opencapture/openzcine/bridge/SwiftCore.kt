@@ -36,6 +36,18 @@ object SwiftCore {
     external fun coreVersion(): String
 
     /**
+     * Advances decoded-playback stereo peaks through Swift's shared dBFS and meter-ballistics
+     * policy. [previousPayload] is empty for a new meter or the complete six-value payload from
+     * the prior call; the returned state includes both peak ages so hold survives Android polls.
+     */
+    external fun playbackAudioMeterStep(
+        previousPayload: FloatArray,
+        leftPeakLinear: Float,
+        rightPeakLinear: Float,
+        deltaTimeSeconds: Float,
+    ): FloatArray?
+
+    /**
      * Derives the camera access-point SSID from a PTP friendly name
      * (`ZR_6001234` → `NIKON_ZR_01234`), or null when the name is not a ZR.
      */

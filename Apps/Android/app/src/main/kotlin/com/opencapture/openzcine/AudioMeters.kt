@@ -56,8 +56,8 @@ internal fun audioMeterPanelSize(isDebugFixture: Boolean): Pair<Float, Float> =
  * Floating camera-audio panel for the landscape monitor.
  *
  * This mirrors the iOS audio meter's bottom-trailing default and normalized
- * drag persistence. Portrait intentionally follows iOS's current behavior:
- * floating overlay panels are suppressed there in favour of the fit layout.
+ * drag persistence. Live portrait suppresses this panel at its caller, while
+ * playback may mount it against the exact aspect-fit video rectangle.
  */
 @Composable
 internal fun AudioMetersOverlay(
@@ -65,12 +65,26 @@ internal fun AudioMetersOverlay(
     sensitivity: String?,
     feed: ZoneFrame,
     viewport: ZoneFrame,
+    placementStoreName: String = "audioMeterPlacement",
+    bottomChromeClearance: Float = AUDIO_PANEL_BOTTOM_CHROME_CLEARANCE,
+    trailingEdgeGap: Float = AUDIO_PANEL_EDGE_GAP,
 ) {
     val context = LocalContext.current.applicationContext
-    val store = remember(context) { AudioMeterPlacementStore(context) }
+    val store =
+        remember(context, placementStoreName) {
+            AudioMeterPlacementStore(context, placementStoreName)
+        }
     val isDebugFixture = levels?.isDebugFixture == true
     val (width, height) = audioMeterPanelSize(isDebugFixture)
-    val default = floatingAudioMeterFrame(feed, viewport, width, height)
+    val default =
+        floatingAudioMeterFrame(
+            feed,
+            viewport,
+            width,
+            height,
+            bottomChromeClearance,
+            trailingEdgeGap,
+        )
     var frame by remember(default, viewport) { mutableStateOf(store.resolve(default, viewport)) }
     val density = LocalDensity.current
 
@@ -104,15 +118,17 @@ internal fun floatingAudioMeterFrame(
     viewport: ZoneFrame,
     width: Float,
     height: Float,
+    bottomChromeClearance: Float = AUDIO_PANEL_BOTTOM_CHROME_CLEARANCE,
+    trailingEdgeGap: Float = AUDIO_PANEL_EDGE_GAP,
 ): ZoneFrame {
     val bottomEdge =
         min(
             feed.y + feed.height,
-            viewport.y + viewport.height - AUDIO_PANEL_BOTTOM_CHROME_CLEARANCE,
+            viewport.y + viewport.height - bottomChromeClearance.coerceAtLeast(0f),
         )
     return clampScopeFrame(
         ZoneFrame(
-            x = feed.x + feed.width - width - AUDIO_PANEL_EDGE_GAP,
+            x = feed.x + feed.width - width - trailingEdgeGap.coerceAtLeast(0f),
             y = bottomEdge - height - AUDIO_PANEL_EDGE_GAP,
             width = width,
             height = height,
@@ -283,8 +299,8 @@ private fun DrawScope.drawAudioMeters(levels: LiveAudioMeterLevels?) {
 }
 
 /** Current Android equivalent of iOS's persisted movable audio-panel centre. */
-private class AudioMeterPlacementStore(context: Context) {
-    private val preferences = context.getSharedPreferences("audioMeterPlacement", Context.MODE_PRIVATE)
+private class AudioMeterPlacementStore(context: Context, name: String) {
+    private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
     fun resolve(default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
         if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
