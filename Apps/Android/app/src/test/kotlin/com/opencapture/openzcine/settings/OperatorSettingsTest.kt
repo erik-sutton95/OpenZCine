@@ -75,6 +75,21 @@ class OperatorSettingsTest {
     }
 
     @Test
+    fun `legacy visible assist set adds traffic lights once without undoing a later hide`() {
+        store.edit()
+            .putStringSet("display.assistToolbar.visible.v1", linkedSetOf("LUT", "PEAK"))
+            .apply()
+
+        val migrated = OperatorSettings(store)
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.LIGHTS))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.PEAK))
+        assertFalse(migrated.isAssistToolbarToolVisible(AssistTool.WAVE))
+
+        migrated.toggleAssistToolbarToolVisibility(AssistTool.LIGHTS)
+        assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.LIGHTS))
+    }
+
+    @Test
     fun `toolbar order reconciles malformed stored data and retains moves`() {
         store.edit()
             .putString("display.assistToolbar.order.v1", "VECTOR,UNKNOWN,VECTOR,LUT")
@@ -115,6 +130,41 @@ class OperatorSettingsTest {
         assertEquals(LocalFramingGuide.CINEMA_239, restored.framingGuide)
         assertEquals(LocalDesqueezePresentation.X165, restored.desqueezePresentation)
         assertTrue(restored.localFramingAssistConfiguration.accessibilitySummary.contains("unchanged"))
+    }
+
+    @Test
+    fun `scope compensation defaults to quarter and round trips its Swift raw value`() {
+        val settings = OperatorSettings(store)
+        assertEquals(ScopeCrushClipCompensation.QUARTER, settings.scopeCrushClipCompensation)
+        assertTrue(settings.histogramTrafficLightsEnabled.value)
+
+        ScopeCrushClipCompensation.entries.forEach { compensation ->
+            settings.scopeCrushClipCompensation = compensation
+            assertEquals(compensation.wireValue, store.getInt("assist.scopes.crushClipCompensation.v1", -1))
+            assertEquals(compensation, OperatorSettings(store).scopeCrushClipCompensation)
+        }
+        settings.histogramTrafficLightsEnabled.value = false
+
+        assertFalse(store.getBoolean("assist.scopes.histogramTrafficLights.v1", true))
+        assertEquals(
+            ScopeCrushClipCompensation.ONE,
+            OperatorSettings(store).scopeCrushClipCompensation,
+        )
+        assertFalse(OperatorSettings(store).histogramTrafficLightsEnabled.value)
+    }
+
+    @Test
+    fun `missing or legacy compensation values migrate with iOS-compatible defaults and clamps`() {
+        assertEquals(ScopeCrushClipCompensation.QUARTER, OperatorSettings(store).scopeCrushClipCompensation)
+
+        store.edit().putInt("assist.scopes.crushClipCompensation.v1", 5).apply()
+        assertEquals(ScopeCrushClipCompensation.HALF, OperatorSettings(store).scopeCrushClipCompensation)
+
+        store.edit().putInt("assist.scopes.crushClipCompensation.v1", 15).apply()
+        assertEquals(ScopeCrushClipCompensation.ONE, OperatorSettings(store).scopeCrushClipCompensation)
+
+        store.edit().putInt("assist.scopes.crushClipCompensation.v1", -1).apply()
+        assertEquals(ScopeCrushClipCompensation.ZERO, OperatorSettings(store).scopeCrushClipCompensation)
     }
 
     @Test

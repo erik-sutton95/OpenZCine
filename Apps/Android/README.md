@@ -74,23 +74,35 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   counter auto-degrades one tier under sustained overruns. Debug override:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
   (`full`/`blur`/`flat`; lowers only).
-- **Scopes v1:** waveform, RGB parade, histogram, and vectorscope render at ~10 Hz from the
-  live feed. All axis/curve math lives in the shared core behind the facade
-  (`Sources/OpenZCineAndroidFacade/ScopeFrameWire.swift` ↔ `bridge/ScopeWire.kt`): the 3-anchor
-  display axis (log-black floor → 5% crush line, fixed per-curve mid grey, clip warning → 95%
-  line) and the tone-mapped vectorscope come back as flat payloads; Kotlin only reduces the
-  JPEG (1/2ⁿ decode to ≤160 px wide) and draws (`ScopeView.kt`). The assist toolbar owns the
-  scope toggle; the debug intent still seeds it for tests:
-  `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true --es zc.scopes wave|parade|histo|vector`.
+- **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
+  monitor-owned ~10 Hz clean-frame sampler. The shared core owns all axis/curve and Traffic
+  Lights decisions behind the facade (`Sources/OpenZCineAndroidFacade/ScopeFrameWire.swift` ↔
+  `bridge/ScopeWire.kt`): the 3-anchor display axis (log-black floor → 5% crush line, fixed
+  per-curve mid grey, clip warning → 95% line), tone-mapped vectorscope, and RGB goal-post
+  direction/fill/clip/crush values come back as flat payloads. Kotlin reduces each JPEG once
+  (1/2ⁿ decode to ≤160 px wide) and draws (`ScopeView.kt`). Scope tools toggle independently;
+  landscape panels are draggable with per-scope persisted placement, while portrait displays the
+  two most-recent active scopes in canonical order. The histogram carries the iOS-style RGB
+  crush/clip edge blocks (default on) and a 95–100 IRE clip tint from that same Swift result.
+  View Assist persists iOS's five-step crush/clip compensation selector (`0`, `¼`, `½`, `¾`,
+  `1` stop) and forwards its raw value to Swift; Kotlin never remeasures the Traffic Lights
+  result. Debug intent selections are
+  comma-separated:
+
+  ```sh
+  adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true \\
+    --es zc.scopes wave,parade,lights
+  ```
+
 - **Feed effects (view assists):** `FeedEffectsRenderer` bakes LUT preview, false colour,
   focus peaking, and zebras into the live feed in one AGSL pass. All colour math is baked in
   the shared Swift core (`Sources/OpenZCineAndroidFacade/FeedEffectsWire.swift` — cubes from
   `MonitorLUT`/`FalseColorMap`, thresholds from `ExposureSignalMapping`); Kotlin only uploads
   textures/uniforms and interpolates. Requires **API 33 (AGSL)** and the staged Swift core —
   below that the plain feed still renders (minSdk 29) and a warning is logged. The assist
-  toolbar (`AssistToolbar.kt`) is the operator switch — LUT/PEAK/FALSE/ZEBRA plus the four
-  scope pills, toggles persisted in SharedPreferences. The debug intent still seeds an exact
-  session state for tests (intent beats persistence):
+  toolbar (`AssistToolbar.kt`) is the operator switch — LUT/PEAK/FALSE/ZEBRA plus five
+  independently selectable scope pills, toggles persisted in SharedPreferences. The debug intent
+  still seeds an exact session state for tests (intent beats persistence):
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
   --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
   with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).

@@ -3,6 +3,7 @@ package com.opencapture.openzcine.bridge
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 /** Pure-JVM check of the scope wire decoding against hand-built payloads. */
 class ScopeWireTest {
@@ -40,11 +41,58 @@ class ScopeWireTest {
         assertEquals(1f, traces.histogramRed[0])
         assertEquals(2f, traces.histogramGreen[255])
         assertEquals(3f, traces.histogramBlue[128])
+        assertNull(traces.trafficLights) // Exact legacy payload remains valid.
     }
 
     @Test
     fun rejectsTornTraces() {
         assertFailsWith<IllegalArgumentException> { ScopeTraces.parse(floatArrayOf(3f, 0f)) }
         assertFailsWith<IllegalArgumentException> { ScopeTraces.parse(FloatArray(0)) }
+    }
+
+    @Test
+    fun rejectsInvalidPointCountsBeforeReadingPayloadRecords() {
+        listOf(Float.NaN, Float.NEGATIVE_INFINITY, -1f, 0.5f, 1_000_000f).forEach { count ->
+            assertFailsWith<IllegalArgumentException> { ScopeTraces.parse(floatArrayOf(count)) }
+        }
+    }
+
+    @Test
+    fun parsesSwiftTrafficLightsTrailerWithoutRecomputingIt() {
+        val legacy = floatArrayOf(0f) + FloatArray(4 * ScopeTraces.HISTOGRAM_BINS)
+        val trailer =
+            floatArrayOf(
+                31_415f, 1f,
+                0.6f, 1f, 0f, 1f, 0.2f, // red: over / clipped
+                0.5f, 0f, 0f, 0f, 0f, // green: balanced
+                0.2f, 0f, 1f, 2f, 0.6f, // blue: under / crushed
+            )
+
+        val reading = ScopeTraces.parse(legacy + trailer).trafficLights
+        requireNotNull(reading)
+        assertEquals(TrafficLightsBarSide.OVER, reading.red.side)
+        assertEquals(0.2f, reading.red.fill)
+        assertEquals(TrafficLightsBarSide.NEUTRAL, reading.green.side)
+        assertEquals(TrafficLightsBarSide.UNDER, reading.blue.side)
+        assertEquals(true, reading.blue.crush)
+    }
+
+    @Test
+    fun rejectsPartialOrMalformedTrafficLightsTrailer() {
+        val legacy = floatArrayOf(0f) + FloatArray(4 * ScopeTraces.HISTOGRAM_BINS)
+        assertFailsWith<IllegalArgumentException> {
+            ScopeTraces.parse(legacy + floatArrayOf(31_415f))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ScopeTraces.parse(
+                legacy +
+                    floatArrayOf(
+                        31_415f, 1f,
+                        0.6f, 1f, 0f, 9f, 0.2f,
+                        0.5f, 0f, 0f, 0f, 0f,
+                        0.2f, 0f, 1f, 2f, 0.6f,
+                    ),
+            )
+        }
     }
 }

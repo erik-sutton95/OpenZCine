@@ -81,18 +81,28 @@ object DemoHarness {
      */
     fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
 
-    /** String intent extra selecting a scope: `wave|parade|histo|vector`. */
+    /** String intent extra selecting scopes: `wave,parade,histo,vector,lights`. */
     const val EXTRA_SCOPES = "zc.scopes"
 
     /**
-     * The scope selected by the debug intent, or null. Activate with e.g.
+     * The first scope selected by the debug intent, or null. Kept for callers
+     * that still use the pre-multi-scope seam; new monitor wiring uses
+     * [scopeKinds]. Activate with e.g.
      * ```
      * adb shell am start -n com.opencapture.openzcine/.MainActivity \
      *   --ez zc.demo.feed true --es zc.scopes wave
      * ```
      */
     fun scopeKind(intent: Intent): ScopeKind? =
-        ScopeKind.fromToken(intent.getStringExtra(EXTRA_SCOPES))
+        scopeKinds(intent)?.firstOrNull()
+
+    /**
+     * Ordered, deduplicated debug scope selection. Comma-separated values keep
+     * screenshots deterministic while exercising concurrent panels:
+     * `--es zc.scopes wave,parade,lights`.
+     */
+    fun scopeKinds(intent: Intent): List<ScopeKind>? =
+        ScopeKind.parseTokens(intent.getStringExtra(EXTRA_SCOPES))
 
     /** String intent extra carrying the camera host for a real Swift-core session. */
     const val EXTRA_SESSION_HOST = "zc.session.host"

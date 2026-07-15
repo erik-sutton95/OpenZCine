@@ -528,6 +528,41 @@ private fun AssistRows(
         }
     }
     SettingsGroupCard(
+        title = "Traffic Lights",
+        caption = "Configure the shared Swift meter used by the histogram and goal-post panel.",
+    ) {
+        SettingsSwitchRow(
+            "Histogram Traffic Lights",
+            isOn = settings.histogramTrafficLightsEnabled.value,
+            showTopDivider = false,
+        ) {
+            settings.histogramTrafficLightsEnabled.toggle()
+            onInteraction()
+        }
+        Text(
+            "Show small RGB edge blocks for crushed and clipped channels.",
+            style = chromeStyle(10.5f, FontWeight.Normal),
+            color = LiveDesign.muted,
+        )
+        Text(
+            "Crush/Clip Compensation",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        ScopeCrushClipCompensationChoices(
+            selected = settings.scopeCrushClipCompensation,
+            onSelect = { compensation ->
+                settings.scopeCrushClipCompensation = compensation
+                onInteraction()
+            },
+        )
+        Text(
+            "Forwarded to the shared Swift meter; Kotlin only stores and presents this choice.",
+            style = chromeStyle(10.5f, FontWeight.Normal),
+            color = LiveDesign.muted,
+        )
+    }
+    SettingsGroupCard(
         title = "Local Framing",
         caption = "OpenZCine draws these monitor-only overlays. They never change the camera's Grid Display setting.",
     ) {
@@ -670,6 +705,48 @@ private fun FramingAssistChoice(
             color = if (selected) LiveDesign.accent else LiveDesign.muted,
             maxLines = 1,
         )
+    }
+}
+
+/** Five-option Android mirror of iOS's `SettingsCrushClipSegmented` control. */
+@Composable
+private fun ScopeCrushClipCompensationChoices(
+    selected: ScopeCrushClipCompensation,
+    onSelect: (ScopeCrushClipCompensation) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ScopeCrushClipCompensation.entries.forEach { option ->
+            val active = option == selected
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .background(
+                        if (active) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
+                        ChromeShape,
+                    )
+                    .border(1.dp, if (active) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
+                    .selectable(
+                        selected = active,
+                        role = Role.RadioButton,
+                        onClick = { onSelect(option) },
+                    )
+                    .semantics {
+                        contentDescription = "${option.label} stops crush/clip compensation"
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    option.compactLabel,
+                    style = chromeStyle(15f, FontWeight.SemiBold, mono = true),
+                    color = if (active) LiveDesign.accent else LiveDesign.muted,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 

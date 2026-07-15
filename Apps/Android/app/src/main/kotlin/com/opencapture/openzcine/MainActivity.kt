@@ -238,6 +238,7 @@ class MainActivity : ComponentActivity() {
                                 applicationContext,
                                 FeedEffectsState.current,
                                 DemoHarness.scopeKind(intent),
+                                DemoHarness.scopeKinds(intent),
                             )
                         }
                         val currentSessionState by active.state.collectAsState()

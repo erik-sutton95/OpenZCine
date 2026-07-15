@@ -488,7 +488,12 @@ fun MonitorScreen(
         // landscape map is mode-invariant (iOS gates chrome shell-side), but
         // the portrait map encodes per-mode zones, so mode/scope key the map
         // alongside geometry.
-        val scopeCount = if (assist.scope != null) 1 else 0
+        // Portrait's shared scopes zone must reflect panels actually mounted,
+        // not every remembered landscape scope. The selection mirrors iOS:
+        // two newest activations, then canonical presentation order.
+        val portraitScopes =
+            if (isPortrait && dispIndex == 0) assist.displayedPortraitScopes else emptyList()
+        val scopeCount = portraitScopes.size
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
@@ -748,20 +753,22 @@ fun MonitorScreen(
                 }
             }
         }
-        // Scope panel: toolbar-toggled (seeded by `--es zc.scopes`). Landscape
-        // floats it over the feed (the map carries no scopes zone there);
-        // portrait mounts the stacked zone the map emits (fit + live only).
-        val activeScope = assist.scope
-        if (!isCommand && activeScope != null && activeFrameSource != null) {
-            val scopeFrame =
-                if (isPortrait) {
-                    zones.scopes?.let {
-                        ZoneFrame(it.x + 12f, it.y, it.width - 24f, it.height)
-                    }
-                } else {
-                    zones.scopes ?: floatingScopeFrame(activeScope, zones.feed, zones.infoBar)
-            }
-            scopeFrame?.let { ScopePanel(activeScope, activeFrameSource, Modifier.zone(it)) }
+        // One monitor-owned sampler serves every toolbar-selected scope. In
+        // landscape all selected panels float independently; portrait mounts
+        // only its recency-selected ≤2 panels in the shared zone-map frame.
+        if (!isCommand && assist.selectedScopes.isNotEmpty() && activeFrameSource != null) {
+            ScopePanels(
+                selectedScopes = assist.selectedScopes,
+                portraitScopes = portraitScopes,
+                crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
+                histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
+                source = activeFrameSource,
+                isPortrait = isPortrait,
+                feed = zones.feed,
+                infoBar = zones.infoBar,
+                scopeZone = zones.scopes,
+                viewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight),
+            )
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).
