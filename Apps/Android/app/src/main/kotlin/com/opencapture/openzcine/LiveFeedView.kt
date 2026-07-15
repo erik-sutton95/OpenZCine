@@ -43,6 +43,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -573,8 +574,8 @@ internal fun LiveFeedColorModeNotice(
     if (!effectsActive) return
     val copy =
         when (colorMode) {
-            LiveFeedColorMode.HDR -> "HDR LIVE VIEW · IMAGE ASSISTS OFF"
-            LiveFeedColorMode.UNSUPPORTED -> "LIVE COLOR FORMAT · IMAGE ASSISTS OFF"
+            LiveFeedColorMode.HDR -> stringResource(R.string.feed_hdr_assists_off)
+            LiveFeedColorMode.UNSUPPORTED -> stringResource(R.string.feed_color_assists_off)
             LiveFeedColorMode.UNKNOWN,
             LiveFeedColorMode.SDR,
             -> return
@@ -655,16 +656,45 @@ internal fun FalseColorReferenceOverlay(
     var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
     val density = LocalDensity.current
     val view = LocalView.current
+    val referenceDescription = stringResource(R.string.false_color_reference_description)
+    val recenterDescription = stringResource(R.string.false_color_recenter_description)
+    val copy =
+        FalseColorReferenceCopy(
+            title = stringResource(R.string.false_color_title),
+            scale = stringResource(presentation.scale.labelResource()),
+            stopLabels =
+                listOf(
+                    stringResource(R.string.false_color_axis_min),
+                    stringResource(R.string.false_color_axis_minus_three),
+                    stringResource(R.string.false_color_axis_middle_gray),
+                    stringResource(R.string.false_color_axis_skin),
+                    stringResource(R.string.false_color_axis_plus_two),
+                    stringResource(R.string.false_color_axis_max),
+                ),
+            ireLabels =
+                listOf(
+                    stringResource(R.string.false_color_axis_clip_shadows),
+                    stringResource(R.string.false_color_axis_middle_gray),
+                    stringResource(R.string.false_color_axis_skin_high),
+                    stringResource(R.string.false_color_axis_highlights_clip),
+                ),
+            limitsLabels =
+                listOf(
+                    stringResource(R.string.false_color_axis_crushed),
+                    stringResource(R.string.false_color_axis_midtones),
+                    stringResource(R.string.false_color_axis_clipped),
+                ),
+        )
     Canvas(
         modifier
             .zone(frame)
             .glass(ChromeShape)
             .semantics {
-                contentDescription = "False color reference, movable panel"
+                contentDescription = referenceDescription
                 if (placementStore != null) {
                     customActions =
                         listOf(
-                            CustomAccessibilityAction("Recenter false color reference") {
+                            CustomAccessibilityAction(recenterDescription) {
                                 placementStore.recenter(panelID)
                                 frame = clampScopeFrame(default, resolvedLayout.safeBounds)
                                 true
@@ -705,7 +735,7 @@ internal fun FalseColorReferenceOverlay(
                 }
             },
     ) {
-        drawFalseColorReference(presentation)
+        drawFalseColorReference(presentation, copy)
     }
 }
 
@@ -801,8 +831,25 @@ private class FalseColorReferencePlacementStore(context: Context, name: String) 
 }
 
 /** Draws the Swift-derived palette geometry and camera-aware reference axis. */
+private data class FalseColorReferenceCopy(
+    val title: String,
+    val scale: String,
+    val stopLabels: List<String>,
+    val ireLabels: List<String>,
+    val limitsLabels: List<String>,
+)
+
+@androidx.annotation.StringRes
+internal fun FeedFalseColorScale.labelResource(): Int =
+    when (this) {
+        FeedFalseColorScale.STOPS -> R.string.false_color_scale_stops
+        FeedFalseColorScale.IRE -> R.string.false_color_scale_ire
+        FeedFalseColorScale.LIMITS -> R.string.false_color_scale_limits
+    }
+
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorReference(
     presentation: FalseColorReferencePresentation,
+    copy: FalseColorReferenceCopy,
 ) {
     val reference = presentation.reference
     if (reference.segments.isEmpty()) return
@@ -844,25 +891,25 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorRefer
         paint.textSize = 8.5.dp.toPx()
         paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
         paint.textAlign = android.graphics.Paint.Align.LEFT
-        canvas.nativeCanvas.drawText("False Color", barLeft, top + 13.dp.toPx(), paint)
+        canvas.nativeCanvas.drawText(copy.title, barLeft, top + 13.dp.toPx(), paint)
         paint.color = LiveDesign.muted.toArgb()
         paint.textSize = 7.5.dp.toPx()
         paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
         paint.textAlign = android.graphics.Paint.Align.RIGHT
         val curve = if (reference.curveOrdinal == 0) "L3G10" else "N-Log"
-        canvas.nativeCanvas.drawText("${presentation.scale.label} · $curve", left + panelWidth - padding, top + 13.dp.toPx(), paint)
+        canvas.nativeCanvas.drawText("${copy.scale} · $curve", left + panelWidth - padding, top + 13.dp.toPx(), paint)
 
         paint.textSize = 5.5.dp.toPx()
         paint.textAlign = android.graphics.Paint.Align.CENTER
         val labels: List<Pair<String, Float>> =
             if (presentation.scale == FeedFalseColorScale.STOPS) {
-                listOf("Min", "−3", "18%", "Skin", "+2", "Max").zip(reference.stopMarkerFractions.toList())
+                copy.stopLabels.zip(reference.stopMarkerFractions.toList())
             } else {
                 val axis =
                     if (presentation.scale == FeedFalseColorScale.IRE) {
-                        listOf("clip / shadows", "18%", "skin hi", "highlights → clip")
+                        copy.ireLabels
                     } else {
-                        listOf("crushed", "midtones untouched", "clipped")
+                        copy.limitsLabels
                     }
                 axis.mapIndexed { index, label -> label to index.toFloat() / (axis.size - 1) }
             }

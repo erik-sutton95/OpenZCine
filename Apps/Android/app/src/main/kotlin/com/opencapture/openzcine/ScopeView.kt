@@ -55,7 +55,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -117,12 +119,12 @@ private const val SCOPE_RESIZE_GRIP_PAD =
 private const val PLAYBACK_SCOPE_PLACEMENT_STORE = "playbackScopePanelPlacement"
 
 /** Android mirror of iOS's canonical scope-tool order. */
-enum class ScopeKind(val token: String, val title: String, val chip: String) {
-    WAVEFORM("wave", "WAVE", "LUMA"),
-    PARADE("parade", "PARADE", "RGB"),
-    HISTOGRAM("histo", "HISTO", "RGBL"),
-    VECTORSCOPE("vector", "VECTOR", "MON · 1X"),
-    TRAFFIC_LIGHTS("lights", "TL", "RGB"),
+enum class ScopeKind(val token: String) {
+    WAVEFORM("wave"),
+    PARADE("parade"),
+    HISTOGRAM("histo"),
+    VECTORSCOPE("vector"),
+    TRAFFIC_LIGHTS("lights"),
     ;
 
     companion object {
@@ -156,6 +158,18 @@ enum class ScopeKind(val token: String, val title: String, val chip: String) {
             canonical.filter(selected::contains).joinToString(",") { it.token }
     }
 }
+
+@Composable
+private fun scopeTitle(kind: ScopeKind): String =
+    stringResource(
+        when (kind) {
+            ScopeKind.WAVEFORM -> R.string.scope_title_waveform
+            ScopeKind.PARADE -> R.string.scope_title_parade
+            ScopeKind.HISTOGRAM -> R.string.scope_title_histogram
+            ScopeKind.VECTORSCOPE -> R.string.scope_title_vectorscope
+            ScopeKind.TRAFFIC_LIGHTS -> R.string.scope_title_traffic_lights
+        },
+    )
 
 /** Which Swift payloads the shared monitor sampler must retain for visible scopes. */
 data class ScopeSamplingDemand(
@@ -832,6 +846,10 @@ internal fun FloatingScopePanel(
 ) {
     val density = LocalDensity.current
     val view = LocalView.current
+    val localizedTitle = scopeTitle(kind)
+    val panelDescription = stringResource(R.string.scope_panel_description, localizedTitle)
+    val recenterDescription = stringResource(R.string.scope_panel_recenter, localizedTitle)
+    val resizeDescription = stringResource(R.string.scope_panel_resize, localizedTitle)
     val panelID = kind.monitorAnalysisPanelID()
     fun resolvedFrame(): ZoneFrame =
         placementStore?.resolve(panelID, default, panelLayout)
@@ -886,11 +904,11 @@ internal fun FloatingScopePanel(
             Modifier
                 .size(frame.width.dp, frame.height.dp)
                 .semantics {
-                    contentDescription = "${kind.title} analysis panel, movable"
+                    contentDescription = panelDescription
                     if (placementStore != null) {
                         customActions =
                             listOf(
-                                CustomAccessibilityAction("Recenter ${kind.title} panel") {
+                                CustomAccessibilityAction(recenterDescription) {
                                     placementStore.recenter(panelID)
                                     frame = clampScopeFrame(default, panelLayout.safeBounds)
                                     true
@@ -954,7 +972,7 @@ internal fun FloatingScopePanel(
                     (frame.height - SCOPE_RESIZE_GRIP_VISUAL_SIZE).dp,
                 )
                 .size(SCOPE_RESIZE_GRIP_HIT_SIZE.dp)
-                .semantics { contentDescription = "Resize ${kind.title} panel" }
+                .semantics { contentDescription = resizeDescription }
                 .pointerInput(
                     kind,
                     default,
@@ -1047,13 +1065,29 @@ private fun ScopePanel(
         return
     }
     val resolvedAnchors = anchors ?: return
+    val vectorLabels =
+        listOf(
+            stringResource(R.string.scope_vector_red),
+            stringResource(R.string.scope_vector_magenta),
+            stringResource(R.string.scope_vector_blue),
+            stringResource(R.string.scope_vector_cyan),
+            stringResource(R.string.scope_vector_green),
+            stringResource(R.string.scope_vector_yellow),
+        )
     Box(
         modifier
             .background(ScopePalette.panelBackground, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape),
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            drawScope(kind, resolvedAnchors, data, histogramTrafficLightsEnabled, configuration)
+            drawScope(
+                kind,
+                resolvedAnchors,
+                data,
+                histogramTrafficLightsEnabled,
+                configuration,
+                vectorLabels,
+            )
         }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(top = 4.dp),
@@ -1061,7 +1095,7 @@ private fun ScopePanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                kind.title,
+                scopeTitle(kind),
                 style = chromeStyle(10.5f, FontWeight.Bold, mono = true),
                 color = LiveDesign.text.copy(alpha = 0.66f),
                 maxLines = 1,
@@ -1077,13 +1111,38 @@ private fun ScopePanel(
 }
 
 /** Compact current-option readout in each scope title bar. */
+@Composable
 private fun scopeChip(kind: ScopeKind, configuration: ScopeAssistConfiguration): String =
     when (kind) {
-        ScopeKind.WAVEFORM -> configuration.waveformMode.label
-        ScopeKind.PARADE -> configuration.paradeMode.label
-        ScopeKind.HISTOGRAM -> ScopeKind.HISTOGRAM.chip
-        ScopeKind.VECTORSCOPE -> "MON · ${configuration.vectorscopeZoom.label}"
-        ScopeKind.TRAFFIC_LIGHTS -> ScopeKind.TRAFFIC_LIGHTS.chip
+        ScopeKind.WAVEFORM ->
+            stringResource(
+                if (configuration.waveformMode == ScopeWaveformMode.LUMA) {
+                    R.string.scope_chip_luma
+                } else {
+                    R.string.scope_chip_rgb
+                },
+            )
+        ScopeKind.PARADE ->
+            stringResource(
+                if (configuration.paradeMode == ScopeParadeMode.RGB) {
+                    R.string.scope_chip_rgb
+                } else {
+                    R.string.scope_chip_yrgb
+                },
+            )
+        ScopeKind.HISTOGRAM -> stringResource(R.string.scope_chip_rgbl)
+        ScopeKind.VECTORSCOPE ->
+            stringResource(
+                R.string.scope_chip_vectorscope,
+                stringResource(
+                    when (configuration.vectorscopeZoom.wireOrdinal) {
+                        0 -> R.string.scope_zoom_1
+                        1 -> R.string.scope_zoom_2
+                        else -> R.string.scope_zoom_4
+                    },
+                ),
+            )
+        ScopeKind.TRAFFIC_LIGHTS -> stringResource(R.string.scope_chip_rgb)
     }
 
 /** Real RED-style RGB goal-post meter; side/fill arrives fully computed from Swift. */
@@ -1093,19 +1152,23 @@ private fun TrafficLightsPanel(
     fillsWidth: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val resources = LocalResources.current
+    val strings = remember(resources) { resources.phoneStringResolver() }
+    val title = stringResource(R.string.scope_traffic_lights)
+    val state = trafficLightsStateDescription(reading, strings)
     BoxWithConstraints(
         modifier
             .background(ScopePalette.panelBackground, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .semantics {
-                contentDescription = "Traffic Lights"
-                stateDescription = trafficLightsStateDescription(reading)
+                contentDescription = title
+                stateDescription = state
             },
     ) {
         val uiScale = min(maxWidth.value / 74f, maxHeight.value / 168f).coerceAtLeast(0f)
         Canvas(Modifier.fillMaxSize()) { drawTrafficLights(reading, fillsWidth, uiScale) }
         Text(
-            "TL",
+            stringResource(R.string.scope_title_traffic_lights),
             modifier = Modifier.align(Alignment.TopCenter).padding(top = (8f * uiScale).dp),
             style = chromeStyle(8.5f * uiScale, FontWeight.Bold, mono = true),
             color = LiveDesign.text.copy(alpha = 0.58f),
@@ -1114,22 +1177,40 @@ private fun TrafficLightsPanel(
     }
 }
 
-private fun trafficLightsStateDescription(reading: TrafficLightsReading): String {
+private fun trafficLightsStateDescription(
+    reading: TrafficLightsReading,
+    strings: PhoneStringResolver,
+): String {
     fun channel(name: String, value: com.opencapture.openzcine.bridge.TrafficLightsChannel): String {
         val direction =
             when (value.side) {
-                TrafficLightsBarSide.NEUTRAL -> "balanced"
-                TrafficLightsBarSide.OVER -> "over"
-                TrafficLightsBarSide.UNDER -> "under"
+                TrafficLightsBarSide.NEUTRAL -> strings.resolve(R.string.scope_direction_balanced)
+                TrafficLightsBarSide.OVER -> strings.resolve(R.string.scope_direction_over)
+                TrafficLightsBarSide.UNDER -> strings.resolve(R.string.scope_direction_under)
             }
-        val flags = listOfNotNull("clip".takeIf { value.clip }, "crush".takeIf { value.crush })
-        return "$name $direction${if (flags.isEmpty()) "" else " (${flags.joinToString()})"}"
+        val flags =
+            listOfNotNull(
+                strings.resolve(R.string.scope_flag_clip).takeIf { value.clip },
+                strings.resolve(R.string.scope_flag_crush).takeIf { value.crush },
+            )
+        return if (flags.isEmpty()) {
+            strings.resolve(R.string.scope_channel_state, name, direction)
+        } else {
+            val flagCopy =
+                if (flags.size == 2) {
+                    strings.resolve(R.string.scope_flags_both, flags[0], flags[1])
+                } else {
+                    flags.single()
+                }
+            strings.resolve(R.string.scope_channel_state_flags, name, direction, flagCopy)
+        }
     }
-    return listOf(
-        channel("red", reading.red),
-        channel("green", reading.green),
-        channel("blue", reading.blue),
-    ).joinToString(", ")
+    return strings.resolve(
+        R.string.scope_state_description,
+        channel(strings.resolve(R.string.scope_channel_red), reading.red),
+        channel(strings.resolve(R.string.scope_channel_green), reading.green),
+        channel(strings.resolve(R.string.scope_channel_blue), reading.blue),
+    )
 }
 
 private fun DrawScope.drawTrafficLights(
@@ -1753,6 +1834,7 @@ private fun DrawScope.drawScope(
     data: ScopeDrawData?,
     histogramTrafficLightsEnabled: Boolean,
     configuration: ScopeAssistConfiguration,
+    vectorLabels: List<String>,
 ) {
     val plot =
         if (kind == ScopeKind.HISTOGRAM) {
@@ -1798,7 +1880,7 @@ private fun DrawScope.drawScope(
                 drawVectorDensity(it, square, ScopePalette.TRAIL_DECAY, crispCore = false)
             }
             data?.vector?.let { drawVectorDensity(it, square, 1f, crispCore = true) }
-            drawVectorGraticule(anchors, square)
+            drawVectorGraticule(anchors, square, vectorLabels)
         }
         ScopeKind.TRAFFIC_LIGHTS -> Unit // Rendered by TrafficLightsPanel, never this Canvas path.
     }
@@ -2123,7 +2205,11 @@ private fun DrawScope.drawVectorDensity(
  * positions ([ScopeAnchors.vectorTargets] — trace and graticule can never
  * disagree about the matrix).
  */
-private fun DrawScope.drawVectorGraticule(anchors: ScopeAnchors, square: Rect) {
+private fun DrawScope.drawVectorGraticule(
+    anchors: ScopeAnchors,
+    square: Rect,
+    labels: List<String>,
+) {
     val centre = square.center
     val radius = square.width / 2
     drawCircle(ScopePalette.graticule, radius, centre, style = Stroke(1.25.dp.toPx()))
@@ -2147,7 +2233,6 @@ private fun DrawScope.drawVectorGraticule(anchors: ScopeAnchors, square: Rect) {
         1.dp.toPx(),
         pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())),
     )
-    val labels = listOf("R", "Mg", "B", "Cy", "G", "Yl")
     val boxSide = 7.dp.toPx()
     drawIntoCanvas { canvas ->
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)

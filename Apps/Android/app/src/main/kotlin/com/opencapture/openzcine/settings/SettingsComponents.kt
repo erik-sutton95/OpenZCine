@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,6 +32,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.remember
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.LiveDesign
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
 
@@ -207,7 +209,9 @@ public fun SettingsGroupCard(
                     color = LiveDesign.text,
                 )
                 Spacer(Modifier.weight(1f))
-                if (onReset != null) SettingsQuietLink("Reset", onReset)
+                if (onReset != null) {
+                    SettingsQuietLink(stringResource(R.string.action_reset), onReset)
+                }
             }
             Text(
                 caption,

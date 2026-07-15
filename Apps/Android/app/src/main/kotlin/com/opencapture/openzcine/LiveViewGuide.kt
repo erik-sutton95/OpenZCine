@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.annotation.StringRes
 import androidx.activity.compose.BackHandler
 import androidx.core.content.edit
 import androidx.compose.foundation.background
@@ -38,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -47,11 +49,11 @@ import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 
 /** The replayable three-step live monitor introduction, matching iOS concepts. */
 internal enum class LiveViewGuideStep(
-    val title: String,
+    @StringRes val titleResource: Int,
 ) {
-    CAMERA_CONTROLS("Status & camera controls"),
-    VIEW_ASSIST("View Assist"),
-    SYSTEM_CONTROLS("System controls"),
+    CAMERA_CONTROLS(R.string.guide_title_camera_controls),
+    VIEW_ASSIST(R.string.guide_title_view_assist),
+    SYSTEM_CONTROLS(R.string.guide_title_system_controls),
     ;
 
     val number: Int
@@ -60,22 +62,22 @@ internal enum class LiveViewGuideStep(
     val next: LiveViewGuideStep?
         get() = entries.getOrNull(ordinal + 1)
 
-    fun message(isPortrait: Boolean, usesVerticalAssistRail: Boolean): String =
+    @StringRes
+    fun messageResource(isPortrait: Boolean, usesVerticalAssistRail: Boolean): Int =
         when (this) {
             CAMERA_CONTROLS ->
                 if (isPortrait) {
-                    "Status shows timecode, media, and camera health. Tap a camera tile or value to change it."
+                    R.string.guide_camera_portrait
                 } else {
-                    "Status shows recording, timecode, format, media, and feed health. Tap ISO, shutter, iris, focus, or WB below to change it."
+                    R.string.guide_camera_landscape
                 }
             VIEW_ASSIST ->
                 if (usesVerticalAssistRail) {
-                    "Tap the slider to open View Assist. Tap a tool to turn it on, or press and hold a configurable tool for quick settings."
+                    R.string.guide_assist_rail
                 } else {
-                    "Tap a tool to turn it on. Press and hold a configurable tool for quick settings. Swipe for more."
+                    R.string.guide_assist_toolbar
                 }
-            SYSTEM_CONTROLS ->
-                "Lock prevents accidental changes. DISP changes the monitor layout. Red records. Media opens clips. Gear opens Operator Setup."
+            SYSTEM_CONTROLS -> R.string.guide_system_controls
         }
 
     companion object {
@@ -90,11 +92,11 @@ internal enum class LiveViewGuideStep(
 }
 
 /** Truthful Settings presentation for the persisted guide state. */
-internal enum class LiveViewGuideStatus(val label: String) {
-    SHOWING("Showing now"),
-    SCHEDULED("Scheduled for next real frame"),
-    FIRST_FRAME_PENDING("Will show on the first real frame"),
-    COMPLETED("Completed"),
+internal enum class LiveViewGuideStatus(@StringRes val labelResource: Int) {
+    SHOWING(R.string.guide_status_showing),
+    SCHEDULED(R.string.guide_status_scheduled),
+    FIRST_FRAME_PENDING(R.string.guide_status_first_frame),
+    COMPLETED(R.string.guide_status_completed),
 }
 
 /** Closed real-frame gate shared by the monitor callback and JVM tests. */
@@ -260,12 +262,14 @@ internal fun LiveViewGuideOverlay(
     assistTarget: ZoneFrame? = zones.assistStrip,
 ) {
     val step = controller.activeStep ?: return
+    val paneTitleText = stringResource(R.string.guide_pane_title)
+    val backgroundDescription = stringResource(R.string.guide_modal_background_description)
     BackHandler { controller.skip() }
     BoxWithConstraints(
         Modifier.fillMaxSize()
             .zIndex(100f)
             .semantics {
-                paneTitle = "Live View Guide"
+                paneTitle = paneTitleText
                 isTraversalGroup = true
             },
     ) {
@@ -279,7 +283,7 @@ internal fun LiveViewGuideOverlay(
                     role = Role.Button,
                     onClick = {},
                 )
-                .semantics { contentDescription = "Live View Guide modal background" },
+                .semantics { contentDescription = backgroundDescription },
         )
         guideTargetFrames(step, zones, assistTarget).forEach { frame ->
             val highlight =
@@ -335,21 +339,28 @@ internal fun LiveViewGuideCard(
     onAdvance: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val title = stringResource(step.titleResource)
+    val cardDescription =
+        stringResource(
+            R.string.guide_card_description,
+            step.number,
+            LiveViewGuideStep.entries.size,
+            title,
+        )
     Column(
         modifier
             .glass(ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .testTag("live_guide_card")
             .semantics {
-                contentDescription =
-                    "Quick Guide. Step ${step.number} of ${LiveViewGuideStep.entries.size}. ${step.title}"
+                contentDescription = cardDescription
             }
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "QUICK GUIDE",
+                stringResource(R.string.guide_heading),
                 color = LiveDesign.accent,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
@@ -357,34 +368,45 @@ internal fun LiveViewGuideCard(
             )
             Spacer(Modifier.weight(1f))
             Text(
-                "${step.number} OF ${LiveViewGuideStep.entries.size}",
+                stringResource(
+                    R.string.guide_step_counter,
+                    step.number,
+                    LiveViewGuideStep.entries.size,
+                ),
                 color = LiveDesign.muted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
         Text(
-            step.title,
+            title,
             style = chromeStyle(21f, FontWeight.SemiBold),
             color = LiveDesign.text,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            step.message(isPortrait, usesVerticalAssistRail),
+            stringResource(step.messageResource(isPortrait, usesVerticalAssistRail)),
             style = chromeStyle(13f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            GuideTextButton("Skip", "Skip Live View Guide", onSkip)
+            GuideTextButton(
+                stringResource(R.string.guide_skip),
+                stringResource(R.string.guide_skip_description),
+                onSkip,
+            )
             Spacer(Modifier.weight(1f))
             GuidePrimaryButton(
-                title = if (step.next == null) "Done" else "Next",
+                title =
+                    stringResource(
+                        if (step.next == null) R.string.action_done else R.string.action_next
+                    ),
                 contentDescription =
                     if (step.next == null) {
-                        "Finish Live View Guide"
+                        stringResource(R.string.guide_finish_description)
                     } else {
-                        "Next Live View Guide step"
+                        stringResource(R.string.guide_next_description)
                     },
                 onClick = onAdvance,
             )

@@ -41,6 +41,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick as semanticsOnClick
@@ -109,20 +110,22 @@ fun CameraTimecodeReadout(
 ) {
     val available = authoritativeTimecode(timecode)
     if (available == null) {
+        val description = stringResource(R.string.timecode_unavailable_description)
         Text(
             UNAVAILABLE_TIMECODE,
             style = chromeStyle(sizeSp, weight, mono = true),
             color = LiveDesign.muted,
             maxLines = 1,
-            modifier = modifier.semantics { contentDescription = "Camera timecode unavailable" },
+            modifier = modifier.semantics { contentDescription = description },
         )
     } else {
         val label = cameraTimecodeLabel(available)
+        val description = stringResource(R.string.timecode_description, label)
         Text(
             timecodeAnnotated(available),
             style = chromeStyle(sizeSp, weight, mono = true),
             maxLines = 1,
-            modifier = modifier.semantics { contentDescription = "Camera timecode $label" },
+            modifier = modifier.semantics { contentDescription = description },
         )
     }
 }
@@ -140,7 +143,11 @@ fun RecordChip(recording: Boolean) {
                 .background(if (recording) LiveDesign.rec else LiveDesign.faint, CircleShape),
         )
         Text(
-            text = if (recording) "REC" else "STBY",
+            text =
+                stringResource(
+                    if (recording) R.string.record_state_rec
+                    else R.string.record_state_standby_short,
+                ),
             style = chromeStyle(11f, FontWeight.Bold, mono = true),
             color = if (recording) LiveDesign.text else LiveDesign.muted,
         )
@@ -182,7 +189,7 @@ fun FpsChip(signalBars: Int, fps: String) {
     ) {
         SignalBarsGlyph(bars = signalBars, tint = tint)
         Text(
-            "FPS",
+            stringResource(R.string.monitor_fps),
             style = chromeStyle(8f, FontWeight.Bold, mono = true),
             color = LiveDesign.faint,
         )
@@ -290,7 +297,11 @@ fun DispButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("DISP", style = chromeStyle(12f, FontWeight.Bold), color = labelColor)
+        Text(
+            stringResource(R.string.monitor_disp),
+            style = chromeStyle(12f, FontWeight.Bold),
+            color = labelColor,
+        )
         Row(
             Modifier.padding(top = 3.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -333,13 +344,18 @@ fun RecordButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
 ) {
-    val actionLabel = if (recording) "Stop recording" else "Start recording"
+    val actionLabel =
+        stringResource(if (recording) R.string.record_action_stop else R.string.record_action_start)
+    val recordingState =
+        stringResource(
+            if (recording) R.string.record_state_recording else R.string.record_state_standby,
+        )
     Canvas(
         modifier
             .chromeClickable(enabled = enabled, onClick = onClick)
             .semantics {
                 contentDescription = actionLabel
-                stateDescription = if (recording) "Recording" else "Standby"
+                stateDescription = recordingState
                 role = Role.Button
                 if (enabled) {
                     semanticsOnClick(label = actionLabel) {
@@ -403,14 +419,16 @@ fun BatteryIndicatorColumn(
             isCamera -> LiveDesign.accent
             else -> LiveDesign.text.copy(alpha = 0.85f)
         }
-    val source = if (isCamera) "Camera" else "Phone"
+    val source =
+        stringResource(if (isCamera) R.string.battery_source_camera else R.string.battery_source_phone)
     val description =
         when {
             batteryPercent != null && externalPower == true ->
-                "$source battery $batteryPercent percent, external power"
-            batteryPercent != null -> "$source battery $batteryPercent percent"
-            externalPower == true -> "$source external power"
-            else -> "$source battery unavailable"
+                stringResource(R.string.battery_description_power, source, batteryPercent)
+            batteryPercent != null ->
+                stringResource(R.string.battery_description_percent, source, batteryPercent)
+            externalPower == true -> stringResource(R.string.battery_description_external, source)
+            else -> stringResource(R.string.battery_description_unavailable, source)
         }
     Column(
         modifier = modifier.semantics { contentDescription = description },

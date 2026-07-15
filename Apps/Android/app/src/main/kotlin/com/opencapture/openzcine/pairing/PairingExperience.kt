@@ -9,6 +9,7 @@ import android.net.Uri
 import android.net.nsd.NsdManager
 import android.os.Build
 import android.provider.Settings
+import androidx.annotation.StringRes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -49,6 +50,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextStyle
@@ -60,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
@@ -178,128 +182,138 @@ public fun isPairingPermissionGranted(context: Context): Boolean =
  * (body-agnostic "your camera" per the Z-lineup pass; "iPhone" → "phone").
  */
 internal object PairingCopy {
-    fun stepTitle(step: PairingStep): String =
+    @StringRes
+    fun stepTitle(step: PairingStep): Int =
         when (step) {
-            PairingStep.PERMISSIONS -> "Allow permissions"
-            PairingStep.CHOOSE_PATH -> "Choose how to connect"
-            PairingStep.PREPARE -> "Prepare your camera"
-            PairingStep.NETWORK -> "Set up the network"
-            PairingStep.DISCOVER -> "Find and pair"
+            PairingStep.PERMISSIONS -> R.string.pairing_step_permissions
+            PairingStep.CHOOSE_PATH -> R.string.pairing_step_choose_path
+            PairingStep.PREPARE -> R.string.pairing_step_prepare
+            PairingStep.NETWORK -> R.string.pairing_step_network
+            PairingStep.DISCOVER -> R.string.pairing_step_discover
         }
 
-    fun introFooter(step: PairingStep): String =
+    @StringRes
+    fun introFooter(step: PairingStep): Int =
         when (step) {
-            PairingStep.PERMISSIONS ->
-                "Only what pairing needs — change anytime in Android Settings."
-            PairingStep.CHOOSE_PATH ->
-                "Each trades battery, quality, and convenience — pick what fits the shoot."
-            PairingStep.PREPARE ->
-                "Menu names match the Nikon ZR; they may vary by model and firmware version."
-            PairingStep.NETWORK ->
-                "Get both devices onto the same network — we'll find the camera automatically."
-            PairingStep.DISCOVER -> "Keep the camera powered on and nearby while we find it."
+            PairingStep.PERMISSIONS -> R.string.pairing_footer_permissions
+            PairingStep.CHOOSE_PATH -> R.string.pairing_footer_choose_path
+            PairingStep.PREPARE -> R.string.pairing_footer_prepare
+            PairingStep.NETWORK -> R.string.pairing_footer_network
+            PairingStep.DISCOVER -> R.string.pairing_footer_discover
         }
 
-    fun pathTitle(path: PairingPath): String =
+    @StringRes
+    fun pathTitle(path: PairingPath): Int =
         when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> "Camera's Access Point"
-            PairingPath.PHONE_HOTSPOT -> "Phone's Hotspot"
-            PairingPath.USB_C -> "USB-C cable"
+            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_path_camera_ap
+            PairingPath.PHONE_HOTSPOT -> R.string.pairing_path_phone_hotspot
+            PairingPath.USB_C -> R.string.pairing_path_usb_c
         }
 
-    fun pathBadge(path: PairingPath): String =
+    @StringRes
+    fun pathBadge(path: PairingPath): Int =
         when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> "Simplest"
-            PairingPath.PHONE_HOTSPOT -> "Best wireless"
-            PairingPath.USB_C -> "Direct cable"
+            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_badge_simplest
+            PairingPath.PHONE_HOTSPOT -> R.string.pairing_badge_best_wireless
+            PairingPath.USB_C -> R.string.pairing_badge_direct_cable
         }
 
-    fun pathPros(path: PairingPath): List<String> =
+    fun pathPros(path: PairingPath): List<Int> =
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT ->
-                listOf("Lightest battery use", "No phone setup needed")
-            PairingPath.PHONE_HOTSPOT -> listOf("Best wireless quality", "Stable at high settings")
-            PairingPath.USB_C -> listOf("Direct wired connection", "No Wi‑Fi or network key")
+                listOf(R.string.pairing_pro_light_battery, R.string.pairing_pro_no_phone_setup)
+            PairingPath.PHONE_HOTSPOT ->
+                listOf(R.string.pairing_pro_wireless_quality, R.string.pairing_pro_stable_high_settings)
+            PairingPath.USB_C ->
+                listOf(R.string.pairing_pro_direct_wired, R.string.pairing_pro_no_wifi_key)
         }
 
-    fun pathCon(path: PairingPath): String =
+    @StringRes
+    fun pathCon(path: PairingPath): Int =
         when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> "Softer link, lower quality"
-            PairingPath.PHONE_HOTSPOT -> "Heavier battery drain"
-            PairingPath.USB_C -> "Requires a data-capable cable"
+            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_con_softer_link
+            PairingPath.PHONE_HOTSPOT -> R.string.pairing_con_battery_drain
+            PairingPath.USB_C -> R.string.pairing_con_data_cable
         }
 
     /** Short landscape-card copy that keeps every connection choice readable. */
-    fun compactPathPro(path: PairingPath): String =
+    @StringRes
+    fun compactPathPro(path: PairingPath): Int =
         when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> "Light battery · no setup"
-            PairingPath.PHONE_HOTSPOT -> "High-quality wireless"
-            PairingPath.USB_C -> "Direct cable · no Wi‑Fi"
+            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_compact_pro_camera_ap
+            PairingPath.PHONE_HOTSPOT -> R.string.pairing_compact_pro_hotspot
+            PairingPath.USB_C -> R.string.pairing_compact_pro_usb
         }
 
     /** Short landscape-card tradeoff paired with [compactPathPro]. */
-    fun compactPathCon(path: PairingPath): String =
+    @StringRes
+    fun compactPathCon(path: PairingPath): Int =
         when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> "Softer link"
-            PairingPath.PHONE_HOTSPOT -> "Uses more battery"
-            PairingPath.USB_C -> "Data cable needed"
+            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_compact_con_camera_ap
+            PairingPath.PHONE_HOTSPOT -> R.string.pairing_compact_con_hotspot
+            PairingPath.USB_C -> R.string.pairing_compact_con_usb
         }
 
     // [VERIFY-ON-HW] Confirm the ZR's exact menu wording for each path on hardware.
-    fun prepareSteps(path: PairingPath): List<String> =
+    fun prepareSteps(path: PairingPath): List<Int> =
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT ->
                 listOf(
-                    "On the camera: Network menu → Connect to computer → Network settings.",
-                    "Choose Create Profile and give the profile a name.",
-                    "Select Direct connection to computer — the camera shows its SSID and key.",
+                    R.string.pairing_prepare_ap_1,
+                    R.string.pairing_prepare_ap_2,
+                    R.string.pairing_prepare_ap_3,
                 )
             PairingPath.PHONE_HOTSPOT ->
                 listOf(
-                    "Turn on your phone's Wi‑Fi hotspot (Settings → Hotspot & tethering).",
-                    "Note the hotspot name and password — the camera needs them to join.",
-                    "On the camera: Network menu → Connect to computer.",
-                    "We'll walk through joining your hotspot in the next step.",
+                    R.string.pairing_prepare_hotspot_1,
+                    R.string.pairing_prepare_hotspot_2,
+                    R.string.pairing_prepare_hotspot_3,
+                    R.string.pairing_prepare_hotspot_4,
                 )
             PairingPath.USB_C ->
                 listOf(
-                    "On the camera: turn on Connect to computer and keep the camera powered on.",
-                    "Use a data-capable USB-C cable — charging-only cables cannot carry PTP.",
-                    "Connect the camera directly to this phone, then approve Android's USB prompt.",
+                    R.string.pairing_prepare_usb_1,
+                    R.string.pairing_prepare_usb_2,
+                    R.string.pairing_prepare_usb_3,
                 )
         }
 
-    fun networkSubtitle(path: PairingPath, keyRemembered: Boolean): String =
+    @StringRes
+    fun networkSubtitle(path: PairingPath, keyRemembered: Boolean): Int =
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT ->
                 if (keyRemembered) {
-                    "The key for this camera is remembered — check the SSID and tap Join."
+                    R.string.pairing_network_ap_remembered
                 } else {
-                    "Enter the SSID and key from the camera's screen — " +
-                        "we remember the key for next time."
+                    R.string.pairing_network_ap_new
                 }
-            PairingPath.PHONE_HOTSPOT -> "Keep your phone's Wi‑Fi hotspot on. Then on the camera:"
-            PairingPath.USB_C -> "USB-C pairing does not use a Wi‑Fi network."
+            PairingPath.PHONE_HOTSPOT -> R.string.pairing_network_hotspot
+            PairingPath.USB_C -> R.string.pairing_network_usb
         }
 
     /** Camera-side instruction card lines for the hotspot network step. */
-    val hotspotCameraSteps: List<String> =
+    val hotspotCameraSteps: List<Int> =
         listOf(
-            "Connect to computer → Network settings",
-            "Create Profile → name your profile",
-            "Search for Wi‑Fi network → join this phone's hotspot",
-            "IP address → Obtain automatically",
+            R.string.pairing_hotspot_camera_1,
+            R.string.pairing_hotspot_camera_2,
+            R.string.pairing_hotspot_camera_3,
+            R.string.pairing_hotspot_camera_4,
         )
 
-    val permissionTitle: String =
-        if (Build.VERSION.SDK_INT >= 33) "Nearby devices" else "Location"
-
-    val permissionDetail: String =
+    @get:StringRes
+    val permissionTitle: Int =
         if (Build.VERSION.SDK_INT >= 33) {
-            "Find and stream from your camera over Wi‑Fi."
+            R.string.pairing_permission_nearby
         } else {
-            "Android uses Location access to find cameras on Wi‑Fi. " +
-                "Your location is never tracked or stored."
+            R.string.pairing_permission_location
+        }
+
+    @get:StringRes
+    val permissionDetail: Int =
+        if (Build.VERSION.SDK_INT >= 33) {
+            R.string.pairing_permission_nearby_detail
+        } else {
+            R.string.pairing_permission_location_detail
         }
 }
 
@@ -332,6 +346,7 @@ public fun PairingExperience(
     onOpenSettings: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var permissionGranted by remember { mutableStateOf(isPairingPermissionGranted(context)) }
     var permissionDenied by remember { mutableStateOf(false) }
     var flow by remember {
@@ -427,7 +442,7 @@ public fun PairingExperience(
             savedCamera =
                 SavedCameraRecord(
                     host = host,
-                    cameraName = "Nikon camera",
+                    cameraName = resources.getString(R.string.pairing_default_camera_name),
                     transport = transport,
                     lastSeenAtEpochMillis = null,
                     wifiSsid =
@@ -437,14 +452,14 @@ public fun PairingExperience(
                             null
                         },
                 ),
-            unreachableMessage = "Couldn't reach the camera. Check Wi‑Fi and try again.",
+            unreachableMessage = resources.getString(R.string.pairing_error_camera_unreachable),
         )
     }
 
     fun connectUsb(camera: UsbPtpCamera) {
         val source = environment.usbCameraSource
         if (source == null) {
-            phase = PairingPhase.Error("USB-C camera support is unavailable on this device.")
+            phase = PairingPhase.Error(resources.getString(R.string.pairing_error_usb_unsupported))
             return
         }
         when (camera.access) {
@@ -454,7 +469,7 @@ public fun PairingExperience(
             UsbPtpCameraAccess.IDENTITY_UNAVAILABLE ->
                 phase =
                     PairingPhase.Error(
-                        "This camera did not expose a stable USB identity. Reconnect it or use Wi‑Fi pairing.",
+                        resources.getString(R.string.pairing_error_usb_identity),
                     )
             UsbPtpCameraAccess.READY ->
                 when (val opened = source.open(camera)) {
@@ -469,7 +484,7 @@ public fun PairingExperience(
                                 opened.transport.close()
                                 phase =
                                     PairingPhase.Error(
-                                        "Couldn't start the USB-C camera session. Reconnect the cable and try again.",
+                                        resources.getString(R.string.pairing_error_usb_session),
                                     )
                                 return
                             }
@@ -484,7 +499,7 @@ public fun PairingExperience(
                                     wifiSsid = null,
                                 ),
                             unreachableMessage =
-                                "Couldn't reach the USB-C camera. Check the cable and camera connection, then try again.",
+                                resources.getString(R.string.pairing_error_usb_unreachable),
                         )
                     }
                     is UsbPtpOpenResult.Rejected -> phase = PairingPhase.Error(opened.message)
@@ -512,7 +527,7 @@ public fun PairingExperience(
                 } else {
                     phase =
                         PairingPhase.Error(
-                            "Couldn't join the camera's Wi‑Fi. Check the key and try again."
+                            resources.getString(R.string.pairing_error_wifi_join)
                         )
                 }
             }
@@ -587,10 +602,10 @@ public fun PairingExperience(
     val busy = phase == PairingPhase.Joining || phase == PairingPhase.Connecting
     val statusTitle =
         when {
-            phase == PairingPhase.Joining -> "Joining"
-            phase == PairingPhase.Connecting -> "Connecting"
-            flow.step == PairingStep.DISCOVER -> "Looking"
-            else -> "Ready"
+            phase == PairingPhase.Joining -> stringResource(R.string.pairing_status_joining)
+            phase == PairingPhase.Connecting -> stringResource(R.string.pairing_status_connecting)
+            flow.step == PairingStep.DISCOVER -> stringResource(R.string.pairing_status_looking)
+            else -> stringResource(R.string.pairing_status_ready)
         }
 
     Box(Modifier.fillMaxSize().startupBackdrop()) {
@@ -600,7 +615,7 @@ public fun PairingExperience(
                 .padding(horizontal = 24.dp, vertical = 12.dp)
         ) {
             StartupHeader(
-                title = "Connection setup",
+                title = stringResource(R.string.pairing_connection_setup),
                 statusTitle = statusTitle,
                 isBusy = busy || flow.step == PairingStep.DISCOVER,
                 onOpenSettings = if (busy) null else onOpenSettings,
@@ -741,7 +756,7 @@ private fun IntroCard(
         ),
     ) {
         Text(
-            "FIRST RUN",
+            stringResource(R.string.pairing_first_run),
             color = StartupColors.muted,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
@@ -749,7 +764,7 @@ private fun IntroCard(
         )
         Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
         Text(
-            "Pair your camera.",
+            stringResource(R.string.pairing_intro_title),
             color = StartupColors.ink,
             fontSize = if (condensed) 21.sp else 24.sp,
             fontWeight = FontWeight.Bold,
@@ -758,9 +773,9 @@ private fun IntroCard(
         Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
         Text(
             if (condensed) {
-                "Choose the connection path that fits the shoot."
+                stringResource(R.string.pairing_intro_compact)
             } else {
-                "We'll walk you through it — your camera is connected in about a minute."
+                stringResource(R.string.pairing_intro_full)
             },
             color = StartupColors.muted,
             fontSize = if (condensed) 11.sp else 12.sp,
@@ -770,8 +785,11 @@ private fun IntroCard(
         StartupWizardProgress(currentStep = flow.displayStepNumber, totalSteps = flow.stepCount)
         Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
         Text(
-            if (condensed) "You can change this path later in Settings."
-            else PairingCopy.introFooter(flow.step),
+            if (condensed) {
+                stringResource(R.string.pairing_change_path_later)
+            } else {
+                stringResource(PairingCopy.introFooter(flow.step))
+            },
             color = StartupColors.dim,
             fontSize = if (condensed) 10.sp else 11.sp,
             lineHeight = if (condensed) 13.sp else 15.sp,
@@ -810,7 +828,7 @@ private fun StepCard(
 ) {
     Column(modifier.startupCard().padding(20.dp)) {
         Text(
-            "STEP ${flow.displayStepNumber} OF ${flow.stepCount}",
+            stringResource(R.string.pairing_step_counter, flow.displayStepNumber, flow.stepCount),
             color = StartupColors.muted,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
@@ -818,7 +836,7 @@ private fun StepCard(
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            PairingCopy.stepTitle(flow.step),
+            stringResource(PairingCopy.stepTitle(flow.step)),
             color = StartupColors.ink,
             fontSize = 21.sp,
             fontWeight = FontWeight.Bold,
@@ -839,7 +857,8 @@ private fun StepCard(
                             compact = compact,
                             condensed = condensedChoiceCards,
                         )
-                    PairingStep.PREPARE -> NumberedCards(PairingCopy.prepareSteps(flow.path))
+                    PairingStep.PREPARE ->
+                        NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
                     PairingStep.NETWORK ->
                         NetworkBody(
                             path = flow.path,
@@ -880,7 +899,11 @@ private fun StepCard(
         if (busy) {
             Row {
                 Spacer(Modifier.weight(1f))
-                StartupOutlineButton("Cancel", onClick = onCancel, modifier = Modifier.width(116.dp))
+                StartupOutlineButton(
+                    stringResource(R.string.action_cancel),
+                    onClick = onCancel,
+                    modifier = Modifier.width(116.dp),
+                )
             }
         } else if (flow.step != PairingStep.CHOOSE_PATH) {
             Row(
@@ -889,7 +912,7 @@ private fun StepCard(
             ) {
                 if (flow.canRetreat) {
                     StartupOutlineButton(
-                        "Back",
+                        stringResource(R.string.action_back),
                         onClick = onRetreat,
                         modifier = Modifier.width(116.dp),
                     )
@@ -899,7 +922,7 @@ private fun StepCard(
                     flow.step == PairingStep.NETWORK &&
                         flow.path == PairingPath.CAMERA_ACCESS_POINT ->
                         StartupFilledButton(
-                            "Join camera Wi‑Fi",
+                            stringResource(R.string.pairing_join_camera_wifi),
                             enabled = ssidField.isNotBlank(),
                             onClick = onJoin,
                             modifier =
@@ -907,7 +930,7 @@ private fun StepCard(
                         )
                     !flow.isFinalStep ->
                         StartupFilledButton(
-                            "Continue",
+                            stringResource(R.string.action_continue),
                             enabled = flow.step != PairingStep.PERMISSIONS || permissionGranted,
                             onClick = onAdvance,
                             modifier =
@@ -928,9 +951,9 @@ private fun BusyBody(phase: PairingPhase) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
             if (phase == PairingPhase.Joining) {
-                "Joining the camera's Wi‑Fi network…"
+                stringResource(R.string.pairing_busy_joining)
             } else {
-                "Connecting to your camera…"
+                stringResource(R.string.pairing_busy_connecting)
             },
             color = StartupColors.ink,
             fontSize = 15.sp,
@@ -938,9 +961,9 @@ private fun BusyBody(phase: PairingPhase) {
         )
         Text(
             if (phase == PairingPhase.Joining) {
-                "Android asks you to confirm the connection the first time."
+                stringResource(R.string.pairing_busy_joining_detail)
             } else {
-                "Keep the camera powered on — this takes a few seconds."
+                stringResource(R.string.pairing_busy_connecting_detail)
             },
             color = StartupColors.muted,
             fontSize = 12.sp,
@@ -962,14 +985,14 @@ private fun PermissionsBody(granted: Boolean, denied: Boolean, onRequest: () -> 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        PairingCopy.permissionTitle,
+                        stringResource(PairingCopy.permissionTitle),
                         color = StartupColors.ink,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        PairingCopy.permissionDetail,
+                        stringResource(PairingCopy.permissionDetail),
                         color = StartupColors.muted,
                         fontSize = 12.sp,
                         lineHeight = 16.sp,
@@ -977,11 +1000,11 @@ private fun PermissionsBody(granted: Boolean, denied: Boolean, onRequest: () -> 
                 }
                 Spacer(Modifier.width(8.dp))
                 when {
-                    granted -> StatusPill("Allowed", StartupColors.ready)
-                    denied -> StatusPill("Settings", StartupColors.muted)
+                    granted -> StatusPill(stringResource(R.string.status_allowed), StartupColors.ready)
+                    denied -> StatusPill(stringResource(R.string.status_settings), StartupColors.muted)
                     else ->
                         Text(
-                            "Allow",
+                            stringResource(R.string.action_allow),
                             color = StartupColors.darkText,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -995,7 +1018,7 @@ private fun PermissionsBody(granted: Boolean, denied: Boolean, onRequest: () -> 
         }
         if (!granted) {
             Text(
-                "Required to connect to your camera — grant it to continue.",
+                stringResource(R.string.pairing_permission_required),
                 color = StartupColors.dim,
                 fontSize = 11.sp,
             )
@@ -1054,7 +1077,7 @@ private fun PathChoiceCard(
             .padding(horizontal = 12.dp, vertical = if (condensed) 8.dp else 10.dp)
     ) {
         Text(
-            PairingCopy.pathTitle(path),
+            stringResource(PairingCopy.pathTitle(path)),
             color = StartupColors.ink,
             fontSize = if (condensed) 14.sp else 15.sp,
             fontWeight = FontWeight.Bold,
@@ -1062,7 +1085,7 @@ private fun PathChoiceCard(
         )
         Spacer(Modifier.height(if (condensed) 5.dp else 6.dp))
         Text(
-            PairingCopy.pathBadge(path),
+            stringResource(PairingCopy.pathBadge(path)),
             color = StartupColors.accent,
             fontSize = if (condensed) 11.sp else 12.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1074,15 +1097,25 @@ private fun PathChoiceCard(
         Spacer(Modifier.height(if (condensed) 5.dp else 7.dp))
         if (condensed) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                TradeoffRow("+", StartupColors.ready, PairingCopy.compactPathPro(path), compact = true)
-                TradeoffRow("−", StartupColors.dim, PairingCopy.compactPathCon(path), compact = true)
+                TradeoffRow(
+                    "+",
+                    StartupColors.ready,
+                    stringResource(PairingCopy.compactPathPro(path)),
+                    compact = true,
+                )
+                TradeoffRow(
+                    "−",
+                    StartupColors.dim,
+                    stringResource(PairingCopy.compactPathCon(path)),
+                    compact = true,
+                )
             }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 for (pro in PairingCopy.pathPros(path)) {
-                    TradeoffRow("+", StartupColors.ready, pro)
+                    TradeoffRow("+", StartupColors.ready, stringResource(pro))
                 }
-                TradeoffRow("−", StartupColors.dim, PairingCopy.pathCon(path))
+                TradeoffRow("−", StartupColors.dim, stringResource(PairingCopy.pathCon(path)))
             }
         }
     }
@@ -1135,7 +1168,7 @@ private fun NumberedCards(steps: List<String>) {
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        "${index + 1}",
+                        stringResource(R.string.step_number, index + 1),
                         color = StartupColors.accent,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -1167,7 +1200,7 @@ private fun NetworkBody(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            PairingCopy.networkSubtitle(path, keyRemembered = keyWasRemembered),
+            stringResource(PairingCopy.networkSubtitle(path, keyRemembered = keyWasRemembered)),
             color = StartupColors.muted,
             fontSize = 13.sp,
             lineHeight = 18.sp,
@@ -1177,8 +1210,8 @@ private fun NetworkBody(
         // camera instruction card here (iOS "tight" mode collapses it too).
         if (path == PairingPath.PHONE_HOTSPOT) {
             DeviceInstructionCard(
-                label = "ON CAMERA",
-                steps = PairingCopy.hotspotCameraSteps,
+                label = stringResource(R.string.pairing_on_camera),
+                steps = PairingCopy.hotspotCameraSteps.map { stringResource(it) },
             )
         }
         if (path == PairingPath.CAMERA_ACCESS_POINT) {
@@ -1189,7 +1222,7 @@ private fun NetworkBody(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    "ON THIS PHONE",
+                    stringResource(R.string.pairing_on_phone),
                     color = StartupColors.muted,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -1205,21 +1238,25 @@ private fun NetworkBody(
                     StartupTextField(
                         value = ssidField,
                         onValueChange = onSsidChange,
-                        placeholder = "Network SSID (${CameraDiscovery.NIKON_ZR_SSID_PREFIX}…)",
+                        placeholder =
+                            stringResource(
+                                R.string.pairing_network_ssid_hint,
+                                CameraDiscovery.NIKON_ZR_SSID_PREFIX,
+                            ),
                     )
                     StartupTextField(
                         value = keyField,
                         onValueChange = onKeyChange,
-                        placeholder = "Network key",
+                        placeholder = stringResource(R.string.pairing_network_key_hint),
                         password = true,
                     )
                     StartupOutlineButton(
-                        text = "Scan SSID & key",
+                        text = stringResource(R.string.pairing_scan_ssid_key),
                         onClick = onScanCameraWifi,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "Uses this phone's rear camera and on-device text recognition only.",
+                        stringResource(R.string.pairing_scanner_privacy),
                         color = StartupColors.dim,
                         fontSize = 11.sp,
                         lineHeight = 15.sp,
@@ -1237,8 +1274,9 @@ private fun ScannedCameraWifiCredentials(
     key: String,
     onRescan: () -> Unit,
 ) {
+    val keyDescription = stringResource(R.string.pairing_scanned_key_description)
     Text(
-        "SCANNED FROM CAMERA — CHECK BEFORE JOINING",
+        stringResource(R.string.pairing_scanned_check),
         color = StartupColors.ready,
         fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
@@ -1266,11 +1304,11 @@ private fun ScannedCameraWifiCredentials(
                 .background(StartupColors.control)
                 .padding(horizontal = 13.dp, vertical = 10.dp)
                 .clearAndSetSemantics {
-                    contentDescription = "Scanned network key. Check the camera screen before joining."
+                    contentDescription = keyDescription
                 },
     )
     StartupOutlineButton(
-        text = "Rescan SSID & key",
+        text = stringResource(R.string.pairing_rescan_ssid_key),
         onClick = onRescan,
         modifier = Modifier.fillMaxWidth(),
     )
@@ -1295,7 +1333,7 @@ private fun DeviceInstructionCard(label: String, steps: List<String>) {
         steps.forEachIndexed { index, step ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "${index + 1}",
+                    stringResource(R.string.step_number, index + 1),
                     color = StartupColors.muted,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -1335,13 +1373,13 @@ private fun DiscoverBody(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    "Waiting for the camera to join this phone's hotspot",
+                    stringResource(R.string.pairing_waiting_hotspot),
                     color = StartupColors.ink,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "The camera appears here a few seconds after it joins.",
+                    stringResource(R.string.pairing_waiting_hotspot_detail),
                     color = StartupColors.muted,
                     fontSize = 11.sp,
                 )
@@ -1364,13 +1402,13 @@ private fun DiscoverBody(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            "Wi‑Fi · nearby",
+                            stringResource(R.string.pairing_wifi_nearby),
                             color = StartupColors.muted,
                             fontSize = 11.sp,
                         )
                     }
                     Text(
-                        "Connect",
+                        stringResource(R.string.action_connect),
                         color = StartupColors.darkText,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -1400,13 +1438,13 @@ private fun UsbDiscoverBody(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    "Waiting for a USB-C camera",
+                    stringResource(R.string.pairing_waiting_usb),
                     color = StartupColors.ink,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "Connect a powered camera with a data-capable USB-C cable.",
+                    stringResource(R.string.pairing_waiting_usb_detail),
                     color = StartupColors.muted,
                     fontSize = 11.sp,
                 )
@@ -1442,13 +1480,17 @@ private fun UsbDiscoverBody(
                             )
                         }
                         Text(
-                            usbCameraDetail(camera.access, camera.isDebugFixture),
+                            if (camera.isDebugFixture) {
+                                usbCameraDebugDetail(camera.access)
+                            } else {
+                                stringResource(usbCameraDetailResource(camera.access))
+                            },
                             color = StartupColors.muted,
                             fontSize = 11.sp,
                         )
                     }
                     Text(
-                        usbCameraAction(camera.access),
+                        stringResource(usbCameraActionResource(camera.access)),
                         color = if (actionable) StartupColors.darkText else StartupColors.muted,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -1471,29 +1513,32 @@ private fun UsbDiscoverBody(
 
 internal const val USB_DEBUG_FIXTURE_LABEL: String = "DEBUG FIXTURE — NOT USB HARDWARE"
 
-internal fun usbCameraDetail(access: UsbPtpCameraAccess, isDebugFixture: Boolean = false): String =
-    if (isDebugFixture) {
-        when (access) {
-            UsbPtpCameraAccess.NEEDS_PERMISSION -> "SIMULATED · permission needed"
-            UsbPtpCameraAccess.READY -> "SIMULATED · ready"
-            UsbPtpCameraAccess.DENIED -> "SIMULATED · access denied"
-            UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "SIMULATED · no stable identity"
-        }
-    } else {
-        when (access) {
-            UsbPtpCameraAccess.NEEDS_PERMISSION -> "USB-C · allow Android camera access"
-            UsbPtpCameraAccess.READY -> "USB-C · ready to connect"
-            UsbPtpCameraAccess.DENIED -> "USB-C · access was denied"
-            UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "USB-C · stable camera identity unavailable"
-        }
+@StringRes
+internal fun usbCameraDetailResource(
+    access: UsbPtpCameraAccess,
+): Int =
+    when (access) {
+        UsbPtpCameraAccess.NEEDS_PERMISSION -> R.string.pairing_usb_permission
+        UsbPtpCameraAccess.READY -> R.string.pairing_usb_ready
+        UsbPtpCameraAccess.DENIED -> R.string.pairing_usb_denied
+        UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> R.string.pairing_usb_identity
     }
 
-private fun usbCameraAction(access: UsbPtpCameraAccess): String =
+internal fun usbCameraDebugDetail(access: UsbPtpCameraAccess): String =
     when (access) {
-        UsbPtpCameraAccess.NEEDS_PERMISSION -> "Allow"
-        UsbPtpCameraAccess.READY -> "Connect"
-        UsbPtpCameraAccess.DENIED -> "Allow"
-        UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "Unavailable"
+        UsbPtpCameraAccess.NEEDS_PERMISSION -> "SIMULATED · permission needed"
+        UsbPtpCameraAccess.READY -> "SIMULATED · ready"
+        UsbPtpCameraAccess.DENIED -> "SIMULATED · access denied"
+        UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "SIMULATED · no stable identity"
+    }
+
+@StringRes
+private fun usbCameraActionResource(access: UsbPtpCameraAccess): Int =
+    when (access) {
+        UsbPtpCameraAccess.NEEDS_PERMISSION -> R.string.action_allow
+        UsbPtpCameraAccess.READY -> R.string.action_connect
+        UsbPtpCameraAccess.DENIED -> R.string.action_allow
+        UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> R.string.status_unavailable
     }
 
 // MARK: - Controls

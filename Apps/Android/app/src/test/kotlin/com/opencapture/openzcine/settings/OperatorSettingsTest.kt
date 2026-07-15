@@ -386,7 +386,6 @@ class OperatorSettingsTest {
         assertTrue(restored.desqueezeEnabled.value)
         assertEquals(LocalDesqueezeRatio.X165, restored.desqueezeRatio)
         assertEquals(LocalDesqueezeOrientation.VERTICAL, restored.desqueezeOrientation)
-        assertTrue(restored.localFramingAssistConfiguration.accessibilitySummary.contains("unchanged"))
     }
 
     @Test

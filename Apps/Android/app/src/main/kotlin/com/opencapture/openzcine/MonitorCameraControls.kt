@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,10 +87,13 @@ internal enum class MonitorPickerAnchor {
  */
 internal fun monitorCaptureSettings(
     dashboard: CommandDashboardPresentation,
+    strings: PhoneStringResolver,
 ): List<MonitorCaptureSettingPresentation> {
     val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
-    val focus = dashboard.sideSections.firstOrNull { it.title == "Focus" }?.cells.orEmpty()
-    val exposure = dashboard.sideSections.firstOrNull { it.title == "Exposure" }?.cells.orEmpty()
+    val focus =
+        dashboard.sideSections.firstOrNull { it.kind == CommandSideSectionKind.FOCUS }?.cells.orEmpty()
+    val exposure =
+        dashboard.sideSections.firstOrNull { it.kind == CommandSideSectionKind.EXPOSURE }?.cells.orEmpty()
 
     fun mode(label: String, tile: CommandTilePresentation?): MonitorPickerModePresentation? =
         tile?.request
@@ -139,55 +143,55 @@ internal fun monitorCaptureSettings(
 
     val focusModes =
         listOfNotNull(
-            mode("AF Mode", focus.getOrNull(0)),
-            mode("Area", focus.getOrNull(1)),
-            mode("Subject", focus.getOrNull(2)),
+            mode(strings.resolve(R.string.camera_mode_af), focus.getOrNull(0)),
+            mode(strings.resolve(R.string.camera_mode_area), focus.getOrNull(1)),
+            mode(strings.resolve(R.string.camera_mode_subject), focus.getOrNull(2)),
         )
     val focusValue = focus.getOrNull(0)?.value ?: "—"
     return listOf(
         multi(
             kind = MonitorPickerKind.ISO,
-            label = "ISO",
+            label = strings.resolve(R.string.camera_label_iso),
             widestValue = "25600",
-            subtitle = "Sensitivity / base circuit",
+            subtitle = strings.resolve(R.string.camera_subtitle_iso),
             valueTile = primary[CommandTileKind.ISO],
             modes =
                 listOfNotNull(
-                    mode("Sensitivity", primary[CommandTileKind.ISO]),
-                    mode("Base ISO", exposure.getOrNull(0)),
+                    mode(strings.resolve(R.string.camera_mode_sensitivity), primary[CommandTileKind.ISO]),
+                    mode(strings.resolve(R.string.camera_mode_base_iso), exposure.getOrNull(0)),
                 ),
         ),
         multi(
             kind = MonitorPickerKind.SHUTTER,
-            label = "SHUTTER",
+            label = strings.resolve(R.string.camera_label_shutter),
             widestValue = "1/16000",
-            subtitle = "Value / circuit / camera lock",
+            subtitle = strings.resolve(R.string.camera_subtitle_shutter),
             valueTile = primary[CommandTileKind.SHUTTER],
             modes =
                 listOfNotNull(
-                    mode("Value", primary[CommandTileKind.SHUTTER]),
-                    mode("Mode", exposure.getOrNull(1)),
-                    mode("Lock", exposure.getOrNull(2)),
+                    mode(strings.resolve(R.string.camera_mode_value), primary[CommandTileKind.SHUTTER]),
+                    mode(strings.resolve(R.string.camera_mode_mode), exposure.getOrNull(1)),
+                    mode(strings.resolve(R.string.camera_mode_lock), exposure.getOrNull(2)),
                 ),
         ),
         single(
             MonitorPickerKind.IRIS,
-            "IRIS",
+            strings.resolve(R.string.camera_label_iris),
             "f/2.8",
-            "Aperture",
+            strings.resolve(R.string.camera_subtitle_iris),
             primary[CommandTileKind.IRIS],
         ),
         MonitorCaptureSettingPresentation(
             kind = MonitorPickerKind.FOCUS,
-            label = "FOCUS",
+            label = strings.resolve(R.string.camera_label_focus),
             value = focusValue,
             widestValue = "Wide-L",
             picker =
                 focusModes.takeIf(List<MonitorPickerModePresentation>::isNotEmpty)?.let {
                     MonitorPickerPresentation(
                         MonitorPickerKind.FOCUS,
-                        "FOCUS",
-                        "AF mode / area / subject",
+                        strings.resolve(R.string.camera_label_focus),
+                        strings.resolve(R.string.camera_subtitle_focus),
                         it,
                     )
                 },
@@ -195,14 +199,14 @@ internal fun monitorCaptureSettings(
         ),
         multi(
             kind = MonitorPickerKind.WHITE_BALANCE,
-            label = "WB",
+            label = strings.resolve(R.string.camera_label_wb),
             widestValue = "5600K",
-            subtitle = "Kelvin / preset / tint",
+            subtitle = strings.resolve(R.string.camera_subtitle_wb),
             valueTile = primary[CommandTileKind.WHITE_BALANCE],
             modes =
                 listOfNotNull(
-                    mode("Kelvin / preset", primary[CommandTileKind.WHITE_BALANCE]),
-                    mode("Tint", exposure.getOrNull(3)),
+                    mode(strings.resolve(R.string.camera_mode_kelvin_preset), primary[CommandTileKind.WHITE_BALANCE]),
+                    mode(strings.resolve(R.string.camera_mode_tint), exposure.getOrNull(3)),
                 ),
         ),
     )
@@ -338,6 +342,11 @@ internal fun MonitorCaptureStrip(
     onOpenPicker: (MonitorPickerKind) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val applyingState = stringResource(R.string.camera_state_applying)
+    val otherChangeState = stringResource(R.string.camera_state_other_change)
+    val readOnlyState = stringResource(R.string.camera_state_read_only)
+    val lockedState = stringResource(R.string.camera_state_locked)
+    val changeHint = stringResource(R.string.camera_state_change_hint)
     Row(
         modifier =
             modifier
@@ -350,18 +359,22 @@ internal fun MonitorCaptureStrip(
             val active = activePicker == setting.kind
             val enabled = setting.picker != null && controlsEnabled && pendingControl == null
             val pending = setting.picker?.modes?.any { it.request.control == pendingControl } == true
+            val valueDescription =
+                stringResource(R.string.command_value_description, setting.label, setting.value)
+            val unavailableDescription =
+                stringResource(
+                    R.string.command_read_only_description,
+                    setting.unavailableReason ?: readOnlyState,
+                )
             val summary =
                 buildString {
-                    append(setting.label)
-                    append(": ")
-                    append(setting.value)
+                    append(valueDescription)
                     when {
-                        pending -> append(". Applying change.")
-                        pendingControl != null -> append(". Another camera change is in progress.")
-                        setting.picker == null ->
-                            append(". ${setting.unavailableReason ?: "Read-only on this camera."}")
-                        !controlsEnabled -> append(". Camera controls are locked.")
-                        else -> append(". Double tap to change.")
+                        pending -> append(applyingState)
+                        pendingControl != null -> append(otherChangeState)
+                        setting.picker == null -> append(unavailableDescription)
+                        !controlsEnabled -> append(lockedState)
+                        else -> append(changeHint)
                     }
                 }
             Box(
@@ -397,6 +410,8 @@ internal fun MonitorControlPickerPanel(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val pickerDescription =
+        stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
     var selectedMode by remember(picker.kind) { mutableIntStateOf(0) }
     val modeIndex = selectedMode.coerceIn(0, picker.modes.lastIndex)
     val mode = picker.modes[modeIndex]
@@ -410,8 +425,7 @@ internal fun MonitorControlPickerPanel(
                 .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
                 .semantics {
-                    contentDescription =
-                        "${picker.title} camera control picker. ${picker.subtitle}."
+                    contentDescription = pickerDescription
                 },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -435,7 +449,9 @@ internal fun MonitorControlPickerPanel(
                     overflow = TextOverflow.Clip,
                 )
             }
-            TextButton(onClick = onDismiss, enabled = !pending) { Text("Close") }
+            TextButton(onClick = onDismiss, enabled = !pending) {
+                Text(stringResource(R.string.action_close))
+            }
         }
 
         if (picker.modes.size > 1) {
@@ -481,7 +497,7 @@ internal fun MonitorControlPickerPanel(
         }
         if (!controlsEnabled) {
             Text(
-                "Controls are unavailable until the camera is connected and unlocked.",
+                stringResource(R.string.camera_controls_unavailable),
                 style = chromeStyle(11f, FontWeight.Medium),
                 color = LiveDesign.muted,
                 maxLines = 2,
@@ -496,6 +512,9 @@ internal fun MonitorControlPickerPanel(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             commandControlOptions(mode.request, pendingControl, controlsEnabled).forEach { option ->
+                val optionDescription =
+                    stringResource(R.string.camera_option_description, mode.label, option.label)
+                val selectedSuffix = stringResource(R.string.camera_option_selected_suffix)
                 TextButton(
                     onClick = { onSelect(mode.request, option.label) },
                     enabled = option.enabled,
@@ -513,8 +532,7 @@ internal fun MonitorControlPickerPanel(
                             )
                             .semantics {
                                 contentDescription =
-                                    "${mode.label} ${option.label}" +
-                                        if (option.selected) ", currently selected" else ""
+                                    optionDescription + if (option.selected) selectedSuffix else ""
                             },
                 ) {
                     Text(
@@ -526,7 +544,7 @@ internal fun MonitorControlPickerPanel(
             }
             if (pendingControl == mode.request.control) {
                 Text(
-                    "Applying change…",
+                    stringResource(R.string.camera_applying_change),
                     style = chromeStyle(11f, FontWeight.Medium),
                     color = LiveDesign.muted,
                 )

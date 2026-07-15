@@ -8,6 +8,7 @@ import android.os.Build
 import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -67,10 +68,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -87,8 +90,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.AndroidThermalTier
 import com.opencapture.openzcine.BuildConfig
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
+import com.opencapture.openzcine.titleResource
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FeedPeakingColor
@@ -110,6 +115,7 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.FeedFalseColorScale
+import com.opencapture.openzcine.labelResource
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.glass
@@ -142,18 +148,18 @@ import kotlin.math.roundToInt
  * every other tab exposes controls the shell can already honor.
  */
 public enum class OperatorSettingsTab(
-    public val title: String,
-    public val compactTitle: String,
-    public val railSubtitle: String,
-    public val subtitle: String,
-    public val pill: String,
+    @StringRes public val titleResource: Int,
+    @StringRes public val compactTitleResource: Int,
+    @StringRes public val railSubtitleResource: Int,
+    @StringRes public val subtitleResource: Int,
+    @StringRes public val pillResource: Int,
 ) {
-    LINK("Link", "Link", "Connection", "Transport & preview", "LIVE"),
-    ASSIST("View Assist", "Assist", "Scopes & overlays", "Behavior for live-view tools.", "ASSIST"),
-    CONTROLS("Controls", "Controls", "Dials & safety", "Touch behavior and safety.", "TOUCH"),
-    DISPLAY("Display", "Display", "Live view", "Live view buttons and chrome.", "VISIBILITY"),
-    STORAGE("Storage", "Storage", "Local media", "Local cache and offline media.", "STORAGE"),
-    SYSTEM("System", "System", "App behavior", "App-level behavior.", "APP"),
+    LINK(R.string.settings_tab_link, R.string.settings_tab_link, R.string.settings_rail_connection, R.string.settings_subtitle_link, R.string.settings_pill_live),
+    ASSIST(R.string.settings_tab_assist, R.string.settings_tab_assist_compact, R.string.settings_rail_assist, R.string.settings_subtitle_assist, R.string.settings_pill_assist),
+    CONTROLS(R.string.settings_tab_controls, R.string.settings_tab_controls, R.string.settings_rail_controls, R.string.settings_subtitle_controls, R.string.settings_pill_touch),
+    DISPLAY(R.string.settings_tab_display, R.string.settings_tab_display, R.string.settings_rail_display, R.string.settings_subtitle_display, R.string.settings_pill_visibility),
+    STORAGE(R.string.settings_tab_storage, R.string.settings_tab_storage, R.string.settings_rail_storage, R.string.settings_subtitle_storage, R.string.settings_pill_storage),
+    SYSTEM(R.string.settings_tab_system, R.string.settings_tab_system, R.string.settings_rail_system, R.string.settings_subtitle_system, R.string.settings_pill_app),
 }
 
 /**
@@ -190,6 +196,7 @@ internal fun OperatorSettingsScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scopeLimitMessage = stringResource(R.string.settings_scope_limit)
     val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
     val cameraInput =
@@ -215,7 +222,7 @@ internal fun OperatorSettingsScreen(
         if (!changed) {
             Toast.makeText(
                 context,
-                "2 scopes max in fit view. Close one or rotate to landscape.",
+                scopeLimitMessage,
                 Toast.LENGTH_SHORT,
             ).show()
         } else if (hapticsEnabled) {
@@ -348,14 +355,14 @@ private fun SettingsHeader(
 private fun SettingsTitle(modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(
-            "OPENZCINE",
+            stringResource(R.string.settings_brand),
             color = LiveDesign.accent,
             fontSize = 9.5.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.8.sp,
         )
         Text(
-            "Operator Setup",
+            stringResource(R.string.settings_title),
             style = chromeStyle(24f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -384,13 +391,19 @@ private fun SettingsLiveTile(
         }
     val detail =
         if (standalone) {
-            "No camera · local setup only"
+            stringResource(R.string.settings_local_only)
         } else {
             when (val current = state) {
                 is CameraSessionState.Connected ->
-                    health.detail.ifBlank { "${current.identity.name} · PTP-IP" }
-                CameraSessionState.Connecting -> "Connecting…"
-                CameraSessionState.Disconnected -> "No camera"
+                    health.detail.ifBlank {
+                        stringResource(
+                            R.string.settings_connected_detail,
+                            current.identity.name,
+                            "PTP-IP",
+                        )
+                    }
+                CameraSessionState.Connecting -> stringResource(R.string.camera_connecting_short)
+                CameraSessionState.Disconnected -> stringResource(R.string.camera_none)
             }
         }
     Row(
@@ -406,7 +419,11 @@ private fun SettingsLiveTile(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                if (linked) "Active Link" else if (standalone) "Local Setup" else "No Link",
+                stringResource(
+                    if (linked) R.string.settings_active_link
+                    else if (standalone) R.string.settings_local_setup
+                    else R.string.settings_no_link,
+                ),
                 style = chromeStyle(12f, FontWeight.SemiBold),
                 color = LiveDesign.text,
             )
@@ -458,7 +475,7 @@ private fun SettingsTabStrip(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    tab.compactTitle,
+                    stringResource(tab.compactTitleResource),
                     style = chromeStyle(11.5f, FontWeight.SemiBold),
                     color = if (active) LiveDesign.text else LiveDesign.muted,
                     maxLines = 1,
@@ -511,13 +528,13 @@ private fun SettingsTabButton(tab: OperatorSettingsTab, active: Boolean, onClick
         )
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                tab.title,
+                stringResource(tab.titleResource),
                 style = chromeStyle(13f, FontWeight.SemiBold),
                 color = if (active) LiveDesign.text else LiveDesign.muted,
                 maxLines = 1,
             )
             Text(
-                tab.railSubtitle,
+                stringResource(tab.railSubtitleResource),
                 style = chromeStyle(10.5f, FontWeight.Normal),
                 color = LiveDesign.faint,
                 maxLines = 1,
@@ -572,13 +589,13 @@ private fun SettingsContentPane(
             Row(verticalAlignment = Alignment.Top) {
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
-                        tab.title,
+                        stringResource(tab.titleResource),
                         style = chromeStyle(if (condensed) 21f else 24f, FontWeight.SemiBold),
                         color = LiveDesign.text,
                     )
                     if (!condensed) {
                         Text(
-                            tab.subtitle,
+                            stringResource(tab.subtitleResource),
                             style = chromeStyle(12.5f, FontWeight.Normal),
                             color = LiveDesign.muted,
                             maxLines = 2,
@@ -587,7 +604,7 @@ private fun SettingsContentPane(
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
-                    tab.pill,
+                    stringResource(tab.pillResource),
                     color = LiveDesign.accent,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -686,56 +703,58 @@ private fun LinkRows(
     val thermalTier = rememberAndroidThermalTier()
     val warningLabel =
         when (cameraProperties.temperatureStatus) {
-            CameraTemperatureStatus.NORMAL -> "OK"
-            CameraTemperatureStatus.WARNING -> "CHECK"
-            CameraTemperatureStatus.HOT -> "HOT"
-            null -> "Not reported"
+            CameraTemperatureStatus.NORMAL -> stringResource(R.string.temperature_ok)
+            CameraTemperatureStatus.WARNING -> stringResource(R.string.temperature_check)
+            CameraTemperatureStatus.HOT -> stringResource(R.string.temperature_hot)
+            null -> stringResource(R.string.settings_not_reported)
         }
     val thermalPreviewLabel =
         when (thermalTier) {
-            AndroidThermalTier.NOMINAL -> "Nominal · full preview request"
-            AndroidThermalTier.FAIR -> "Fair · full preview request"
-            AndroidThermalTier.SERIOUS -> "Serious · preview reduced"
-            AndroidThermalTier.CRITICAL -> "Critical · preview minimized"
+            AndroidThermalTier.NOMINAL -> stringResource(R.string.thermal_nominal)
+            AndroidThermalTier.FAIR -> stringResource(R.string.thermal_fair)
+            AndroidThermalTier.SERIOUS -> stringResource(R.string.thermal_serious)
+            AndroidThermalTier.CRITICAL -> stringResource(R.string.thermal_critical)
         }
     val previewApplicationLabel =
         when (val state = previewApplication) {
-            SwiftLiveViewPreviewState.Idle -> "Waiting for live view"
-            is SwiftLiveViewPreviewState.Pending -> "Applying preview request"
-            is SwiftLiveViewPreviewState.Applied -> "Applied"
+            SwiftLiveViewPreviewState.Idle -> stringResource(R.string.preview_waiting)
+            is SwiftLiveViewPreviewState.Pending -> stringResource(R.string.preview_applying)
+            is SwiftLiveViewPreviewState.Applied -> stringResource(R.string.preview_applied)
             is SwiftLiveViewPreviewState.Rejected ->
                 if (state.retainedRequest != null) {
-                    "Rejected · keeping prior stream"
+                    stringResource(R.string.preview_rejected_retained)
                 } else {
-                    "Rejected · live view paused"
+                    stringResource(R.string.preview_rejected_paused)
                 }
         }
 
     SettingsGroupCard(
-        title = "Link Health",
+        title = stringResource(R.string.settings_link_health),
         caption =
             if (session == null) {
-                "No active camera. Link measurements appear only after a session connects."
+                stringResource(R.string.settings_link_no_camera_caption)
             } else {
                 health.detail
             },
     ) {
         LinkHealthMeter(score = health.score, signalBars = health.signalBars)
-        SettingsInlineRow(title = "Health", showTopDivider = false) {
-            SettingsValueText(if (session == null) "No Link" else "${health.score}%")
+        SettingsInlineRow(title = stringResource(R.string.settings_health), showTopDivider = false) {
+            SettingsValueText(
+                if (session == null) stringResource(R.string.settings_no_link)
+                else stringResource(R.string.settings_health_score, health.score),
+            )
         }
-        SettingsInlineRow(title = "Current Transport") {
-            SettingsValueText(activeTransportLabel ?: "Not reported")
+        SettingsInlineRow(title = stringResource(R.string.settings_current_transport)) {
+            SettingsValueText(activeTransportLabel ?: stringResource(R.string.settings_not_reported))
         }
     }
 
     SettingsGroupCard(
-        title = "Preview Stream",
-        caption =
-            "These choices restart only the disposable live-view JPEG stream through Swift. Recording format and card writes stay unchanged.",
+        title = stringResource(R.string.settings_preview_stream),
+        caption = stringResource(R.string.settings_preview_caption),
     ) {
         Text(
-            "Stream Preset",
+            stringResource(R.string.settings_stream_preset),
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -745,7 +764,14 @@ private fun LinkRows(
         ) {
             LiveViewStreamPreset.entries.forEach { preset ->
                 FramingAssistChoice(
-                    label = preset.label,
+                    label =
+                        stringResource(
+                            when (preset) {
+                                LiveViewStreamPreset.FAST -> R.string.preview_preset_fast
+                                LiveViewStreamPreset.BALANCED -> R.string.preview_preset_balanced
+                                LiveViewStreamPreset.QUALITY -> R.string.preview_preset_quality
+                            },
+                        ),
                     selected = settings.streamPreset == preset,
                     modifier = Modifier.weight(1f),
                 ) {
@@ -755,7 +781,7 @@ private fun LinkRows(
             }
         }
         Text(
-            "Quality Bias",
+            stringResource(R.string.settings_quality_bias),
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -765,7 +791,14 @@ private fun LinkRows(
         ) {
             LiveViewQualityBias.entries.forEach { bias ->
                 FramingAssistChoice(
-                    label = bias.label,
+                    label =
+                        stringResource(
+                            when (bias) {
+                                LiveViewQualityBias.LATENCY -> R.string.preview_bias_latency
+                                LiveViewQualityBias.BALANCED -> R.string.preview_preset_balanced
+                                LiveViewQualityBias.DETAIL -> R.string.preview_bias_detail
+                            },
+                        ),
                     selected = settings.qualityBias == bias,
                     modifier = Modifier.weight(1f),
                 ) {
@@ -774,34 +807,44 @@ private fun LinkRows(
                 }
             }
         }
-        SettingsInlineRow(title = "Thermal Preview", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_thermal_preview), showTopDivider = false) {
             SettingsValueText(thermalPreviewLabel)
         }
-        SettingsInlineRow(title = "Preview Apply") {
+        SettingsInlineRow(title = stringResource(R.string.settings_preview_apply)) {
             SettingsValueText(
-                if (liveViewSource == null) "Native source unavailable" else previewApplicationLabel,
+                if (liveViewSource == null) {
+                    stringResource(R.string.settings_native_source_unavailable)
+                } else {
+                    previewApplicationLabel
+                },
             )
         }
-        SettingsInlineRow(title = "Camera Warning") { SettingsValueText(warningLabel) }
+        SettingsInlineRow(title = stringResource(R.string.settings_camera_warning)) {
+            SettingsValueText(warningLabel)
+        }
     }
 
     SettingsGroupCard(
-        title = "Connection",
-        caption =
-            "Reconnect returns to the saved-camera owner so Wi-Fi and USB cleanup stay scoped to the active profile.",
+        title = stringResource(R.string.settings_connection),
+        caption = stringResource(R.string.settings_connection_caption),
     ) {
-        SettingsInlineRow(title = "Disconnect", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.action_disconnect), showTopDivider = false) {
             if (onDisconnect == null) {
-                SettingsValueText(if (session == null) "No active camera" else "No saved profile")
+                SettingsValueText(
+                    stringResource(
+                        if (session == null) R.string.settings_no_active_camera
+                        else R.string.settings_no_saved_profile,
+                    ),
+                )
             } else {
-                SettingsLinkAction("Disconnect", onClick = onDisconnect)
+                SettingsLinkAction(stringResource(R.string.action_disconnect), onClick = onDisconnect)
             }
         }
-        SettingsInlineRow(title = "Reconnect") {
+        SettingsInlineRow(title = stringResource(R.string.action_reconnect)) {
             if (onReconnect == null) {
-                SettingsValueText("No saved profile")
+                SettingsValueText(stringResource(R.string.settings_no_saved_profile))
             } else {
-                SettingsLinkAction("Reconnect", onClick = onReconnect)
+                SettingsLinkAction(stringResource(R.string.action_reconnect), onClick = onReconnect)
             }
         }
     }
@@ -859,7 +902,7 @@ private fun AssistRows(
             .filter { imageEffectsAvailable || it !in imageEffectTools }
             .forEachIndexed { index, tool ->
             SettingsSwitchRow(
-                tool.settingsTitle,
+                stringResource(tool.titleResource()),
                 isOn = assistState.isOn(tool),
                 showTopDivider = index != 0,
             ) { onAssistToggle(tool) }
@@ -875,14 +918,14 @@ private fun AssistRows(
             RedLutWorkflowRows()
         }
         SettingsGroupCard(
-            title = "Monitor LUT",
-            caption = "Choose the built-in monitor look used when LUT is enabled.",
+            title = stringResource(R.string.settings_monitor_lut),
+            caption = stringResource(R.string.settings_monitor_lut_caption),
         ) {
-            SettingsInlineRow(title = "LUT Look", showTopDivider = false) {
+            SettingsInlineRow(title = stringResource(R.string.settings_lut_look), showTopDivider = false) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     FeedLut.entries.forEach { lut ->
                         AssistChoice(
-                            label = lut.label,
+                            label = feedLutLabel(lut),
                             selected = assistState.selectedLut == FeedLutSelection.BuiltIn(lut),
                         ) {
                             assistState.selectLut(lut)
@@ -893,19 +936,19 @@ private fun AssistRows(
             }
         }
         SettingsGroupCard(
-            title = "False Color",
-            caption = "Choose the camera-aware scale and optional movable reference display.",
+            title = stringResource(R.string.settings_false_color),
+            caption = stringResource(R.string.settings_false_color_caption),
             onReset = {
                 assistState.resetFalseColorSelection()
                 settings.resetFalseColorConfiguration()
                 onInteraction()
             },
         ) {
-            SettingsInlineRow(title = "Scale", showTopDivider = false) {
+            SettingsInlineRow(title = stringResource(R.string.settings_scale), showTopDivider = false) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     FeedFalseColorScale.entries.forEach { scale ->
                         AssistChoice(
-                            label = scale.label,
+                            label = stringResource(scale.labelResource()),
                             selected = assistState.selectedFalseColorScale == scale,
                         ) {
                             assistState.selectFalseColorScale(scale)
@@ -915,7 +958,7 @@ private fun AssistRows(
                 }
             }
             SettingsSwitchRow(
-                "Reference Display",
+                stringResource(R.string.settings_reference_display),
                 isOn = settings.feedEffectsConfiguration.falseColorReferenceEnabled,
             ) {
                 val enabled = !configuration.falseColorReferenceEnabled
@@ -933,7 +976,7 @@ private fun AssistRows(
                 }
             }
             Text(
-                "Shows the Swift-derived palette key only while False Color is active.",
+                stringResource(R.string.settings_reference_caption),
                 style = chromeStyle(10.5f, FontWeight.Normal),
                 color = LiveDesign.muted,
             )
@@ -942,11 +985,11 @@ private fun AssistRows(
         ZebraSettingsRows(settings, cameraInput, onInteraction)
     } else {
         SettingsGroupCard(
-            title = "Image Processing",
-            caption = "LUT, False Color, Peaking, and Zebra require Android 13 or newer and the bundled Swift core.",
+            title = stringResource(R.string.settings_image_processing),
+            caption = stringResource(R.string.settings_image_processing_caption),
         ) {
             Text(
-                "Unavailable on this device. Scope and framing assists remain fully functional.",
+                stringResource(R.string.settings_image_processing_unavailable),
                 style = chromeStyle(10.5f, FontWeight.Normal),
                 color = LiveDesign.muted,
             )
@@ -954,14 +997,14 @@ private fun AssistRows(
     }
     ScopeSettingsRows(settings, onInteraction)
     SettingsGroupCard(
-        title = "Traffic Lights",
-        caption = "Configure the shared Swift meter used by the histogram and goal-post panel.",
+        title = stringResource(R.string.settings_traffic_lights),
+        caption = stringResource(R.string.settings_traffic_lights_caption),
         onReset = {
             settings.resetTrafficLightsConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = "Panel Scale", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_panel_scale), showTopDivider = false) {
             ScopeScaleSlider(
                 selected = settings.scopeAssistConfiguration.trafficLightsScale,
                 onSelect = { value ->
@@ -972,7 +1015,7 @@ private fun AssistRows(
             )
         }
         SettingsSwitchRow(
-            "Histogram Traffic Lights",
+            stringResource(R.string.settings_histogram_traffic_lights),
             isOn = settings.histogramTrafficLightsEnabled.value,
             showTopDivider = false,
         ) {
@@ -980,12 +1023,12 @@ private fun AssistRows(
             onInteraction()
         }
         Text(
-            "Show small RGB edge blocks for crushed and clipped channels.",
+            stringResource(R.string.settings_histogram_traffic_caption),
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
         Text(
-            "Crush/Clip Compensation",
+            stringResource(R.string.settings_crush_clip),
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -997,17 +1040,17 @@ private fun AssistRows(
             },
         )
         Text(
-            "Forwarded to the shared Swift meter; Kotlin only stores and presents this choice.",
+            stringResource(R.string.settings_crush_clip_caption),
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
     }
     SettingsGroupCard(
-        title = "Local Framing",
-        caption = "OpenZCine draws these monitor-only overlays over the visible feed. They never change the camera's Grid Display setting.",
+        title = stringResource(R.string.settings_local_framing),
+        caption = stringResource(R.string.settings_local_framing_caption),
     ) {
         FramingAssistSwitchRow(
-            title = "Show Delivery Guides",
+            title = stringResource(R.string.settings_show_delivery_guides),
             isOn = settings.guidesVisible.value,
             showTopDivider = false,
         ) {
@@ -1018,7 +1061,7 @@ private fun AssistRows(
             onInteraction()
         }
         Text(
-            "Delivery Guide Family",
+            stringResource(R.string.settings_delivery_family),
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -1038,18 +1081,18 @@ private fun AssistRows(
             },
         )
         FramingAssistSwitchRow(
-            title = "Mask Outside Selected Frames",
+            title = stringResource(R.string.settings_mask_frames),
             isOn = settings.guideMaskEnabled.value,
         ) {
             onSettingToggle(settings.guideMaskEnabled)
         }
         Text(
-            "Composition Grid",
+            stringResource(R.string.settings_composition_grid),
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
         FramingAssistSwitchRow(
-            title = "Show Composition Grid",
+            title = stringResource(R.string.settings_show_composition_grid),
             isOn = settings.localGridVisible.value,
         ) {
             // Likewise, re-enabling an otherwise empty grid starts with
@@ -1066,24 +1109,24 @@ private fun AssistRows(
             onToggleDiagonal = { onSettingToggle(settings.diagonalGridEnabled) },
         )
         FramingAssistSwitchRow(
-            title = "Centre Crosshair",
+            title = stringResource(R.string.settings_centre_crosshair),
             isOn = settings.centerCrosshairEnabled.value,
         ) {
             onSettingToggle(settings.centerCrosshairEnabled)
         }
         Text(
-            "Desqueeze",
+            stringResource(R.string.settings_desqueeze),
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
         FramingAssistSwitchRow(
-            title = "Enable Local Desqueeze",
+            title = stringResource(R.string.settings_enable_desqueeze),
             isOn = settings.desqueezeEnabled.value,
         ) {
             onSettingToggle(settings.desqueezeEnabled)
         }
         Text(
-            "Ratio",
+            stringResource(R.string.settings_ratio),
             style = chromeStyle(11.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -1095,7 +1138,7 @@ private fun AssistRows(
             },
         )
         Text(
-            "Compressed Axis",
+            stringResource(R.string.settings_compressed_axis),
             style = chromeStyle(11.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -1107,24 +1150,24 @@ private fun AssistRows(
             },
         )
         Text(
-            "Guides, masks, grids, crosshair, and desqueeze are local display assists. Camera Grid Display remains camera-owned and unchanged.",
+            stringResource(R.string.settings_local_assists_caption),
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
     }
     SettingsGroupCard(
-        title = "Camera Level",
-        caption = "Uses the camera virtual horizon when its live-view header reports a reliable value.",
+        title = stringResource(R.string.settings_camera_level),
+        caption = stringResource(R.string.settings_camera_level_caption),
     ) {
         FramingAssistSwitchRow(
-            title = "Level",
+            title = stringResource(R.string.settings_level),
             isOn = settings.levelAssistEnabled.value,
             showTopDivider = false,
         ) {
             onSettingToggle(settings.levelAssistEnabled)
         }
         Text(
-            "Style",
+            stringResource(R.string.settings_style),
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
@@ -1136,7 +1179,7 @@ private fun AssistRows(
             },
         )
         Text(
-            "If the camera does not provide a level, the monitor may use labelled device tilt fallback.",
+            stringResource(R.string.settings_level_fallback),
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
@@ -1146,26 +1189,110 @@ private fun AssistRows(
 private val imageEffectTools: Set<AssistTool> =
     setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
 
+@Composable
+private fun feedLutLabel(lut: FeedLut): String =
+    stringResource(
+        when (lut) {
+            FeedLut.LOG3G10_709 -> R.string.lut_log_709
+            FeedLut.NLOG_709 -> R.string.lut_nlog_709
+            FeedLut.MONO -> R.string.lut_mono
+        },
+    )
+
+@Composable
+private fun peakingSensitivityLabel(value: FeedPeakingSensitivity): String =
+    stringResource(
+        when (value) {
+            FeedPeakingSensitivity.LOW -> R.string.peaking_low
+            FeedPeakingSensitivity.MEDIUM -> R.string.peaking_medium
+            FeedPeakingSensitivity.HIGH -> R.string.peaking_high
+        },
+    )
+
+@Composable
+private fun peakingColorLabel(value: FeedPeakingColor): String =
+    stringResource(
+        when (value) {
+            FeedPeakingColor.WHITE -> R.string.color_white
+            FeedPeakingColor.BLUE -> R.string.color_blue
+            FeedPeakingColor.RED -> R.string.color_red
+            FeedPeakingColor.GREEN -> R.string.color_green
+        },
+    )
+
+@Composable
+private fun zebraColorLabel(value: FeedZebraStripeColor): String =
+    stringResource(
+        when (value) {
+            FeedZebraStripeColor.WHITE -> R.string.color_white
+            FeedZebraStripeColor.AMBER -> R.string.color_amber
+            FeedZebraStripeColor.RED -> R.string.color_red
+            FeedZebraStripeColor.CYAN -> R.string.color_cyan
+            FeedZebraStripeColor.GREEN -> R.string.color_green
+        },
+    )
+
+@Composable
+private fun framingFamilyLabel(value: LocalFramingGuideFamily): String =
+    stringResource(
+        if (value == LocalFramingGuideFamily.FILM) R.string.framing_family_film
+        else R.string.framing_family_social,
+    )
+
+@Composable
+private fun framingRatioLabel(value: LocalFramingAspectRatio): String =
+    stringResource(
+        when (value) {
+            LocalFramingAspectRatio.RATIO_276 -> R.string.framing_ratio_276
+            LocalFramingAspectRatio.RATIO_239 -> R.string.framing_ratio_239
+            LocalFramingAspectRatio.RATIO_235 -> R.string.framing_ratio_235
+            LocalFramingAspectRatio.RATIO_200 -> R.string.framing_ratio_200
+            LocalFramingAspectRatio.RATIO_185 -> R.string.framing_ratio_185
+            LocalFramingAspectRatio.RATIO_16_9 -> R.string.framing_ratio_16_9
+            LocalFramingAspectRatio.RATIO_166 -> R.string.framing_ratio_166
+            LocalFramingAspectRatio.RATIO_143 -> R.string.framing_ratio_143
+            LocalFramingAspectRatio.RATIO_4_3 -> R.string.framing_ratio_4_3
+            LocalFramingAspectRatio.RATIO_9_16 -> R.string.framing_ratio_9_16
+            LocalFramingAspectRatio.RATIO_4_5 -> R.string.framing_ratio_4_5
+            LocalFramingAspectRatio.RATIO_1_1 -> R.string.framing_ratio_1_1
+            LocalFramingAspectRatio.RATIO_2_3 -> R.string.framing_ratio_2_3
+            LocalFramingAspectRatio.RATIO_191 -> R.string.framing_ratio_191
+        },
+    )
+
+@Composable
+private fun desqueezeRatioLabel(value: LocalDesqueezeRatio): String =
+    stringResource(
+        when (value) {
+            LocalDesqueezeRatio.X100 -> R.string.desqueeze_1
+            LocalDesqueezeRatio.X133 -> R.string.desqueeze_133
+            LocalDesqueezeRatio.X150 -> R.string.desqueeze_15
+            LocalDesqueezeRatio.X165 -> R.string.desqueeze_165
+            LocalDesqueezeRatio.X180 -> R.string.desqueeze_18
+            LocalDesqueezeRatio.X200 -> R.string.desqueeze_2
+        },
+    )
+
 /** iOS-matched peaking choices; Swift resolves the actual detector values and RGB. */
 @Composable
 private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
     val configuration = settings.feedEffectsConfiguration
     SettingsGroupCard(
-        title = "Focus Peaking",
-        caption = "Sensitivity and color are resolved by the shared Swift exposure-assist facade.",
+        title = stringResource(R.string.settings_focus_peaking),
+        caption = stringResource(R.string.settings_peaking_caption),
         onReset = {
             settings.resetPeakingConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = "Sensitivity", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_sensitivity), showTopDivider = false) {
             Row(
                 Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 FeedPeakingSensitivity.entries.forEach { sensitivity ->
                     AssistChoice(
-                        label = sensitivity.label,
+                        label = peakingSensitivityLabel(sensitivity),
                         selected = configuration.peakingSensitivity == sensitivity,
                     ) {
                         settings.feedEffectsConfiguration =
@@ -1175,13 +1302,13 @@ private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () ->
                 }
             }
         }
-        SettingsInlineRow(title = "Color") {
+        SettingsInlineRow(title = stringResource(R.string.settings_color)) {
             Row(
                 Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 FeedPeakingColor.entries.forEach { color ->
-                    AssistChoice(label = color.label, selected = configuration.peakingColor == color) {
+                    AssistChoice(label = peakingColorLabel(color), selected = configuration.peakingColor == color) {
                         settings.feedEffectsConfiguration = configuration.copy(peakingColor = color)
                         onInteraction()
                     }
@@ -1200,29 +1327,36 @@ private fun ZebraSettingsRows(
 ) {
     val configuration = settings.feedEffectsConfiguration
     SettingsGroupCard(
-        title = "Zebra",
-        caption = "Highlight and midtone warnings use the active camera curve; 0–255 changes only the editor.",
+        title = stringResource(R.string.settings_zebra),
+        caption = stringResource(R.string.settings_zebra_caption),
         onReset = {
             settings.resetZebraConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = "Units", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_units), showTopDivider = false) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 FeedZebraUnit.entries.forEach { unit ->
-                    AssistChoice(label = unit.label, selected = configuration.zebraUnit == unit) {
+                    AssistChoice(
+                        label =
+                            stringResource(
+                                if (unit == FeedZebraUnit.NATIVE) R.string.zebra_unit_native
+                                else R.string.false_color_scale_ire,
+                            ),
+                        selected = configuration.zebraUnit == unit,
+                    ) {
                         settings.feedEffectsConfiguration = configuration.copy(zebraUnit = unit)
                         onInteraction()
                     }
                 }
             }
         }
-        SettingsSwitchRow("Highlight", isOn = configuration.zebraHighlightEnabled) {
+        SettingsSwitchRow(stringResource(R.string.settings_highlight), isOn = configuration.zebraHighlightEnabled) {
             settings.feedEffectsConfiguration =
                 configuration.copy(zebraHighlightEnabled = !configuration.zebraHighlightEnabled)
             onInteraction()
         }
-        SettingsInlineRow(title = "Highlight Threshold") {
+        SettingsInlineRow(title = stringResource(R.string.settings_highlight_threshold)) {
             ZebraThresholdStepper(
                 cameraInput = cameraInput,
                 unit = configuration.zebraUnit,
@@ -1234,7 +1368,7 @@ private fun ZebraSettingsRows(
                 },
             )
         }
-        SettingsInlineRow(title = "Highlight Color") {
+        SettingsInlineRow(title = stringResource(R.string.settings_highlight_color)) {
             ZebraColorChoices(
                 selected = configuration.zebraHighlightColor,
                 onSelect = { color ->
@@ -1243,12 +1377,12 @@ private fun ZebraSettingsRows(
                 },
             )
         }
-        SettingsSwitchRow("Midtone", isOn = configuration.zebraMidtoneEnabled) {
+        SettingsSwitchRow(stringResource(R.string.settings_midtone), isOn = configuration.zebraMidtoneEnabled) {
             settings.feedEffectsConfiguration =
                 configuration.copy(zebraMidtoneEnabled = !configuration.zebraMidtoneEnabled)
             onInteraction()
         }
-        SettingsInlineRow(title = "Midtone Threshold") {
+        SettingsInlineRow(title = stringResource(R.string.settings_midtone_threshold)) {
             ZebraThresholdStepper(
                 cameraInput = cameraInput,
                 unit = configuration.zebraUnit,
@@ -1260,7 +1394,7 @@ private fun ZebraSettingsRows(
                 },
             )
         }
-        SettingsInlineRow(title = "Midtone Color") {
+        SettingsInlineRow(title = stringResource(R.string.settings_midtone_color)) {
             ZebraColorChoices(
                 selected = configuration.zebraMidtoneColor,
                 onSelect = { color ->
@@ -1286,6 +1420,8 @@ private fun ZebraThresholdStepper(
         } ?: return
     val maximum = if (unit == FeedZebraUnit.NATIVE) 255f else 100f
     val rounded = editorValue.roundToInt().coerceIn(0, maximum.roundToInt())
+    val thresholdDescription =
+        stringResource(R.string.settings_zebra_threshold_description, maximum.roundToInt())
     var directEntry by remember(unit, rounded) { mutableStateOf(rounded.toString()) }
     fun adjust(delta: Float) {
         zebraMonitorPercent(cameraInput, unit, (editorValue + delta).coerceIn(0f, maximum))?.let(onChange)
@@ -1307,7 +1443,7 @@ private fun ZebraThresholdStepper(
             textStyle = chromeStyle(12.5f, FontWeight.SemiBold),
             modifier =
                 Modifier.width(72.dp).semantics {
-                    contentDescription = "Zebra threshold, 0 to ${maximum.roundToInt()}"
+                    contentDescription = thresholdDescription
                 },
         )
         AssistChoice(label = "+", selected = false) { adjust(1f) }
@@ -1328,7 +1464,9 @@ private fun ZebraColorChoices(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         FeedZebraStripeColor.entries.forEach { color ->
-            AssistChoice(label = color.label, selected = selected == color) { onSelect(color) }
+            AssistChoice(label = zebraColorLabel(color), selected = selected == color) {
+                onSelect(color)
+            }
         }
     }
 }
@@ -1338,17 +1476,24 @@ private fun ZebraColorChoices(
 private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
     val configuration = settings.scopeAssistConfiguration
     SettingsGroupCard(
-        title = "Waveform",
-        caption = "Mode, trace brightness, guides, and footprint are applied by the clean-frame Canvas view.",
+        title = stringResource(R.string.settings_waveform),
+        caption = stringResource(R.string.settings_waveform_caption),
         onReset = {
             settings.resetWaveformConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = "Mode", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_mode), showTopDivider = false) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 ScopeWaveformMode.entries.forEach { mode ->
-                    AssistChoice(label = mode.label, selected = configuration.waveformMode == mode) {
+                    AssistChoice(
+                        label =
+                            stringResource(
+                                if (mode == ScopeWaveformMode.LUMA) R.string.scope_chip_luma
+                                else R.string.scope_chip_rgb,
+                            ),
+                        selected = configuration.waveformMode == mode,
+                    ) {
                         settings.scopeAssistConfiguration = configuration.copy(waveformMode = mode)
                         onInteraction()
                     }
@@ -1378,17 +1523,24 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
         )
     }
     SettingsGroupCard(
-        title = "Parade",
-        caption = "RGB or YRGB channel layout with independent trace and guide controls.",
+        title = stringResource(R.string.settings_parade),
+        caption = stringResource(R.string.settings_parade_caption),
         onReset = {
             settings.resetParadeConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = "Mode", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_mode), showTopDivider = false) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 ScopeParadeMode.entries.forEach { mode ->
-                    AssistChoice(label = mode.label, selected = configuration.paradeMode == mode) {
+                    AssistChoice(
+                        label =
+                            stringResource(
+                                if (mode == ScopeParadeMode.RGB) R.string.scope_chip_rgb
+                                else R.string.scope_chip_yrgb,
+                            ),
+                        selected = configuration.paradeMode == mode,
+                    ) {
                         settings.scopeAssistConfiguration = configuration.copy(paradeMode = mode)
                         onInteraction()
                     }
@@ -1418,17 +1570,27 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
         )
     }
     SettingsGroupCard(
-        title = "Vectorscope",
-        caption = "Zoom changes core density binning; brightness and footprint affect only the rendered trace.",
+        title = stringResource(R.string.settings_vectorscope),
+        caption = stringResource(R.string.settings_vectorscope_caption),
         onReset = {
             settings.resetVectorscopeConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = "Trace Zoom", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_trace_zoom), showTopDivider = false) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 ScopeVectorscopeZoom.entries.forEach { zoom ->
-                    AssistChoice(label = zoom.label, selected = configuration.vectorscopeZoom == zoom) {
+                    AssistChoice(
+                        label =
+                            stringResource(
+                                when (zoom.wireOrdinal) {
+                                    0 -> R.string.scope_zoom_1
+                                    1 -> R.string.scope_zoom_2
+                                    else -> R.string.scope_zoom_4
+                                },
+                            ),
+                        selected = configuration.vectorscopeZoom == zoom,
+                    ) {
                         settings.scopeAssistConfiguration = configuration.copy(vectorscopeZoom = zoom)
                         onInteraction()
                     }
@@ -1451,14 +1613,14 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
         )
     }
     SettingsGroupCard(
-        title = "Histogram",
-        caption = "Histogram footprint and shared edge warnings remain independently persisted.",
+        title = stringResource(R.string.settings_histogram),
+        caption = stringResource(R.string.settings_histogram_caption),
         onReset = {
             settings.resetHistogramConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = "Histogram Scale", showTopDivider = false) {
+        SettingsInlineRow(title = stringResource(R.string.settings_histogram_scale), showTopDivider = false) {
             ScopeScaleSlider(
                 selected = configuration.histogramScale,
                 onSelect = { value ->
@@ -1472,7 +1634,7 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
 
 @Composable
 private fun ScopeBrightnessRow(brightness: Int, onSelect: (Int) -> Unit) {
-    SettingsInlineRow(title = "Brightness") {
+    SettingsInlineRow(title = stringResource(R.string.settings_brightness)) {
         Row(
             Modifier.widthIn(max = 250.dp),
             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1487,14 +1649,16 @@ private fun ScopeBrightnessRow(brightness: Int, onSelect: (Int) -> Unit) {
                 steps = ScopeAssistConfiguration.MAX_BRIGHTNESS - ScopeAssistConfiguration.MIN_BRIGHTNESS - 1,
                 modifier = Modifier.weight(1f),
             )
-            SettingsValueText("$brightness%")
+            SettingsValueText(stringResource(R.string.settings_percent, brightness))
         }
     }
 }
 
 @Composable
 private fun ScopeScaleRow(scale: Float, onSelect: (Float) -> Unit) {
-    SettingsInlineRow(title = "Panel Scale") { ScopeScaleSlider(scale, onSelect) }
+    SettingsInlineRow(title = stringResource(R.string.settings_panel_scale)) {
+        ScopeScaleSlider(scale, onSelect)
+    }
 }
 
 @Composable
@@ -1510,19 +1674,19 @@ private fun ScopeScaleSlider(selected: Float, onSelect: (Float) -> Unit) {
             valueRange = ScopeAssistConfiguration.MIN_SCALE..ScopeAssistConfiguration.MAX_SCALE,
             modifier = Modifier.weight(1f),
         )
-        SettingsValueText("${(selected * 100).roundToInt()}%")
+        SettingsValueText(stringResource(R.string.settings_percent, (selected * 100).roundToInt()))
     }
 }
 
 @Composable
 private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) -> Unit) {
-    SettingsSwitchRow("Safe Border Clip", isOn = guides.clip) {
+    SettingsSwitchRow(stringResource(R.string.settings_safe_border_clip), isOn = guides.clip) {
         onChange(guides.copy(clip = !guides.clip))
     }
-    SettingsSwitchRow("Safe Border Crush", isOn = guides.crush) {
+    SettingsSwitchRow(stringResource(R.string.settings_safe_border_crush), isOn = guides.crush) {
         onChange(guides.copy(crush = !guides.crush))
     }
-    SettingsSwitchRow("Middle Gray", isOn = guides.middle) {
+    SettingsSwitchRow(stringResource(R.string.settings_middle_gray), isOn = guides.middle) {
         onChange(guides.copy(middle = !guides.middle))
     }
 }
@@ -1537,6 +1701,7 @@ private fun StoredLutLibraryRows(
     assistState: AssistState,
     onInteraction: () -> Unit,
 ) {
+    val resources = LocalResources.current
     val entries by library.entries.collectAsState()
     val failures by library.failures.collectAsState()
     val scope = rememberCoroutineScope()
@@ -1550,7 +1715,8 @@ private fun StoredLutLibraryRows(
                         is CustomLutImportResult.Imported -> {
                             assistState.selectStoredLut(result.entry.selection)
                             if (!assistState.isOn(AssistTool.LUT)) assistState.toggle(AssistTool.LUT)
-                            feedback = "${result.entry.displayName} added to the private library."
+                            feedback =
+                                resources.getString(R.string.lut_added, result.entry.displayName)
                             onInteraction()
                         }
                         is CustomLutImportResult.Rejected -> feedback = result.message
@@ -1562,14 +1728,12 @@ private fun StoredLutLibraryRows(
     val redEntries = entries.filter { it.selection.category == StoredLutCategory.RED }
 
     SettingsGroupCard(
-        title = "Custom LUT Library",
-        caption =
-            "Choose one .cube document. Swift validates it before a bounded app-private copy; " +
-                "OpenZCine never keeps the document URI or scans storage.",
+        title = stringResource(R.string.lut_custom_library),
+        caption = stringResource(R.string.lut_custom_caption),
     ) {
         if (customEntries.isEmpty()) {
             Text(
-                "No custom LUTs yet. Import a .cube to add a monitor look.",
+                stringResource(R.string.lut_custom_empty),
                 style = chromeStyle(10.5f, FontWeight.Normal),
                 color = LiveDesign.muted,
             )
@@ -1585,11 +1749,11 @@ private fun StoredLutLibraryRows(
                             if (library.prepare(entry.selection)) {
                                 assistState.selectStoredLut(entry.selection)
                                 if (!assistState.isOn(AssistTool.LUT)) assistState.toggle(AssistTool.LUT)
-                                feedback = "${entry.displayName} selected."
+                                feedback = resources.getString(R.string.lut_selected, entry.displayName)
                                 onInteraction()
                             } else {
                                 feedback = failures[entry.selection]?.operatorMessage
-                                    ?: "This LUT could not be prepared."
+                                    ?: resources.getString(R.string.lut_prepare_failed)
                             }
                         }
                     },
@@ -1597,8 +1761,13 @@ private fun StoredLutLibraryRows(
                 )
             }
         }
-        SettingsInlineRow(title = "Import .cube", showTopDivider = customEntries.isNotEmpty()) {
-            SettingsLinkAction("Choose") { importLauncher.launch(arrayOf("*/*")) }
+        SettingsInlineRow(
+            title = stringResource(R.string.lut_import),
+            showTopDivider = customEntries.isNotEmpty(),
+        ) {
+            SettingsLinkAction(stringResource(R.string.action_choose)) {
+                importLauncher.launch(arrayOf("*/*"))
+            }
         }
         feedback?.let { message ->
             Text(
@@ -1611,8 +1780,8 @@ private fun StoredLutLibraryRows(
 
     if (redEntries.isNotEmpty()) {
         SettingsGroupCard(
-            title = "Stored RED LUTs",
-            caption = "Only LUTs added by an authorized RED workflow appear here; none are bundled.",
+            title = stringResource(R.string.lut_stored_red),
+            caption = stringResource(R.string.lut_stored_red_caption),
         ) {
             redEntries.forEachIndexed { index, entry ->
                 StoredLutEntryRow(
@@ -1638,11 +1807,10 @@ private fun StoredLutLibraryRows(
     pendingDeletion?.let { entry ->
         AlertDialog(
             onDismissRequest = { pendingDeletion = null },
-            title = { Text("Remove ${entry.displayName}?") },
+            title = { Text(stringResource(R.string.lut_remove_title, entry.displayName)) },
             text = {
                 Text(
-                    "Only OpenZCine's app-private copy will be removed. The document you selected " +
-                        "from storage is untouched.",
+                    stringResource(R.string.lut_remove_message),
                 )
             },
             confirmButton = {
@@ -1666,17 +1834,19 @@ private fun StoredLutLibraryRows(
                                         is FeedLutSelection.Stored -> assistState.selectStoredLut(reconciled.value)
                                     }
                                 }
-                                feedback = "${entry.displayName} removed."
+                                feedback = resources.getString(R.string.lut_removed, entry.displayName)
                                 onInteraction()
                             } else {
-                                feedback = "OpenZCine could not remove that private LUT copy."
+                                feedback = resources.getString(R.string.lut_remove_failed)
                             }
                         }
                     },
-                ) { Text("Remove") }
+                ) { Text(stringResource(R.string.action_remove)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeletion = null }) { Text("Cancel") }
+                TextButton(onClick = { pendingDeletion = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
         )
     }
@@ -1697,8 +1867,8 @@ private fun StoredLutEntryRow(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AssistChoice(label = "USE", selected = selected, onClick = onSelect)
-            SettingsLinkAction("Remove", onClick = onRemove)
+            AssistChoice(label = stringResource(R.string.action_use), selected = selected, onClick = onSelect)
+            SettingsLinkAction(stringResource(R.string.action_remove), onClick = onRemove)
         }
     }
     failure?.let {
@@ -1717,27 +1887,31 @@ private fun RedLutWorkflowRows() {
     val gate = remember(context) { RedLutDownloadGate(context.applicationContext) }
     var readiness by remember { mutableStateOf(gate.readiness()) }
     SettingsGroupCard(
-        title = "RED IPP2 LUTs",
-        caption = "RED assets are never bundled. Download remains unavailable until RED authorizes an Android endpoint and terms workflow.",
+        title = stringResource(R.string.lut_red_ipp2),
+        caption = stringResource(R.string.lut_red_caption),
     ) {
-        SettingsInlineRow(title = "Terms acknowledgement", showTopDivider = false) {
-            SettingsValueText("Not configured")
+        SettingsInlineRow(title = stringResource(R.string.lut_terms_acknowledgement), showTopDivider = false) {
+            SettingsValueText(stringResource(R.string.status_not_configured))
         }
-        SettingsInlineRow(title = "Delivery") {
-            SettingsValueText(if (readiness.canEnterWorkflow) "Ready" else "Blocked")
+        SettingsInlineRow(title = stringResource(R.string.lut_delivery)) {
+            SettingsValueText(
+                stringResource(
+                    if (readiness.canEnterWorkflow) R.string.status_ready else R.string.status_blocked,
+                ),
+            )
         }
-        SettingsInlineRow(title = "Network guard") {
+        SettingsInlineRow(title = stringResource(R.string.lut_network_guard)) {
             SettingsValueText(
                 when (readiness.network) {
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.AVAILABLE -> "Internet ready"
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT -> "Camera AP"
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.NO_INTERNET -> "Offline"
-                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.SWIFT_CORE_UNAVAILABLE -> "Core unavailable"
+                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.AVAILABLE -> stringResource(R.string.network_internet_ready)
+                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT -> stringResource(R.string.network_camera_ap)
+                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.NO_INTERNET -> stringResource(R.string.status_offline)
+                    com.opencapture.openzcine.lut.RedLutNetworkAvailability.SWIFT_CORE_UNAVAILABLE -> stringResource(R.string.status_core_unavailable)
                 },
             )
         }
-        SettingsInlineRow(title = "Refresh status") {
-            SettingsLinkAction("Refresh") { readiness = gate.readiness() }
+        SettingsInlineRow(title = stringResource(R.string.lut_refresh_status)) {
+            SettingsLinkAction(stringResource(R.string.action_refresh)) { readiness = gate.readiness() }
         }
         Text(
             readiness.network.operatorMessage,
@@ -1794,7 +1968,7 @@ private fun FramingGuideFamilyChoices(
     ) {
         LocalFramingGuideFamily.entries.forEach { family ->
             FramingAssistChoice(
-                label = family.label,
+                label = framingFamilyLabel(family),
                 selected = family == selected,
                 modifier = Modifier.weight(1f),
             ) { onSelect(family) }
@@ -1820,7 +1994,7 @@ private fun FramingGuideChoices(
             ) {
                 row.forEach { ratio ->
                     FramingAssistToggleChoice(
-                        label = ratio.label,
+                        label = framingRatioLabel(ratio),
                         checked = ratio in selected,
                         modifier = Modifier.weight(1f),
                     ) { onToggle(ratio) }
@@ -1846,19 +2020,19 @@ private fun FramingGridChoices(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         FramingAssistToggleChoice(
-            label = "Thirds",
+            label = stringResource(R.string.framing_grid_thirds),
             checked = thirds,
             modifier = Modifier.weight(1f),
             onClick = onToggleThirds,
         )
         FramingAssistToggleChoice(
-            label = "Phi Grid",
+            label = stringResource(R.string.framing_grid_phi),
             checked = phi,
             modifier = Modifier.weight(1f),
             onClick = onTogglePhi,
         )
         FramingAssistToggleChoice(
-            label = "Diagonal",
+            label = stringResource(R.string.framing_grid_diagonal),
             checked = diagonal,
             modifier = Modifier.weight(1f),
             onClick = onToggleDiagonal,
@@ -1883,7 +2057,7 @@ private fun DesqueezeRatioChoices(
             ) {
                 row.forEach { ratio ->
                     FramingAssistChoice(
-                        label = ratio.label,
+                        label = desqueezeRatioLabel(ratio),
                         selected = ratio == selected,
                         modifier = Modifier.weight(1f),
                     ) { onSelect(ratio) }
@@ -1905,7 +2079,11 @@ private fun LevelStyleChoices(
     ) {
         LocalLevelStyle.entries.forEach { style ->
             FramingAssistChoice(
-                label = style.label,
+                label =
+                    stringResource(
+                        if (style == LocalLevelStyle.HORIZON) R.string.level_horizon
+                        else R.string.level_gauge,
+                    ),
                 selected = style == selected,
                 modifier = Modifier.weight(1f),
             ) { onSelect(style) }
@@ -1925,7 +2103,14 @@ private fun DesqueezeOrientationChoices(
     ) {
         LocalDesqueezeOrientation.entries.forEach { orientation ->
             FramingAssistChoice(
-                label = orientation.label,
+                label =
+                    stringResource(
+                        if (orientation == LocalDesqueezeOrientation.HORIZONTAL) {
+                            R.string.orientation_horizontal
+                        } else {
+                            R.string.orientation_vertical
+                        },
+                    ),
                 selected = orientation == selected,
                 modifier = Modifier.weight(1f),
             ) { onSelect(orientation) }
@@ -2006,6 +2191,30 @@ private fun ScopeCrushClipCompensationChoices(
     ) {
         ScopeCrushClipCompensation.entries.forEach { option ->
             val active = option == selected
+            val optionLabel =
+                stringResource(
+                    when (option) {
+                        ScopeCrushClipCompensation.ZERO -> R.string.crush_clip_zero
+                        ScopeCrushClipCompensation.QUARTER -> R.string.crush_clip_quarter
+                        ScopeCrushClipCompensation.HALF -> R.string.crush_clip_half
+                        ScopeCrushClipCompensation.THREE_QUARTER ->
+                            R.string.crush_clip_three_quarter
+                        ScopeCrushClipCompensation.ONE -> R.string.crush_clip_one
+                    },
+                )
+            val compactLabel =
+                stringResource(
+                    when (option) {
+                        ScopeCrushClipCompensation.ZERO -> R.string.crush_clip_zero
+                        ScopeCrushClipCompensation.QUARTER -> R.string.crush_clip_quarter_compact
+                        ScopeCrushClipCompensation.HALF -> R.string.crush_clip_half_compact
+                        ScopeCrushClipCompensation.THREE_QUARTER ->
+                            R.string.crush_clip_three_quarter_compact
+                        ScopeCrushClipCompensation.ONE -> R.string.crush_clip_one_compact
+                    },
+                )
+            val description =
+                stringResource(R.string.crush_clip_description, optionLabel)
             Box(
                 Modifier
                     .weight(1f)
@@ -2021,12 +2230,12 @@ private fun ScopeCrushClipCompensationChoices(
                         onClick = { onSelect(option) },
                     )
                     .semantics {
-                        contentDescription = "${option.label} stops crush/clip compensation"
+                        contentDescription = description
                     },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    option.compactLabel,
+                    compactLabel,
                     style = chromeStyle(15f, FontWeight.SemiBold, mono = true),
                     color = if (active) LiveDesign.accent else LiveDesign.muted,
                     maxLines = 1,
@@ -2044,29 +2253,28 @@ private fun ControlsRows(
 ) {
     SettingsRowCard {
         SettingsSwitchRow(
-            "Record Confirmation",
+            stringResource(R.string.settings_record_confirmation),
             isOn = settings.recordConfirmationEnabled.value,
             showTopDivider = false,
         ) { onToggle(settings.recordConfirmationEnabled) }
-        SettingsSwitchRow("Haptics", isOn = settings.hapticsEnabled.value) {
+        SettingsSwitchRow(stringResource(R.string.settings_haptics), isOn = settings.hapticsEnabled.value) {
             onToggle(settings.hapticsEnabled)
         }
-        SettingsSwitchRow("Keep Screen Awake", isOn = settings.keepScreenAwake.value) {
+        SettingsSwitchRow(stringResource(R.string.settings_keep_awake), isOn = settings.keepScreenAwake.value) {
             onToggle(settings.keepScreenAwake)
         }
     }
     SettingsGroupCard(
-        title = "Media Remote Shutter",
-        caption =
-            "Monitor-only; Android cannot reliably distinguish Bluetooth from phone hardware keys.",
+        title = stringResource(R.string.settings_media_remote),
+        caption = stringResource(R.string.settings_media_remote_caption),
     ) {
         SettingsSwitchRow(
-            "Enable Media Remote",
+            stringResource(R.string.settings_enable_media_remote),
             isOn = settings.mediaRemoteShutterEnabled.value,
             showTopDivider = false,
         ) { onToggle(settings.mediaRemoteShutterEnabled) }
         Text(
-            "Volume Up/Down and Play/Pause toggle recording; Record/Play start and Pause/Stop stop. Confirmation is skipped.",
+            stringResource(R.string.settings_media_remote_detail),
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
@@ -2215,6 +2423,20 @@ internal fun AssistToolbarOrderList(
         val listHeightPx = constraints.maxHeight.toFloat()
         tools.forEachIndexed { index, tool ->
             key(tool) {
+                val toolTitle = stringResource(tool.titleResource())
+                val moveEarlier = stringResource(R.string.settings_move_earlier, toolTitle)
+                val moveLater = stringResource(R.string.settings_move_later, toolTitle)
+                val positionDescription = stringResource(R.string.settings_position, index + 1)
+                val positionLabel = stringResource(R.string.settings_position_number, index + 1)
+                val visibilityDescription =
+                    stringResource(R.string.settings_toolbar_visibility, toolTitle)
+                val visibilityState =
+                    stringResource(
+                        if (settings.isAssistToolbarToolVisible(tool)) R.string.status_visible
+                        else R.string.status_hidden,
+                    )
+                val reorderDescription =
+                    stringResource(R.string.settings_reorder_position, toolTitle, index + 1)
                 val dragging = tool == draggingTool
                 val y =
                     if (dragging) {
@@ -2227,7 +2449,7 @@ internal fun AssistToolbarOrderList(
                     buildList {
                         if (index > 0) {
                             add(
-                                CustomAccessibilityAction("Move ${tool.settingsTitle} earlier") {
+                                CustomAccessibilityAction(moveEarlier) {
                                     settings.moveAssistToolbarTool(tool, index - 1)
                                     onInteraction()
                                     true
@@ -2236,7 +2458,7 @@ internal fun AssistToolbarOrderList(
                         }
                         if (index < tools.lastIndex) {
                             add(
-                                CustomAccessibilityAction("Move ${tool.settingsTitle} later") {
+                                CustomAccessibilityAction(moveLater) {
                                     settings.moveAssistToolbarTool(tool, index + 1)
                                     onInteraction()
                                     true
@@ -2268,17 +2490,17 @@ internal fun AssistToolbarOrderList(
                         Box(
                             Modifier.size(22.dp)
                                 .background(LiveDesign.surface, CircleShape)
-                                .semantics { contentDescription = "Position ${index + 1}" },
+                                .semantics { contentDescription = positionDescription },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "${index + 1}",
+                                positionLabel,
                                 style = chromeStyle(9f, FontWeight.Medium, mono = true),
                                 color = LiveDesign.muted,
                             )
                         }
                         Text(
-                            tool.settingsTitle,
+                            toolTitle,
                             style = chromeStyle(12.5f, FontWeight.SemiBold),
                             color =
                                 if (settings.isAssistToolbarToolVisible(tool)) {
@@ -2291,20 +2513,15 @@ internal fun AssistToolbarOrderList(
                             modifier = Modifier.weight(1f),
                         )
                         if (tool == AssistTool.LUT) {
-                            SettingsValueText("PINNED")
+                            SettingsValueText(stringResource(R.string.settings_pinned))
                         } else {
                             Box(
                                 Modifier.settingsClickable(role = Role.Switch) {
                                     settings.toggleAssistToolbarToolVisibility(tool)
                                     onInteraction()
                                 }.semantics {
-                                    contentDescription = "Show ${tool.settingsTitle} in monitor toolbar"
-                                    stateDescription =
-                                        if (settings.isAssistToolbarToolVisible(tool)) {
-                                            "Visible"
-                                        } else {
-                                            "Hidden"
-                                        }
+                                    contentDescription = visibilityDescription
+                                    stateDescription = visibilityState
                                 },
                             ) {
                                 SettingsSwitchGraphic(settings.isAssistToolbarToolVisible(tool))
@@ -2314,8 +2531,7 @@ internal fun AssistToolbarOrderList(
                             Modifier.width(gripWidth)
                                 .fillMaxHeight()
                                 .semantics {
-                                    contentDescription =
-                                        "Reorder ${tool.settingsTitle}, position ${index + 1}"
+                                    contentDescription = reorderDescription
                                     customActions = accessibilityActions
                                 },
                             contentAlignment = Alignment.Center,
@@ -2405,6 +2621,20 @@ internal fun DisplayModeOrderList(
         val listHeightPx = constraints.maxHeight.toFloat()
         modes.forEachIndexed { index, mode ->
             key(mode) {
+                val modeLabel = stringResource(mode.labelResource())
+                val moveEarlier = stringResource(R.string.settings_move_earlier, modeLabel)
+                val moveLater = stringResource(R.string.settings_move_later, modeLabel)
+                val positionDescription = stringResource(R.string.settings_position, index + 1)
+                val positionLabel = stringResource(R.string.settings_position_number, index + 1)
+                val includeDescription =
+                    stringResource(R.string.settings_disp_include, modeLabel)
+                val reorderDescription =
+                    stringResource(R.string.settings_reorder_position, modeLabel, index + 1)
+                val enabled = mode in settings.enabledDisplayModes
+                val enabledState =
+                    stringResource(
+                        if (enabled) R.string.status_enabled else R.string.status_disabled,
+                    )
                 val dragging = mode == draggingMode
                 val y =
                     if (dragging) {
@@ -2417,7 +2647,7 @@ internal fun DisplayModeOrderList(
                     buildList {
                         if (index > 0) {
                             add(
-                                CustomAccessibilityAction("Move ${mode.label} earlier") {
+                                CustomAccessibilityAction(moveEarlier) {
                                     settings.moveDisplayMode(mode, index - 1)
                                     onInteraction()
                                     true
@@ -2426,7 +2656,7 @@ internal fun DisplayModeOrderList(
                         }
                         if (index < modes.lastIndex) {
                             add(
-                                CustomAccessibilityAction("Move ${mode.label} later") {
+                                CustomAccessibilityAction(moveLater) {
                                     settings.moveDisplayMode(mode, index + 1)
                                     onInteraction()
                                     true
@@ -2460,18 +2690,17 @@ internal fun DisplayModeOrderList(
                         Box(
                             Modifier.size(22.dp)
                                 .background(LiveDesign.surface, CircleShape)
-                                .semantics { contentDescription = "Position ${index + 1}" },
+                                .semantics { contentDescription = positionDescription },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "${index + 1}",
+                                positionLabel,
                                 style = chromeStyle(9f, FontWeight.Medium, mono = true),
                                 color = LiveDesign.muted,
                             )
                         }
-                        val enabled = mode in settings.enabledDisplayModes
                         Text(
-                            mode.label,
+                            modeLabel,
                             style = chromeStyle(12.5f, FontWeight.SemiBold),
                             color = if (enabled) LiveDesign.text else LiveDesign.muted,
                             maxLines = 1,
@@ -2481,8 +2710,8 @@ internal fun DisplayModeOrderList(
                             Modifier.settingsClickable(role = Role.Switch) {
                                 if (settings.toggleDisplayMode(mode)) onInteraction()
                             }.semantics {
-                                contentDescription = "Include ${mode.label} in DISP cycle"
-                                stateDescription = if (enabled) "Enabled" else "Disabled"
+                                contentDescription = includeDescription
+                                stateDescription = enabledState
                             },
                         ) {
                             SettingsSwitchGraphic(enabled)
@@ -2491,8 +2720,7 @@ internal fun DisplayModeOrderList(
                             Modifier.width(gripWidth)
                                 .fillMaxHeight()
                                 .semantics {
-                                    contentDescription =
-                                        "Reorder ${mode.label}, position ${index + 1}"
+                                    contentDescription = reorderDescription
                                     customActions = accessibilityActions
                                 },
                             contentAlignment = Alignment.Center,
@@ -2531,24 +2759,23 @@ private fun DisplayRows(
     viewportBounds: Rect?,
 ) {
     SettingsGroupCard(
-        title = "Monitor Chrome",
-        caption =
-            "Show only the monitor regions you need. Settings stays reachable when landscape rails are hidden.",
+        title = stringResource(R.string.settings_monitor_chrome),
+        caption = stringResource(R.string.settings_monitor_chrome_caption),
     ) {
         DisplayToggleGrid(
             compact = compact,
             entries =
                 listOf(
-                    DisplayToggleEntry("STATUS", settings.statusBarVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_status), settings.statusBarVisible.value) {
                         onToggle(settings.statusBarVisible)
                     },
-                    DisplayToggleEntry("RAILS", settings.sideRailsVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_rails), settings.sideRailsVisible.value) {
                         onToggle(settings.sideRailsVisible)
                     },
-                    DisplayToggleEntry("ASSISTS", settings.assistToolbarVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_assists), settings.assistToolbarVisible.value) {
                         onToggle(settings.assistToolbarVisible)
                     },
-                    DisplayToggleEntry("VALUES", settings.cameraValuesVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_values), settings.cameraValuesVisible.value) {
                         onToggle(settings.cameraValuesVisible)
                     },
                 ),
@@ -2556,8 +2783,8 @@ private fun DisplayRows(
         )
     }
     SettingsGroupCard(
-        title = "View Assist Toolbar",
-        caption = "Show or hide tools, then drag a trailing handle to set their monitor order.",
+        title = stringResource(R.string.settings_assist_toolbar),
+        caption = stringResource(R.string.settings_assist_toolbar_caption),
     ) {
         AssistToolbarOrderList(
             settings = settings,
@@ -2565,40 +2792,40 @@ private fun DisplayRows(
             parentScrollState = parentScrollState,
             viewportBounds = viewportBounds,
         )
-        SettingsLinkAction("Reset toolbar") {
+        SettingsLinkAction(stringResource(R.string.settings_reset_toolbar)) {
             settings.resetAssistToolbarPreferences()
             onInteraction()
         }
     }
     SettingsGroupCard(
-        title = "Live Status Readouts",
-        caption = "Hide readouts you do not ride during a take.",
+        title = stringResource(R.string.settings_live_readouts),
+        caption = stringResource(R.string.settings_live_readouts_caption),
     ) {
         DisplayToggleGrid(
             compact = compact,
             entries =
                 listOf(
-                    DisplayToggleEntry("REC", settings.recReadoutVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_rec), settings.recReadoutVisible.value) {
                         onToggle(settings.recReadoutVisible)
                     },
-                    DisplayToggleEntry("CODEC", settings.codecReadoutVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_codec), settings.codecReadoutVisible.value) {
                         onToggle(settings.codecReadoutVisible)
                     },
-                    DisplayToggleEntry("MEDIA", settings.mediaReadoutVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_media), settings.mediaReadoutVisible.value) {
                         onToggle(settings.mediaReadoutVisible)
                     },
-                    DisplayToggleEntry("FPS", settings.fpsReadoutVisible.value) {
+                    DisplayToggleEntry(stringResource(R.string.settings_toggle_fps), settings.fpsReadoutVisible.value) {
                         onToggle(settings.fpsReadoutVisible)
                     },
                 ),
         )
     }
     SettingsGroupCard(
-        title = "DISP Button Order",
-        caption = "Drag to reorder; disable modes you do not use. One mode always remains.",
+        title = stringResource(R.string.settings_disp_order),
+        caption = stringResource(R.string.settings_disp_order_caption),
     ) {
         DisplayModeOrderList(settings, onInteraction)
-        SettingsLinkAction("Reset DISP") {
+        SettingsLinkAction(stringResource(R.string.settings_reset_disp)) {
             settings.resetDisplayModePreferences()
             onInteraction()
         }
@@ -2683,6 +2910,7 @@ private fun StorageRows(
     onCompletedMediaCacheCleared: () -> Unit,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val storageState = remember(mediaCacheStore) { MediaCacheSettingsState(mediaCacheStore) }
     var snapshot by remember(mediaCacheStore) { mutableStateOf<MediaCacheStorageSnapshot?>(null) }
@@ -2695,41 +2923,41 @@ private fun StorageRows(
             snapshot = withContext(Dispatchers.IO) { storageState.refresh() }
             loadFailure = null
         } catch (error: Exception) {
-            loadFailure = error.message ?: "Couldn't read the local media cache."
+            loadFailure = error.message ?: resources.getString(R.string.cache_read_failed)
         }
     }
 
     SettingsGroupCard(
-        title = "Local Media Cache",
+        title = stringResource(R.string.cache_title),
         caption =
             if (condensed) {
-                "Completed offline cache only. Camera originals, share files, accounts, and transfers stay untouched."
+                stringResource(R.string.cache_caption_condensed)
             } else {
-                "Offline camera cache only. Nothing on the camera is deleted."
+                stringResource(R.string.cache_caption)
             },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(if (condensed) 4.dp else 11.dp)) {
             if (condensed) {
-                CondensedStorageRow(title = "Cached Media", showTopDivider = false) {
+                CondensedStorageRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
                     SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
                 }
             } else {
-                SettingsInlineRow(title = "Cached Media", showTopDivider = false) {
+                SettingsInlineRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
                     SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
                 }
             }
             snapshot?.usage?.let { usage ->
                 if (usage.incompleteEntryCount > 0) {
                     if (condensed) {
-                        CondensedStorageRow(title = "Incomplete Transfers") {
+                        CondensedStorageRow(title = stringResource(R.string.cache_incomplete_transfers)) {
                             SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
                         }
                     } else {
-                        SettingsInlineRow(title = "Incomplete Transfers") {
+                        SettingsInlineRow(title = stringResource(R.string.cache_incomplete_transfers)) {
                             SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
                         }
                         Text(
-                            "Incomplete transfers stay in place so they can resume safely.",
+                            stringResource(R.string.cache_incomplete_caption),
                             style = chromeStyle(10.5f, FontWeight.Normal),
                             color = LiveDesign.muted,
                         )
@@ -2737,15 +2965,15 @@ private fun StorageRows(
                 }
             }
             if (condensed) {
-                CondensedStorageRow(title = "Clear Cache") {
+                CondensedStorageRow(title = stringResource(R.string.cache_clear)) {
                     StorageClearAction(clearing) { showClearConfirmation = true }
                 }
             } else {
-                SettingsInlineRow(title = "Clear Cache") {
+                SettingsInlineRow(title = stringResource(R.string.cache_clear)) {
                     StorageClearAction(clearing) { showClearConfirmation = true }
                 }
                 Text(
-                    "Clearing removes completed offline camera files only. Share files, accounts, and camera originals stay untouched.",
+                    stringResource(R.string.cache_clear_caption),
                     style = chromeStyle(10.5f, FontWeight.Normal),
                     color = LiveDesign.muted,
                 )
@@ -2770,11 +2998,10 @@ private fun StorageRows(
     if (showClearConfirmation) {
         AlertDialog(
             onDismissRequest = { showClearConfirmation = false },
-            title = { Text("Clear local media cache?") },
+            title = { Text(stringResource(R.string.cache_clear_title)) },
             text = {
                 Text(
-                    "Completed offline camera files will be removed from this phone. " +
-                        "Camera originals, share files, accounts, and incomplete transfers stay untouched.",
+                    stringResource(R.string.cache_clear_message),
                 )
             },
             confirmButton = {
@@ -2789,18 +3016,20 @@ private fun StorageRows(
                                 onCompletedMediaCacheCleared()
                             } catch (error: Exception) {
                                 loadFailure =
-                                    error.message ?: "Couldn't clear the local media cache."
+                                    error.message ?: resources.getString(R.string.cache_clear_failed)
                             } finally {
                                 clearing = false
                             }
                         }
                     },
                 ) {
-                    Text("Clear cache")
+                    Text(stringResource(R.string.cache_clear_action))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearConfirmation = false }) { Text("Cancel") }
+                TextButton(onClick = { showClearConfirmation = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
         )
     }
@@ -2827,42 +3056,49 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
 
     val connectionLabel =
         when (controller.connectionState) {
-            FrameioConnectionState.UNCONFIGURED -> "Not configured"
-            FrameioConnectionState.SIGNED_OUT -> "Not connected"
-            FrameioConnectionState.AUTHORIZING -> "Waiting for sign-in"
-            FrameioConnectionState.CONNECTED -> "Connected"
-            FrameioConnectionState.ERROR -> "Needs attention"
+            FrameioConnectionState.UNCONFIGURED -> stringResource(R.string.status_not_configured)
+            FrameioConnectionState.SIGNED_OUT -> stringResource(R.string.frameio_not_connected)
+            FrameioConnectionState.AUTHORIZING -> stringResource(R.string.frameio_waiting_signin)
+            FrameioConnectionState.CONNECTED -> stringResource(R.string.status_connected)
+            FrameioConnectionState.ERROR -> stringResource(R.string.status_needs_attention)
         }
     val networkLabel =
         when (controller.networkState) {
-            FrameioNetworkState.ONLINE -> "Ready"
-            FrameioNetworkState.CAMERA_ACCESS_POINT -> "Camera Wi-Fi"
-            FrameioNetworkState.OFFLINE -> "Offline"
+            FrameioNetworkState.ONLINE -> stringResource(R.string.network_ready)
+            FrameioNetworkState.CAMERA_ACCESS_POINT -> stringResource(R.string.network_camera_wifi)
+            FrameioNetworkState.OFFLINE -> stringResource(R.string.status_offline)
         }
     val caption =
         if (!controller.isConfigured) {
-            "This Android build is intentionally unavailable until an approved Adobe Native App client and exact redirect are supplied."
+            stringResource(R.string.frameio_unconfigured_caption)
         } else if (condensed) {
-            "Adobe PKCE sign-in. Delivery accepts only final cache copies; native Share is unchanged."
+            stringResource(R.string.frameio_condensed_caption)
         } else {
-            "Adobe PKCE sign-in and project selection for complete cached media. On a camera access point, Media requires an explicit hop and verifies the saved-camera reconnect afterward."
+            stringResource(R.string.frameio_caption)
         }
 
-    SettingsGroupCard(title = "Frame.io Delivery", caption = caption) {
-        SettingsInlineRow(title = "Connection", showTopDivider = false) {
+    SettingsGroupCard(title = stringResource(R.string.frameio_delivery), caption = caption) {
+        SettingsInlineRow(title = stringResource(R.string.settings_connection), showTopDivider = false) {
             when (controller.connectionState) {
                 FrameioConnectionState.CONNECTED ->
-                    SettingsLinkAction("Disconnect") { controller.disconnect() }
+                    SettingsLinkAction(stringResource(R.string.action_disconnect)) {
+                        controller.disconnect()
+                    }
                 FrameioConnectionState.SIGNED_OUT ->
-                    SettingsLinkAction("Sign in") { beginSignIn() }
+                    SettingsLinkAction(stringResource(R.string.action_sign_in)) { beginSignIn() }
                 FrameioConnectionState.ERROR ->
-                    SettingsLinkAction("Try again") { beginSignIn() }
+                    SettingsLinkAction(stringResource(R.string.action_try_again)) { beginSignIn() }
                 else -> SettingsValueText(connectionLabel)
             }
         }
-        SettingsInlineRow(title = "Internet") { SettingsValueText(networkLabel) }
-        SettingsInlineRow(title = "Upload Project") {
-            SettingsValueText(controller.selectedDestination?.projectName ?: "Choose in media")
+        SettingsInlineRow(title = stringResource(R.string.settings_internet)) {
+            SettingsValueText(networkLabel)
+        }
+        SettingsInlineRow(title = stringResource(R.string.frameio_upload_project)) {
+            SettingsValueText(
+                controller.selectedDestination?.projectName
+                    ?: stringResource(R.string.frameio_choose_media),
+            )
         }
         controller.errorMessage?.let { message ->
             Text(
@@ -2906,16 +3142,17 @@ private fun CondensedStorageRow(
 @Composable
 private fun StorageClearAction(clearing: Boolean, onClick: () -> Unit) {
     if (clearing) {
-        SettingsValueText("Clearing…")
+        SettingsValueText(stringResource(R.string.cache_clearing))
     } else {
+        val description = stringResource(R.string.cache_clear_description)
         Box(
             Modifier.size(48.dp)
                 .settingsClickable(role = Role.Button, onClick = onClick)
-                .semantics { contentDescription = "Clear local media cache" },
+                .semantics { contentDescription = description },
             contentAlignment = Alignment.CenterEnd,
         ) {
             Text(
-                "Clear",
+                stringResource(R.string.action_clear),
                 style = chromeStyle(13f, FontWeight.SemiBold),
                 color = LiveDesign.accent,
             )
@@ -2925,19 +3162,25 @@ private fun StorageClearAction(clearing: Boolean, onClick: () -> Unit) {
 
 private fun cacheSizeLabel(context: Context, bytes: Long?): String =
     when {
-        bytes == null -> "Calculating…"
-        bytes == 0L -> "Empty"
+        bytes == null -> context.getString(R.string.status_calculating)
+        bytes == 0L -> context.getString(R.string.status_empty)
         else -> Formatter.formatFileSize(context, bytes)
     }
 
 private fun clearResultLabel(context: Context, result: MediaCacheClearResult): String =
     when {
-        result.removedCompleteEntryCount == 0 -> "No completed cache files to remove."
+        result.removedCompleteEntryCount == 0 -> context.getString(R.string.cache_none_removed)
         result.preservedIncompleteEntryCount == 0 ->
-            "Removed ${cacheSizeLabel(context, result.removedCompleteBytes)} of offline media."
+            context.getString(
+                R.string.cache_removed,
+                cacheSizeLabel(context, result.removedCompleteBytes),
+            )
         else ->
-            "Removed ${cacheSizeLabel(context, result.removedCompleteBytes)}. " +
-                "${cacheSizeLabel(context, result.preservedIncompleteBytes)} remains resumable."
+            context.getString(
+                R.string.cache_removed_preserved,
+                cacheSizeLabel(context, result.removedCompleteBytes),
+                cacheSizeLabel(context, result.preservedIncompleteBytes),
+            )
     }
 
 /** System tab: native support/share intents, replayable guide, project links, and build data. */
@@ -2949,55 +3192,75 @@ internal fun SystemRows(
     onShowGuideOnNextRealFrame: () -> Unit,
 ) {
     val context = LocalContext.current
+    val unavailableMessage = stringResource(R.string.system_action_unavailable)
     fun runAction(action: () -> Boolean) {
         if (!action()) {
-            Toast.makeText(context, "No app is available for that action.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                context,
+                unavailableMessage,
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 
     SettingsGroupCard(
-        title = "Help & Feedback",
-        caption = "Open project support, report reproducible Android problems, or share a local report you can review first.",
+        title = stringResource(R.string.system_help_feedback),
+        caption = stringResource(R.string.system_help_caption),
     ) {
-        SettingsInlineRow("Support", showTopDivider = false) {
-            SettingsLinkAction("Open", "Open Support") { runAction(actions::openSupport) }
+        SettingsInlineRow(stringResource(R.string.system_support), showTopDivider = false) {
+            SettingsLinkAction(
+                stringResource(R.string.action_open),
+                stringResource(R.string.system_open_support),
+            ) { runAction(actions::openSupport) }
         }
-        SettingsInlineRow("Report a Problem") {
-            SettingsLinkAction("Report", "Report an Android Problem") {
+        SettingsInlineRow(stringResource(R.string.system_report_problem)) {
+            SettingsLinkAction(
+                stringResource(R.string.action_report),
+                stringResource(R.string.system_report_android_problem),
+            ) {
                 runAction(actions::reportBug)
             }
         }
-        SettingsInlineRow("Request a Feature") {
-            SettingsLinkAction("Request", "Request a Feature") {
+        SettingsInlineRow(stringResource(R.string.system_request_feature)) {
+            SettingsLinkAction(
+                stringResource(R.string.action_request),
+                stringResource(R.string.system_request_feature),
+            ) {
                 runAction(actions::requestFeature)
             }
         }
-        SettingsInlineRow("Share Diagnostics") {
-            SettingsLinkAction("Share", "Share Diagnostics") {
+        SettingsInlineRow(stringResource(R.string.system_share_diagnostics)) {
+            SettingsLinkAction(
+                stringResource(R.string.action_share),
+                stringResource(R.string.system_share_diagnostics),
+            ) {
                 runAction(actions::shareDiagnostics)
             }
         }
     }
 
     SettingsGroupCard(
-        title = "Live View Guide",
-        caption =
-            "Replay the short camera-controls, View Assist, and system-controls introduction without enabling camera commands underneath it.",
+        title = stringResource(R.string.system_live_view_guide),
+        caption = stringResource(R.string.system_live_view_guide_caption),
     ) {
-        SettingsInlineRow("Guide Status", showTopDivider = false) {
-            SettingsValueText(guideController.status.label)
+        SettingsInlineRow(stringResource(R.string.system_guide_status), showTopDivider = false) {
+            SettingsValueText(stringResource(guideController.status.labelResource))
         }
-        SettingsInlineRow("Replay") {
+        SettingsInlineRow(stringResource(R.string.system_replay)) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (onShowGuideNow != null && guideController.canReplayNow) {
-                    SettingsLinkAction("Now", "Show Live View Guide Now", onShowGuideNow)
+                    SettingsLinkAction(
+                        stringResource(R.string.action_now),
+                        stringResource(R.string.system_show_guide_now),
+                        onShowGuideNow,
+                    )
                 }
                 SettingsLinkAction(
-                    "Next frame",
-                    "Show Live View Guide on Next Real Frame",
+                    stringResource(R.string.action_next_frame),
+                    stringResource(R.string.system_show_guide_next_frame),
                     onShowGuideOnNextRealFrame,
                 )
             }
@@ -3005,34 +3268,43 @@ internal fun SystemRows(
     }
 
     SettingsGroupCard(
-        title = "Project & Legal",
-        caption = "OpenZCine is open source. These links leave the app only when you choose them.",
+        title = stringResource(R.string.system_project_legal),
+        caption = stringResource(R.string.system_project_legal_caption),
     ) {
-        SettingsInlineRow("Source Code", showTopDivider = false) {
-            SettingsLinkAction("Open", "Open Source Code") { runAction(actions::openSource) }
+        SettingsInlineRow(stringResource(R.string.system_source_code), showTopDivider = false) {
+            SettingsLinkAction(
+                stringResource(R.string.action_open),
+                stringResource(R.string.system_open_source_code),
+            ) { runAction(actions::openSource) }
         }
-        SettingsInlineRow("Privacy") {
-            SettingsLinkAction("Open", "Open Privacy Policy") { runAction(actions::openPrivacy) }
+        SettingsInlineRow(stringResource(R.string.system_privacy)) {
+            SettingsLinkAction(
+                stringResource(R.string.action_open),
+                stringResource(R.string.system_open_privacy),
+            ) { runAction(actions::openPrivacy) }
         }
-        SettingsInlineRow("Terms") {
-            SettingsLinkAction("Open", "Open Terms of Use") { runAction(actions::openTerms) }
+        SettingsInlineRow(stringResource(R.string.system_terms)) {
+            SettingsLinkAction(
+                stringResource(R.string.action_open),
+                stringResource(R.string.system_open_terms),
+            ) { runAction(actions::openTerms) }
         }
-        SettingsInlineRow("Open-Source Licenses") {
-            SettingsValueText("Third-Party Notices")
+        SettingsInlineRow(stringResource(R.string.system_licenses)) {
+            SettingsValueText(stringResource(R.string.system_third_party_notices))
         }
     }
 
     SettingsGroupCard(
-        title = "App Information",
-        caption = "Build and protocol details for support reports.",
+        title = stringResource(R.string.system_app_information),
+        caption = stringResource(R.string.system_app_information_caption),
     ) {
-        SettingsInlineRow("Theme", showTopDivider = false) {
-            SettingsValueText("Warm Dark")
+        SettingsInlineRow(stringResource(R.string.system_theme), showTopDivider = false) {
+            SettingsValueText(stringResource(R.string.system_theme_warm_dark))
         }
-        SettingsInlineRow("Protocol Implementation") {
+        SettingsInlineRow(stringResource(R.string.system_protocol)) {
             SettingsValueText("PTP / PTP-IP")
         }
-        SettingsInlineRow("App Version") {
+        SettingsInlineRow(stringResource(R.string.system_app_version)) {
             SettingsValueText(appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE))
         }
     }

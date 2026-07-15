@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -146,6 +148,10 @@ private fun AudioMetersPanel(
     modifier: Modifier = Modifier,
 ) {
     val isDebugFixture = levels?.isDebugFixture == true
+    val resources = LocalResources.current
+    val strings = remember(resources) { resources.phoneStringResolver() }
+    val title = stringResource(R.string.audio_levels_title)
+    val state = audioMeterStateDescription(strings, levels, sensitivity)
     Column(
         modifier =
             modifier
@@ -154,13 +160,13 @@ private fun AudioMetersPanel(
                 .clipToBounds()
                 .padding(horizontal = 3.dp, vertical = 7.dp)
                 .semantics {
-                    contentDescription = "Audio Levels"
-                    stateDescription = audioMeterStateDescription(levels, sensitivity)
+                    contentDescription = title
+                    stateDescription = state
                 },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         androidx.compose.material3.Text(
-            "AUDIO",
+            stringResource(R.string.audio_meter_label),
             style = chromeStyle(6f, FontWeight.Bold, mono = true),
             color = LiveDesign.text.copy(alpha = 0.58f),
             maxLines = 1,
@@ -172,7 +178,7 @@ private fun AudioMetersPanel(
             Canvas(Modifier.fillMaxSize()) { drawAudioMeters(levels) }
             if (levels == null) {
                 androidx.compose.material3.Text(
-                    "NO\nDATA",
+                    stringResource(R.string.audio_no_data),
                     style = chromeStyle(6f, FontWeight.Bold, mono = true),
                     color = LiveDesign.muted.copy(alpha = 0.74f),
                 )
@@ -187,7 +193,7 @@ private fun AudioMetersPanel(
             )
         } else {
             androidx.compose.material3.Text(
-                "SENS",
+                stringResource(R.string.audio_sensitivity_label),
                 style = chromeStyle(5f, FontWeight.SemiBold, mono = true),
                 color = LiveDesign.text.copy(alpha = 0.42f),
                 maxLines = 1,
@@ -208,25 +214,38 @@ internal fun displayedAudioSensitivity(value: String?): String =
 
 /** TalkBack-facing readout; fixture provenance is explicit rather than implied by moving bars. */
 internal fun audioMeterStateDescription(
+    strings: PhoneStringResolver,
     levels: LiveAudioMeterLevels?,
     sensitivity: String?,
 ): String {
     if (levels == null) {
-        return "Camera audio level unavailable, sensitivity ${displayedAudioSensitivity(sensitivity)}."
+        return strings.resolve(
+            R.string.audio_state_unavailable,
+            displayedAudioSensitivity(sensitivity),
+        )
     }
     fun channel(name: String, value: LiveAudioMeterChannel): String =
         if (value.levelDb <= AUDIO_METER_FLOOR_DB + 0.5) {
-            "$name silent"
+            strings.resolve(R.string.audio_channel_silent, name)
         } else {
-            "$name %.0f dB, peak %.0f".format(value.levelDb, value.peakDb)
+            strings.resolve(
+                R.string.audio_channel_level,
+                name,
+                value.levelDb,
+                value.peakDb,
+            )
         }
-    return buildString {
-        append(channel("left", levels.left))
-        append(", ")
-        append(channel("right", levels.right))
-        append(", sensitivity ")
-        append(displayedAudioSensitivity(sensitivity))
-        if (levels.isDebugFixture) append(", debug fixture, not camera audio")
+    val summary =
+        strings.resolve(
+            R.string.audio_state_summary,
+            channel(strings.resolve(R.string.audio_channel_left), levels.left),
+            channel(strings.resolve(R.string.audio_channel_right), levels.right),
+            displayedAudioSensitivity(sensitivity),
+        )
+    return if (levels.isDebugFixture) {
+        summary + ", debug fixture, not camera audio"
+    } else {
+        summary
     }
 }
 

@@ -18,11 +18,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MonitorCameraControlsTest {
+    private val strings = PhoneStringResolver { resource, _ -> resource.toString() }
+
     @Test
     fun `live capture settings reuse typed command requests`() {
         val dashboard = dashboard(cameraSnapshot())
 
-        val settings = monitorCaptureSettings(dashboard)
+        val settings = monitorCaptureSettings(dashboard, strings)
 
         assertEquals(
             listOf(
@@ -66,7 +68,7 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `unsupported or locked camera values never gain a picker`() {
-        val unavailable = monitorCaptureSettings(dashboard(CameraPropertySnapshot()))
+        val unavailable = monitorCaptureSettings(dashboard(CameraPropertySnapshot()), strings)
         assertTrue(unavailable.all { it.picker == null })
         assertTrue(unavailable.all { it.value == "—" })
 
@@ -75,6 +77,7 @@ class MonitorCameraControlsTest {
                 dashboard(
                     cameraSnapshot().copy(shutterLocked = true),
                 ),
+                strings,
             ).first { it.kind == MonitorPickerKind.SHUTTER }
         val lockedModes = requireNotNull(lockedShutter.picker).modes.map { it.request.control }
         assertTrue(CameraControl.SHUTTER !in lockedModes)
@@ -84,7 +87,7 @@ class MonitorCameraControlsTest {
 
     @Test
     fun `descriptor backed live controls expose exactly the camera advertised labels`() {
-        val settings = monitorCaptureSettings(dashboard(cameraSnapshot()))
+        val settings = monitorCaptureSettings(dashboard(cameraSnapshot()), strings)
 
         val shutter = requireNotNull(settings[1].picker)
         assertEquals(

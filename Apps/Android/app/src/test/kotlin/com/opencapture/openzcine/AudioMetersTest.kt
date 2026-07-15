@@ -73,7 +73,18 @@ class AudioMetersTest {
                 isDebugFixture = true,
             )
 
-        val description = audioMeterStateDescription(levels, "auto")
+        val strings =
+            PhoneStringResolver { resource, args ->
+                when (resource) {
+                    R.string.audio_channel_left -> "left"
+                    R.string.audio_channel_right -> "right"
+                    R.string.audio_channel_level ->
+                        "%s %.0f dB, peak %.0f".format(args[0], args[1], args[2])
+                    R.string.audio_state_summary -> "%s, %s, sensitivity %s".format(*args)
+                    else -> error("Unexpected string resource $resource")
+                }
+            }
+        val description = audioMeterStateDescription(strings, levels, "auto")
 
         assertTrue(description.contains("sensitivity AUTO"))
         assertTrue(description.contains("debug fixture, not camera audio"))

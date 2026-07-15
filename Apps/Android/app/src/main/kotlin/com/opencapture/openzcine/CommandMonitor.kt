@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -174,7 +175,15 @@ internal data class CommandTilePresentation(
 )
 
 /** A small section of the right-hand Image / Focus / Audio command column. */
+internal enum class CommandSideSectionKind {
+    IMAGE,
+    EXPOSURE,
+    FOCUS,
+    AUDIO,
+}
+
 internal data class CommandSideSectionPresentation(
+    val kind: CommandSideSectionKind,
     val title: String,
     val cells: List<CommandTilePresentation>,
 )
@@ -270,9 +279,10 @@ internal fun commandDashboardPresentation(
     refreshStatus: CameraPropertyRefreshStatus,
     sessionState: CameraSessionState,
     tileOrder: List<CommandTileKind>,
+    strings: PhoneStringResolver,
     recording: Boolean = false,
 ): CommandDashboardPresentation {
-    val unavailable = commandPropertyUnavailableReason(sessionState, refreshStatus)
+    val unavailable = commandPropertyUnavailableReason(sessionState, refreshStatus, strings)
     val codec = snapshot.codecSelection.monitorValueOrNull() ?: snapshot.codec.monitorValueOrNull()
     val frameRate = validMonitorFrameRate(snapshot.frameRate)
     val shutter =
@@ -314,18 +324,18 @@ internal fun commandDashboardPresentation(
         recording && codec?.contains("R3D", ignoreCase = true) != false
     val isoLockReason =
         if (codec == null) {
-            "ISO is unavailable during recording until codec readback completes."
+            strings.resolve(R.string.command_iso_recording_wait)
         } else {
-            "ISO is locked while recording in R3D NE."
+            strings.resolve(R.string.command_iso_recording_locked)
         }
     val capabilities = snapshot.controlCapabilities
     val isoCapabilityReason =
         when {
             recording && isoLockedDuringRecording -> isoLockReason
-            codec == null -> "Waiting for the camera codec before offering ISO values."
+            codec == null -> strings.resolve(R.string.command_iso_wait_codec)
             codec.contains("R3D", ignoreCase = true) && snapshot.baseIso == null ->
-                "Waiting for the active base-ISO circuit."
-            else -> "This camera did not provide ISO values for the active circuit."
+                strings.resolve(R.string.command_iso_wait_base)
+            else -> strings.resolve(R.string.command_iso_no_values)
         }
     // The active descriptor changes with the camera's shutter circuit. Never
     // surface the inactive circuit or a local fallback ladder.
@@ -333,10 +343,10 @@ internal fun commandDashboardPresentation(
     val shutterWritable = snapshot.shutterLocked == false && shutterOptions.isNotEmpty()
     val shutterLockReason =
         when {
-            snapshot.shutterLocked == true -> "Shutter is locked on the camera."
-            snapshot.shutterLocked == null -> "Waiting for the camera shutter lock state."
-            snapshot.shutterMode == null -> "Waiting for the active shutter mode."
-            else -> "Shutter changes are unavailable."
+            snapshot.shutterLocked == true -> strings.resolve(R.string.command_shutter_locked)
+            snapshot.shutterLocked == null -> strings.resolve(R.string.command_shutter_wait_lock)
+            snapshot.shutterMode == null -> strings.resolve(R.string.command_shutter_wait_mode)
+            else -> strings.resolve(R.string.command_shutter_unavailable)
         }
 
     fun editable(
@@ -346,7 +356,7 @@ internal fun commandDashboardPresentation(
         control: CameraControl,
         options: List<String>,
         writable: Boolean = true,
-        blockedReason: String = "This control is locked on the camera.",
+        blockedReason: String = strings.resolve(R.string.command_control_locked),
     ): CommandTilePresentation {
         val currentValue = value.monitorValueOrNull()
         return if (currentValue == null) {
@@ -407,7 +417,7 @@ internal fun commandDashboardPresentation(
             CommandTileKind.MODE to
                 editable(
                     CommandTileKind.MODE,
-                    "Mode",
+                    strings.resolve(R.string.command_title_mode),
                     snapshot.exposureMode,
                     CameraControl.EXPOSURE_MODE,
                     EXPOSURE_MODE_OPTIONS,
@@ -415,7 +425,7 @@ internal fun commandDashboardPresentation(
             CommandTileKind.ISO to
                 advertisedEditable(
                     kind = CommandTileKind.ISO,
-                    title = "ISO",
+                    title = strings.resolve(R.string.command_title_iso),
                     value = snapshot.iso?.takeIf { it > 0 }?.toString(),
                     control = CameraControl.ISO,
                     writable = !isoLockedDuringRecording,
@@ -424,7 +434,7 @@ internal fun commandDashboardPresentation(
             CommandTileKind.SHUTTER to
                 advertisedEditable(
                     kind = CommandTileKind.SHUTTER,
-                    title = "Shutter",
+                    title = strings.resolve(R.string.command_title_shutter),
                     value = shutter,
                     control = CameraControl.SHUTTER,
                     blockedReason = shutterLockReason,
@@ -433,119 +443,122 @@ internal fun commandDashboardPresentation(
             CommandTileKind.IRIS to
                 advertisedEditable(
                     kind = CommandTileKind.IRIS,
-                    title = "Iris",
+                    title = strings.resolve(R.string.command_title_iris),
                     value = snapshot.iris,
                     control = CameraControl.IRIS,
-                    blockedReason = "This camera did not provide apertures for the mounted lens.",
+                    blockedReason = strings.resolve(R.string.command_reason_aperture),
                 ),
             CommandTileKind.WHITE_BALANCE to
                 advertisedEditable(
                     kind = CommandTileKind.WHITE_BALANCE,
-                    title = "White Bal",
+                    title = strings.resolve(R.string.command_title_white_balance),
                     value = whiteBalance,
                     control = CameraControl.WHITE_BALANCE,
-                    blockedReason = "This camera did not provide white-balance choices.",
+                    blockedReason = strings.resolve(R.string.command_reason_white_balance),
                 ),
             CommandTileKind.RESOLUTION_FRAMERATE to
                 advertisedEditable(
                     kind = CommandTileKind.RESOLUTION_FRAMERATE,
-                    title = "Resolution Framerate",
+                    title = strings.resolve(R.string.command_title_resolution),
                     value = resolution,
                     control = CameraControl.RESOLUTION_FRAMERATE,
-                    blockedReason = "This camera did not advertise recording modes.",
+                    blockedReason = strings.resolve(R.string.command_reason_recording_modes),
                 ),
             CommandTileKind.CODEC to
                 advertisedEditable(
                     kind = CommandTileKind.CODEC,
-                    title = "Codec",
+                    title = strings.resolve(R.string.command_title_codec),
                     value = codec,
                     control = CameraControl.CODEC,
-                    blockedReason = "This camera did not advertise codec modes.",
+                    blockedReason = strings.resolve(R.string.command_reason_codec_modes),
                 ),
             CommandTileKind.STABILIZATION to
                 advertisedEditable(
                     kind = CommandTileKind.STABILIZATION,
-                    title = "VR",
+                    title = strings.resolve(R.string.command_title_vr),
                     value = snapshot.vibrationReduction,
                     control = CameraControl.VIBRATION_REDUCTION,
-                    blockedReason = "This camera did not advertise movie VR modes.",
-                ).copy(title = "VR / e-VR", value = stabilization ?: "—"),
+                    blockedReason = strings.resolve(R.string.command_reason_movie_vr),
+                ).copy(
+                    title = strings.resolve(R.string.command_title_vr_combined),
+                    value = stabilization ?: "—",
+                ),
         )
     val focusCells =
         listOf(
             advertisedEditable(
-                title = "Mode",
+                title = strings.resolve(R.string.command_title_mode),
                 value = snapshot.focusMode,
                 control = CameraControl.FOCUS_MODE,
-                blockedReason = "This camera did not provide movie focus modes.",
+                blockedReason = strings.resolve(R.string.command_reason_focus_modes),
             ),
             advertisedEditable(
-                title = "Area",
+                title = strings.resolve(R.string.command_title_area),
                 value = snapshot.focusArea,
                 control = CameraControl.FOCUS_AREA,
-                blockedReason = "This camera did not provide movie focus areas.",
+                blockedReason = strings.resolve(R.string.command_reason_focus_areas),
             ),
             advertisedEditable(
-                title = "Subject",
+                title = strings.resolve(R.string.command_title_subject),
                 value = snapshot.focusSubject,
                 control = CameraControl.FOCUS_SUBJECT,
-                blockedReason = "This camera did not provide focus-subject modes.",
+                blockedReason = strings.resolve(R.string.command_reason_focus_subjects),
             ),
         )
     val audioSensitivityCell =
         if (snapshot.audioSensitivity.monitorValueOrNull() != null) {
             advertisedEditable(
-                title = "Sens",
+                title = strings.resolve(R.string.command_title_sensitivity_short),
                 value = snapshot.audioSensitivity,
                 control = CameraControl.AUDIO_SENSITIVITY,
-                blockedReason = "This camera did not provide audio-sensitivity choices.",
+                blockedReason = strings.resolve(R.string.command_reason_audio_sensitivity),
             )
         } else {
             readOnly(
-                title = "Sens",
+                title = strings.resolve(R.string.command_title_sensitivity_short),
                 value = snapshot.microphoneSensitivity,
-                reason = "This microphone sensitivity has no Android write selector.",
+                reason = strings.resolve(R.string.command_reason_microphone_read_only),
             )
         }
     val audioCells =
         listOf(
             audioSensitivityCell,
             advertisedEditable(
-                title = "Input",
+                title = strings.resolve(R.string.command_title_input),
                 value = snapshot.audioInput,
                 control = CameraControl.AUDIO_INPUT,
-                blockedReason = "This camera did not provide audio-input choices.",
+                blockedReason = strings.resolve(R.string.command_reason_audio_input),
             ),
             advertisedEditable(
-                title = "Wind",
+                title = strings.resolve(R.string.command_title_wind),
                 value = snapshot.windFilter,
                 control = CameraControl.WIND_FILTER,
-                blockedReason = "This camera did not advertise a wind-filter control.",
+                blockedReason = strings.resolve(R.string.command_reason_wind_filter),
             ),
             advertisedEditable(
-                title = "Atten",
+                title = strings.resolve(R.string.command_title_attenuator),
                 value = snapshot.inputAttenuator,
                 control = CameraControl.ATTENUATOR,
-                blockedReason = "This camera did not advertise an input attenuator.",
+                blockedReason = strings.resolve(R.string.command_reason_attenuator),
             ),
             advertisedEditable(
-                title = "32-bit Float",
+                title = strings.resolve(R.string.command_title_32_bit_float),
                 value = snapshot.audio32BitFloat,
                 control = CameraControl.AUDIO_32_BIT_FLOAT,
-                blockedReason = "This camera did not advertise 32-bit-float audio.",
+                blockedReason = strings.resolve(R.string.command_reason_32_bit_float),
             ),
         )
 
     val exposureCells =
         listOf(
             advertisedEditable(
-                title = "Base ISO",
+                title = strings.resolve(R.string.command_title_base_iso),
                 value = snapshot.baseIso,
                 control = CameraControl.BASE_ISO,
-                blockedReason = "This camera did not advertise dual-base ISO circuits.",
+                blockedReason = strings.resolve(R.string.command_reason_base_iso),
             ),
             advertisedEditable(
-                title = "Shutter Mode",
+                title = strings.resolve(R.string.command_title_shutter_mode),
                 value =
                     when (snapshot.shutterMode) {
                         CameraShutterMode.ANGLE -> "Angle"
@@ -553,19 +566,19 @@ internal fun commandDashboardPresentation(
                         null -> null
                     },
                 control = CameraControl.SHUTTER_MODE,
-                blockedReason = "This camera did not advertise shutter display modes.",
+                blockedReason = strings.resolve(R.string.command_reason_shutter_modes),
             ),
             advertisedEditable(
-                title = "Shutter Lock",
+                title = strings.resolve(R.string.command_title_shutter_lock),
                 value = snapshot.shutterLocked?.let { if (it) "Locked" else "Unlocked" },
                 control = CameraControl.SHUTTER_LOCK,
-                blockedReason = "This camera did not advertise its shutter lock control.",
+                blockedReason = strings.resolve(R.string.command_reason_shutter_lock),
             ),
             advertisedEditable(
-                title = "WB Tint",
+                title = strings.resolve(R.string.command_title_wb_tint),
                 value = snapshot.whiteBalanceTint,
                 control = CameraControl.WHITE_BALANCE_TINT,
-                blockedReason = "Fine tune is unavailable for the active white-balance mode.",
+                blockedReason = strings.resolve(R.string.command_reason_wb_tint),
             ),
         )
 
@@ -583,81 +596,107 @@ internal fun commandDashboardPresentation(
         sideSections =
             listOf(
                 CommandSideSectionPresentation(
-                    "Image",
-                    listOf(
+                    kind = CommandSideSectionKind.IMAGE,
+                    title = strings.resolve(R.string.command_section_image),
+                    cells = listOf(
                         readOnly(
-                            title = "Grid",
+                            title = strings.resolve(R.string.command_title_grid),
                             value = snapshot.cameraGrid,
-                            reason = "Camera Grid Display is read-only on Android.",
+                            reason = strings.resolve(R.string.command_reason_grid_read_only),
                         ),
                         readOnly(
-                            title = "Tone",
+                            title = strings.resolve(R.string.command_title_tone),
                             value = snapshot.tone,
-                            reason = "Tone follows the active recording codec.",
+                            reason = strings.resolve(R.string.command_reason_tone),
                         ),
                         advertisedEditable(
-                            title = "VR",
+                            title = strings.resolve(R.string.command_title_vr),
                             value = snapshot.vibrationReduction,
                             control = CameraControl.VIBRATION_REDUCTION,
-                            blockedReason = "This camera did not advertise movie VR modes.",
+                            blockedReason = strings.resolve(R.string.command_reason_movie_vr),
                         ),
                         advertisedEditable(
-                            title = "e-VR",
+                            title = strings.resolve(R.string.command_title_evr),
                             value = snapshot.electronicVr,
                             control = CameraControl.ELECTRONIC_VR,
-                            blockedReason =
-                                "Electronic VR is unavailable for this camera or active codec.",
+                            blockedReason = strings.resolve(R.string.command_reason_evr),
                         ),
                     ),
                 ),
-                CommandSideSectionPresentation("Exposure", exposureCells),
-                CommandSideSectionPresentation("Focus", focusCells),
-                CommandSideSectionPresentation("Audio", audioCells),
+                CommandSideSectionPresentation(
+                    CommandSideSectionKind.EXPOSURE,
+                    strings.resolve(R.string.command_section_exposure),
+                    exposureCells,
+                ),
+                CommandSideSectionPresentation(
+                    CommandSideSectionKind.FOCUS,
+                    strings.resolve(R.string.command_section_focus),
+                    focusCells,
+                ),
+                CommandSideSectionPresentation(
+                    CommandSideSectionKind.AUDIO,
+                    strings.resolve(R.string.command_section_audio),
+                    audioCells,
+                ),
             ),
-        temperature = commandTemperature(snapshot.temperatureStatus),
+        temperature = commandTemperature(snapshot.temperatureStatus, strings),
         storage = monitorStorageLabel(snapshot.storage),
         camera = camera,
         lens = snapshot.lens.monitorValueOrNull() ?: "—",
         frameRate = monitorFrameRateLabel(frameRate),
-        refreshSummary = commandRefreshSummary(refreshStatus),
+        refreshSummary = commandRefreshSummary(refreshStatus, strings),
     )
 }
 
 private fun commandPropertyUnavailableReason(
     sessionState: CameraSessionState,
     refreshStatus: CameraPropertyRefreshStatus,
+    strings: PhoneStringResolver,
 ): String =
     when {
-        sessionState !is CameraSessionState.Connected -> "Connect to a camera to read this control."
+        sessionState !is CameraSessionState.Connected ->
+            strings.resolve(R.string.command_not_connected)
         refreshStatus is CameraPropertyRefreshStatus.Refreshing ->
-            "Waiting for camera property readback."
+            strings.resolve(R.string.command_wait_readback)
         refreshStatus is CameraPropertyRefreshStatus.Degraded ->
-            "Camera property readback is limited: ${commandRefreshFailure(refreshStatus.failure)}."
-        else -> "This camera has not reported this control."
+            strings.resolve(
+                R.string.command_limited_readback,
+                commandRefreshFailure(refreshStatus.failure, strings),
+            )
+        else -> strings.resolve(R.string.command_not_reported)
     }
 
-private fun commandRefreshSummary(status: CameraPropertyRefreshStatus): String =
+private fun commandRefreshSummary(
+    status: CameraPropertyRefreshStatus,
+    strings: PhoneStringResolver,
+): String =
     when (status) {
-        CameraPropertyRefreshStatus.Idle -> "Idle"
-        CameraPropertyRefreshStatus.Refreshing -> "Refreshing"
-        CameraPropertyRefreshStatus.Ready -> "Ready"
-        is CameraPropertyRefreshStatus.Degraded -> commandRefreshFailure(status.failure)
+        CameraPropertyRefreshStatus.Idle -> strings.resolve(R.string.status_idle)
+        CameraPropertyRefreshStatus.Refreshing -> strings.resolve(R.string.status_refreshing)
+        CameraPropertyRefreshStatus.Ready -> strings.resolve(R.string.status_ready)
+        is CameraPropertyRefreshStatus.Degraded -> commandRefreshFailure(status.failure, strings)
     }
 
-private fun commandRefreshFailure(failure: CameraPropertyRefreshFailure): String =
+private fun commandRefreshFailure(
+    failure: CameraPropertyRefreshFailure,
+    strings: PhoneStringResolver,
+): String =
     when (failure) {
-        CameraPropertyRefreshFailure.NOT_CONNECTED -> "No camera"
-        CameraPropertyRefreshFailure.CORE_UNAVAILABLE -> "Core unavailable"
-        CameraPropertyRefreshFailure.MEDIA_BUSY -> "Media is active"
-        CameraPropertyRefreshFailure.UNSUPPORTED_PROPERTY -> "Limited by camera"
-        CameraPropertyRefreshFailure.TRANSPORT_FAILED -> "Transport unavailable"
+        CameraPropertyRefreshFailure.NOT_CONNECTED -> strings.resolve(R.string.command_failure_no_camera)
+        CameraPropertyRefreshFailure.CORE_UNAVAILABLE -> strings.resolve(R.string.command_failure_core)
+        CameraPropertyRefreshFailure.MEDIA_BUSY -> strings.resolve(R.string.command_failure_media)
+        CameraPropertyRefreshFailure.UNSUPPORTED_PROPERTY -> strings.resolve(R.string.command_failure_unsupported)
+        CameraPropertyRefreshFailure.TRANSPORT_FAILED -> strings.resolve(R.string.command_failure_transport)
     }
 
-private fun commandTemperature(status: CameraTemperatureStatus?): String =
+private fun commandTemperature(
+    status: CameraTemperatureStatus?,
+    strings: PhoneStringResolver,
+): String =
     when (status) {
-        CameraTemperatureStatus.NORMAL -> "OK"
-        CameraTemperatureStatus.WARNING -> "CHECK"
-        CameraTemperatureStatus.HOT -> "HOT"
+        CameraTemperatureStatus.NORMAL -> strings.resolve(R.string.temperature_ok)
+        CameraTemperatureStatus.WARNING -> strings.resolve(R.string.temperature_check)
+        CameraTemperatureStatus.HOT -> strings.resolve(R.string.temperature_hot)
         null -> "—"
     }
 
@@ -781,8 +820,7 @@ internal fun PortraitCommandDashboard(
     modifier: Modifier = Modifier,
 ) {
     CommandDashboardScrollContainer(
-        accessibilityLabel =
-            "Command dashboard. Swipe up to view Image, Focus, and Audio controls.",
+        accessibilityLabel = stringResource(R.string.command_dashboard_description),
         modifier = modifier.background(LiveDesign.background),
     ) {
         Column(
@@ -848,19 +886,30 @@ private fun CommandHealthStrip(presentation: CommandDashboardPresentation) {
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CommandStatusBlock("Temp", presentation.temperature, Modifier.weight(0.65f))
-        CommandStatusBlock("Storage", presentation.storage, Modifier.weight(1.1f))
-        CommandStatusBlock("Camera", presentation.camera, Modifier.weight(1f))
-        CommandStatusBlock("Lens", presentation.lens, Modifier.weight(1.25f))
-        CommandStatusBlock("FPS", presentation.frameRate, Modifier.weight(0.65f))
-        CommandStatusBlock("Read", presentation.refreshSummary, Modifier.weight(0.8f))
+        CommandStatusBlock(
+            stringResource(R.string.command_health_temp),
+            presentation.temperature,
+            Modifier.weight(0.65f),
+            good = presentation.temperature == stringResource(R.string.temperature_ok),
+        )
+        CommandStatusBlock(stringResource(R.string.command_health_storage), presentation.storage, Modifier.weight(1.1f))
+        CommandStatusBlock(stringResource(R.string.command_health_camera), presentation.camera, Modifier.weight(1f))
+        CommandStatusBlock(stringResource(R.string.command_health_lens), presentation.lens, Modifier.weight(1.25f))
+        CommandStatusBlock(stringResource(R.string.command_health_fps), presentation.frameRate, Modifier.weight(0.65f))
+        CommandStatusBlock(stringResource(R.string.command_health_read), presentation.refreshSummary, Modifier.weight(0.8f))
     }
 }
 
 @Composable
-private fun CommandStatusBlock(label: String, value: String, modifier: Modifier = Modifier) {
+private fun CommandStatusBlock(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    good: Boolean = false,
+) {
+    val description = stringResource(R.string.command_health_value_description, label, value)
     Column(
-        modifier.semantics { contentDescription = "$label $value" },
+        modifier.semantics { contentDescription = description },
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
@@ -872,7 +921,7 @@ private fun CommandStatusBlock(label: String, value: String, modifier: Modifier 
         Text(
             value,
             style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
-            color = if (label == "Temp" && value == "OK") LiveDesign.good else LiveDesign.text,
+            color = if (good) LiveDesign.good else LiveDesign.text,
             maxLines = 1,
             overflow = TextOverflow.Clip,
         )
@@ -1049,11 +1098,22 @@ private fun CommandTile(
     // reorderable without implying that their Nikon property can be changed.
     val canMove = tile.kind != null
     val interactive = controlEnabled || canMove
+    val moveEarlierLabel = stringResource(R.string.command_move_earlier, tile.title)
+    val moveLaterLabel = stringResource(R.string.command_move_later, tile.title)
+    val applyingDescription = stringResource(R.string.command_state_applying)
+    val pendingDescription = stringResource(R.string.command_state_pending)
+    val readOnlyDescription = tile.unavailableReason ?: stringResource(R.string.command_state_read_only)
+    val readOnlyReorderDescription =
+        stringResource(R.string.command_state_read_only_reorder, readOnlyDescription)
+    val lockedReorderDescription = stringResource(R.string.command_state_locked_reorder)
+    val changeReorderDescription = stringResource(R.string.command_state_change_reorder)
+    val changeLabel = stringResource(R.string.command_change_description, tile.title)
+    val valueDescription = stringResource(R.string.command_value_description, tile.title, tile.value)
     val reorderActions =
         buildList {
             if (canMove && index > 0) {
                 add(
-                    CustomAccessibilityAction("Move ${tile.title} earlier") {
+                    CustomAccessibilityAction(moveEarlierLabel) {
                         onMoveTo(index - 1)
                         true
                     },
@@ -1061,7 +1121,7 @@ private fun CommandTile(
             }
             if (canMove && index < tileCount - 1) {
                 add(
-                    CustomAccessibilityAction("Move ${tile.title} later") {
+                    CustomAccessibilityAction(moveLaterLabel) {
                         onMoveTo(index + 1)
                         true
                     },
@@ -1070,15 +1130,13 @@ private fun CommandTile(
         }
     val description =
         buildString {
-            append(tile.title)
-            append(": ")
-            append(tile.value)
+            append(valueDescription)
             when {
-                applyingThisControl -> append(". Applying change.")
-                pending -> append(". Another control is being applied.")
-                request == null -> append(". ${tile.unavailableReason ?: "Read-only."} Long press and drag to reorder.")
-                !controlsEnabled -> append(". Controls are locked. Long press and drag to reorder.")
-                else -> append(". Double tap to change; long press and drag to reorder.")
+                applyingThisControl -> append(applyingDescription)
+                pending -> append(pendingDescription)
+                request == null -> append(readOnlyReorderDescription)
+                !controlsEnabled -> append(lockedReorderDescription)
+                else -> append(changeReorderDescription)
             }
         }
     Column(
@@ -1092,7 +1150,7 @@ private fun CommandTile(
             }
             .combinedClickable(
                 enabled = interactive,
-                onClickLabel = if (controlEnabled) "Change ${tile.title}" else null,
+                onClickLabel = if (controlEnabled) changeLabel else null,
                 onClick = { request?.takeIf { controlEnabled }?.let(onOpenControl) },
             )
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1142,8 +1200,7 @@ private fun CommandSideColumn(
     modifier: Modifier = Modifier,
 ) {
     CommandDashboardScrollContainer(
-        accessibilityLabel =
-            "Image, Focus, and Audio controls. Swipe up to reveal more command controls.",
+        accessibilityLabel = stringResource(R.string.command_side_description),
         modifier = modifier,
     ) {
         CommandSecondarySections(
@@ -1194,6 +1251,7 @@ private fun CommandDashboardScrollContainer(
     content: @Composable () -> Unit,
 ) {
     val scrollState = rememberScrollState()
+    val moreDescription = stringResource(R.string.command_more_description)
     Box(modifier.clipToBounds()) {
         Box(
             Modifier
@@ -1216,7 +1274,7 @@ private fun CommandDashboardScrollContainer(
                     ),
             )
             Text(
-                "MORE ↓",
+                stringResource(R.string.command_more),
                 style = chromeStyle(9f, FontWeight.Bold),
                 color = LiveDesign.muted,
                 modifier =
@@ -1224,8 +1282,7 @@ private fun CommandDashboardScrollContainer(
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 3.dp)
                         .semantics {
-                            contentDescription =
-                                "More command controls below. Swipe up to reveal them."
+                            contentDescription = moreDescription
                         },
             )
         }
@@ -1285,17 +1342,24 @@ private fun CommandSmallTile(
     val pending = pendingControl != null
     val applyingThisControl = request?.control == pendingControl
     val enabled = request != null && controlsEnabled && !pending
+    val applyingDescription = stringResource(R.string.command_state_applying)
+    val pendingDescription = stringResource(R.string.command_state_pending)
+    val readOnlyDescription = cell.unavailableReason ?: stringResource(R.string.command_state_read_only)
+    val lockedDescription = stringResource(R.string.command_state_locked)
+    val changeDescription = stringResource(R.string.camera_state_change_hint)
+    val changeLabel = stringResource(R.string.command_change_description, cell.title)
+    val valueDescription = stringResource(R.string.command_value_description, cell.title, cell.value)
+    val readOnlyValueDescription =
+        stringResource(R.string.command_read_only_description, readOnlyDescription)
     val description =
         buildString {
-            append(cell.title)
-            append(": ")
-            append(cell.value)
+            append(valueDescription)
             when {
-                applyingThisControl -> append(". Applying change.")
-                pending -> append(". Another control is being applied.")
-                request == null -> append(". ${cell.unavailableReason ?: "Read-only."}")
-                !controlsEnabled -> append(". Controls are locked.")
-                else -> append(". Double tap to change.")
+                applyingThisControl -> append(applyingDescription)
+                pending -> append(pendingDescription)
+                request == null -> append(readOnlyValueDescription)
+                !controlsEnabled -> append(lockedDescription)
+                else -> append(changeDescription)
             }
         }
     Column(
@@ -1311,7 +1375,7 @@ private fun CommandSmallTile(
             }
             .combinedClickable(
                 enabled = enabled,
-                onClickLabel = "Change ${cell.title}",
+                onClickLabel = changeLabel,
                 onClick = { request?.let(onOpenControl) },
             )
             .padding(horizontal = 8.dp, vertical = if (compact) 3.dp else 5.dp),
@@ -1346,6 +1410,7 @@ internal fun CommandControlDialog(
 ) {
     val pending = pendingControl != null
     val options = commandControlOptions(request, pendingControl, controlsEnabled)
+    val selectedSuffix = stringResource(R.string.camera_option_selected_suffix)
     AlertDialog(
         onDismissRequest = {
             if (!pending) onDismiss()
@@ -1354,7 +1419,7 @@ internal fun CommandControlDialog(
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(request.title)
                 Text(
-                    "Current: ${request.currentValue}",
+                    stringResource(R.string.command_current_value, request.currentValue),
                     style = chromeStyle(13f, FontWeight.Medium, mono = true),
                     color = LiveDesign.muted,
                 )
@@ -1375,13 +1440,19 @@ internal fun CommandControlDialog(
                 }
                 if (!controlsEnabled) {
                     Text(
-                        "Controls are unavailable until the camera is connected and unlocked.",
+                        stringResource(R.string.camera_controls_unavailable),
                         color = LiveDesign.muted,
                         style = chromeStyle(12f, FontWeight.Medium),
                         modifier = Modifier.padding(bottom = 4.dp),
                     )
                 }
                 options.forEach { option ->
+                    val optionDescription =
+                        stringResource(
+                            R.string.camera_option_description,
+                            request.title,
+                            option.label,
+                        ) + if (option.selected) selectedSuffix else ""
                     TextButton(
                         onClick = { onSelect(option.label) },
                         enabled = option.enabled,
@@ -1398,9 +1469,7 @@ internal fun CommandControlDialog(
                                     ChromeShape,
                                 )
                                 .semantics {
-                                    contentDescription =
-                                        "${request.title} ${option.label}" +
-                                            if (option.selected) ", currently selected" else ""
+                                    contentDescription = optionDescription
                                 },
                     ) {
                         Text(
@@ -1412,7 +1481,7 @@ internal fun CommandControlDialog(
                 }
                 if (pending) {
                     Text(
-                        "Applying change…",
+                        stringResource(R.string.camera_applying_change),
                         style = chromeStyle(12f, FontWeight.Medium),
                         color = LiveDesign.muted,
                     )
@@ -1420,7 +1489,9 @@ internal fun CommandControlDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss, enabled = !pending) { Text("Done") }
+            TextButton(onClick = onDismiss, enabled = !pending) {
+                Text(stringResource(R.string.action_done))
+            }
         },
     )
 }

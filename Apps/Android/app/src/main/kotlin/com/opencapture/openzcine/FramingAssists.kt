@@ -20,6 +20,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +32,7 @@ import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
 import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
+import com.opencapture.openzcine.settings.LocalLevelStyle
 import kotlin.math.roundToInt
 
 /** A rectangle expressed in the hosting monitor's local pixels for deterministic overlay layout. */
@@ -205,11 +208,12 @@ internal fun LocalFramingAssistOverlay(
     aspectFill: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val accessibilitySummary = localFramingAssistAccessibilitySummary(configuration)
     BoxWithConstraints(
         modifier
             .fillMaxSize()
             .clearAndSetSemantics {
-                contentDescription = configuration.accessibilitySummary
+                contentDescription = accessibilitySummary
             },
     ) {
         val density = LocalDensity.current
@@ -288,6 +292,94 @@ internal fun LocalFramingAssistOverlay(
     }
 }
 
+@Composable
+private fun localFramingAssistAccessibilitySummary(
+    configuration: LocalFramingAssistConfiguration,
+): String {
+    val guides =
+        if (configuration.drawsGuides) {
+            pluralStringResource(
+                R.plurals.framing_accessibility_guides_on,
+                configuration.selectedGuideRatios.size,
+                configuration.selectedGuideRatios.size,
+            )
+        } else {
+            stringResource(R.string.framing_accessibility_guides_off)
+        }
+    val mask =
+        stringResource(
+            if (configuration.guideMaskEnabled) {
+                R.string.framing_accessibility_mask_on
+            } else {
+                R.string.framing_accessibility_mask_off
+            },
+        )
+    val grid =
+        stringResource(
+            if (configuration.drawsGrid) {
+                R.string.framing_accessibility_grid_on
+            } else {
+                R.string.framing_accessibility_grid_off
+            },
+        )
+    val crosshair =
+        stringResource(
+            if (configuration.centerCrosshairEnabled) {
+                R.string.framing_accessibility_crosshair_on
+            } else {
+                R.string.framing_accessibility_crosshair_off
+            },
+        )
+    val desqueeze =
+        if (configuration.desqueezeEnabled) {
+            val orientation =
+                stringResource(
+                    if (configuration.desqueezeOrientation == LocalDesqueezeOrientation.HORIZONTAL) {
+                        R.string.orientation_horizontal
+                    } else {
+                        R.string.orientation_vertical
+                    },
+                )
+            val ratio =
+                stringResource(
+                    when (configuration.desqueezeRatio) {
+                        LocalDesqueezeRatio.X100 -> R.string.desqueeze_1
+                        LocalDesqueezeRatio.X133 -> R.string.desqueeze_133
+                        LocalDesqueezeRatio.X150 -> R.string.desqueeze_15
+                        LocalDesqueezeRatio.X165 -> R.string.desqueeze_165
+                        LocalDesqueezeRatio.X180 -> R.string.desqueeze_18
+                        LocalDesqueezeRatio.X200 -> R.string.desqueeze_2
+                    },
+                )
+            stringResource(R.string.framing_accessibility_desqueeze_on, orientation, ratio)
+        } else {
+            stringResource(R.string.framing_accessibility_desqueeze_off)
+        }
+    val level =
+        if (configuration.levelEnabled) {
+            val style =
+                stringResource(
+                    if (configuration.levelStyle == LocalLevelStyle.HORIZON) {
+                        R.string.level_horizon
+                    } else {
+                        R.string.level_gauge
+                    },
+                )
+            stringResource(R.string.framing_accessibility_level_on, style)
+        } else {
+            stringResource(R.string.framing_accessibility_level_off)
+        }
+    return stringResource(
+        R.string.framing_accessibility_summary,
+        guides,
+        mask,
+        grid,
+        crosshair,
+        desqueeze,
+        level,
+    )
+}
+
 /** Converts the feed renderer's exact integer fit/fill rectangle into framing coordinates. */
 private fun LiveFeedContentRect.toFramingAssistRect(): FramingAssistRect =
     FramingAssistRect(left.toFloat(), top.toFloat(), width.toFloat(), height.toFloat())
@@ -318,7 +410,25 @@ private fun FramingGuideLabel(frame: LocalFramingGuideFrame) {
     val density = LocalDensity.current
     val inset = with(density) { 8.dp.roundToPx() }
     Text(
-        text = frame.ratio.label,
+        text =
+            stringResource(
+                when (frame.ratio) {
+                    LocalFramingAspectRatio.RATIO_276 -> R.string.framing_ratio_276
+                    LocalFramingAspectRatio.RATIO_239 -> R.string.framing_ratio_239
+                    LocalFramingAspectRatio.RATIO_235 -> R.string.framing_ratio_235
+                    LocalFramingAspectRatio.RATIO_200 -> R.string.framing_ratio_200
+                    LocalFramingAspectRatio.RATIO_185 -> R.string.framing_ratio_185
+                    LocalFramingAspectRatio.RATIO_16_9 -> R.string.framing_ratio_16_9
+                    LocalFramingAspectRatio.RATIO_166 -> R.string.framing_ratio_166
+                    LocalFramingAspectRatio.RATIO_143 -> R.string.framing_ratio_143
+                    LocalFramingAspectRatio.RATIO_4_3 -> R.string.framing_ratio_4_3
+                    LocalFramingAspectRatio.RATIO_9_16 -> R.string.framing_ratio_9_16
+                    LocalFramingAspectRatio.RATIO_4_5 -> R.string.framing_ratio_4_5
+                    LocalFramingAspectRatio.RATIO_1_1 -> R.string.framing_ratio_1_1
+                    LocalFramingAspectRatio.RATIO_2_3 -> R.string.framing_ratio_2_3
+                    LocalFramingAspectRatio.RATIO_191 -> R.string.framing_ratio_191
+                },
+            ),
         style = chromeStyle(10f, FontWeight.Bold, mono = true).copy(letterSpacing = 1.2.sp),
         color = LiveDesign.accent,
         modifier =

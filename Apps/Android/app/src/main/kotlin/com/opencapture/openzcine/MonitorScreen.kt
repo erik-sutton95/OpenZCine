@@ -51,7 +51,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
@@ -100,6 +102,7 @@ import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
 import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.openzcine.settings.labelResource
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
 import com.opencapture.openzcine.wear.WearRecordCommandSafety
@@ -165,9 +168,10 @@ internal fun LandscapeSettingsRecoveryButton(
     modifier: Modifier = Modifier,
     onOpenSettings: () -> Unit,
 ) {
+    val description = stringResource(R.string.monitor_settings_recovery)
     AuxCircleButton(
         modifier.semantics {
-            contentDescription = "Open Settings, restore hidden monitor controls"
+            contentDescription = description
         },
         onClick = onOpenSettings,
     ) { glyphModifier, tint ->
@@ -296,9 +300,9 @@ internal fun MonitorScreen(
     val sessionState by session.state.collectAsState()
     val monitorAccessibilityState =
         when (sessionState) {
-            is CameraSessionState.Connected -> "Camera connected"
-            CameraSessionState.Connecting -> "Camera connecting"
-            CameraSessionState.Disconnected -> "Camera disconnected"
+            is CameraSessionState.Connected -> stringResource(R.string.camera_connected)
+            CameraSessionState.Connecting -> stringResource(R.string.camera_connecting)
+            CameraSessionState.Disconnected -> stringResource(R.string.camera_disconnected)
         }
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
@@ -467,6 +471,8 @@ internal fun MonitorScreen(
     LaunchedEffect(effectiveDisplayMode) {
         if (displayMode != effectiveDisplayMode) displayMode = effectiveDisplayMode
     }
+    val resources = LocalResources.current
+    val stringResolver = remember(resources) { resources.phoneStringResolver() }
     val commandPresentation =
         remember(
             cameraProperties,
@@ -474,16 +480,21 @@ internal fun MonitorScreen(
             sessionState,
             commandTileOrder,
             recording,
+            stringResolver,
         ) {
             commandDashboardPresentation(
                 snapshot = cameraProperties,
                 refreshStatus = propertyRefreshStatus,
                 sessionState = sessionState,
                 tileOrder = commandTileOrder,
+                strings = stringResolver,
                 recording = recording,
             )
         }
-    val captureSettings = remember(commandPresentation) { monitorCaptureSettings(commandPresentation) }
+    val captureSettings =
+        remember(commandPresentation, stringResolver) {
+            monitorCaptureSettings(commandPresentation, stringResolver)
+        }
     val activeMonitorPicker =
         captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
     val mediaOwnsCommandChannel =
@@ -522,18 +533,30 @@ internal fun MonitorScreen(
                         activeCommandControl = request.copy(currentValue = label)
                     }
                     commandControlFeedback =
-                        CommandControlFeedback("${request.title} set to $label.", isError = false)
+                        CommandControlFeedback(
+                            appContext.getString(R.string.control_set_success, request.title, label),
+                            isError = false,
+                        )
                 } else {
                     commandControlFeedback =
                         CommandControlFeedback(
-                            "${request.title} did not confirm $label. Check the active camera mode and try again.",
+                            appContext.getString(
+                                R.string.control_confirmation_failed,
+                                request.title,
+                                label,
+                            ),
                             isError = true,
                         )
                 }
             } catch (error: CameraControlException) {
                 commandControlFeedback =
                     CommandControlFeedback(
-                        "${request.title}: ${error.message ?: "The camera rejected the control change."}",
+                        appContext.getString(
+                            R.string.control_error,
+                            request.title,
+                            error.message
+                                ?: appContext.getString(R.string.control_change_rejected),
+                        ),
                         isError = true,
                     )
             } finally {
@@ -1185,7 +1208,8 @@ internal fun MonitorScreen(
                         } catch (error: CameraFocusException) {
                             Toast.makeText(
                                     appContext,
-                                    error.message ?: "The camera rejected the focus-point change.",
+                                    error.message
+                                        ?: appContext.getString(R.string.focus_change_rejected),
                                     Toast.LENGTH_SHORT,
                                 )
                                 .show()
@@ -1229,7 +1253,7 @@ internal fun MonitorScreen(
                 } catch (error: CameraFocusException) {
                     Toast.makeText(
                             appContext,
-                            error.message ?: "The camera could not reset focus.",
+                            error.message ?: appContext.getString(R.string.focus_reset_failed),
                             Toast.LENGTH_SHORT,
                         )
                         .show()
@@ -1238,6 +1262,24 @@ internal fun MonitorScreen(
                 }
             }
         }
+        val displayModeDescription =
+            stringResource(
+                R.string.display_mode_description,
+                stringResource(effectiveDisplayMode.labelResource()),
+            )
+        val liveViewDescription =
+            when {
+                monitorFrameSource == null -> stringResource(R.string.live_view_unavailable)
+                focusPointLocked -> stringResource(R.string.live_view_focus_locked)
+                focusGestureContext.canRecognizeFocusGesture ->
+                    stringResource(R.string.live_view_focus_available)
+                else -> stringResource(R.string.live_view_focus_unavailable)
+            }
+        val focusLockActionLabel =
+            stringResource(
+                if (focusPointLocked) R.string.focus_unlock_position
+                else R.string.focus_lock_position,
+            )
         if (!isCommand) {
             Box(
                 Modifier.zone(zones.feed)
@@ -1247,25 +1289,11 @@ internal fun MonitorScreen(
                     // by every Android view bridge. The feed container is the
                     // stable, descriptive region for TalkBack and UI tests.
                     .semantics {
-                        stateDescription = "Display mode ${effectiveDisplayMode.label}"
-                        contentDescription =
-                            when {
-                                monitorFrameSource == null -> "Live view unavailable"
-                                focusPointLocked ->
-                                    "Live view active. Focus point position locked in app."
-                                focusGestureContext.canRecognizeFocusGesture ->
-                                    "Live view active. Tap to move focus point; hold to lock its position."
-                                else ->
-                                    "Live view active. Camera focus point control unavailable."
-                            }
+                        stateDescription = displayModeDescription
+                        contentDescription = liveViewDescription
                         if (focusGestureContext.canRecognizeFocusGesture) {
                             onLongClick(
-                                label =
-                                    if (focusPointLocked) {
-                                        "Unlock focus point position"
-                                    } else {
-                                        "Lock focus point position"
-                                    },
+                                label = focusLockActionLabel,
                             ) {
                                 toggleFocusPointLock()
                                 true
@@ -1343,8 +1371,10 @@ internal fun MonitorScreen(
                         text =
                             when (val current = sessionState) {
                                 is CameraSessionState.Connected -> current.identity.name
-                                CameraSessionState.Connecting -> "Connecting…"
-                                CameraSessionState.Disconnected -> "No camera"
+                                CameraSessionState.Connecting ->
+                                    stringResource(R.string.camera_connecting_short)
+                                CameraSessionState.Disconnected ->
+                                    stringResource(R.string.camera_none)
                             },
                         style = chromeStyle(15f, FontWeight.Medium),
                         color = LiveDesign.muted,
@@ -1705,6 +1735,14 @@ internal fun MonitorScreen(
                     panelFrames = analysisPanelFrames.values,
                     bounds = zones.feed,
                 )
+            val resetDescription =
+                stringResource(
+                    when {
+                        focusResetPending -> R.string.focus_resetting
+                        focusMoveRequestsInFlight > 0 -> R.string.focus_reset_moving
+                        else -> R.string.focus_reset
+                    },
+                )
             IconButton(
                 onClick = requestFocusReset,
                 enabled = !focusCommandPending,
@@ -1715,13 +1753,7 @@ internal fun MonitorScreen(
                         .border(1.dp, LiveDesign.hairline, CircleShape)
                         .testTag("focus_reset_button")
                         .semantics {
-                            contentDescription =
-                                when {
-                                    focusResetPending -> "Resetting focus point to center"
-                                    focusMoveRequestsInFlight > 0 ->
-                                        "Reset focus point unavailable while moving focus"
-                                    else -> "Reset focus point to center"
-                                }
+                            contentDescription = resetDescription
                         },
             ) {
                 Text(
@@ -1820,14 +1852,18 @@ internal fun MonitorScreen(
     pendingRecordTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingRecordTarget = null },
-            title = { Text(if (target) "Start recording?" else "Stop recording?") },
+            title = {
+                Text(
+                    stringResource(
+                        if (target) R.string.record_start_title else R.string.record_stop_title,
+                    ),
+                )
+            },
             text = {
                 Text(
-                    if (target) {
-                        "The camera will begin recording."
-                    } else {
-                        "The camera will stop recording."
-                    },
+                    stringResource(
+                        if (target) R.string.record_start_message else R.string.record_stop_message,
+                    ),
                 )
             },
             confirmButton = {
@@ -1839,11 +1875,13 @@ internal fun MonitorScreen(
                         }
                     },
                 ) {
-                    Text(if (target) "Start" else "Stop")
+                    Text(stringResource(if (target) R.string.action_start else R.string.action_stop))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingRecordTarget = null }) { Text("Cancel") }
+                TextButton(onClick = { pendingRecordTarget = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
         )
     }
@@ -1936,6 +1974,7 @@ private fun PortraitChrome(
     onOpenAssistOptions: (AssistTool, Rect) -> Unit,
 ) {
     val context = LocalContext.current
+    val scopeLimitMessage = stringResource(R.string.scope_fit_limit)
     var railExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(isFill, isCommand) {
         if (!isFill || isCommand) railExpanded = false
@@ -1969,7 +2008,7 @@ private fun PortraitChrome(
                 onScopeLimitReached = {
                     Toast.makeText(
                         context,
-                        "2 scopes max in fit view. Close one or pinch to fill.",
+                        scopeLimitMessage,
                         Toast.LENGTH_SHORT,
                     ).show()
                 },

@@ -34,6 +34,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.diagnostics.AndroidSupportLinks
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 
@@ -140,7 +142,7 @@ public fun StartupHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    "OPENZCINE",
+                    stringResource(R.string.startup_wordmark),
                     color = StartupColors.muted,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -149,8 +151,11 @@ public fun StartupHeader(
                 if (compact) {
                     StartupHeaderTitle(title)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StartupLegalLink("Privacy", openPrivacy)
-                        StartupLegalLink("Terms", openTerms)
+                        StartupLegalLink(
+                            stringResource(R.string.startup_privacy),
+                            openPrivacy,
+                        )
+                        StartupLegalLink(stringResource(R.string.startup_terms), openTerms)
                     }
                 } else {
                     Row(
@@ -158,15 +163,18 @@ public fun StartupHeader(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         StartupHeaderTitle(title, Modifier.weight(1f, fill = false))
-                        StartupLegalLink("Privacy", openPrivacy)
-                        StartupLegalLink("Terms", openTerms)
+                        StartupLegalLink(
+                            stringResource(R.string.startup_privacy),
+                            openPrivacy,
+                        )
+                        StartupLegalLink(stringResource(R.string.startup_terms), openTerms)
                     }
                 }
             }
             Spacer(Modifier.width(8.dp))
             onOpenSettings?.let { openSettings ->
                 StartupOutlineButton(
-                    text = "Settings",
+                    text = stringResource(R.string.action_settings),
                     onClick = openSettings,
                     modifier = Modifier.width(92.dp),
                 )
@@ -210,6 +218,7 @@ private fun StartupHeaderTitle(title: String, modifier: Modifier = Modifier) {
 /** Quiet policy link matching the iOS startup header without competing with its title. */
 @Composable
 private fun StartupLegalLink(label: String, onClick: () -> Unit) {
+    val contentDescription = stringResource(R.string.startup_legal_link_description, label)
     Text(
         label,
         color = StartupColors.dim,
@@ -218,7 +227,7 @@ private fun StartupLegalLink(label: String, onClick: () -> Unit) {
         maxLines = 1,
         modifier =
             Modifier.semantics {
-                    contentDescription = "Open the OpenZCine $label page"
+                    this.contentDescription = contentDescription
                 }
                 .clickable(role = Role.Button, onClick = onClick)
                 .padding(horizontal = 3.dp, vertical = 5.dp),
@@ -231,14 +240,14 @@ public fun StartupWizardProgress(currentStep: Int, totalSteps: Int) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row {
             Text(
-                "Setup",
+                stringResource(R.string.startup_setup),
                 color = StartupColors.muted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.weight(1f))
             Text(
-                "Step $currentStep of $totalSteps",
+                stringResource(R.string.startup_step_progress, currentStep, totalSteps),
                 color = StartupColors.dim,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,

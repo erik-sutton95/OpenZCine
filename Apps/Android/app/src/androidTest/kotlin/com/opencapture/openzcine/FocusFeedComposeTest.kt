@@ -32,6 +32,7 @@ import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFocusResult
 import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
 import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.OperatorSettings
@@ -219,6 +220,9 @@ class FocusFeedComposeTest {
                     "focus-feed-ope91-portrait-fill-test",
                 )
             settings.portraitFeedAspect = PortraitFeedAspect.FILL
+            LocalFramingAspectRatio.entries
+                .filter { it != LocalFramingAspectRatio.RATIO_239 && it in settings.selectedGuideRatios }
+                .forEach(settings::toggleGuideRatioConfiguration)
             if (LocalFramingAspectRatio.RATIO_239 !in settings.selectedGuideRatios) {
                 settings.toggleGuideRatioConfiguration(LocalFramingAspectRatio.RATIO_239)
             }
@@ -229,13 +233,18 @@ class FocusFeedComposeTest {
             settings.centerCrosshairEnabled.value = true
             settings.desqueezeEnabled.value = true
             settings.desqueezeRatio = LocalDesqueezeRatio.X200
+            settings.desqueezeOrientation = LocalDesqueezeOrientation.HORIZONTAL
+            settings.levelAssistEnabled.value = false
 
             composeRule.waitUntil(5_000) {
                 composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
             }
             composeRule
                 .onNodeWithContentDescription(
-                    settings.localFramingAssistConfiguration.accessibilitySummary,
+                    "Local framing assists. 1 delivery guide on. " +
+                        "Mask outside selected frames on. Composition grid on. " +
+                        "Centre crosshair on. Horizontal desqueeze 2x. Camera level off. " +
+                        "Camera Grid Display is unchanged.",
                 )
                 .assertIsDisplayed()
             saveDeviceScreenshot(

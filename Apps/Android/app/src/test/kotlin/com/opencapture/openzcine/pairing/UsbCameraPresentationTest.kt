@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -10,11 +11,11 @@ class UsbCameraPresentationTest {
         assertEquals("DEBUG FIXTURE — NOT USB HARDWARE", USB_DEBUG_FIXTURE_LABEL)
         assertEquals(
             "SIMULATED · ready",
-            usbCameraDetail(UsbPtpCameraAccess.READY, isDebugFixture = true),
+            usbCameraDebugDetail(UsbPtpCameraAccess.READY),
         )
         assertEquals(
-            "USB-C · ready to connect",
-            usbCameraDetail(UsbPtpCameraAccess.READY),
+            R.string.pairing_usb_ready,
+            usbCameraDetailResource(UsbPtpCameraAccess.READY),
         )
     }
 }

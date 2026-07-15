@@ -2,6 +2,7 @@ package com.opencapture.openzcine.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
@@ -11,6 +12,7 @@ import com.opencapture.openzcine.FeedPeakingColor
 import com.opencapture.openzcine.FeedPeakingSensitivity
 import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
+import com.opencapture.openzcine.R
 
 /**
  * Top-level monitor layout selected by the operator's DISP button.
@@ -45,6 +47,15 @@ public enum class MonitorDisplayMode(
         }
     }
 }
+
+/** Localized label used by phone monitor and settings presentation. */
+@StringRes
+internal fun MonitorDisplayMode.labelResource(): Int =
+    when (this) {
+        MonitorDisplayMode.LIVE -> R.string.display_mode_live
+        MonitorDisplayMode.CLEAN -> R.string.display_mode_clean
+        MonitorDisplayMode.COMMAND -> R.string.display_mode_command
+    }
 
 /**
  * Operator-selected presentation of the live feed in the portrait monitor.
@@ -421,32 +432,6 @@ public data class LocalFramingAssistConfiguration(
                 1f / desqueezeRatio.factor
             } else {
                 1f
-            }
-
-    /** Human-readable accessibility summary that distinguishes local from camera state. */
-    public val accessibilitySummary: String
-        get() =
-            buildString {
-                append("Local framing assists. ")
-                append(
-                    if (drawsGuides) {
-                        "${selectedGuideRatios.size} delivery guide${if (selectedGuideRatios.size == 1) "" else "s"} on. "
-                    } else {
-                        "Delivery guides off. "
-                    },
-                )
-                append(if (guideMaskEnabled) "Mask outside selected frames on. " else "Mask outside selected frames off. ")
-                append(if (drawsGrid) "Composition grid on. " else "Composition grid off. ")
-                append(if (centerCrosshairEnabled) "Centre crosshair on. " else "Centre crosshair off. ")
-                append(
-                    if (desqueezeEnabled) {
-                        "${desqueezeOrientation.label} desqueeze ${desqueezeRatio.label}. "
-                    } else {
-                        "Desqueeze off. "
-                    },
-                )
-                append(if (levelEnabled) "Camera level ${levelStyle.label}. " else "Camera level off. ")
-                append("Camera Grid Display is unchanged.")
             }
 }
 

@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
@@ -67,6 +68,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -263,13 +265,13 @@ internal fun CameraWifiScannerOverlay(
                 verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 14.dp),
             ) {
                 Text(
-                    text = "Scan Wi‑Fi Details",
+                    text = stringResource(R.string.wifi_scanner_title),
                     color = StartupColors.ink,
                     fontSize = if (compact) 19.sp else 22.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                 )
                 Text(
-                    text = "Point your phone at the camera's Connection wizard showing its SSID and key.",
+                    text = stringResource(R.string.wifi_scanner_intro),
                     color = StartupColors.muted,
                     fontSize = if (compact) 12.sp else 14.sp,
                     lineHeight = if (compact) 16.sp else 19.sp,
@@ -332,7 +334,7 @@ internal fun CameraWifiScannerOverlay(
                 }
 
                 StartupOutlineButton(
-                    text = "Cancel",
+                    text = stringResource(R.string.action_cancel),
                     onClick = ::dismiss,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -352,7 +354,7 @@ private fun CameraWifiScannerPermissionPanel(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = "Camera access is needed to read the Connection wizard.",
+            text = stringResource(R.string.wifi_scanner_permission_title),
             color = StartupColors.ink,
             fontSize = 14.sp,
             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
@@ -360,16 +362,23 @@ private fun CameraWifiScannerPermissionPanel(
         Text(
             text =
                 if (permanentlyDenied) {
-                    "Allow Camera in Android Settings, then return here to scan."
+                    stringResource(R.string.wifi_scanner_permission_settings)
                 } else {
-                    "OpenZCine uses the rear camera only while this scanner is open."
+                    stringResource(R.string.wifi_scanner_permission_privacy)
                 },
             color = StartupColors.muted,
             fontSize = 12.sp,
             lineHeight = 16.sp,
         )
         StartupFilledButton(
-            text = if (permanentlyDenied) "Open Android Settings" else "Allow camera",
+            text =
+                stringResource(
+                    if (permanentlyDenied) {
+                        R.string.wifi_scanner_open_android_settings
+                    } else {
+                        R.string.wifi_scanner_allow_camera
+                    },
+                ),
             enabled = true,
             onClick = if (permanentlyDenied) onOpenSettings else onRetry,
             modifier = Modifier.fillMaxWidth(),
@@ -390,7 +399,7 @@ private fun CameraWifiScannerPreview(
             modifier = Modifier.fillMaxWidth().height(if (compact) 122.dp else 232.dp),
         )
         Text(
-            text = "Looking for a complete SSID and key. No image or recognized text leaves this phone.",
+            text = stringResource(R.string.wifi_scanner_searching),
             color = StartupColors.dim,
             fontSize = 11.sp,
             lineHeight = 15.sp,
@@ -417,40 +426,44 @@ private fun CameraWifiScannerConfirmation(
         }
         if (compact) {
             Text(
-                text = "Review these camera values before using them.",
+                text = stringResource(R.string.wifi_scanner_compact_review),
                 color = StartupColors.muted,
                 fontSize = 11.sp,
                 lineHeight = 14.sp,
             )
         } else {
             Text(
-                text = "Review scanned details",
+                text = stringResource(R.string.wifi_scanner_review_title),
                 color = StartupColors.ink,
                 fontSize = 18.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
             )
             Text(
-                text = "Check these against the camera screen. Nothing is saved until you choose Join camera Wi‑Fi.",
+                text = stringResource(R.string.wifi_scanner_review_detail),
                 color = StartupColors.muted,
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
             )
         }
-        CameraWifiScannerCredentialValue(label = "NETWORK SSID", value = candidate.ssid, compact = compact)
         CameraWifiScannerCredentialValue(
-            label = "NETWORK KEY",
+            label = stringResource(R.string.wifi_scanner_network_ssid),
+            value = candidate.ssid,
+            compact = compact,
+        )
+        CameraWifiScannerCredentialValue(
+            label = stringResource(R.string.wifi_scanner_network_key),
             value = candidate.key,
             sensitive = true,
             compact = compact,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StartupOutlineButton(
-                text = "Rescan",
+                text = stringResource(R.string.wifi_scanner_rescan),
                 onClick = onRescan,
                 modifier = Modifier.weight(1f),
             )
             StartupFilledButton(
-                text = "Use details",
+                text = stringResource(R.string.wifi_scanner_use_details),
                 enabled = true,
                 onClick = onUseDetails,
                 modifier = Modifier.weight(1f),
@@ -466,6 +479,7 @@ private fun CameraWifiScannerCredentialValue(
     sensitive: Boolean = false,
     compact: Boolean,
 ) {
+    val sensitiveDescription = stringResource(R.string.wifi_scanner_key_description)
     Column(
         modifier =
             Modifier.fillMaxWidth()
@@ -493,7 +507,7 @@ private fun CameraWifiScannerCredentialValue(
             modifier =
                 if (sensitive) {
                     Modifier.clearAndSetSemantics {
-                        contentDescription = "Scanned network key. Check the camera screen before using it."
+                        contentDescription = sensitiveDescription
                     }
                 } else {
                     Modifier
@@ -512,7 +526,7 @@ private fun CameraWifiScannerFailurePanel(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = "Scanner unavailable",
+            text = stringResource(R.string.wifi_scanner_failure_title),
             color = StartupColors.destructive,
             fontSize = 15.sp,
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
@@ -521,11 +535,11 @@ private fun CameraWifiScannerFailurePanel(
             text =
                 when (failure) {
                     CameraWifiScannerFailure.CAMERA_UNAVAILABLE ->
-                        "The rear camera could not start. Close other camera apps and try again."
+                        stringResource(R.string.wifi_scanner_camera_unavailable)
                     CameraWifiScannerFailure.RECOGNIZER_UNAVAILABLE ->
-                        "On-device text recognition is not ready. Try again in a moment."
+                        stringResource(R.string.wifi_scanner_recognizer_unavailable)
                     CameraWifiScannerFailure.CORE_UNAVAILABLE ->
-                        "The shared camera core is unavailable. Rebuild OpenZCine before scanning."
+                        stringResource(R.string.wifi_scanner_core_unavailable)
                 },
             color = StartupColors.muted,
             fontSize = 12.sp,
@@ -533,7 +547,7 @@ private fun CameraWifiScannerFailurePanel(
         )
         if (failure != CameraWifiScannerFailure.CORE_UNAVAILABLE) {
             StartupFilledButton(
-                text = "Try again",
+                text = stringResource(R.string.action_try_again),
                 enabled = true,
                 onClick = onRetry,
                 modifier = Modifier.fillMaxWidth(),
@@ -561,6 +575,7 @@ private fun CameraWifiCameraPreview(
                 scaleType = PreviewView.ScaleType.FIT_CENTER
             }
         }
+    val viewfinderDescription = stringResource(R.string.wifi_scanner_viewfinder_description)
     val currentTranscript by rememberUpdatedState(onTranscript)
     val currentFailure by rememberUpdatedState(onFailure)
 
@@ -634,7 +649,7 @@ private fun CameraWifiCameraPreview(
             modifier
                 .clip(RoundedCornerShape(16.dp))
                 .border(1.dp, StartupColors.border.copy(alpha = 0.26f), RoundedCornerShape(16.dp))
-                .clearAndSetSemantics { contentDescription = "Camera viewfinder scanning the Connection wizard" },
+                .clearAndSetSemantics { contentDescription = viewfinderDescription },
     )
 }
 

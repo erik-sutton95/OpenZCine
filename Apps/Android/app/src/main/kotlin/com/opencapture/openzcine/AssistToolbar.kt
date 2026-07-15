@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.view.HapticFeedbackConstants
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -46,6 +47,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
@@ -99,6 +101,46 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
             entries.firstOrNull { it.name == value }
     }
 }
+
+@StringRes
+internal fun AssistTool.labelResource(): Int =
+    when (this) {
+        AssistTool.LUT -> R.string.assist_label_lut
+        AssistTool.PEAK -> R.string.assist_label_peak
+        AssistTool.FALSE -> R.string.assist_label_false_color
+        AssistTool.ZEBRA -> R.string.assist_label_zebra
+        AssistTool.WAVE -> R.string.assist_label_waveform
+        AssistTool.PARADE -> R.string.assist_label_parade
+        AssistTool.HISTO -> R.string.assist_label_histogram
+        AssistTool.VECTOR -> R.string.assist_label_vectorscope
+        AssistTool.LIGHTS -> R.string.assist_label_traffic_lights
+        AssistTool.GUIDES -> R.string.assist_label_guides
+        AssistTool.GRID -> R.string.assist_label_grid
+        AssistTool.CROSS -> R.string.assist_label_crosshair
+        AssistTool.LEVEL -> R.string.assist_label_level
+        AssistTool.DESQ -> R.string.assist_label_desqueeze
+        AssistTool.AUDIO -> R.string.assist_label_audio
+    }
+
+@StringRes
+internal fun AssistTool.titleResource(): Int =
+    when (this) {
+        AssistTool.LUT -> R.string.assist_label_lut
+        AssistTool.PEAK -> R.string.assist_title_focus_peaking
+        AssistTool.FALSE -> R.string.assist_title_false_color
+        AssistTool.ZEBRA -> R.string.assist_title_zebra
+        AssistTool.WAVE -> R.string.assist_title_waveform
+        AssistTool.PARADE -> R.string.assist_title_parade
+        AssistTool.HISTO -> R.string.assist_title_histogram
+        AssistTool.VECTOR -> R.string.assist_title_vectorscope
+        AssistTool.LIGHTS -> R.string.assist_title_traffic_lights
+        AssistTool.GUIDES -> R.string.assist_title_frame_guides
+        AssistTool.GRID -> R.string.assist_title_composition_grid
+        AssistTool.CROSS -> R.string.assist_title_centre_crosshair
+        AssistTool.LEVEL -> R.string.assist_title_horizon
+        AssistTool.DESQ -> R.string.assist_title_desqueeze
+        AssistTool.AUDIO -> R.string.assist_title_audio_levels
+    }
 
 /**
  * Assist toggle state behind the toolbar: the feed-effect set (LUT / false
@@ -650,19 +692,24 @@ internal fun PortraitFillAssistRail(
     onLongPressTool: ((AssistTool) -> Unit)? = null,
     onLongPressToolAnchored: ((AssistTool, Rect) -> Unit)? = null,
 ) {
+    val openDescription = stringResource(R.string.assist_open_rail_description)
+    val closeDescription = stringResource(R.string.assist_close_rail_description)
+    val railDescription = stringResource(R.string.assist_rail_description)
+    val collapsedDescription = stringResource(R.string.state_collapsed)
+    val expandedDescription = stringResource(R.string.state_expanded)
     if (!expanded) {
         Box(
             modifier
                 .glass(ChromeShape)
                 .chromeClickable(enabled) { onExpandedChange(true) }
                 .semantics {
-                    contentDescription = "Open view assist rail"
-                    stateDescription = "Collapsed"
+                    contentDescription = openDescription
+                    stateDescription = collapsedDescription
                 },
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "VIEW",
+                stringResource(R.string.assist_view),
                 style = chromeStyle(9f, FontWeight.Bold, mono = true),
                 color = LiveDesign.accent,
             )
@@ -685,8 +732,8 @@ internal fun PortraitFillAssistRail(
             .verticalScroll(scroll)
             .padding(horizontal = 4.dp, vertical = 6.dp)
             .semantics {
-                contentDescription = "View assist rail. Swipe up for more tools."
-                stateDescription = "Expanded"
+                contentDescription = railDescription
+                stateDescription = expandedDescription
             },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -695,11 +742,11 @@ internal fun PortraitFillAssistRail(
                 .fillMaxWidth()
                 .height(38.dp)
                 .chromeClickable(enabled) { onExpandedChange(false) }
-                .semantics { contentDescription = "Close view assist rail" },
+                .semantics { contentDescription = closeDescription },
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "VIEW",
+                stringResource(R.string.assist_view),
                 style = chromeStyle(9f, FontWeight.Bold, mono = true),
                 color = LiveDesign.accent,
             )
@@ -801,6 +848,10 @@ private fun AssistToolCell(
     onClick: () -> Unit,
 ) {
     val tint = if (isOn) LiveDesign.accent else LiveDesign.muted
+    val title = stringResource(tool.titleResource())
+    val label = stringResource(tool.labelResource())
+    val onState = stringResource(R.string.state_on)
+    val offState = stringResource(R.string.state_off)
     var bounds by remember(tool) { mutableStateOf(Rect.Zero) }
     Column(
         modifier =
@@ -809,13 +860,13 @@ private fun AssistToolCell(
                 .onGloballyPositioned { bounds = it.boundsInRoot() }
                 .assistToolClickable(
                     enabled = enabled,
-                    title = tool.settingsTitle,
+                    title = title,
                     onLongClick = onLongClick?.let { callback -> { callback(bounds) } },
                     onClick = onClick,
                 )
                 .semantics {
-                    contentDescription = tool.settingsTitle
-                    stateDescription = if (isOn) "On" else "Off"
+                    contentDescription = title
+                    stateDescription = if (isOn) onState else offState
                 }
                 .padding(vertical = 5.dp, horizontal = 8.dp)
                 .widthIn(min = 36.dp),
@@ -825,7 +876,7 @@ private fun AssistToolCell(
             AssistToolGlyph(tool, tint, Modifier.size(19.dp))
         }
         Text(
-            tool.label,
+            label,
             style = chromeStyle(9f, FontWeight.Medium, mono = true),
             color = tint,
             maxLines = 1,
@@ -840,20 +891,23 @@ private fun Modifier.assistToolClickable(
     title: String,
     onLongClick: (() -> Unit)?,
     onClick: () -> Unit,
-): Modifier =
-    if (onLongClick == null) {
+): Modifier {
+    val toggleDescription = stringResource(R.string.assist_toggle_description, title)
+    val configureDescription = stringResource(R.string.assist_configure_description, title)
+    return if (onLongClick == null) {
         chromeClickable(enabled, onClick)
     } else {
         combinedClickable(
             enabled = enabled,
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
-            onClickLabel = "Toggle $title",
-            onLongClickLabel = "Configure $title",
+            onClickLabel = toggleDescription,
+            onLongClickLabel = configureDescription,
             onLongClick = onLongClick,
             onClick = onClick,
         )
     }
+}
 
 /** Canvas stand-ins for the iOS SF Symbol per tool (`MonitorAssistTool.icon`). */
 @Composable
