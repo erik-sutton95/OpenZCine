@@ -211,6 +211,7 @@ struct LiveFeedModule: View {
     let safeArea: MonitorEdgeInsets
     let viewportWidth: Double
     let canvasOffsetX: Double
+    var horizontalDirection: MonitorHorizontalLayoutDirection = .standard
     /// Portrait mounts hand the module an exact zone-frame height. The measured height is only
     /// trustworthy in the landscape full-bleed canvas: inside a safe-area-inset context the
     /// module's own `.ignoresSafeArea()` re-expands the proposal, the reader reports the grown
@@ -231,7 +232,8 @@ struct LiveFeedModule: View {
                 let feedFrame = MonitorFeedLayout.fullBleedFrame(
                     viewportWidth: viewportWidth,
                     viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
-                    safeArea: safeArea
+                    safeArea: safeArea,
+                    horizontalDirection: horizontalDirection
                 )
                 let imageWidth = CGFloat(feedFrame.width)
                 let imageHeight = CGFloat(feedFrame.height)
@@ -740,13 +742,19 @@ extension View {
 
 struct BatteryRailModule: View {
     @Environment(NativeAppModel.self) private var model
+    let safeArea: MonitorEdgeInsets
+    let phoneTopClearance: Double
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = MonitorBatteryRailLayout.fit(railHeight: Double(proxy.size.height))
+            let layout = MonitorBatteryRailLayout.fit(
+                railHeight: Double(proxy.size.height),
+                safeArea: safeArea,
+                phoneTopClearance: phoneTopClearance
+            )
 
             ZStack {
-                phoneBatteryIndicator
+                phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
                     .position(x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
                 cameraBatteryIndicator
                     .position(x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
@@ -755,12 +763,13 @@ struct BatteryRailModule: View {
         }
     }
 
-    private var phoneBatteryIndicator: some View {
+    private func phoneBatteryIndicator(compact: Bool) -> some View {
         BatteryIndicator(
             percent: model.cameraState.phoneBatteryPercent,
             deviceSystemName: "iphone",
             isCamera: false,
-            isCharging: model.phoneBatteryCharging
+            isCharging: model.phoneBatteryCharging,
+            layout: compact ? .compactRail : .rail
         )
     }
 
@@ -985,13 +994,16 @@ struct AssistToolButtonRow: View {
     @Environment(NativeAppModel.self) private var model
     let tool: MonitorAssistTool
     var context: ViewAssistContext = .liveView
+    var compact = false
     /// When set, long-press routes here instead of the live-monitor assist popup (e.g. media playback).
     var onConfigure: ((MonitorAssistTool) -> Void)? = nil
     @State private var buildup: Task<Void, Never>?
 
     var body: some View {
         AssistToolButton(
-            tool: tool, isOn: model.preferences.visibleAssistTools(for: context).contains(tool)
+            tool: tool,
+            isOn: model.preferences.visibleAssistTools(for: context).contains(tool),
+            compact: compact
         )
         // Fit-mode scope cap (R7): a scope that can't activate renders grayed but stays tappable —
         // the tap routes to `toggleAssist`, which refuses and fires the toast. Inert in landscape
@@ -1073,6 +1085,7 @@ struct ScrollEdgeFades: Equatable {
 struct AssistToolButton: View {
     let tool: MonitorAssistTool
     let isOn: Bool
+    var compact = false
 
     var body: some View {
         // Mirrors the mockup's `.tool` box model; the 52pt floor keeps comfortable touch targets
@@ -1087,8 +1100,8 @@ struct AssistToolButton: View {
         }
         .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
         .padding(.vertical, 5)
-        .padding(.horizontal, 8)
-        .frame(minWidth: 52)
+        .padding(.horizontal, compact ? 5 : 8)
+        .frame(minWidth: compact ? 48 : 52)
         // `.tool.on`: a dim-accent fill and a same-tone dim border (no bright outline) —
         // only the icon and label read as full gold. No drop shadow: a glow would extend
         // past the frame and get clipped hard by the scroll container at the leading edge.
@@ -1206,10 +1219,10 @@ struct RecordButton: View {
 }
 
 struct BatteryIndicator: View {
-    /// `.rail`: 3-row VStack for the landscape battery rail (default). `.inline`: single-row
-    /// HStack for the portrait top bar (R2).
+    /// `.rail`: 3-row landscape rail. `.compactRail`: battery + percentage between a classic
+    /// notch and lock button. `.inline`: single-row portrait/iPad presentation.
     enum Layout {
-        case rail, inline
+        case rail, compactRail, inline
     }
 
     let percent: Int
@@ -1249,6 +1262,7 @@ struct BatteryIndicator: View {
     var body: some View {
         switch layout {
         case .rail: railBody
+        case .compactRail: compactRailBody
         case .inline: inlineBody
         }
     }
@@ -1284,6 +1298,24 @@ struct BatteryIndicator: View {
             width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
             height: CGFloat(MonitorBatteryRailLayout.indicatorHeight)
         )
+    }
+
+    private var compactRailBody: some View {
+        VStack(spacing: 1) {
+            Image(systemName: batterySymbol)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(batteryTint)
+                .overlay { chargingOverlay }
+            Text(readout)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(LiveDesign.text.opacity(0.72))
+        }
+        .frame(
+            width: CGFloat(MonitorBatteryRailLayout.indicatorWidth),
+            height: CGFloat(MonitorBatteryRailLayout.compactPhoneIndicatorHeight)
+        )
+        .accessibilityLabel("iPhone battery")
+        .accessibilityValue(readout)
     }
 
     /// Portrait top-bar presentation (R2): one row, battery glyph / percent / device glyph,

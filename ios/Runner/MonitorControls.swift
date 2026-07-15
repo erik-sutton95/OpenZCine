@@ -198,7 +198,11 @@ struct GlassChoice: View {
     var body: some View {
         Text(title)
             .font(.system(size: 14, weight: .medium, design: .monospaced))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .allowsTightening(true)
             .foregroundStyle(isSelected ? LiveDesign.accent : LiveDesign.text)
+            .padding(.horizontal, 2)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
             .background(
