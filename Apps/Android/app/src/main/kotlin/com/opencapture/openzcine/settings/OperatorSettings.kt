@@ -67,6 +67,41 @@ public enum class LocalDesqueezePresentation(
 }
 
 /**
+ * Shared-core crush/clip tolerance for Traffic Lights edge detection.
+ *
+ * The raw values deliberately mirror `AssistConfiguration.CrushClipCompensation`
+ * in Swift. Kotlin persists and forwards this selector only; the Swift core
+ * remains responsible for deciding whether a channel is clipped or crushed.
+ */
+public enum class ScopeCrushClipCompensation(
+    /** Swift enum raw value carried over the JNI scope seam. */
+    public val wireValue: Int,
+    /** Full operator-facing stop value for accessibility and settings copy. */
+    public val label: String,
+    /** Compact fraction glyph for the five-segment Android control. */
+    public val compactLabel: String,
+) {
+    /** No edge-energy tolerance. */
+    ZERO(0, "0", "0"),
+    /** One quarter stop of edge-energy tolerance. */
+    QUARTER(2, "0.25", "¼"),
+    /** One half stop of edge-energy tolerance. */
+    HALF(5, "0.5", "½"),
+    /** Three quarters of a stop of edge-energy tolerance. */
+    THREE_QUARTER(7, "0.75", "¾"),
+    /** One full stop of edge-energy tolerance. */
+    ONE(10, "1.0", "1"),
+    ;
+
+    internal companion object {
+        /** Matches Swift's lenient persisted-value decoding for legacy/corrupt values. */
+        fun fromWireValue(value: Int): ScopeCrushClipCompensation =
+            entries.firstOrNull { it.wireValue == value }
+                ?: if (value > ONE.wireValue) ONE else ZERO
+    }
+}
+
+/**
  * The local monitor-only framing configuration consumed by the Compose feed
  * overlay. Camera framing-grid state is intentionally absent.
  */
@@ -156,9 +191,13 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     // operator never accidentally changes the body while composing a shot.
     public val ruleOfThirdsEnabled: Toggle = Toggle("assist.local.ruleOfThirds", default = false)
     public val centerCrosshairEnabled: Toggle = Toggle("assist.local.centerCrosshair", default = false)
+    /** Shows the shared Swift meter's RGB edge blocks on the histogram. */
+    public val histogramTrafficLightsEnabled: Toggle =
+        Toggle("assist.scopes.histogramTrafficLights.v1", default = true)
 
     private val framingGuideState = mutableStateOf(loadFramingGuide())
     private val desqueezePresentationState = mutableStateOf(loadDesqueezePresentation())
+    private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
 
     /** Selected local delivery-frame guide; persisted immediately on change. */
     public var framingGuide: LocalFramingGuide
@@ -174,6 +213,18 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         set(new) {
             desqueezePresentationState.value = new
             preferences.edit().putString(DESQUEEZE_PRESENTATION_KEY, new.name).apply()
+        }
+
+    /**
+     * Traffic Lights crush/clip tolerance, persisted as the shared Swift
+     * enum's stable raw value. It changes the Swift meter on the next scope
+     * tick without moving any measurement math into Kotlin.
+     */
+    public var scopeCrushClipCompensation: ScopeCrushClipCompensation
+        get() = scopeCrushClipCompensationState.value
+        set(new) {
+            scopeCrushClipCompensationState.value = new
+            preferences.edit().putInt(SCOPE_METER_PREFERENCE, new.wireValue).apply()
         }
 
     /** Compose-observable framing state for the monitor overlay. */
@@ -306,6 +357,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             preferences.getString(DESQUEEZE_PRESENTATION_KEY, null),
         ) ?: LocalDesqueezePresentation.OFF
 
+    private fun loadScopeCrushClipCompensation(): ScopeCrushClipCompensation =
+        ScopeCrushClipCompensation.fromWireValue(
+            preferences.getInt(
+                SCOPE_METER_PREFERENCE,
+                ScopeCrushClipCompensation.QUARTER.wireValue,
+            ),
+        )
+
     private companion object {
         const val STORE_NAME = "openzcine.operator-settings"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
@@ -314,6 +373,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             "display.assistToolbar.trafficLights.visibility.migrated.v1"
         const val FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
+        const val SCOPE_METER_PREFERENCE = "scope-meter-v1"
     }
 }
 

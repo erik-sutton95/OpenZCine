@@ -131,20 +131,25 @@ enum class ScopeKind(val token: String, val title: String, val chip: String) {
     }
 }
 
-/** Which Swift payloads the shared monitor sampler must request for visible scopes. */
+/** Which Swift payloads the shared monitor sampler must retain for visible scopes. */
 data class ScopeSamplingDemand(
     val traces: Boolean,
     val vector: Boolean,
     val pointTrace: Boolean,
     val histogram: Boolean,
+    /** Whether any visible surface needs the Swift-owned RGB edge reading. */
     val trafficLights: Boolean,
 )
 
-/** Pure scope-demand planner: no panel can start a redundant sampling loop. */
-fun scopeSamplingDemand(selected: Set<ScopeKind>): ScopeSamplingDemand {
+/** Pure scope-demand planner: no panel can require a redundant sampling loop. */
+fun scopeSamplingDemand(
+    selected: Set<ScopeKind>,
+    histogramTrafficLightsEnabled: Boolean = true,
+): ScopeSamplingDemand {
     val pointTrace = ScopeKind.WAVEFORM in selected || ScopeKind.PARADE in selected
     val histogram = ScopeKind.HISTOGRAM in selected
-    val trafficLights = ScopeKind.TRAFFIC_LIGHTS in selected
+    val trafficLights =
+        ScopeKind.TRAFFIC_LIGHTS in selected || (histogram && histogramTrafficLightsEnabled)
     return ScopeSamplingDemand(
         traces = pointTrace || histogram || trafficLights,
         vector = ScopeKind.VECTORSCOPE in selected,
@@ -299,6 +304,8 @@ private class HistogramDisplay(
 fun ScopePanels(
     selectedScopes: Set<ScopeKind>,
     portraitScopes: List<ScopeKind>,
+    crushClipCompensationRaw: Int,
+    histogramTrafficLightsEnabled: Boolean,
     source: com.opencapture.openzcine.core.LiveFrameSource,
     isPortrait: Boolean,
     feed: ZoneFrame,
@@ -316,7 +323,13 @@ fun ScopePanels(
     if (displayed.isEmpty()) return
     if (isPortrait && scopeZone == null) return
 
-    val snapshot = rememberScopeSnapshot(source, displayed.toSet())
+    val snapshot =
+        rememberScopeSnapshot(
+            source,
+            displayed.toSet(),
+            crushClipCompensationRaw,
+            histogramTrafficLightsEnabled,
+        )
     val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
     val anchors =
         remember(needsAnchors) {
@@ -325,9 +338,17 @@ fun ScopePanels(
 
     if (isPortrait) {
         val zone = requireNotNull(scopeZone)
-        PortraitScopePanels(displayed, zone, anchors, snapshot)
+        PortraitScopePanels(displayed, zone, anchors, snapshot, histogramTrafficLightsEnabled)
     } else {
-        LandscapeScopePanels(displayed, feed, infoBar, viewport, anchors, snapshot)
+        LandscapeScopePanels(
+            displayed,
+            feed,
+            infoBar,
+            viewport,
+            anchors,
+            snapshot,
+            histogramTrafficLightsEnabled,
+        )
     }
 }
 
@@ -338,6 +359,7 @@ private fun PortraitScopePanels(
     zone: ZoneFrame,
     anchors: ScopeAnchors?,
     snapshot: ScopeDrawData?,
+    histogramTrafficLightsEnabled: Boolean,
 ) {
     val spacing = 8f
     val panelHeight = max(0f, (zone.height - spacing * (displayed.size - 1)) / displayed.size)
@@ -347,6 +369,7 @@ private fun PortraitScopePanels(
                 kind = kind,
                 anchors = anchors,
                 data = snapshot,
+                histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
                 fillsWidth = kind == ScopeKind.TRAFFIC_LIGHTS,
                 modifier =
                     Modifier.zone(
@@ -371,6 +394,7 @@ private fun LandscapeScopePanels(
     viewport: ZoneFrame,
     anchors: ScopeAnchors?,
     snapshot: ScopeDrawData?,
+    histogramTrafficLightsEnabled: Boolean,
 ) {
     val context = LocalContext.current.applicationContext
     val store = remember(context) { ScopePanelPlacementStore(context) }
@@ -382,6 +406,7 @@ private fun LandscapeScopePanels(
                     kind = kind,
                     anchors = anchors,
                     data = snapshot,
+                    histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
                     fillsWidth = false,
                     modifier = modifier,
                 )
@@ -457,6 +482,7 @@ private fun ScopePanel(
     kind: ScopeKind,
     anchors: ScopeAnchors?,
     data: ScopeDrawData?,
+    histogramTrafficLightsEnabled: Boolean,
     fillsWidth: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -470,7 +496,9 @@ private fun ScopePanel(
             .background(ScopePalette.panelBackground, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape),
     ) {
-        Canvas(Modifier.fillMaxSize()) { drawScope(kind, resolvedAnchors, data) }
+        Canvas(Modifier.fillMaxSize()) {
+            drawScope(kind, resolvedAnchors, data, histogramTrafficLightsEnabled)
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -669,13 +697,20 @@ private fun DrawScope.drawTrafficIndicator(
 private fun rememberScopeSnapshot(
     source: com.opencapture.openzcine.core.LiveFrameSource,
     selected: Set<ScopeKind>,
+    crushClipCompensationRaw: Int,
+    histogramTrafficLightsEnabled: Boolean,
 ): ScopeDrawData? {
     val data = remember { mutableStateOf<ScopeDrawData?>(null) }
     val ordered = ScopeKind.canonical.filter(selected::contains)
-    LaunchedEffect(source, ordered) {
+    LaunchedEffect(source, ordered, crushClipCompensationRaw, histogramTrafficLightsEnabled) {
         data.value = null
         withContext(Dispatchers.Default) {
-            pumpScopes(source.frames, ordered.toSet()) { data.value = it }
+            pumpScopes(
+                source.frames,
+                ordered.toSet(),
+                crushClipCompensationRaw,
+                histogramTrafficLightsEnabled,
+            ) { data.value = it }
         }
     }
     return data.value
@@ -688,9 +723,11 @@ private fun rememberScopeSnapshot(
 private suspend fun pumpScopes(
     frames: Flow<LiveFrame>,
     selected: Set<ScopeKind>,
+    crushClipCompensationRaw: Int,
+    histogramTrafficLightsEnabled: Boolean,
     present: (ScopeDrawData) -> Unit,
 ): Unit = coroutineScope {
-    val demand = scopeSamplingDemand(selected)
+    val demand = scopeSamplingDemand(selected, histogramTrafficLightsEnabled)
     if (!demand.traces && !demand.vector) return@coroutineScope
 
     val latest = AtomicReference<ByteArray?>(null)
@@ -722,7 +759,7 @@ private suspend fun pumpScopes(
                     ScopeTraces.parse(
                         SwiftCore.scopeTraces(
                             reduced.rgba, reduced.width, reduced.height,
-                            reduced.bytesPerRow, CURVE_LOG3G10,
+                            reduced.bytesPerRow, CURVE_LOG3G10, crushClipCompensationRaw,
                         ),
                     )
                 } catch (error: IllegalArgumentException) {
@@ -894,12 +931,35 @@ private fun DrawScope.plotRect(): Rect =
         size.height - 8.dp.toPx(),
     )
 
+/** Leaves the iOS-matched left/right clearance for histogram RGB edge blocks. */
+private fun DrawScope.histogramPlotRect(showTrafficLights: Boolean): Rect =
+    if (!showTrafficLights) {
+        plotRect()
+    } else {
+        Rect(
+            26.dp.toPx(),
+            26.dp.toPx(),
+            size.width - 26.dp.toPx(),
+            size.height - 8.dp.toPx(),
+        )
+    }
+
 /** iOS `scopeLevelY`: display level 0…1 to y, with the 4% top/bottom buffer. */
 private fun levelY(level: Float, plot: Rect): Float =
     plot.bottom - (0.04f + level * 0.92f) * plot.height
 
-private fun DrawScope.drawScope(kind: ScopeKind, anchors: ScopeAnchors, data: ScopeDrawData?) {
-    val plot = plotRect()
+private fun DrawScope.drawScope(
+    kind: ScopeKind,
+    anchors: ScopeAnchors,
+    data: ScopeDrawData?,
+    histogramTrafficLightsEnabled: Boolean,
+) {
+    val plot =
+        if (kind == ScopeKind.HISTOGRAM) {
+            histogramPlotRect(histogramTrafficLightsEnabled)
+        } else {
+            plotRect()
+        }
     when (kind) {
         ScopeKind.WAVEFORM, ScopeKind.PARADE -> {
             data?.trailTraces?.let { drawTrace(kind, it, plot, ScopePalette.TRAIL_DECAY) }
@@ -907,8 +967,11 @@ private fun DrawScope.drawScope(kind: ScopeKind, anchors: ScopeAnchors, data: Sc
             drawAxisGuides(anchors, plot)
         }
         ScopeKind.HISTOGRAM -> {
+            val lights = data?.trafficLights?.takeIf { histogramTrafficLightsEnabled }
+            drawHistogramClipZone(plot, lights)
             data?.histogram?.let { drawHistogram(it, plot) }
             drawHistogramGuides(anchors, plot)
+            lights?.let(::drawHistogramTrafficLights)
         }
         ScopeKind.VECTORSCOPE -> {
             val side = min(plot.width, plot.height)
@@ -1051,6 +1114,59 @@ private fun DrawScope.drawHistogram(display: HistogramDisplay, plot: Rect) {
         alpha = 0.58f,
         style = Stroke(1.4.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round),
     )
+}
+
+/** iOS histogram 95…100 IRE clip tint, driven by the Swift-owned RGB edge flags. */
+private fun DrawScope.drawHistogramClipZone(plot: Rect, lights: TrafficLightsReading?) {
+    val hasClip = lights?.let { it.red.clip || it.green.clip || it.blue.clip } ?: false
+    if (!hasClip) return
+    val left = plot.left + plot.width * 0.95f
+    drawRect(
+        ScopePalette.clip.copy(alpha = 0.14f),
+        topLeft = Offset(left, plot.top),
+        size = Size(plot.right - left, plot.height),
+    )
+}
+
+/** Small RGB edge blocks flanking the histogram — left crush, right clip. */
+private fun DrawScope.drawHistogramTrafficLights(reading: TrafficLightsReading) {
+    val blockWidth = 7.5.dp.toPx()
+    val blockHeight = 15.dp.toPx()
+    val gap = 3.dp.toPx()
+    val top = 12.dp.toPx()
+    val left = 11.dp.toPx()
+    val right = size.width - 11.dp.toPx() - blockWidth
+    val corner = CornerRadius(2.dp.toPx())
+    val channels =
+        listOf(
+            Triple(ScopePalette.trafficRed, reading.red.crush, reading.red.clip),
+            Triple(ScopePalette.trafficGreen, reading.green.crush, reading.green.clip),
+            Triple(ScopePalette.trafficBlue, reading.blue.crush, reading.blue.clip),
+        )
+
+    fun block(x: Float, y: Float, color: Color, active: Boolean) {
+        if (active) {
+            drawRoundRect(
+                color,
+                topLeft = Offset(x, y),
+                size = Size(blockWidth, blockHeight),
+                cornerRadius = corner,
+            )
+        }
+        drawRoundRect(
+            color.copy(alpha = if (active) 1f else 0.8f),
+            topLeft = Offset(x, y),
+            size = Size(blockWidth, blockHeight),
+            cornerRadius = corner,
+            style = Stroke(1.5.dp.toPx()),
+        )
+    }
+
+    channels.forEachIndexed { index, (color, crush, clip) ->
+        val y = top + index * (blockHeight + gap)
+        block(left, y, color, crush)
+        block(right, y, color, clip)
+    }
 }
 
 /** Smoothed contour over the display bins (quadratic midpoints, iOS `histogramPaths`). */

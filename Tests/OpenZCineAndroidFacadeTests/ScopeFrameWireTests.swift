@@ -58,6 +58,40 @@ struct ScopeFrameWireTests {
         return (rgba, 2, 8)
     }
 
+    /// Exactly one sampled white pixel among 100 mid-grey samples. It clears
+    /// the 0-stop edge threshold but remains below iOS's quarter-stop default.
+    private func sparseClipBuffer() -> ([UInt8], Int, Int) {
+        let side = 20
+        let mid = UInt8(ExposureToneCurve.redLog3G10.middleGrayNativeCode.rounded())
+        var rgba = [UInt8](repeating: 0, count: side * side * 4)
+        for pixel in 0..<(side * side) {
+            let value: UInt8 = pixel == 0 ? .max : mid
+            let offset = pixel * 4
+            rgba[offset] = value
+            rgba[offset + 1] = value
+            rgba[offset + 2] = value
+            rgba[offset + 3] = .max
+        }
+        return (rgba, side, side)
+    }
+
+    private func trafficClipFlags(_ flat: [Float]) -> [Float] {
+        let pointCount = Int(flat[0])
+        let start =
+            1 + pointCount * ScopeFrameWire.pointStride
+            + 4 * ScopeFrameWire.histogramBins
+            + 2
+        return (0..<3).map { channel in
+            flat[start + channel * ScopeFrameWire.trafficChannelStride + 1]
+        }
+    }
+
+    private func trafficTrailer(_ flat: [Float]) -> ArraySlice<Float> {
+        let pointCount = Int(flat[0])
+        let start = 1 + pointCount * ScopeFrameWire.pointStride + 4 * ScopeFrameWire.histogramBins
+        return flat[start...]
+    }
+
     @Test func tracesPayloadIsWellFormed() {
         let (rgba, width, height) = syntheticBuffer()
         let flat = ScopeFrameWire.traces(
@@ -169,6 +203,39 @@ struct ScopeFrameWireTests {
             #expect(flat[offset + 3] == expectedSide)
             #expect(flat[offset + 4] == Float(expectedDisplay.barFill))
         }
+    }
+
+    @Test func tracesWirePassesSelectedCrushClipCompensationToCoreMeter() {
+        let (rgba, width, height) = sparseClipBuffer()
+        let zero = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0,
+            crushClipCompensationRaw: AssistConfiguration.CrushClipCompensation.zero.rawValue)
+        let quarter = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0,
+            crushClipCompensationRaw: AssistConfiguration.CrushClipCompensation.quarter.rawValue)
+        let defaulted = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0)
+        let one = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0,
+            crushClipCompensationRaw: AssistConfiguration.CrushClipCompensation.one.rawValue)
+        let legacyHigh = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0,
+            crushClipCompensationRaw: 15)
+        let legacyLow = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0,
+            crushClipCompensationRaw: -1)
+
+        #expect(trafficClipFlags(zero) == [1, 1, 1])
+        #expect(trafficClipFlags(quarter) == [0, 0, 0])
+        #expect(trafficTrailer(defaulted) == trafficTrailer(quarter))
+        #expect(trafficTrailer(legacyHigh) == trafficTrailer(one))
+        #expect(trafficTrailer(legacyLow) == trafficTrailer(zero))
     }
 
     // MARK: - Vectorscope

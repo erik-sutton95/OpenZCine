@@ -54,6 +54,17 @@ public enum ScopeFrameWire {
         ordinal == 1 ? .nikonNLog : .redLog3G10
     }
 
+    /// Decodes Android's persisted raw compensation selector with the same
+    /// safety policy as the core's Codable migration: exact current values
+    /// win, older values above the 1-stop ceiling clamp high, and other
+    /// malformed values clamp low.
+    private static func crushClipCompensation(
+        rawValue: Int
+    ) -> AssistConfiguration.CrushClipCompensation {
+        AssistConfiguration.CrushClipCompensation(rawValue: rawValue)
+            ?? (rawValue > AssistConfiguration.CrushClipCompensation.one.rawValue ? .one : .zero)
+    }
+
     /// Fixed axis anchors and graticule constants for one curve:
     /// `[crushLine, middleGrayLevel, clipLine]` followed by six `(cb, cr)`
     /// pairs — the 75% R/Mg/B/Cy/G/Yl vectorscope targets from the core's
@@ -99,8 +110,13 @@ public enum ScopeFrameWire {
     /// 0 = neutral, 1 = over, 2 = under; `fill` is the core's normalized
     /// goal-post fill. Invalid buffer geometry yields `[0]`, four empty
     /// histograms, and the core's empty-sample reading.
+    ///
+    /// - Parameter crushClipCompensationRaw: Raw value for the persisted
+    ///   shared-core `CrushClipCompensation` selector. It defaults to iOS's
+    ///   `.quarter` migration default for direct Swift callers.
     public static func traces(
-        rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int
+        rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int,
+        crushClipCompensationRaw: Int = AssistConfiguration.CrushClipCompensation.quarter.rawValue
     ) -> [Float] {
         let mapping = ExposureSignalMapping(curve: curve(ordinal: curveOrdinal))
         let samples = ScopeSampler.sample(
@@ -133,7 +149,11 @@ public enum ScopeFrameWire {
                 out.append(Float(bin))
             }
         }
-        appendTrafficLights(samples: samples, mapping: mapping, to: &out)
+        appendTrafficLights(
+            samples: samples,
+            mapping: mapping,
+            crushClipCompensation: crushClipCompensation(rawValue: crushClipCompensationRaw),
+            to: &out)
         return out
     }
 
@@ -143,14 +163,12 @@ public enum ScopeFrameWire {
     private static func appendTrafficLights(
         samples: ScopeSamples,
         mapping: ExposureSignalMapping,
+        crushClipCompensation: AssistConfiguration.CrushClipCompensation,
         to out: inout [Float]
     ) {
         let reading = TrafficLightsMeter.measure(
             samples: samples,
-            // Android has not exposed this operator setting yet. Name the
-            // shared core default explicitly so the wire cannot silently drift
-            // if a future `Scopes()` initializer changes.
-            noiseFloorCompensation: AssistConfiguration.CrushClipCompensation.quarter,
+            noiseFloorCompensation: crushClipCompensation,
             mapping: mapping)
         out.append(trafficTrailerMagic)
         out.append(trafficTrailerVersion)

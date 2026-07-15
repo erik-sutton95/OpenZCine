@@ -760,6 +760,8 @@ fun MonitorScreen(
             ScopePanels(
                 selectedScopes = assist.selectedScopes,
                 portraitScopes = portraitScopes,
+                crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
+                histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
                 source = activeFrameSource,
                 isPortrait = isPortrait,
                 feed = zones.feed,

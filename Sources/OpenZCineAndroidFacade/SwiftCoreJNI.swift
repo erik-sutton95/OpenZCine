@@ -188,22 +188,25 @@
         javaFloatArray(env, ScopeFrameWire.anchors(curveOrdinal: Int(curve)))
     }
 
-    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve): FloatArray`
+    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve, compensation): FloatArray`
     /// — one scope tick's waveform/parade/histogram payload plus the additive
     /// Swift-owned Traffic Lights trailer described by `ScopeFrameWire.traces`.
-    /// The JNI signature is unchanged; the trailer is versioned so malformed
-    /// data fails closed in Kotlin. Blocking; Kotlin calls it off the main thread.
+    /// `compensation` is a persisted core enum raw value; Swift decodes and
+    /// applies it while Kotlin stays presentation-only. The trailer is
+    /// versioned so malformed data fails closed in Kotlin. Blocking; Kotlin
+    /// calls it off the main thread.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeTraces")
     public func swiftCoreScopeTraces(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
-        width: jint, height: jint, bytesPerRow: jint, curve: jint
+        width: jint, height: jint, bytesPerRow: jint, curve: jint, compensation: jint
     ) -> jfloatArray? {
         guard let buffer = swiftBytes(env, rgba) else { return nil }
         return javaFloatArray(
             env,
             ScopeFrameWire.traces(
                 rgba: buffer, width: Int(width), height: Int(height),
-                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve)))
+                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve),
+                crushClipCompensationRaw: Int(compensation)))
     }
 
     /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve): ByteArray`

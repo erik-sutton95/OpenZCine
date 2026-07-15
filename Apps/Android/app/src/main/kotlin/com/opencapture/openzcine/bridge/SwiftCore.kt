@@ -90,7 +90,10 @@ object SwiftCore {
      * Samples one downsampled RGBA frame for the waveform / parade /
      * histogram scopes: `[N, (x, luma, r, g, b) × N, 4 × 256 display bins]`
      * with all levels already on the core's 3-anchor display axis — see
-     * [ScopeTraces.parse] and the Swift mirror `ScopeFrameWire.traces`.
+     * [ScopeTraces.parse] and the Swift mirror `ScopeFrameWire.traces`. The
+     * [crushClipCompensationRaw] argument is the persisted raw value for
+     * Swift's `AssistConfiguration.CrushClipCompensation`; Swift alone
+     * applies it when measuring the additive Traffic Lights trailer.
      * Blocking (one CPU sampling pass); call from a background dispatcher.
      */
     external fun scopeTraces(
@@ -99,6 +102,7 @@ object SwiftCore {
         height: Int,
         bytesPerRow: Int,
         curve: Int,
+        crushClipCompensationRaw: Int,
     ): FloatArray
 
     /**

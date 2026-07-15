@@ -133,6 +133,41 @@ class OperatorSettingsTest {
     }
 
     @Test
+    fun `scope compensation defaults to quarter and round trips its Swift raw value`() {
+        val settings = OperatorSettings(store)
+        assertEquals(ScopeCrushClipCompensation.QUARTER, settings.scopeCrushClipCompensation)
+        assertTrue(settings.histogramTrafficLightsEnabled.value)
+
+        ScopeCrushClipCompensation.entries.forEach { compensation ->
+            settings.scopeCrushClipCompensation = compensation
+            assertEquals(compensation.wireValue, store.getInt("assist.scopes.crushClipCompensation.v1", -1))
+            assertEquals(compensation, OperatorSettings(store).scopeCrushClipCompensation)
+        }
+        settings.histogramTrafficLightsEnabled.value = false
+
+        assertFalse(store.getBoolean("assist.scopes.histogramTrafficLights.v1", true))
+        assertEquals(
+            ScopeCrushClipCompensation.ONE,
+            OperatorSettings(store).scopeCrushClipCompensation,
+        )
+        assertFalse(OperatorSettings(store).histogramTrafficLightsEnabled.value)
+    }
+
+    @Test
+    fun `missing or legacy compensation values migrate with iOS-compatible defaults and clamps`() {
+        assertEquals(ScopeCrushClipCompensation.QUARTER, OperatorSettings(store).scopeCrushClipCompensation)
+
+        store.edit().putInt("assist.scopes.crushClipCompensation.v1", 5).apply()
+        assertEquals(ScopeCrushClipCompensation.HALF, OperatorSettings(store).scopeCrushClipCompensation)
+
+        store.edit().putInt("assist.scopes.crushClipCompensation.v1", 15).apply()
+        assertEquals(ScopeCrushClipCompensation.ONE, OperatorSettings(store).scopeCrushClipCompensation)
+
+        store.edit().putInt("assist.scopes.crushClipCompensation.v1", -1).apply()
+        assertEquals(ScopeCrushClipCompensation.ZERO, OperatorSettings(store).scopeCrushClipCompensation)
+    }
+
+    @Test
     fun `malformed local framing selections safely fall back to off`() {
         store.edit()
             .putString("assist.local.framingGuide.v1", "NOT_A_GUIDE")

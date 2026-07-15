@@ -51,6 +51,18 @@ class ScopeLayoutTest {
         assertFalse(lights.vector)
         assertFalse(lights.pointTrace)
 
+        val histogramWithEdgeBlocks =
+            scopeSamplingDemand(setOf(ScopeKind.HISTOGRAM), histogramTrafficLightsEnabled = true)
+        assertTrue(histogramWithEdgeBlocks.traces)
+        assertTrue(histogramWithEdgeBlocks.histogram)
+        assertTrue(histogramWithEdgeBlocks.trafficLights)
+
+        val histogramWithoutEdgeBlocks =
+            scopeSamplingDemand(setOf(ScopeKind.HISTOGRAM), histogramTrafficLightsEnabled = false)
+        assertTrue(histogramWithoutEdgeBlocks.traces)
+        assertTrue(histogramWithoutEdgeBlocks.histogram)
+        assertFalse(histogramWithoutEdgeBlocks.trafficLights)
+
         val vector = scopeSamplingDemand(setOf(ScopeKind.VECTORSCOPE))
         assertFalse(vector.traces)
         assertTrue(vector.vector)
