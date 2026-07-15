@@ -1,0 +1,8 @@
+# Copy to frameio.local.properties (ignored) after Adobe Developer Console has
+# approved an Android OAuth Native App redirect. These are PKCE public-client
+# values, not a client secret, but deployment registration must not be guessed
+# or accidentally committed.
+#
+# [VERIFY-ON-HW] Confirm the exact values and callback on a signed Android build.
+frameio.clientId=
+frameio.redirectUri=

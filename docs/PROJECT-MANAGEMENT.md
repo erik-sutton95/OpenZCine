@@ -42,8 +42,9 @@ time. Two things to know:
 
 - The sync is **create-only**: editing a task in Kaneo does not update its issue, and deleting a
   Kaneo task **orphans** its issue (close it manually).
-- Sub-tasks are ordinary tasks linked to a parent by a `subtask` relation; the MCP tools don't
-  expose relations, so check the board before bulk-creating to avoid duplicates.
+- Sub-tasks are ordinary tasks linked to a parent by a `subtask` relation. The MCP relation tools
+  can list, create, and delete those links; still check the board before bulk-creating to avoid
+  duplicates.
 
 Ideas live in GitHub Discussions (Ideas & Feature Requests) and are mirrored onto the board as
 `planned` + `investigation` tasks referencing the discussion number.

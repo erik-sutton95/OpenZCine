@@ -1,0 +1,554 @@
+package com.opencapture.openzcine
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.opencapture.openzcine.bridge.MonitorZones
+import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.settings.PortraitFeedAspect
+import kotlin.math.max
+import kotlin.math.min
+
+/** Stable identities for the five camera controls surrounding iOS live view. */
+internal enum class MonitorPickerKind {
+    ISO,
+    SHUTTER,
+    IRIS,
+    FOCUS,
+    WHITE_BALANCE,
+}
+
+/** One typed control tab inside an in-monitor picker. */
+internal data class MonitorPickerModePresentation(
+    val label: String,
+    val request: CommandControlRequest,
+)
+
+/** Camera-backed picker shown over live view. */
+internal data class MonitorPickerPresentation(
+    val kind: MonitorPickerKind,
+    val title: String,
+    val subtitle: String,
+    val modes: List<MonitorPickerModePresentation>,
+)
+
+/** One readout in the live monitor's capture strip. */
+internal data class MonitorCaptureSettingPresentation(
+    val kind: MonitorPickerKind,
+    val label: String,
+    val value: String,
+    val widestValue: String,
+    val picker: MonitorPickerPresentation?,
+    val unavailableReason: String?,
+)
+
+/** The shared-zone anchor used by an in-monitor control panel. */
+internal enum class MonitorPickerAnchor {
+    CAPTURE_STRIP,
+    CONTROLS_GRID,
+}
+
+/**
+ * Projects the same typed command presentation used by DISP 3 into the five
+ * controls surrounding live view.
+ *
+ * No option is invented here. A readout becomes actionable only when the
+ * existing command projection already produced a Swift-validated
+ * [CommandControlRequest]. Resolution, codec, and other descriptor-dependent
+ * controls consequently stay read-only rather than gaining guessed choices.
+ */
+internal fun monitorCaptureSettings(
+    dashboard: CommandDashboardPresentation,
+    strings: PhoneStringResolver,
+): List<MonitorCaptureSettingPresentation> {
+    val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
+    val focus =
+        dashboard.sideSections.firstOrNull { it.kind == CommandSideSectionKind.FOCUS }?.cells.orEmpty()
+    val exposure =
+        dashboard.sideSections.firstOrNull { it.kind == CommandSideSectionKind.EXPOSURE }?.cells.orEmpty()
+
+    fun mode(label: String, tile: CommandTilePresentation?): MonitorPickerModePresentation? =
+        tile?.request
+            ?.takeIf { it.options.isNotEmpty() }
+            ?.let { MonitorPickerModePresentation(label, it) }
+
+    fun single(
+        kind: MonitorPickerKind,
+        label: String,
+        widestValue: String,
+        subtitle: String,
+        tile: CommandTilePresentation?,
+    ): MonitorCaptureSettingPresentation {
+        val modes = listOfNotNull(mode(label, tile))
+        return MonitorCaptureSettingPresentation(
+            kind = kind,
+            label = label,
+            value = tile?.value ?: "—",
+            widestValue = widestValue,
+            picker =
+                modes.takeIf(List<MonitorPickerModePresentation>::isNotEmpty)?.let {
+                    MonitorPickerPresentation(kind, label, subtitle, it)
+                },
+            unavailableReason = tile?.unavailableReason,
+        )
+    }
+
+    fun multi(
+        kind: MonitorPickerKind,
+        label: String,
+        widestValue: String,
+        subtitle: String,
+        valueTile: CommandTilePresentation?,
+        modes: List<MonitorPickerModePresentation>,
+    ): MonitorCaptureSettingPresentation =
+        MonitorCaptureSettingPresentation(
+            kind = kind,
+            label = label,
+            value = valueTile?.value ?: "—",
+            widestValue = widestValue,
+            picker =
+                modes.takeIf(List<MonitorPickerModePresentation>::isNotEmpty)?.let {
+                    MonitorPickerPresentation(kind, label, subtitle, it)
+                },
+            unavailableReason = valueTile?.unavailableReason,
+        )
+
+    val focusModes =
+        listOfNotNull(
+            mode(strings.resolve(R.string.camera_mode_af), focus.getOrNull(0)),
+            mode(strings.resolve(R.string.camera_mode_area), focus.getOrNull(1)),
+            mode(strings.resolve(R.string.camera_mode_subject), focus.getOrNull(2)),
+        )
+    val focusValue = focus.getOrNull(0)?.value ?: "—"
+    return listOf(
+        multi(
+            kind = MonitorPickerKind.ISO,
+            label = strings.resolve(R.string.camera_label_iso),
+            widestValue = "25600",
+            subtitle = strings.resolve(R.string.camera_subtitle_iso),
+            valueTile = primary[CommandTileKind.ISO],
+            modes =
+                listOfNotNull(
+                    mode(strings.resolve(R.string.camera_mode_sensitivity), primary[CommandTileKind.ISO]),
+                    mode(strings.resolve(R.string.camera_mode_base_iso), exposure.getOrNull(0)),
+                ),
+        ),
+        multi(
+            kind = MonitorPickerKind.SHUTTER,
+            label = strings.resolve(R.string.camera_label_shutter),
+            widestValue = "1/16000",
+            subtitle = strings.resolve(R.string.camera_subtitle_shutter),
+            valueTile = primary[CommandTileKind.SHUTTER],
+            modes =
+                listOfNotNull(
+                    mode(strings.resolve(R.string.camera_mode_value), primary[CommandTileKind.SHUTTER]),
+                    mode(strings.resolve(R.string.camera_mode_mode), exposure.getOrNull(1)),
+                    mode(strings.resolve(R.string.camera_mode_lock), exposure.getOrNull(2)),
+                ),
+        ),
+        single(
+            MonitorPickerKind.IRIS,
+            strings.resolve(R.string.camera_label_iris),
+            "f/2.8",
+            strings.resolve(R.string.camera_subtitle_iris),
+            primary[CommandTileKind.IRIS],
+        ),
+        MonitorCaptureSettingPresentation(
+            kind = MonitorPickerKind.FOCUS,
+            label = strings.resolve(R.string.camera_label_focus),
+            value = focusValue,
+            widestValue = "Wide-L",
+            picker =
+                focusModes.takeIf(List<MonitorPickerModePresentation>::isNotEmpty)?.let {
+                    MonitorPickerPresentation(
+                        MonitorPickerKind.FOCUS,
+                        strings.resolve(R.string.camera_label_focus),
+                        strings.resolve(R.string.camera_subtitle_focus),
+                        it,
+                    )
+                },
+            unavailableReason = focus.getOrNull(0)?.unavailableReason,
+        ),
+        multi(
+            kind = MonitorPickerKind.WHITE_BALANCE,
+            label = strings.resolve(R.string.camera_label_wb),
+            widestValue = "5600K",
+            subtitle = strings.resolve(R.string.camera_subtitle_wb),
+            valueTile = primary[CommandTileKind.WHITE_BALANCE],
+            modes =
+                listOfNotNull(
+                    mode(strings.resolve(R.string.camera_mode_kelvin_preset), primary[CommandTileKind.WHITE_BALANCE]),
+                    mode(strings.resolve(R.string.camera_mode_tint), exposure.getOrNull(3)),
+                ),
+        ),
+    )
+}
+
+/** Returns the next picker state for a capture-cell tap. */
+internal fun nextMonitorPicker(
+    current: MonitorPickerKind?,
+    requested: MonitorPickerKind,
+    controlsEnabled: Boolean,
+): MonitorPickerKind? =
+    when {
+        !controlsEnabled -> current
+        current == requested -> null
+        else -> requested
+    }
+
+/** Finds the live-view picker that already owns a typed command request. */
+internal fun monitorPickerKindForRequest(
+    settings: List<MonitorCaptureSettingPresentation>,
+    request: CommandControlRequest,
+): MonitorPickerKind? =
+    settings.firstOrNull { setting ->
+        setting.picker?.modes?.any { it.request.control == request.control } == true
+    }?.kind
+
+/** Resolves iOS's pinch thresholds without changing state for a small gesture. */
+internal fun portraitAspectAfterPinch(
+    zoom: Float,
+    current: PortraitFeedAspect,
+): PortraitFeedAspect? {
+    val next =
+        when {
+            zoom > 1.15f -> PortraitFeedAspect.FILL
+            zoom < 0.87f -> PortraitFeedAspect.FIT_16_9
+            else -> null
+        }
+    return next?.takeIf { it != current }
+}
+
+/**
+ * Seats the picker against frames supplied by the shared Swift zone map.
+ * Only popup width/height limits are local; no feed, safe-area, scope, or
+ * capture-strip geometry is re-derived in Compose.
+ */
+internal fun monitorPickerFrame(
+    viewport: ZoneFrame,
+    zones: MonitorZones,
+    isPortrait: Boolean,
+    anchor: MonitorPickerAnchor,
+): ZoneFrame {
+    val outerMargin = if (isPortrait) 12f else 8f
+    val topLimit =
+        max(
+            viewport.y + outerMargin,
+            zones.infoBar.y + zones.infoBar.height + if (isPortrait) 8f else 4f,
+        )
+    val anchorFrame =
+        when (anchor) {
+            MonitorPickerAnchor.CAPTURE_STRIP -> zones.captureStrip
+            MonitorPickerAnchor.CONTROLS_GRID -> zones.controlsGrid
+        }
+    val bottomLimit =
+        when {
+            anchor == MonitorPickerAnchor.CAPTURE_STRIP && anchorFrame != null ->
+                anchorFrame.y - 10f
+            isPortrait -> zones.systemCluster.y - 10f
+            else -> zones.feed.y + zones.feed.height - 10f
+        }
+    val availableHeight = max(0f, bottomLimit - topLimit)
+    val height = min(if (isPortrait) 320f else 300f, availableHeight)
+    val width =
+        if (isPortrait) {
+            max(0f, viewport.width - outerMargin * 2f)
+        } else {
+            min(420f, max(0f, anchorFrame?.width ?: zones.feed.width))
+        }
+    val horizontalBounds = if (isPortrait) viewport else zones.feed
+    val rawX =
+        if (isPortrait) {
+            viewport.x + outerMargin
+        } else {
+            min(
+                (anchorFrame ?: zones.feed).let { it.x + it.width },
+                horizontalBounds.x + horizontalBounds.width - outerMargin,
+            ) - width
+        }
+    val minX = horizontalBounds.x + outerMargin
+    val maxX =
+        max(
+            minX,
+            horizontalBounds.x + horizontalBounds.width - width - outerMargin,
+        )
+    return ZoneFrame(
+        x = rawX.coerceIn(minX, maxX),
+        y = max(topLimit, bottomLimit - height),
+        width = width,
+        height = height,
+    )
+}
+
+/**
+ * Seats iOS's portrait-fill assist rail inside the shared feed frame and
+ * above the shared capture-strip frame.
+ */
+internal fun portraitFillAssistRailFrame(
+    feed: ZoneFrame,
+    captureStrip: ZoneFrame?,
+    expanded: Boolean,
+): ZoneFrame {
+    val edge = 10f
+    val width = if (expanded) 60f else 44f
+    val feedBottom = feed.y + feed.height
+    val railBottom = captureStrip?.y?.coerceIn(feed.y, feedBottom) ?: feedBottom
+    val top = feed.y + edge
+    val height = if (expanded) max(0f, railBottom - top - edge) else 44f
+    val y =
+        if (expanded) {
+            top
+        } else {
+            max(top, railBottom - height - edge)
+        }
+    return ZoneFrame(feed.x + edge, y, width, height)
+}
+
+/** The actionable ISO/shutter/iris/focus/WB strip shared by both orientations. */
+@Composable
+internal fun MonitorCaptureStrip(
+    settings: List<MonitorCaptureSettingPresentation>,
+    activePicker: MonitorPickerKind?,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenPicker: (MonitorPickerKind) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val applyingState = stringResource(R.string.camera_state_applying)
+    val otherChangeState = stringResource(R.string.camera_state_other_change)
+    val readOnlyState = stringResource(R.string.camera_state_read_only)
+    val lockedState = stringResource(R.string.camera_state_locked)
+    val changeHint = stringResource(R.string.camera_state_change_hint)
+    Row(
+        modifier =
+            modifier
+                .glass(ChromeShape)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        settings.forEach { setting ->
+            val active = activePicker == setting.kind
+            val enabled = setting.picker != null && controlsEnabled && pendingControl == null
+            val pending = setting.picker?.modes?.any { it.request.control == pendingControl } == true
+            val valueDescription =
+                stringResource(R.string.command_value_description, setting.label, setting.value)
+            val unavailableDescription =
+                stringResource(
+                    R.string.command_read_only_description,
+                    setting.unavailableReason ?: readOnlyState,
+                )
+            val summary =
+                buildString {
+                    append(valueDescription)
+                    when {
+                        pending -> append(applyingState)
+                        pendingControl != null -> append(otherChangeState)
+                        setting.picker == null -> append(unavailableDescription)
+                        !controlsEnabled -> append(lockedState)
+                        else -> append(changeHint)
+                    }
+                }
+            Box(
+                Modifier
+                    .background(if (active) LiveDesign.accentDim else Color.Transparent, ChromeShape)
+                    .border(
+                        1.dp,
+                        if (active) LiveDesign.accent else Color.Transparent,
+                        ChromeShape,
+                    )
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = summary
+                        if (!enabled) disabled()
+                    }
+                    .chromeClickable(enabled) { onOpenPicker(setting.kind) }
+                    .alpha(if (setting.picker == null) 0.62f else 1f),
+            ) {
+                CaptureSettingCell(setting.label, setting.value, setting.widestValue)
+            }
+        }
+    }
+}
+
+/** Anchored, non-modal camera-control picker that keeps DISP and monitor rails reachable. */
+@Composable
+internal fun MonitorControlPickerPanel(
+    picker: MonitorPickerPresentation,
+    frame: ZoneFrame,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    feedback: CommandControlFeedback?,
+    onSelect: (CommandControlRequest, String) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val pickerDescription =
+        stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
+    var selectedMode by remember(picker.kind) { mutableIntStateOf(0) }
+    val modeIndex = selectedMode.coerceIn(0, picker.modes.lastIndex)
+    val mode = picker.modes[modeIndex]
+    val pending = pendingControl != null
+    Column(
+        modifier =
+            modifier
+                .zone(frame)
+                .clipToBounds()
+                .glass(ChromeShape)
+                .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .semantics {
+                    contentDescription = pickerDescription
+                },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    picker.title,
+                    style = chromeStyle(18f, FontWeight.ExtraBold),
+                    color = LiveDesign.text,
+                    maxLines = 1,
+                )
+                Text(
+                    picker.subtitle.uppercase(),
+                    style = chromeStyle(10f, FontWeight.SemiBold, mono = true),
+                    color = LiveDesign.faint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+            TextButton(onClick = onDismiss, enabled = !pending) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+
+        if (picker.modes.size > 1) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                picker.modes.forEachIndexed { index, candidate ->
+                    val selected = index == modeIndex
+                    TextButton(
+                        onClick = { selectedMode = index },
+                        enabled = !pending,
+                        modifier =
+                            Modifier
+                                .background(
+                                    if (selected) LiveDesign.accentDim else Color.Transparent,
+                                    ChromeShape,
+                                )
+                                .border(
+                                    1.dp,
+                                    if (selected) LiveDesign.accent else LiveDesign.hairline,
+                                    ChromeShape,
+                                ),
+                    ) {
+                        Text(
+                            candidate.label,
+                            style = chromeStyle(11f, FontWeight.Bold, mono = true),
+                            color = if (selected) LiveDesign.accent else LiveDesign.muted,
+                        )
+                    }
+                }
+            }
+        }
+
+        feedback?.let {
+            Text(
+                it.message,
+                style = chromeStyle(11f, FontWeight.Medium),
+                color = if (it.isError) LiveDesign.rec else LiveDesign.good,
+                maxLines = 2,
+                overflow = TextOverflow.Clip,
+            )
+        }
+        if (!controlsEnabled) {
+            Text(
+                stringResource(R.string.camera_controls_unavailable),
+                style = chromeStyle(11f, FontWeight.Medium),
+                color = LiveDesign.muted,
+                maxLines = 2,
+            )
+        }
+
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            commandControlOptions(mode.request, pendingControl, controlsEnabled).forEach { option ->
+                val optionDescription =
+                    stringResource(R.string.camera_option_description, mode.label, option.label)
+                val selectedSuffix = stringResource(R.string.camera_option_selected_suffix)
+                TextButton(
+                    onClick = { onSelect(mode.request, option.label) },
+                    enabled = option.enabled,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (option.selected) LiveDesign.accentDim else Color.Transparent,
+                                ChromeShape,
+                            )
+                            .border(
+                                1.dp,
+                                if (option.selected) LiveDesign.accent else LiveDesign.hairline,
+                                ChromeShape,
+                            )
+                            .semantics {
+                                contentDescription =
+                                    optionDescription + if (option.selected) selectedSuffix else ""
+                            },
+                ) {
+                    Text(
+                        option.label,
+                        style = chromeStyle(15f, FontWeight.Medium, mono = true),
+                        color = if (option.selected) LiveDesign.accent else LiveDesign.text,
+                    )
+                }
+            }
+            if (pendingControl == mode.request.control) {
+                Text(
+                    stringResource(R.string.camera_applying_change),
+                    style = chromeStyle(11f, FontWeight.Medium),
+                    color = LiveDesign.muted,
+                )
+            }
+        }
+    }
+}

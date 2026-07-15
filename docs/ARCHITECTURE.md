@@ -2,8 +2,9 @@
 
 ## Overview
 
-OpenZCine is structured as a two-layer Swift codebase: a portable shared core and a
-SwiftUI iOS shell. The two layers communicate through a clean, UI-free API boundary.
+OpenZCine uses a portable Swift business/protocol core with native SwiftUI and Jetpack Compose
+shells. iOS consumes the core directly. Android packages the same core with the Swift SDK for
+Android and exposes a deliberately small Swift facade/JNI boundary to Kotlin.
 
 ## Layer Map
 
@@ -19,6 +20,12 @@ Instead, the guide's organizing principles map onto the existing tree as follows
 | Core | `Sources/OpenZCineCore` | Portable camera protocol, state machines, business logic |
 | Core tests | `Tests/OpenZCineCoreTests` | Swift Testing suite for the shared core |
 | Shell tests | `ios/RunnerTests` | Swift Testing suite for the iOS shell |
+| Android facade | `Sources/OpenZCineAndroidFacade` | Swift-owned Android sessions and JNI wires |
+| Facade tests | `Tests/OpenZCineAndroidFacadeTests` | Swift tests for Android transport/session wires |
+| Android app | `Apps/Android/app` | Compose phone shell, lifecycle, rendering, storage, and adapters |
+| Android API | `Apps/Android/core-api` | Typed Kotlin interface between the app and camera session |
+| Wear OS | `Apps/Android/wear`, `Apps/Android/wear-relay` | Wear UI and phone-mediated relay |
+| Android tests | `Apps/Android/*/src/test`, `Apps/Android/*/src/androidTest` | JVM policy tests and device UI tests |
 
 ## Portable Core Rule
 
@@ -67,7 +74,18 @@ All new code in the iOS shell follows these conventions:
   UI-level integration tests.
 - 80 % or higher line coverage target for `Sources/OpenZCineCore`.
 
-## Orientation
+## Android Shell Standards (`Apps/Android`)
+
+- Jetpack Compose owns UI and app-local presentation state; Kotlin never packs PTP commands or
+  invents camera property values.
+- `core-api` defines the typed Kotlin session boundary. `OpenZCineAndroidFacade` owns PTP session
+  serialization, raw protocol values, transport framing, and JNI memory/lifetime rules.
+- Android adapters own NSD, USB Host, permissions, CameraX/ML Kit, Keystore, MediaStore, lifecycle,
+  rendering, and platform share surfaces.
+- JVM tests cover pure state/policy. Instrumentation tests cover critical Compose and Android
+  platform integration, and UI changes require portrait/landscape edge inspection.
+
+## iOS orientation and unified monitor
 
 Portrait is unlocked app-wide (alongside the existing landscape orientation); it is not a
 separate mode or feature flag. Each screen in `ios/Runner` decides its own layout by reading its
@@ -102,6 +120,10 @@ Rotation is a **geometry change under stable view identity**, not a tree swap: `
 new zone frame when `context.isPortrait` flips. There is no `matchedGeometryEffect`, no rotation
 namespace, and no hero-tag plumbing — earlier "rung 2" approximated the morph with matched-geometry
 heroes across two parallel shells; unification replaced that with the real thing.
+
+Android follows the same product model in one Compose `MonitorScreen` tree. It calls the shared
+Swift monitor-zone map through the facade, retains state across configuration changes, and keeps
+feed, focus, framing, scope, and chrome geometry registered to the same fit/fill content rectangle.
 
 **Portrait monitor v2 (live mode)** is the zone shape `MonitorPortraitLayout.zones(...)` produces:
 a top bar overlaid on the feed, the feed itself (pinch-toggled between `.fit16x9` and a
@@ -143,10 +165,12 @@ further for serious/critical phone thermal state. Nikon `WarningStatus` (`0xD102
 shown as `OK`/`CHECK`; the body-specific thermal bit and the `MovieRecordInterrupted` error-value
 table remain **verify-on-hardware**, so they are surfaced without guessing their meaning.
 
-### ADR-001 — PTP-IP over Network.framework
+### ADR-001 — Platform PTP-IP socket adapters
 
-The PTP-IP client uses Apple's Network.framework TCP sockets directly. No third-party networking
-library is introduced. This keeps the dependency footprint small and the core portable.
+The iOS PTP-IP adapter uses Apple's Network.framework TCP sockets directly. The Android Swift
+facade uses its platform socket API and retains the same transaction/session policy. No
+third-party networking library is introduced, and portable protocol/business rules stay outside
+either platform socket implementation.
 
 ### ADR-002 — Stable appGUID for Camera Pairing
 
@@ -158,9 +182,8 @@ recognises returning clients without operator intervention.
 ### ADR-003 — Shared Core, Platform Shells
 
 Business logic and protocol state live in `Sources/OpenZCineCore`. Platform shells (`ios/Runner`,
-future `Apps/Android/`) own only rendering, UI state, and platform lifecycle. This boundary
-enables the Android shell to reuse the core via the Swift SDK for Android without duplicating
-protocol logic.
+`Apps/Android`) own rendering, UI state, and platform lifecycle. Android reuses the core through
+the Swift SDK for Android and `Sources/OpenZCineAndroidFacade` without duplicating protocol logic.
 
 ### ADR-004 — Flutter Prototype Archived
 
@@ -185,6 +208,10 @@ shared abstraction cannot sit any lower.
   `requestSendPTPCommand`, and `ptpEventHandler` bridged into the event drain.
 - `NativeCameraSession` keeps orchestration only (open/pair/identify, live view, keep-alive) and
   is transport-agnostic.
+- `Apps/Android/app/.../transport` owns Android NSD and USB Host discovery plus raw socket/USB byte
+  adapters. It does not build PTP operations locally.
+- `Sources/OpenZCineAndroidFacade` owns Android PTP-IP and USB transaction/session serialization,
+  response validation, event draining, and the narrow JNI records consumed by `core-api`.
 
 USB cameras are identified by stable `usb:<device-id>` host keys in discovery results and saved
 camera records (`transport: "USB-C"`), so startup policies can skip network probing for tethered

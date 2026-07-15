@@ -17,6 +17,8 @@ public enum PTPUSBContainerError: LocalizedError, Equatable, Sendable {
     case shortHeader(actualLength: Int)
     /// The declared container length was invalid or exceeded the buffer.
     case invalidLength(declaredLength: Int, actualLength: Int)
+    /// A streaming endpoint declared a container above its allocation bound.
+    case exceedsMaximumLength(declaredLength: Int, maximumLength: Int)
     /// The container type code was not a known PIMA 15740 type.
     case unknownType(rawType: UInt16)
 
@@ -26,6 +28,8 @@ public enum PTPUSBContainerError: LocalizedError, Equatable, Sendable {
             "PTP USB container header was incomplete (\(actualLength) bytes)."
         case .invalidLength(let declaredLength, let actualLength):
             "PTP USB container declared \(declaredLength) bytes but \(actualLength) were available."
+        case .exceedsMaximumLength(let declaredLength, let maximumLength):
+            "PTP USB container declared \(declaredLength) bytes, above the \(maximumLength)-byte limit."
         case .unknownType(let rawType):
             "PTP USB container type \(rawType) is not a known PIMA 15740 container type."
         }
@@ -86,6 +90,54 @@ public struct PTPUSBContainer: Equatable, Sendable {
             + ByteCoding.uint32LE(transactionID)
             + Array(payload)
     }
+}
+
+/// Incremental PTP USB container framing for a byte-stream bulk endpoint.
+///
+/// USB bulk transfers are not message boundaries: one PIMA container may be
+/// fragmented across reads, and one read may carry several containers. This
+/// buffer retains incomplete bytes and vends exactly one validated container
+/// at a time so platform adapters never need to interpret PTP fields.
+public struct PTPUSBReadBuffer: Sendable {
+    /// Creates an empty buffer with a hard per-container allocation bound.
+    public init(maximumContainerLength: Int = 128 * 1024 * 1024) {
+        self.maximumContainerLength = maximumContainerLength
+    }
+
+    /// Appends raw bytes received from the USB bulk or interrupt endpoint.
+    public mutating func append(_ bytes: [UInt8]) {
+        bufferedBytes.append(contentsOf: bytes)
+    }
+
+    /// Returns the next complete container, or nil until more bytes arrive.
+    public mutating func nextContainer() throws -> PTPUSBContainer? {
+        guard bufferedBytes.count >= Self.lengthFieldByteCount else { return nil }
+        let declaredLength = Int(ByteCoding.readUInt32LE(bufferedBytes, at: 0))
+        guard declaredLength >= Self.minimumContainerLength else {
+            throw PTPUSBContainerError.invalidLength(
+                declaredLength: declaredLength,
+                actualLength: bufferedBytes.count
+            )
+        }
+        guard declaredLength <= maximumContainerLength else {
+            throw PTPUSBContainerError.exceedsMaximumLength(
+                declaredLength: declaredLength,
+                maximumLength: maximumContainerLength
+            )
+        }
+        guard bufferedBytes.count >= declaredLength else { return nil }
+        let bytes = Array(bufferedBytes.prefix(declaredLength))
+        bufferedBytes.removeFirst(declaredLength)
+        return try PTPUSBContainer(serializedBytes: bytes)
+    }
+
+    /// Number of incomplete bytes retained for the next USB read.
+    public var bufferedByteCount: Int { bufferedBytes.count }
+
+    private static let lengthFieldByteCount = 4
+    private static let minimumContainerLength = 12
+    private let maximumContainerLength: Int
+    private var bufferedBytes: [UInt8] = []
 }
 
 /// Builds and decodes the USB-container halves of one PTP transaction, for transports (such as

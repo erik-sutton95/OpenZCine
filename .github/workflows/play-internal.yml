@@ -1,7 +1,8 @@
 name: Play Internal
 
-# Uploads a signed .aab to the Google Play internal testing track. Deliberate
-# releases only: manual dispatch or an `android-v*` tag — never plain merges.
+# Uploads the signed phone and Wear OS bundles to their Google Play internal
+# testing tracks. Deliberate releases only: manual dispatch or an `android-v*`
+# tag, never plain merges.
 # Prerequisites (Play console app, `play` environment secrets, and the first
 # MANUAL .aab upload Google requires) are in docs/android-distribution.md.
 on:
@@ -42,8 +43,23 @@ jobs:
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
+      # Keep the Play artifact on the exact Swift Android SDK/toolchain that
+      # CI uses. Gradle stages the arm64-v8a core into build output itself.
+      - name: Set up Swift Android toolchain
+        id: swift-android
+        uses: skiptools/swift-android-action@2044b79660f201ccef8cbce62877e4ec5409f9c8 # v2.9.5
+        with:
+          swift-version: '6.3.3'
+          ndk-version: '27'
+          compile-sdk-api-level: '29'
+          build-package: false
+          build-tests: false
+          run-tests: false
+
       - name: Run Android checks
         working-directory: Apps/Android
+        env:
+          SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
         run: ./gradlew test lint
 
       - name: Compute version code
@@ -61,7 +77,7 @@ jobs:
           fi
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
 
-      - name: Build signed release bundle
+      - name: Build and verify signed release packages
         working-directory: Apps/Android
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
@@ -69,7 +85,8 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
-        run: ./gradlew bundleRelease "-PversionCode=$VERSION_CODE"
+          SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
+        run: ./gradlew :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact "-PversionCode=$VERSION_CODE"
 
       # r0adkll/upload-google-play over alternatives: Google publishes no official
       # GitHub Action for Play uploads (its official paths are Gradle Play Publisher
@@ -85,11 +102,21 @@ jobs:
           track: internal
           status: completed
 
+      - name: Upload to Wear OS internal track
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.opencapture.openzcine
+          releaseFiles: Apps/Android/wear/build/outputs/bundle/release/wear-release.aab
+          track: wear:qa
+          status: completed
+
       - name: Summary
         run: |
           {
             echo "### Play internal upload"
             echo ""
-            echo "- **Version code:** ${{ steps.version.outputs.version_code }}"
+            echo "- **Phone version code:** ${{ steps.version.outputs.version_code }}"
+            echo "- **Wear version code:** $((1000000000 + ${{ steps.version.outputs.version_code }}))"
             echo "- **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

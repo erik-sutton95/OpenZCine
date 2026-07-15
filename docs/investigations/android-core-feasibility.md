@@ -73,9 +73,13 @@ work list):
   UI half), preferences storage (DataStore), credential storage (Android Keystore /
   EncryptedSharedPreferences), OAuth browser flow (Custom Tabs), lifecycle/foreground-service
   handling.
-- USB host transport, if/when USB-C tethering ships on Android: `android.hardware.usb` bulk
-  transfers replacing ImageCaptureCore (the core's `PTPUSBContainer` framing is reusable either
-  way).
+- USB host transport is now implemented in `Apps/Android/app/.../transport/`: Kotlin owns
+  `UsbManager` attach/detach, Android's per-device consent, Still Image/PTP endpoint claim, and
+  raw bulk/interrupt bytes; `Sources/OpenZCineAndroidFacade/AndroidUSBPTPTransport.swift` owns
+  generic PTP container framing and session policy. A USB serial is read only after Android grants
+  access and becomes a local SHA-256 reconnect digest; the raw serial is never saved, shown,
+  logged, or sent over the network. **[VERIFY-ON-HW]** Nikon cable/session behavior remains a
+  physical-device validation item, not a claimed compatibility result.
 
 **What Kotlin would call in the core** (the reuse surface): session open/close +
 `CameraTransport` execution, `PTPIPHandshake` framing, `PTPCameraProperties`
@@ -137,7 +141,8 @@ Date — the swift-foundation rewrite) plus optional Internationalization/Networ
 - Everything the core uses (`Data`, `Codable`, `URLComponents`, `Date`) is `FoundationEssentials`.
   The known Android Foundation gaps — `URLSession` CA-certificate discovery, `FileManager` quirks,
   bionic libc differences — are **all in APIs this core does not use**. Frame.io HTTP calls stay
-  in the shell (OkHttp on Android), exactly as they use `URLSession` in the iOS shell today.
+  in the shell (the Android adapter uses `HttpURLConnection`; iOS uses `URLSession`), while the
+  portable core owns PKCE, OAuth form construction, endpoint paths, and Codable models.
 - `CryptoKit` becomes `swift-crypto`: one conditional import.
 - ICU is the headline size risk (`lib_FoundationICU.so` historically ~40 MB,
   [forums thread](https://forums.swift.org/t/android-app-size-and-lib-foundationicu-so/78399)) —
@@ -244,6 +249,35 @@ itself stays untouched. Sockets go Swift-side (shape 2 above) to keep the whole 
 machinery in one place — the iOS transport is already raw POSIX sockets, so the Android twin is a
 near-copy, not new design.
 
+### Implemented Android USB-host boundary
+
+USB has a deliberately different platform ownership split because Android exposes host endpoints
+through `UsbManager`, while the shared core's portable seam starts at a complete PTP transaction:
+
+```text
+Kotlin / Android APIs                         Swift Android facade + shared core
+----------------------------------------      -----------------------------------------
+UsbManager attach/detach + consent            PTP USB generic-container framing
+Still Image/PTP interface + endpoints   -->   transaction IDs + data-phase validation
+claim/release + raw bulk/interrupt I/O         OpenSession/pair/identify + event decoding
+local USB host-key digest only                 camera operations and CloseSession policy
+```
+
+`AndroidUsbPtpCameraSource` discovers only a complete USB Still Image interface with bulk IN,
+bulk OUT, and interrupt IN endpoints. It owns `UsbRequest` lifecycle and closes an active claim on
+detach; the JNI raw-handle close path is intentionally able to interrupt an in-flight endpoint read
+without waiting for that read's normal command timeout. Swift's `AndroidUSBPTPTransport` rejects
+ambiguous data phases, retains fragmented/concatenated containers safely, and treats an idle
+interrupt timeout as non-terminal so the next event can still arrive. Saved USB profiles store a
+privacy-safe local `usb:<digest>` key and display only connection state, never that key or a raw
+serial.
+
+**[VERIFY-ON-HW]** This boundary has automated Kotlin/Swift coverage and a debug-only visual
+fixture, but no supported Nikon body was attached for this implementation pass. Verify on a Nikon
+ZR (or supported body) with a data-capable cable: Android permission denial/retry, interface
+claim, event delivery through idle timeouts, detach during an active command/session, and the
+CloseSession → OpenSession retry after app-control refusal.
+
 ### Phased plan mapped to the board
 
 **Decision-independent (can start now, in Kotlin, regardless of A/B):**
@@ -303,7 +337,7 @@ whole package — all 55 core files plus the 58 test files — after a three-fil
    file) lives in FoundationNetworking on non-Darwin. Importing FoundationNetworking works but
    drags libcurl/ICU into the payload and its static variant is missing from the 6.3.3 bundle
    (`-l_CFURLSessionInterface` link failure under `--static-swift-stdlib`). Since the Android
-   shell owns HTTP (OkHttp) and would never consume `URLRequest`, the three builders are now
+   shell owns HTTP through its platform adapter and would never consume `URLRequest`, the three builders are now
    `#if !os(Android)` instead; the pure PKCE/URL/parse logic compiles everywhere.
 3. `Tests/OpenZCineCoreTests/FrameioOAuthTests.swift` — the two tests covering those builders get
    the same gate.
@@ -387,9 +421,34 @@ above — the facade is the Android platform adapter, so a blocking POSIX twin o
 - `sessionReadProperty(code)` — `GetDevicePropValueEx` decoded by the core
   (battery → percent, others raw hex until their display decoders are wired);
 - `sessionDisconnect()` — best-effort `CloseSession` before dropping sockets (the iOS
-  reconnect-wedge fix semantics).
+  reconnect-wedge fix semantics);
+- `sessionStartLiveView(listener)` / `sessionStopLiveView()` — a Swift-side frame pump on the
+  session's command socket (`StartLiveView` + `DeviceReady` readiness poll, then
+  `GetLiveViewImageEx` on an absolute-schedule ~30 fps poll ceiling), pushing JPEG bytes,
+  monotonic timestamps, camera recording state, and optional stereo dBFS/peak-hold values to the
+  Kotlin listener from one background thread. The Swift core alone maps Nikon's live-view
+  sound-indicator bytes to dBFS; Kotlin receives only the resolved typed presentation payload.
+  Backpressure is latest-wins by construction (frames are pulled, never queued); stop and
+  disconnect both join the pump so `EndLiveView` always precedes `CloseSession` — the iOS
+  heat-audit lesson (a hidden feed must end live view on the body) carried over.
 
 The layer compiles on Darwin too, so `Tests/OpenZCineAndroidFacadeTests` exercises the same wire
 behavior against a scripted fake ZR (`FakeZRServer`) in `swift test` — sequencing, the pairing
 fallback, property decode, and graceful teardown; real-ZR validation of connect + property read
 is the remaining hardware step.
+
+### Release packaging (2026-07-14)
+
+Android builds now cross-compile and stage the Swift core through a Gradle-owned task rather than
+reading an ignored `src/main/jniLibs` directory. The release contract is explicit: ship only
+**arm64-v8a**, built as `aarch64-unknown-linux-android29` for the app's Android 10 minimum. The
+task uses the exact Swift 6.3.3 toolchain and `swift-6.3.3-RELEASE_android` SDK, copies the full
+dynamic `NEEDED` closure, and records it for archive verification. `verifyReleaseNativeLibraries`
+then checks the release APK and AAB entry lists without extracting either archive: every staged
+library, including `libOpenZCineAndroid.so`, must be present under that ABI and no second ABI may
+slip into a Play upload. The Android CI and Play-internal workflow install the same pinned SDK
+before Gradle runs. A debug-device startup calls the existing `SwiftCoreSmoke` JNI round trip; it
+remains a hardware smoke check because hosted x86 GitHub runners cannot load the arm64-only app.
+`just android-bridge-smoke <adb-serial>` makes that check reproducible: it builds the generated
+debug APK, installs it with data preserved, launches the app, and requires the arm64 core-version
+line from logcat.

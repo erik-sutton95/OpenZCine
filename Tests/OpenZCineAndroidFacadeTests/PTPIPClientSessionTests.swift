@@ -11,6 +11,14 @@ import Testing
 
 @testable import OpenZCineAndroidFacade
 
+@Test func androidInitiatorIdentityIsStableAndDistinctFromIOS() {
+    #expect(Array(AndroidPTPIPInitiator.appGUID) == Array("OpenZCineAndroid".utf8))
+    #expect(AndroidPTPIPInitiator.appGUID.count == 16)
+    #expect(AndroidPTPIPInitiator.appGUID != PTPIPInitiator.appGUID)
+    #expect(AndroidPTPIPInitiator.friendlyName == "OpenZCine Android")
+    #expect(AndroidPTPIPInitiator.friendlyName != PTPIPInitiator.friendlyName)
+}
+
 struct PTPIPClientSessionTests {
     private func connect(
         to server: FakeZRServer,
@@ -21,6 +29,22 @@ struct PTPIPClientSessionTests {
             port: server.port,
             timeoutMilliseconds: 2_000,
             onPhase: onPhase)
+    }
+
+    private func startLiveViewAndWaitForFocus(
+        _ session: PTPIPClientSession,
+        timeout: TimeInterval = 2
+    ) throws {
+        let arrival = FocusFrameArrival()
+        try session.startLiveView(
+            onFrame: { frame, _ in
+                arrival.record(frame)
+            },
+            onEnded: {})
+        if !arrival.wait(timeout: timeout) {
+            session.stopLiveView()
+            throw PTPIPClientSessionError.focusStateUnavailable
+        }
     }
 
     @Test func connectsWithSavedProfileAndIdentifies() throws {
@@ -98,6 +122,1008 @@ struct PTPIPClientSessionTests {
         #expect(transactionIDs == Array(0..<UInt32(transactionIDs.count)))
     }
 
+    @Test func startsAndStopsMovieRecordingOverTheLiveViewSession() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.startRecording()
+        #expect(server.isRecording())
+
+        try session.stopRecording()
+        #expect(!server.isRecording())
+
+        let operations = server.receivedOperations()
+        #expect(operations.contains(.startMovieRecInCard))
+        #expect(operations.contains(.endMovieRec))
+    }
+
+    @Test func configuresOnlyPreviewPropertiesBeforeLiveViewStarts() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(
+            session.configureLiveView(
+                imageSize: 1,
+                compression: 3,
+                frameIntervalNanoseconds: 49_500_000))
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.liveViewImageSize.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.liveViewImageCompression.rawValue,
+                        data: Data([3])),
+                ])
+        let operations = server.receivedOperations()
+        #expect(!operations.contains(.startMovieRecInCard))
+        #expect(!operations.contains(.endMovieRec))
+    }
+
+    @Test func rejectsRecordingWhileMediaOwnsTheCommandChannel() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        session.enterMediaMode()
+        #expect(throws: PTPIPClientSessionError.mediaModeActive) {
+            try session.startRecording()
+        }
+        #expect(!server.receivedOperations().contains(.startMovieRecInCard))
+    }
+
+    @Test func writesStandardAndExtendedControlsWithTheCorrectPTPOperations() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        // ISO is a 32-bit 0x0001_Dxxx extended property; focus area is a
+        // 16-bit 0xDxxx property. The operation must follow property width,
+        // not the payload's byte count.
+        try session.applyControl(.iso, label: "1600")
+        try session.applyControl(.focusArea, label: "Subject")
+
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieISOSensitivity.rawValue,
+                        data: Data([0x40, 0x06, 0x00, 0x00])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                        data: Data([0x33, 0x80])),
+                ])
+        // Every data-out write remains a normal serialized PTP transaction.
+        let transactionIDs = server.receivedTransactionIDs()
+        #expect(transactionIDs == Array(0..<UInt32(transactionIDs.count)))
+    }
+
+    @Test func descriptorBackedAndroidControlsWriteOnlyExactAdvertisedValues() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.result == .accepted)
+        #expect(bootstrap.controls.resolutionFrameRate == "6K · 25p")
+        #expect(bootstrap.controls.codec == "R3D NE")
+        #expect(bootstrap.controls.whiteBalanceTint == "Neutral")
+        #expect(bootstrap.controls.isoValues == ISOPickerPolicy.highBaseOptions)
+        #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
+        #expect(
+            bootstrap.controls.irisValues == [
+                "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0", "f/16.0", "f/22.0",
+            ])
+        #expect(bootstrap.controls.whiteBalanceValues.contains("5600K"))
+        #expect(bootstrap.controls.focusAreas.contains("Subject"))
+        #expect(bootstrap.controls.audioSensitivities.last == "20")
+        #expect(bootstrap.controls.audioInputs == ["Microphone", "Line"])
+        #expect(bootstrap.controls.baseISO == ["Low", "High"])
+        #expect(bootstrap.controls.shutterModes == ["Speed", "Angle"])
+        #expect(bootstrap.controls.shutterLocks == ["Unlocked", "Locked"])
+        #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
+        #expect(bootstrap.controls.codecs == ["R3D NE", "H.265"])
+        #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
+        #expect(bootstrap.controls.electronicVR.isEmpty)
+        #expect(bootstrap.controls.whiteBalanceTints.contains("A1 · G0.5"))
+
+        let writeBaseline = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.shutter, label: "360°")
+        try session.applyAndroidControl(.baseISO, label: "Low")
+        try session.applyAndroidControl(.shutterMode, label: "Speed")
+        try session.applyAndroidControl(.shutter, label: "1/100")
+        try session.applyAndroidControl(.shutterLock, label: "Locked")
+        try session.applyAndroidControl(.whiteBalanceTint, label: "A1 · G0.5")
+        try session.applyAndroidControl(.resolutionFrameRate, label: "4K · 60p")
+        try session.applyAndroidControl(.codec, label: "H.265")
+        try session.applyAndroidControl(.vibrationReduction, label: "ON")
+        try session.applyAndroidControl(.electronicVR, label: "OFF")
+
+        #expect(
+            Array(server.receivedPropertyWrites().dropFirst(writeBaseline))
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieShutterAngle.rawValue,
+                        data: Data(ByteCoding.uint32LE(36_000))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieBaseISO.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieShutterMode.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieShutterSpeed.rawValue,
+                        data: Data(ByteCoding.uint32LE(0x0001_0064))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieTVLockSetting.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWbTuneColorTemp.rawValue,
+                        data: Data(ByteCoding.uint16LE(416))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieRecordScreenSize.rawValue,
+                        data: Data(ByteCoding.uint64LE(0x0F00_0870_003C_0000))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFileType.rawValue,
+                        data: Data(ByteCoding.uint32LE(0x0001_0A01))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieVibrationReduction.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.electronicVR.rawValue,
+                        data: Data([0])),
+                ])
+
+        let refreshed = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieFileType.rawValue))
+        #expect(refreshed.controls.resolutionFrameRate == "4K · 60p")
+        #expect(refreshed.controls.codec == "H.265")
+        #expect(refreshed.controls.whiteBalanceTint == "A1 · G0.5")
+        #expect(refreshed.properties.shutterMode == .speed)
+        #expect(refreshed.properties.shutterSpeed == "1/100")
+        #expect(refreshed.properties.baseISO == "Low")
+        #expect(refreshed.properties.shutterLocked == true)
+        #expect(refreshed.properties.vibrationReduction == "ON")
+        #expect(refreshed.properties.electronicVR == "OFF")
+
+        let rejectedBaseline = server.receivedPropertyWrites().count
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "resolutionFrameRate", "6K · 60p")
+        ) {
+            try session.applyAndroidControl(.resolutionFrameRate, label: "6K · 60p")
+        }
+        #expect(server.receivedPropertyWrites().count == rejectedBaseline)
+    }
+
+    @Test func dynamicAndroidControlsPreserveAdvertisedRawValuesEndToEnd() throws {
+        var options = FakeZRServer.Options()
+        options.descriptorEnumOverrides = [
+            .movieFNumber: [400, 560],
+            .movieWBColorTemp: [5_000, 5_600],
+            .movieWhiteBalance: [0x8012, 0x0004],
+            .movieFocusMode: [3],
+            .movieFocusMeteringMode: [0x8010],
+            .movieAFSubjectDetection: [6],
+            .movieAudioInputSensitivity: [7],
+            .audioInputSelection: [2],
+            .movWindNoiseReduction: [0],
+            .movieAttenuator: [1],
+            .movie32BitFloatAudioRecording: [1],
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(controls.irisValues == ["f/4.0", "f/5.6"])
+        #expect(controls.whiteBalanceValues == ["5000K", "5600K", "Sunny"])
+        #expect(controls.focusModes == ["AF-S", "AF-C", "AF-F", "MF"])
+        #expect(controls.focusAreas == ["Single"])
+        #expect(controls.focusSubjects == ["Airplane"])
+        #expect(controls.audioSensitivities == ["7"])
+        #expect(controls.audioInputs == ["Line"])
+        #expect(controls.windFilters == ["OFF"])
+        #expect(controls.attenuators == ["ON"])
+        #expect(controls.audio32BitFloat == ["ON"])
+
+        try session.applyAndroidControl(.iris, label: "f/5.6")
+        try session.applyAndroidControl(.whiteBalance, label: "5000K")
+        try session.applyAndroidControl(.focusMode, label: "AF-S")
+        try session.applyAndroidControl(.focusArea, label: "Single")
+        try session.applyAndroidControl(.focusSubject, label: "Airplane")
+        try session.applyAndroidControl(.audioSensitivity, label: "7")
+        try session.applyAndroidControl(.audioInput, label: "Line")
+        try session.applyAndroidControl(.windFilter, label: "OFF")
+        try session.applyAndroidControl(.attenuator, label: "ON")
+        try session.applyAndroidControl(.audio32BitFloat, label: "ON")
+
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFNumber.rawValue,
+                        data: Data(ByteCoding.uint16LE(560))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWhiteBalance.rawValue,
+                        data: Data(ByteCoding.uint16LE(0x8012))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWBColorTemp.rawValue,
+                        data: Data(ByteCoding.uint16LE(5_000))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFocusMode.rawValue,
+                        data: Data([0])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                        data: Data(ByteCoding.uint16LE(0x8010))),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieAFSubjectDetection.rawValue,
+                        data: Data([6])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movieAudioInputSensitivity.rawValue,
+                        data: Data([7])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.audioInputSelection.rawValue,
+                        data: Data([2])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movWindNoiseReduction.rawValue,
+                        data: Data([0])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieAttenuator.rawValue,
+                        data: Data([1])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValueEx,
+                        property: PTPPropertyCode.movie32BitFloatAudioRecording.rawValue,
+                        data: Data([1])),
+                ])
+
+        let rejectedBaseline = server.receivedPropertyWrites().count
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iris", "f/2.8")) {
+            try session.applyAndroidControl(.iris, label: "f/2.8")
+        }
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "audioInput", "Microphone")
+        ) {
+            try session.applyAndroidControl(.audioInput, label: "Microphone")
+        }
+        #expect(server.receivedPropertyWrites().count == rejectedBaseline)
+    }
+
+    @Test func nikonZRFallbacksAreModelScopedAndFailClosedElsewhere() throws {
+        let omittedDescriptors: [PTPPropertyCode: [UInt32]] = [
+            .movieFNumber: [],
+            .movieWBColorTemp: [],
+            .movieWhiteBalance: [],
+            .movieFocusMode: [],
+            .movieFocusMeteringMode: [],
+            .movieAFSubjectDetection: [],
+            .movieAudioInputSensitivity: [],
+            .audioInputSelection: [],
+            .movWindNoiseReduction: [],
+            .movieAttenuator: [],
+            .movie32BitFloatAudioRecording: [],
+            .movieBaseISO: [],
+            .movieVibrationReduction: [],
+            .electronicVR: [],
+        ]
+
+        func controls(model: String) throws -> AndroidCameraControlCapabilities {
+            var options = FakeZRServer.Options()
+            options.model = model
+            options.descriptorEnumOverrides = omittedDescriptors
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+            for property in [
+                PTPPropertyCode.focalLength, .lensFocalMin, .lensFocalMax,
+            ] {
+                _ = session.refreshAndroidPropertySnapshot(.propertyChanged(property.rawValue))
+            }
+            return session.refreshAndroidPropertySnapshot(
+                .propertyChanged(PTPPropertyCode.lensApertureMin.rawValue)
+            ).controls
+        }
+
+        let zr = try controls(model: "ZR")
+        #expect(zr.isoValues == ISOPickerPolicy.highBaseOptions)
+        #expect(!zr.irisValues.isEmpty)
+        #expect(!zr.whiteBalanceValues.isEmpty)
+        #expect(zr.focusModes == ["AF-S", "AF-C", "AF-F", "MF"])
+        #expect(!zr.focusAreas.isEmpty)
+        #expect(!zr.focusSubjects.isEmpty)
+        #expect(!zr.audioSensitivities.isEmpty)
+        #expect(zr.audioInputs == ["Microphone", "Line"])
+        #expect(zr.vibrationReduction == ["OFF", "ON", "SPORT"])
+        #expect(zr.electronicVR.isEmpty)
+
+        let z8 = try controls(model: "Z8")
+        #expect(z8.isoValues.isEmpty)
+        #expect(z8.irisValues.isEmpty)
+        #expect(z8.whiteBalanceValues.isEmpty)
+        #expect(z8.focusModes.isEmpty)
+        #expect(z8.focusAreas.isEmpty)
+        #expect(z8.focusSubjects.isEmpty)
+        #expect(z8.audioSensitivities.isEmpty)
+        #expect(z8.audioInputs.isEmpty)
+        #expect(z8.windFilters.isEmpty)
+        #expect(z8.attenuators.isEmpty)
+        #expect(z8.audio32BitFloat.isEmpty)
+        #expect(z8.baseISO.isEmpty)
+        #expect(z8.vibrationReduction.isEmpty)
+        #expect(z8.electronicVR.isEmpty)
+    }
+
+    @Test func isoOptionsTrackTheActiveR3DBaseCircuit() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let high = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(high.isoValues == ISOPickerPolicy.highBaseOptions)
+        let highBaseline = server.receivedPropertyWrites().count
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iso", "800")) {
+            try session.applyAndroidControl(.iso, label: "800")
+        }
+        #expect(server.receivedPropertyWrites().count == highBaseline)
+        try session.applyAndroidControl(.iso, label: "1600")
+        try session.applyAndroidControl(.baseISO, label: "Low")
+
+        let low = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieBaseISO.rawValue)
+        ).controls
+        #expect(low.isoValues == ISOPickerPolicy.lowBaseOptions)
+        let lowBaseline = server.receivedPropertyWrites().count
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iso", "25600")) {
+            try session.applyAndroidControl(.iso, label: "25600")
+        }
+        #expect(server.receivedPropertyWrites().count == lowBaseline)
+        try session.applyAndroidControl(.iso, label: "800")
+    }
+
+    @Test func electronicVRIsRejectedBeforeWritingForRawOrUnknownCodec() throws {
+        let rawServer = try FakeZRServer()
+        defer { rawServer.stop() }
+        let rawSession = try connect(to: rawServer)
+        defer { rawSession.disconnect() }
+        _ = rawSession.refreshAndroidPropertySnapshot(.bootstrap)
+
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("electronicVR", "ON")
+        ) {
+            try rawSession.applyAndroidControl(.electronicVR, label: "ON")
+        }
+        #expect(rawServer.receivedPropertyWrites().isEmpty)
+
+        let unknownServer = try FakeZRServer()
+        defer { unknownServer.stop() }
+        let unknownSession = try connect(to: unknownServer)
+        defer { unknownSession.disconnect() }
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("electronicVR", "ON")
+        ) {
+            try unknownSession.applyAndroidControl(.electronicVR, label: "ON")
+        }
+        #expect(unknownServer.receivedPropertyWrites().isEmpty)
+
+        var encodedUnknownOptions = FakeZRServer.Options()
+        encodedUnknownOptions.movieFileTypeRaw = 0x007F_0A01
+        encodedUnknownOptions.descriptorEnumOverrides[.movieFileType] = [
+            0x007F_0A01, 0x0001_0A01,
+        ]
+        let encodedUnknownServer = try FakeZRServer(options: encodedUnknownOptions)
+        defer { encodedUnknownServer.stop() }
+        let encodedUnknownSession = try connect(to: encodedUnknownServer)
+        defer { encodedUnknownSession.disconnect() }
+        let encodedUnknown = encodedUnknownSession.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(encodedUnknown.controls.electronicVR.isEmpty)
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("electronicVR", "ON")
+        ) {
+            try encodedUnknownSession.applyAndroidControl(.electronicVR, label: "ON")
+        }
+        #expect(encodedUnknownServer.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func baseISOIsUnavailableOutsideTheSharedDualBaseCodecPolicy() throws {
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = 0x0001_0A01  // H.265
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.isoValues == ISOPickerPolicy.unifiedOptions)
+        #expect(bootstrap.controls.baseISO.isEmpty)
+        #expect(bootstrap.controls.electronicVR == ["OFF", "ON"])
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("baseISO", "Low")) {
+            try session.applyAndroidControl(.baseISO, label: "Low")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func readOnlyDescriptorNeverAuthorizesItsFallbackWrite() throws {
+        var options = FakeZRServer.Options()
+        options.readOnlyDescriptorCodes = [PTPPropertyCode.movieFNumber.rawValue]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.result == .unsupported)
+        for property in [
+            PTPPropertyCode.focalLength, .lensFocalMin, .lensFocalMax, .lensApertureMin,
+        ] {
+            _ = session.refreshAndroidPropertySnapshot(.propertyChanged(property.rawValue))
+        }
+        let readback = session.refreshAndroidPropertySnapshot(.propertyChanged(0xDEAD))
+        #expect(readback.properties.lens == "24-70mm f/2.8")
+        #expect(readback.controls.irisValues.isEmpty)
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iris", "f/2.8")) {
+            try session.applyAndroidControl(.iris, label: "f/2.8")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func descriptorIdentityAndDataTypeMismatchesFailClosed() throws {
+        func bootstrap(_ options: FakeZRServer.Options) throws -> AndroidCameraPropertyReadback {
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            return session.refreshAndroidPropertySnapshot(.bootstrap)
+        }
+
+        var identityOptions = FakeZRServer.Options()
+        identityOptions.descriptorIdentityOverrides[
+            PTPPropertyCode.movieRecordScreenSize.rawValue
+        ] = PTPPropertyCode.movieFileType.rawValue
+        let invalidIdentity = try bootstrap(identityOptions)
+        #expect(invalidIdentity.result == .transportFailed)
+        #expect(invalidIdentity.controls == .empty)
+
+        var typeOptions = FakeZRServer.Options()
+        typeOptions.descriptorDataTypeOverrides[PTPPropertyCode.movieFileType.rawValue] = 0x0004
+        let invalidType = try bootstrap(typeOptions)
+        #expect(invalidType.result == .transportFailed)
+        #expect(invalidType.controls == .empty)
+    }
+
+    @Test func partialDescriptorTransportFailureClearsTheWholeCapabilityGeneration() throws {
+        var options = FakeZRServer.Options()
+        options.malformedDescriptorCodesAfterFirstRead = [
+            PTPPropertyCode.movieAudioInputSensitivity.rawValue
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let first = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(first.result == .accepted)
+        #expect(!first.controls.codecs.isEmpty)
+        #expect(!first.controls.audioSensitivities.isEmpty)
+
+        let failed = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(failed.result == .transportFailed)
+        #expect(failed.controls == .empty)
+        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("codec", "H.265")) {
+            try session.applyAndroidControl(.codec, label: "H.265")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func kelvinOptionsRequireAnAdvertisedColorTemperatureMode() throws {
+        var options = FakeZRServer.Options()
+        options.descriptorEnumOverrides[.movieWBColorTemp] = [5_000]
+        options.descriptorEnumOverrides[.movieWhiteBalance] = [0x0004]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(controls.whiteBalanceValues == ["Sunny"])
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "whiteBalance", "5000K")
+        ) {
+            try session.applyAndroidControl(.whiteBalance, label: "5000K")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func acceptedControlWriteRequiresMatchingAuthoritativeReadback() throws {
+        var options = FakeZRServer.Options()
+        options.ignoredPropertyWrites = [PTPPropertyCode.movieISOSensitivity.rawValue]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        #expect(
+            throws: PTPIPClientSessionError.controlReadbackMismatch("iso", "1600")
+        ) {
+            try session.applyAndroidControl(.iso, label: "1600")
+        }
+        #expect(server.receivedPropertyWrites().count == 1)
+    }
+
+    @Test func unsupportedDescriptorsHideOnlyTheirOwnAndroidControls() throws {
+        var options = FakeZRServer.Options()
+        options.unsupportedPropertyCodes = [
+            PTPPropertyCode.movieFileType.rawValue,
+            PTPPropertyCode.electronicVR.rawValue,
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.result == .unsupported)
+        #expect(bootstrap.controls.codecs.isEmpty)
+        #expect(bootstrap.controls.electronicVR.isEmpty)
+        #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
+        #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
+        #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
+    }
+
+    @Test func whiteBalanceTintOptionsRespectTheAdvertisedDescriptorRange() throws {
+        var options = FakeZRServer.Options()
+        options.whiteBalanceTintMaximum = 612
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
+        #expect(controls.whiteBalanceTints.count == 85)
+        #expect(controls.whiteBalanceTints.contains("B3 · G1.5"))
+        #expect(controls.whiteBalanceTints.contains("Neutral"))
+        #expect(!controls.whiteBalanceTints.contains("A3 · M1.5"))
+    }
+
+    @Test func commandRoundTripUsesMeasuredPTPResponseTimingAndClearsOnDisconnect() throws {
+        var options = FakeZRServer.Options()
+        options.commandResponseDelayMilliseconds = 12
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+
+        _ = try session.readPropertyDisplayValue(code: PTPPropertyCode.batteryLevel.rawValue)
+        let measured = try #require(session.latestCommandRoundTripMilliseconds())
+        #expect(measured >= 8)
+        #expect(measured < 1_000)
+
+        session.disconnect()
+        #expect(session.latestCommandRoundTripMilliseconds() == nil)
+    }
+
+    @Test func kelvinWhiteBalanceWritesModeThenTemperatureAsOneControlSequence() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        try session.applyControl(.whiteBalanceKelvin, label: "5600K")
+        try session.startRecording()
+
+        #expect(
+            server.receivedPropertyWrites()
+                == [
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWhiteBalance.rawValue,
+                        data: Data([0x12, 0x80])),
+                    FakeZRPropertyWrite(
+                        operation: .setDevicePropValue,
+                        property: PTPPropertyCode.movieWBColorTemp.rawValue,
+                        data: Data([0xE0, 0x15])),
+                ])
+        let operations = server.receivedOperations()
+        #expect(operations.filter { $0 == .setDevicePropValue }.count == 2)
+        #expect(operations.contains(.startMovieRecInCard))
+        if let secondWrite = operations.lastIndex(of: .setDevicePropValue),
+            let recordStart = operations.lastIndex(of: .startMovieRecInCard)
+        {
+            #expect(secondWrite < recordStart)
+        }
+    }
+
+    @Test func rejectsUnsupportedOrMediaBusyCameraControlsBeforeWriting() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl("codec", "Unadvertised")
+        ) {
+            try session.applyControl(.codec, label: "Unadvertised")
+        }
+        session.enterMediaMode()
+        #expect(throws: PTPIPClientSessionError.mediaModeActive) {
+            try session.applyControl(.iso, label: "800")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func surfacesCameraRejectionForPropertyWrites() throws {
+        var options = FakeZRServer.Options()
+        options.propertyWriteResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(
+                .setDevicePropValue, .deviceBusy)
+        ) {
+            try session.applyControl(.focusMode, label: "AF-C")
+        }
+        #expect(server.receivedPropertyWrites().count == 1)
+    }
+
+    @Test func surfacesCameraRejectionForMovieRecordStart() throws {
+        var options = FakeZRServer.Options()
+        options.startRecordingResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(
+                .startMovieRecInCard, .deviceBusy)
+        ) {
+            try session.startRecording()
+        }
+        #expect(!server.isRecording())
+    }
+
+    @Test func changeAfAreaUsesExactParametersWithoutADataOutPhase() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.changeAfArea(x: 1_234, y: 567)
+
+        let request = try #require(
+            server.receivedRequests().last { $0.operation == .changeAfArea })
+        #expect(request.parameters == [1_234, 567])
+        #expect(request.dataPhase == .noDataOrDataIn)
+        #expect(request.dataOut == nil)
+    }
+
+    @Test func changeAfAreaRejectsMediaOwnershipAndCameraRejection() throws {
+        var rejectingOptions = FakeZRServer.Options()
+        rejectingOptions.changeAfAreaResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let rejectingServer = try FakeZRServer(options: rejectingOptions)
+        defer { rejectingServer.stop() }
+        let rejectingSession = try connect(to: rejectingServer)
+        defer { rejectingSession.disconnect() }
+
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(.changeAfArea, .deviceBusy)
+        ) {
+            try rejectingSession.changeAfArea(x: 3_024, y: 1_700)
+        }
+
+        let mediaServer = try FakeZRServer()
+        defer { mediaServer.stop() }
+        let mediaSession = try connect(to: mediaServer)
+        defer { mediaSession.disconnect() }
+        mediaSession.enterMediaMode()
+        #expect(throws: PTPIPClientSessionError.mediaModeActive) {
+            try mediaSession.changeAfArea(x: 3_024, y: 1_700)
+        }
+        #expect(!mediaServer.receivedOperations().contains(.changeAfArea))
+    }
+
+    @Test func resetFocusPointReleasesSettlesRecentresAndRestoresWithoutStartTracking() throws {
+        var options = FakeZRServer.Options()
+        options.liveViewFrameIntervalNanoseconds = 5_000_000
+        options.focusRelatchesAfterChange = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        try startLiveViewAndWaitForFocus(session)
+        defer { session.stopLiveView() }
+        let requestBaseline = server.receivedRequests().count
+
+        try session.resetFocusPoint()
+
+        let resetRequests = Array(server.receivedRequests().dropFirst(requestBaseline))
+        let semanticOperations =
+            resetRequests.compactMap { request -> PTPOperationCode? in
+                switch request.operation {
+                case .endTracking, .afDriveCancel, .setDevicePropValue,
+                    .setDevicePropValueEx, .changeAfArea:
+                    return request.operation
+                default:
+                    return nil
+                }
+            }
+        #expect(
+            semanticOperations == [
+                .endTracking,
+                .afDriveCancel,
+                .setDevicePropValueEx,
+                .setDevicePropValue,
+                .changeAfArea,
+                .endTracking,
+                .afDriveCancel,
+                .setDevicePropValue,
+                .setDevicePropValueEx,
+            ])
+
+        let change = try #require(resetRequests.first { $0.operation == .changeAfArea })
+        #expect(change.parameters == [3_024, 1_700])
+        #expect(change.dataPhase == .noDataOrDataIn)
+        #expect(change.dataOut == nil)
+
+        let writes = server.receivedPropertyWrites()
+        #expect(
+            writes == [
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValueEx,
+                    property: PTPPropertyCode.movieAFSubjectDetection.rawValue,
+                    data: Data([0])),
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValue,
+                    property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                    data: Data([0x10, 0x80])),
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValue,
+                    property: PTPPropertyCode.movieFocusMeteringMode.rawValue,
+                    data: Data([0x33, 0x80])),
+                FakeZRPropertyWrite(
+                    operation: .setDevicePropValueEx,
+                    property: PTPPropertyCode.movieAFSubjectDetection.rawValue,
+                    data: Data([2])),
+            ])
+
+        let firstRelease = try #require(resetRequests.firstIndex { $0.operation == .endTracking })
+        let changeIndex = try #require(resetRequests.firstIndex { $0.operation == .changeAfArea })
+        let framesBeforeChange =
+            resetRequests[firstRelease..<changeIndex]
+            .filter { $0.operation == .getLiveViewImageEx }.count
+        #expect(framesBeforeChange >= FocusResetSettlePolicy.minimumFramesAfterRelease)
+        #expect(framesBeforeChange <= FocusResetSettlePolicy.maximumWaitFrames + 4)
+        #expect(resetRequests.filter { $0.operation == .endTracking }.count == 2)
+        // Nikon StartTracking is 0x9424. Reset restores picker settings but must never re-latch a
+        // tracked target, even though that vendor operation is intentionally absent from our API.
+        #expect(!server.receivedRawOperationCodes().contains(0x9424))
+    }
+
+    @Test func resetFocusPointUsesTheFifteenFrameCeilingWhenTrackingNeverClears() throws {
+        var options = FakeZRServer.Options()
+        options.liveViewFrameIntervalNanoseconds = 5_000_000
+        options.focusTrackingNeverReleases = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        try startLiveViewAndWaitForFocus(session)
+        defer { session.stopLiveView() }
+        let requestBaseline = server.receivedRequests().count
+
+        try session.resetFocusPoint()
+
+        let resetRequests = Array(server.receivedRequests().dropFirst(requestBaseline))
+        let firstRelease = try #require(resetRequests.firstIndex { $0.operation == .endTracking })
+        let changeIndex = try #require(resetRequests.firstIndex { $0.operation == .changeAfArea })
+        let framesBeforeChange =
+            resetRequests[firstRelease..<changeIndex]
+            .filter { $0.operation == .getLiveViewImageEx }.count
+        #expect(framesBeforeChange >= FocusResetSettlePolicy.maximumWaitFrames)
+        #expect(framesBeforeChange <= FocusResetSettlePolicy.maximumWaitFrames + 4)
+    }
+
+    @Test func resetFocusPointTreatsMissingPostReleaseBoxesAsTrackingCleared() throws {
+        for removesWholeFocusObject in [false, true] {
+            var options = FakeZRServer.Options()
+            options.liveViewFrameIntervalNanoseconds = 5_000_000
+            options.focusMetadataDisappearsAfterRelease = removesWholeFocusObject
+            options.focusBoxesDisappearAfterRelease = !removesWholeFocusObject
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            try startLiveViewAndWaitForFocus(session)
+            defer { session.stopLiveView() }
+            let requestBaseline = server.receivedRequests().count
+
+            try session.resetFocusPoint()
+
+            let resetRequests = Array(server.receivedRequests().dropFirst(requestBaseline))
+            let firstRelease = try #require(
+                resetRequests.firstIndex { $0.operation == .endTracking })
+            let changeIndex = try #require(
+                resetRequests.firstIndex { $0.operation == .changeAfArea })
+            let framesBeforeChange =
+                resetRequests[firstRelease..<changeIndex]
+                .filter { $0.operation == .getLiveViewImageEx }.count
+            #expect(framesBeforeChange >= FocusResetSettlePolicy.minimumFramesAfterRelease)
+            #expect(framesBeforeChange < FocusResetSettlePolicy.maximumWaitFrames)
+        }
+    }
+
+    @Test func stoppingLiveViewWakesAResetWaitingForNewFocusHeaders() throws {
+        var options = FakeZRServer.Options()
+        options.liveViewFrameIntervalNanoseconds = 1_000_000_000
+        options.focusTrackingNeverReleases = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        try startLiveViewAndWaitForFocus(session)
+
+        let completion = FocusResetCompletion()
+        Thread.detachNewThread {
+            do {
+                try session.resetFocusPoint()
+                completion.finish(.success(()))
+            } catch {
+                completion.finish(.failure(error))
+            }
+        }
+        let releaseDeadline = Date().addingTimeInterval(2)
+        while !server.receivedOperations().contains(.endTracking), Date() < releaseDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect(server.receivedOperations().contains(.endTracking))
+
+        session.stopLiveView()
+
+        let result = try #require(completion.wait(timeout: 1))
+        switch result {
+        case .success:
+            Issue.record("Focus reset unexpectedly completed after live view stopped")
+        case .failure(let error):
+            #expect(error as? PTPIPClientSessionError == .focusStateUnavailable)
+        }
+    }
+
+    @Test func resetFocusPointFailsClosedWithoutAuthoritativeLiveFocus() throws {
+        let noLiveViewServer = try FakeZRServer()
+        defer { noLiveViewServer.stop() }
+        let noLiveViewSession = try connect(to: noLiveViewServer)
+        defer { noLiveViewSession.disconnect() }
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try noLiveViewSession.resetFocusPoint()
+        }
+        #expect(!noLiveViewServer.receivedOperations().contains(.changeAfArea))
+
+        var noMetadataOptions = FakeZRServer.Options()
+        noMetadataOptions.focusMetadataEnabled = false
+        let noMetadataServer = try FakeZRServer(options: noMetadataOptions)
+        defer { noMetadataServer.stop() }
+        let noMetadataSession = try connect(to: noMetadataServer)
+        defer { noMetadataSession.disconnect() }
+        try noMetadataSession.startLiveView(onFrame: { _, _ in }, onEnded: {})
+        defer { noMetadataSession.stopLiveView() }
+        Thread.sleep(forTimeInterval: 0.1)
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try noMetadataSession.resetFocusPoint()
+        }
+        #expect(!noMetadataServer.receivedOperations().contains(.changeAfArea))
+
+        var unsupportedOptions = FakeZRServer.Options()
+        unsupportedOptions.unsupportedPropertyCodes = [PTPPropertyCode.movieFocusMode.rawValue]
+        let unsupportedServer = try FakeZRServer(options: unsupportedOptions)
+        defer { unsupportedServer.stop() }
+        let unsupportedSession = try connect(to: unsupportedServer)
+        defer { unsupportedSession.disconnect() }
+        try startLiveViewAndWaitForFocus(unsupportedSession)
+        defer { unsupportedSession.stopLiveView() }
+        let baseline = unsupportedServer.receivedOperations().count
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try unsupportedSession.resetFocusPoint()
+        }
+        let resetOperations = unsupportedServer.receivedOperations().dropFirst(baseline)
+        #expect(!resetOperations.contains(.endTracking))
+        #expect(!resetOperations.contains(.changeAfArea))
+
+        var shortOptions = FakeZRServer.Options()
+        shortOptions.shortPropertyCodesAfterFirstRead = [
+            PTPPropertyCode.movieFocusMode.rawValue
+        ]
+        let shortServer = try FakeZRServer(options: shortOptions)
+        defer { shortServer.stop() }
+        let shortSession = try connect(to: shortServer)
+        defer { shortSession.disconnect() }
+        let seeded =
+            shortSession.refreshAndroidPropertySnapshot(
+                .propertyChanged(PTPPropertyCode.movieFocusMode.rawValue))
+        #expect(seeded.result == .accepted)
+        #expect(seeded.properties.focusMode == "AF-C")
+        try startLiveViewAndWaitForFocus(shortSession)
+        defer { shortSession.stopLiveView() }
+        let shortBaseline = shortServer.receivedOperations().count
+        #expect(throws: PTPIPClientSessionError.focusStateUnavailable) {
+            try shortSession.resetFocusPoint()
+        }
+        let shortResetOperations = shortServer.receivedOperations().dropFirst(shortBaseline)
+        #expect(!shortResetOperations.contains(.endTracking))
+        #expect(!shortResetOperations.contains(.changeAfArea))
+    }
+
+    @Test func rapidFakeServerTurnoverRetainsEachCameraScript() throws {
+        func verifyRejectingServer() throws {
+            let priorServer = try FakeZRServer()
+            priorServer.stop()
+
+            var options = FakeZRServer.Options()
+            options.startRecordingResponseCode = PTPResponseCode.deviceBusy.rawValue
+            let rejectingServer = try FakeZRServer(options: options)
+            defer { rejectingServer.stop() }
+
+            let session = try connect(to: rejectingServer)
+            defer { session.disconnect() }
+            #expect(
+                throws: PTPIPClientSessionError.operationRejected(
+                    .startMovieRecInCard, .deviceBusy)
+            ) {
+                try session.startRecording()
+            }
+        }
+
+        // Start/stop cycles exercise the raw-descriptor reuse case that can
+        // otherwise make a concurrently scheduled test connect to a prior
+        // fake camera's accept loop.
+        for _ in 0..<24 {
+            try verifyRejectingServer()
+        }
+    }
+
     @Test func disconnectSendsGracefulCloseSession() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
@@ -139,5 +1165,48 @@ struct PTPIPClientSessionTests {
             try PTPIPClientSession.connect(
                 host: "127.0.0.1", port: port, timeoutMilliseconds: 1_000)
         }
+    }
+}
+
+// SAFETY: `@unchecked Sendable` because all mutable state is guarded by `condition`.
+private final class FocusFrameArrival: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var arrived = false
+
+    func record(_ frame: PTPLiveViewFrame) {
+        guard frame.focus != nil else { return }
+        condition.lock()
+        arrived = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func wait(timeout: TimeInterval) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !arrived, condition.wait(until: deadline) {}
+        return arrived
+    }
+}
+
+// SAFETY: `@unchecked Sendable` because all mutable state is guarded by `condition`.
+private final class FocusResetCompletion: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var result: Result<Void, Error>?
+
+    func finish(_ result: Result<Void, Error>) {
+        condition.lock()
+        self.result = result
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func wait(timeout: TimeInterval) -> Result<Void, Error>? {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while result == nil, condition.wait(until: deadline) {}
+        return result
     }
 }

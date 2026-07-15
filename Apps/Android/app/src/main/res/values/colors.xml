@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the deep launch backdrop in ios/Runner/Branding.swift. -->
+    <color name="openzcine_splash_background">#0A0908</color>
+    <color name="launcher_icon_background">#0A0908</color>
+</resources>

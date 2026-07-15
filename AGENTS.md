@@ -4,17 +4,18 @@ Open-source iOS + Android app to connect to, control, and monitor (live image) N
 cinema-line cameras — primarily the **Nikon ZR**. Built openly with agentic coding tools, held to
 clean, exemplary engineering standards.
 
-> **Status:** Native iOS implementation milestone. Production/release work now targets Swift
-> business/protocol code with a SwiftUI iOS shell. The older Flutter prototype is retained only as a
-> protocol/live-view reference while useful.
+> **Status:** Native iOS and Android implementation milestone. Production work targets the portable
+> Swift business/protocol core, a SwiftUI iOS shell, and a Jetpack Compose Android shell. Android is
+> not publicly released yet. The older Flutter prototype remains only as a protocol/live-view
+> reference while useful.
 
 ## Stack & tooling
 
 - **Swift Package Manager / Swift** — production shared business and camera-protocol core.
 - **SwiftUI** — production iOS app shell.
 - **Jetpack Compose / Kotlin** — production Android app shell and Android platform adapters.
-- **Swift SDK for Android** — candidate path for compiling the shared Swift core for Android; keep
-  the interop boundary small and verify build/runtime behavior before depending on it broadly.
+- **Swift SDK for Android** — production bridge path for the shared Swift core. Keep the facade/JNI
+  boundary small and verify build, packaging, and runtime behavior through the Android gates.
 - **Flutter / Dart** — archived prototype reference only; not part of production tooling.
 - **just** — the single entry point for all repository tasks. Run `just` to list recipes.
 - **swift-format / swift test / xcodebuild** — production formatting, tests, and iOS build checks.
@@ -27,7 +28,7 @@ Install local tooling with `just setup` (macOS / Homebrew).
 - `Sources/OpenZCineCore/` — production Swift shared core.
 - `Tests/OpenZCineCoreTests/` — Swift shared-core tests.
 - `ios/Runner/` — production SwiftUI iOS app shell.
-- `Apps/Android/` — future Jetpack Compose production app.
+- `Apps/Android/` — production Jetpack Compose app, platform adapters, and Wear OS companion.
 - `reference/flutter-prototype/` — archived Flutter prototype/reference source.
 - `vendor/` — **gitignored.** Local-only material; nothing here is committed or required to build.
 - `ref/` — **gitignored** local reference material.
@@ -73,7 +74,7 @@ Before claiming any change is complete, run:
 just check
 ```
 
-For production Swift/iOS changes, also run:
+For production Swift/iOS or Swift Android-facade changes, also run:
 
 ```sh
 just native-check
@@ -121,10 +122,13 @@ just native-check   # Run Swift checks — format, build, and tests
 just ios-build      # Build the iOS app shell
 just watch-build    # Build the watchOS companion app
 just test           # Run Swift package tests
+just android-build  # Build the Android phone app and staged Swift runtime
+just android-check  # Build, test, compile instrumentation tests, and lint Android
+just android-release-check # Verify the signed phone/Wear release pair and runtime closure
 ```
 
-**Before claiming any change is complete**, run `just native-check` for Swift/iOS work, or
-`just check` for repo-wide changes.
+**Before claiming any change is complete**, run `just native-check` for Swift/iOS or facade work,
+`just android-check` for Android work, and `just check` for repo-wide changes.
 
 Interactive Xcode/simulator helpers (builds, launching the simulator, screenshots, device logs)
 are fine for iteration on the `ios/Runner` shell, but they never replace `just` — CI and official
@@ -141,6 +145,11 @@ The canonical layer names map to this repository as follows:
 | Resources | `ios/Runner` | Assets, localisation strings, Info.plist |
 | Watch | `ios/OpenZCineWatch` | watchOS companion app (embedded in Runner) |
 | Core | `Sources/OpenZCineCore` | Portable camera protocol and business logic |
+| Android facade | `Sources/OpenZCineAndroidFacade` | Swift session/JNI boundary for Android |
+| Android app | `Apps/Android/app` | Compose phone shell and Android adapters |
+| Android API | `Apps/Android/core-api` | Kotlin interface shared by shell and adapters |
+| Wear | `Apps/Android/wear`, `Apps/Android/wear-relay` | Wear OS UI and phone relay contract |
+| Android tests | `Apps/Android/*/src/test`, `Apps/Android/*/src/androidTest` | JVM and device UI tests |
 
 Tests for the shared core live in `Tests/OpenZCineCoreTests/`.
 
@@ -171,13 +180,13 @@ The shells follow modern SwiftUI idioms exclusively:
 
 ### Screenshot-verify every UI change (MANDATORY — no exceptions)
 
-Any SwiftUI layout change is **not done** until it has been visually verified in the simulator.
-Build → launch → capture a screenshot (this app is **landscape-locked and only ~400pt tall**, so
-rotate the raw shot to read it) → then **inspect all four edges** and confirm every interface
-element is fully visible:
+Any SwiftUI or Compose layout change is **not done** until it has been visually verified on the
+relevant simulator, emulator, or physical device. Build → launch → capture a screenshot → inspect
+**all four edges** and confirm every interface element is fully visible. The iOS app is
+**landscape-locked and only ~400pt tall**, so rotate its raw simulator shot to read it.
 
-- **Bottom:** nothing flush against or past the bottom edge — leave clearance for the home
-  indicator. A button touching the bottom edge on the sim is *cut off* on device.
+- **Bottom:** nothing flush against or past the bottom edge. Leave clearance for the iOS home
+  indicator and Android gesture/navigation insets.
 - **Right/left:** content fills the intended width; no unintended empty band at an edge, and no
   element pushed off the side.
 - **Truncation/overflow:** no `…` truncation, no text wrapping mid-word into a vertical sliver, no
@@ -193,8 +202,8 @@ device size and, when a screen has multiple states, screenshot the tightest one.
 - **Critical user flows** (camera connection, record start/stop, live-view activation) must have
   UI-level integration tests.
 - **Business logic coverage**: 80% or higher line coverage for `Sources/OpenZCineCore`.
-- Use **Swift Testing** (`#expect`, `#require`) for all new tests; XCTest is acceptable only when
-  integrating with existing test targets that have not yet been migrated.
+- Use **Swift Testing** (`#expect`, `#require`) for new Swift tests and the existing Kotlin/JUnit
+  conventions for Android tests. XCTest is acceptable only in existing targets not yet migrated.
 
 ## Parallelize independent work
 

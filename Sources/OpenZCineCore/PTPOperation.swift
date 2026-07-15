@@ -34,6 +34,11 @@ public enum PTPOperationCode: UInt16, Sendable {
     // Returns the *valid* (card-present) StorageIDs. Standard GetStorageIDs reports placeholder
     // per-slot IDs even with a card inserted, and GetStorageInfo rejects those.
     case getVendorStorageIDs = 0x9209
+    /// `PTP_OC_NIKON_GetObjectSize`: p1 objectHandle; data-in UINT64 size. [VERIFY-ON-HW]
+    case getObjectSize = 0x9421
+    /// `PTP_OC_NIKON_GetPartialObjectEx`: p1 handle, p2/p3 offset low/high, p4/p5 maximum bytes
+    /// low/high; data-in. [VERIFY-ON-HW]
+    case getPartialObjectEx = 0x9431
 
     // Pairing + session mode. [ZR-only · verify-on-HW]
     case getPairingInfo = 0x952B

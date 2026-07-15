@@ -31,7 +31,11 @@ let package = Package(
         ),
         .testTarget(
             name: "OpenZCineCoreTests",
-            dependencies: ["OpenZCineCore"]
+            dependencies: ["OpenZCineCore"],
+            // Shared canonical JSON schema fixture consumed directly from the
+            // source tree by Swift and Android transport tests; it is not an
+            // app/runtime resource.
+            exclude: ["Fixtures"]
         ),
         // Header-only shim exposing the NDK's <jni.h> to Swift; empty on Darwin.
         .target(name: "CJNI"),

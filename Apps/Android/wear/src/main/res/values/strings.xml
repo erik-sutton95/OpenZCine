@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenZCine</string>
+    <string name="wear_monitor_description">Wear camera monitor</string>
+    <string name="wear_live_preview_description">Live camera preview from phone</string>
+    <string name="wear_open_on_phone">Open OpenZCine on phone</string>
+    <string name="wear_waiting_for_phone">Waiting for phone monitor</string>
+    <string name="wear_phone_unavailable">Phone monitor unavailable</string>
+    <string name="wear_phone_unavailable_error">Phone monitor unavailable.</string>
+    <string name="wear_no_camera">No camera connected</string>
+    <string name="wear_feed_paused">Feed paused (Command mode)</string>
+    <string name="wear_waiting_for_preview">Waiting for camera preview</string>
+    <string name="wear_start_recording_description">Start camera recording</string>
+    <string name="wear_stop_recording_description">Stop camera recording</string>
+    <string name="wear_record_timeout">Phone did not confirm the record command.</string>
+    <string name="wear_unavailable">—</string>
+    <string name="wear_timecode_unavailable">--:--:--:--</string>
+    <string name="wear_storage_capacity">%1$d GB · %2$d%%</string>
+    <string name="wear_battery_percent">%1$d%%</string>
+</resources>

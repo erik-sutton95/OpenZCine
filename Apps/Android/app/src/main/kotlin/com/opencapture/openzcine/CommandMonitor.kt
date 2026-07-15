@@ -1,0 +1,1497 @@
+package com.opencapture.openzcine
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.os.SystemClock
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
+import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
+import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.CameraShutterMode
+import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.openzcine.core.LiveFrameTimecode
+import kotlin.math.floor
+import kotlin.math.roundToInt
+
+/** The stable, persisted tile identifiers used by the DISP 3 primary grid. */
+internal enum class CommandTileKind {
+    MODE,
+    ISO,
+    SHUTTER,
+    IRIS,
+    WHITE_BALANCE,
+    RESOLUTION_FRAMERATE,
+    CODEC,
+    STABILIZATION,
+    ;
+
+    companion object {
+        fun fromStoredName(value: String): CommandTileKind? =
+            entries.firstOrNull { it.name == value }
+    }
+}
+
+/** The app-private, user-configurable order for the command grid. */
+internal class CommandTileOrderStore(private val preferences: SharedPreferences) {
+    constructor(context: Context) : this(
+        context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE),
+    )
+
+    fun load(): List<CommandTileKind> =
+        normalizeCommandTileOrder(
+            preferences.getString(ORDER_KEY, null)
+                ?.split(',')
+                ?.mapNotNull(CommandTileKind::fromStoredName)
+                .orEmpty(),
+        )
+
+    fun save(order: List<CommandTileKind>) {
+        val normalized = normalizeCommandTileOrder(order)
+        preferences.edit()
+            .putString(ORDER_KEY, normalized.joinToString(separator = ",") { it.name })
+            .apply()
+    }
+
+    private companion object {
+        const val STORE_NAME = "openzcine.command-dashboard"
+        const val ORDER_KEY = "display.commandGrid.order.v1"
+    }
+}
+
+/** Removes malformed duplicates and retains newly introduced tiles at the end. */
+internal fun normalizeCommandTileOrder(order: List<CommandTileKind>): List<CommandTileKind> {
+    val unique = order.distinct()
+    return unique + CommandTileKind.entries.filterNot(unique::contains)
+}
+
+/** Moves one tile to [targetIndex] while retaining a complete, valid order. */
+internal fun moveCommandTile(
+    order: List<CommandTileKind>,
+    kind: CommandTileKind,
+    targetIndex: Int,
+): List<CommandTileKind> {
+    val normalized = normalizeCommandTileOrder(order).toMutableList()
+    val currentIndex = normalized.indexOf(kind)
+    if (currentIndex < 0) return normalized
+    normalized.removeAt(currentIndex)
+    normalized.add(targetIndex.coerceIn(0, normalized.size), kind)
+    return normalized
+}
+
+/** One semantically validated intent passed from the Compose sheet to the session control API. */
+internal data class CommandControlRequest(
+    val title: String,
+    val control: CameraControl,
+    val currentValue: String,
+    val options: List<String>,
+)
+
+/** The user-visible outcome of an accepted or rejected control write. */
+internal data class CommandControlFeedback(
+    val message: String,
+    val isError: Boolean,
+)
+
+/** One selectable row in the command-control dialog. */
+internal data class CommandControlOptionPresentation(
+    val label: String,
+    val selected: Boolean,
+    val enabled: Boolean,
+)
+
+/** Builds the picker rows without exposing protocol bytes to Compose. */
+internal fun commandControlOptions(
+    request: CommandControlRequest,
+    pendingControl: CameraControl?,
+    controlsEnabled: Boolean = true,
+): List<CommandControlOptionPresentation> =
+    request.options.map { label ->
+        CommandControlOptionPresentation(
+            label = label,
+            selected = label == request.currentValue,
+            enabled = controlsEnabled && pendingControl == null,
+        )
+    }
+
+/** One grid or side-column value, including its safe-to-write intent when supported. */
+internal data class CommandTilePresentation(
+    val kind: CommandTileKind? = null,
+    val title: String,
+    val value: String,
+    val request: CommandControlRequest? = null,
+    val unavailableReason: String? = null,
+)
+
+/** A small section of the right-hand Image / Focus / Audio command column. */
+internal enum class CommandSideSectionKind {
+    IMAGE,
+    EXPOSURE,
+    FOCUS,
+    AUDIO,
+}
+
+internal data class CommandSideSectionPresentation(
+    val kind: CommandSideSectionKind,
+    val title: String,
+    val cells: List<CommandTilePresentation>,
+)
+
+/** All display data needed by the dashboard, projected from the typed session snapshot. */
+internal data class CommandDashboardPresentation(
+    val tiles: List<CommandTilePresentation>,
+    val sideSections: List<CommandSideSectionPresentation>,
+    val temperature: String,
+    val storage: String,
+    val camera: String,
+    val lens: String,
+    val frameRate: String,
+    val refreshSummary: String,
+)
+
+private const val COMMAND_GRID_COLUMNS = 3
+private const val COMMAND_GRID_SPACING_DP = 9
+private const val COMMAND_REORDER_CLICK_SUPPRESSION_MS = 150L
+private const val COMMAND_PORTRAIT_GRID_ROW_HEIGHT_DP = 76
+private val COMMAND_COMPACT_SIDE_TILE_HEIGHT = 36.dp
+private val COMMAND_PORTRAIT_SIDE_TILE_HEIGHT = 44.dp
+
+/** Returns the number of rows required for the dashboard's primary control grid. */
+internal fun commandPrimaryGridRows(
+    tileCount: Int,
+    columns: Int = COMMAND_GRID_COLUMNS,
+): Int {
+    require(columns > 0) { "Command dashboard grid needs at least one column." }
+    return (tileCount.coerceAtLeast(1) + columns - 1) / columns
+}
+
+/** Resolves one drag position to a clamped row-major command-grid slot. */
+internal fun commandGridSlot(
+    position: Offset,
+    tileWidth: Float,
+    rowHeight: Float,
+    spacing: Float,
+    columns: Int,
+    itemCount: Int,
+): Int {
+    require(tileWidth > 0f && rowHeight > 0f) { "command grid cells must be positive" }
+    require(spacing >= 0f && columns > 0 && itemCount > 0) {
+        "command grid geometry must contain at least one item"
+    }
+    val column = floor(position.x / (tileWidth + spacing)).toInt().coerceIn(0, columns - 1)
+    val row = floor(position.y / (rowHeight + spacing)).toInt().coerceAtLeast(0)
+    return (row * columns + column).coerceIn(0, itemCount - 1)
+}
+
+/** Returns a tile only when a press lands inside its painted cell, never in a gutter. */
+internal fun commandGridHitSlot(
+    position: Offset,
+    tileWidth: Float,
+    rowHeight: Float,
+    spacing: Float,
+    columns: Int,
+    itemCount: Int,
+): Int? {
+    require(tileWidth > 0f && rowHeight > 0f) { "command grid cells must be positive" }
+    require(spacing >= 0f && columns > 0 && itemCount > 0) {
+        "command grid geometry must contain at least one item"
+    }
+    if (position.x < 0f || position.y < 0f) return null
+    val columnStride = tileWidth + spacing
+    val rowStride = rowHeight + spacing
+    val column = floor(position.x / columnStride).toInt()
+    val row = floor(position.y / rowStride).toInt()
+    if (column !in 0 until columns) return null
+    if (position.x - column * columnStride >= tileWidth) return null
+    if (position.y - row * rowStride >= rowHeight) return null
+    return (row * columns + column).takeIf { it in 0 until itemCount }
+}
+
+/**
+ * The compact portrait grid height, leaving a scrollable region for Image,
+ * Focus, and Audio controls above the fixed monitor rail.
+ */
+internal fun portraitCommandGridHeightDp(tileCount: Int): Int {
+    val rows = commandPrimaryGridRows(tileCount)
+    return rows * COMMAND_PORTRAIT_GRID_ROW_HEIGHT_DP + (rows - 1) * COMMAND_GRID_SPACING_DP
+}
+
+/**
+ * Projects the real Swift-core snapshot into the Android command dashboard.
+ *
+ * This is deliberately pure: it makes the UI's unavailable state, allowed
+ * controls, and persisted ordering independently JVM-testable. It never falls
+ * back to a demo value while a [CameraSessionState] is supplied.
+ */
+internal fun commandDashboardPresentation(
+    snapshot: CameraPropertySnapshot,
+    refreshStatus: CameraPropertyRefreshStatus,
+    sessionState: CameraSessionState,
+    tileOrder: List<CommandTileKind>,
+    strings: PhoneStringResolver,
+    recording: Boolean = false,
+): CommandDashboardPresentation {
+    val unavailable = commandPropertyUnavailableReason(sessionState, refreshStatus, strings)
+    val codec = snapshot.codecSelection.monitorValueOrNull() ?: snapshot.codec.monitorValueOrNull()
+    val frameRate = validMonitorFrameRate(snapshot.frameRate)
+    val shutter =
+        when (snapshot.shutterMode) {
+            CameraShutterMode.ANGLE ->
+                snapshot.shutterAngle.monitorValueOrNull()
+                    ?: snapshot.shutterSpeed.monitorValueOrNull()
+            CameraShutterMode.SPEED ->
+                snapshot.shutterSpeed.monitorValueOrNull()
+                    ?: snapshot.shutterAngle.monitorValueOrNull()
+            null ->
+                snapshot.shutterAngle.monitorValueOrNull()
+                    ?: snapshot.shutterSpeed.monitorValueOrNull()
+        }
+    val whiteBalanceMode = snapshot.whiteBalanceMode.monitorValueOrNull()
+    val whiteBalanceKelvin = snapshot.whiteBalanceKelvin?.takeIf { it > 0 }
+    val whiteBalance =
+        if (whiteBalanceMode == COLOR_TEMPERATURE_MODE) {
+            whiteBalanceKelvin?.let { "${it}K" } ?: whiteBalanceMode
+        } else {
+            whiteBalanceMode ?: whiteBalanceKelvin?.let { "${it}K" }
+        }
+    val resolution =
+        snapshot.resolutionFrameRate.monitorValueOrNull()
+            ?: listOfNotNull(snapshot.resolution.monitorValueOrNull(), frameRate?.let { "${it}p" })
+                .joinToString(separator = " · ")
+                .ifBlank { null }
+    val stabilization =
+        listOfNotNull(
+            snapshot.vibrationReduction.monitorValueOrNull(),
+            snapshot.electronicVr.monitorValueOrNull(),
+        )
+            .distinct()
+            .joinToString(separator = " / ")
+            .ifBlank { null }
+    // A take must never gain an ISO write through a missing or stale codec
+    // readback. Only an explicitly non-R3D codec unlocks ISO mid-recording.
+    val isoLockedDuringRecording =
+        recording && codec?.contains("R3D", ignoreCase = true) != false
+    val isoLockReason =
+        if (codec == null) {
+            strings.resolve(R.string.command_iso_recording_wait)
+        } else {
+            strings.resolve(R.string.command_iso_recording_locked)
+        }
+    val capabilities = snapshot.controlCapabilities
+    val isoCapabilityReason =
+        when {
+            recording && isoLockedDuringRecording -> isoLockReason
+            codec == null -> strings.resolve(R.string.command_iso_wait_codec)
+            codec.contains("R3D", ignoreCase = true) && snapshot.baseIso == null ->
+                strings.resolve(R.string.command_iso_wait_base)
+            else -> strings.resolve(R.string.command_iso_no_values)
+        }
+    // The active descriptor changes with the camera's shutter circuit. Never
+    // surface the inactive circuit or a local fallback ladder.
+    val shutterOptions = capabilities.options(CameraControl.SHUTTER)
+    val shutterWritable = snapshot.shutterLocked == false && shutterOptions.isNotEmpty()
+    val shutterLockReason =
+        when {
+            snapshot.shutterLocked == true -> strings.resolve(R.string.command_shutter_locked)
+            snapshot.shutterLocked == null -> strings.resolve(R.string.command_shutter_wait_lock)
+            snapshot.shutterMode == null -> strings.resolve(R.string.command_shutter_wait_mode)
+            else -> strings.resolve(R.string.command_shutter_unavailable)
+        }
+
+    fun editable(
+        kind: CommandTileKind?,
+        title: String,
+        value: String?,
+        control: CameraControl,
+        options: List<String>,
+        writable: Boolean = true,
+        blockedReason: String = strings.resolve(R.string.command_control_locked),
+    ): CommandTilePresentation {
+        val currentValue = value.monitorValueOrNull()
+        return if (currentValue == null) {
+            CommandTilePresentation(kind, title, "—", unavailableReason = unavailable)
+        } else if (!writable) {
+            CommandTilePresentation(kind, title, currentValue, unavailableReason = blockedReason)
+        } else {
+            CommandTilePresentation(
+                kind = kind,
+                title = title,
+                value = currentValue,
+                request = CommandControlRequest(title, control, currentValue, options),
+            )
+        }
+    }
+
+    fun readOnly(
+        kind: CommandTileKind? = null,
+        title: String,
+        value: String?,
+        reason: String,
+    ): CommandTilePresentation {
+        val currentValue = value.monitorValueOrNull()
+        return CommandTilePresentation(
+            kind = kind,
+            title = title,
+            value = currentValue ?: "—",
+            unavailableReason = if (currentValue == null) unavailable else reason,
+        )
+    }
+
+    fun advertisedEditable(
+        kind: CommandTileKind? = null,
+        title: String,
+        value: String?,
+        control: CameraControl,
+        blockedReason: String,
+        writable: Boolean = true,
+    ): CommandTilePresentation {
+        val options = capabilities.options(control)
+        return if (options.isEmpty()) {
+            readOnly(kind, title, value, blockedReason)
+        } else {
+            editable(
+                kind = kind,
+                title = title,
+                value = value,
+                control = control,
+                options = options,
+                writable = writable,
+                blockedReason = blockedReason,
+            )
+        }
+    }
+
+    val tilesByKind =
+        mapOf(
+            CommandTileKind.MODE to
+                editable(
+                    CommandTileKind.MODE,
+                    strings.resolve(R.string.command_title_mode),
+                    snapshot.exposureMode,
+                    CameraControl.EXPOSURE_MODE,
+                    EXPOSURE_MODE_OPTIONS,
+                ),
+            CommandTileKind.ISO to
+                advertisedEditable(
+                    kind = CommandTileKind.ISO,
+                    title = strings.resolve(R.string.command_title_iso),
+                    value = snapshot.iso?.takeIf { it > 0 }?.toString(),
+                    control = CameraControl.ISO,
+                    writable = !isoLockedDuringRecording,
+                    blockedReason = isoCapabilityReason,
+                ),
+            CommandTileKind.SHUTTER to
+                advertisedEditable(
+                    kind = CommandTileKind.SHUTTER,
+                    title = strings.resolve(R.string.command_title_shutter),
+                    value = shutter,
+                    control = CameraControl.SHUTTER,
+                    blockedReason = shutterLockReason,
+                    writable = shutterWritable,
+                ),
+            CommandTileKind.IRIS to
+                advertisedEditable(
+                    kind = CommandTileKind.IRIS,
+                    title = strings.resolve(R.string.command_title_iris),
+                    value = snapshot.iris,
+                    control = CameraControl.IRIS,
+                    blockedReason = strings.resolve(R.string.command_reason_aperture),
+                ),
+            CommandTileKind.WHITE_BALANCE to
+                advertisedEditable(
+                    kind = CommandTileKind.WHITE_BALANCE,
+                    title = strings.resolve(R.string.command_title_white_balance),
+                    value = whiteBalance,
+                    control = CameraControl.WHITE_BALANCE,
+                    blockedReason = strings.resolve(R.string.command_reason_white_balance),
+                ),
+            CommandTileKind.RESOLUTION_FRAMERATE to
+                advertisedEditable(
+                    kind = CommandTileKind.RESOLUTION_FRAMERATE,
+                    title = strings.resolve(R.string.command_title_resolution),
+                    value = resolution,
+                    control = CameraControl.RESOLUTION_FRAMERATE,
+                    blockedReason = strings.resolve(R.string.command_reason_recording_modes),
+                ),
+            CommandTileKind.CODEC to
+                advertisedEditable(
+                    kind = CommandTileKind.CODEC,
+                    title = strings.resolve(R.string.command_title_codec),
+                    value = codec,
+                    control = CameraControl.CODEC,
+                    blockedReason = strings.resolve(R.string.command_reason_codec_modes),
+                ),
+            CommandTileKind.STABILIZATION to
+                advertisedEditable(
+                    kind = CommandTileKind.STABILIZATION,
+                    title = strings.resolve(R.string.command_title_vr),
+                    value = snapshot.vibrationReduction,
+                    control = CameraControl.VIBRATION_REDUCTION,
+                    blockedReason = strings.resolve(R.string.command_reason_movie_vr),
+                ).copy(
+                    title = strings.resolve(R.string.command_title_vr_combined),
+                    value = stabilization ?: "—",
+                ),
+        )
+    val focusCells =
+        listOf(
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_mode),
+                value = snapshot.focusMode,
+                control = CameraControl.FOCUS_MODE,
+                blockedReason = strings.resolve(R.string.command_reason_focus_modes),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_area),
+                value = snapshot.focusArea,
+                control = CameraControl.FOCUS_AREA,
+                blockedReason = strings.resolve(R.string.command_reason_focus_areas),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_subject),
+                value = snapshot.focusSubject,
+                control = CameraControl.FOCUS_SUBJECT,
+                blockedReason = strings.resolve(R.string.command_reason_focus_subjects),
+            ),
+        )
+    val audioSensitivityCell =
+        if (snapshot.audioSensitivity.monitorValueOrNull() != null) {
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_sensitivity_short),
+                value = snapshot.audioSensitivity,
+                control = CameraControl.AUDIO_SENSITIVITY,
+                blockedReason = strings.resolve(R.string.command_reason_audio_sensitivity),
+            )
+        } else {
+            readOnly(
+                title = strings.resolve(R.string.command_title_sensitivity_short),
+                value = snapshot.microphoneSensitivity,
+                reason = strings.resolve(R.string.command_reason_microphone_read_only),
+            )
+        }
+    val audioCells =
+        listOf(
+            audioSensitivityCell,
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_input),
+                value = snapshot.audioInput,
+                control = CameraControl.AUDIO_INPUT,
+                blockedReason = strings.resolve(R.string.command_reason_audio_input),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_wind),
+                value = snapshot.windFilter,
+                control = CameraControl.WIND_FILTER,
+                blockedReason = strings.resolve(R.string.command_reason_wind_filter),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_attenuator),
+                value = snapshot.inputAttenuator,
+                control = CameraControl.ATTENUATOR,
+                blockedReason = strings.resolve(R.string.command_reason_attenuator),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_32_bit_float),
+                value = snapshot.audio32BitFloat,
+                control = CameraControl.AUDIO_32_BIT_FLOAT,
+                blockedReason = strings.resolve(R.string.command_reason_32_bit_float),
+            ),
+        )
+
+    val exposureCells =
+        listOf(
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_base_iso),
+                value = snapshot.baseIso,
+                control = CameraControl.BASE_ISO,
+                blockedReason = strings.resolve(R.string.command_reason_base_iso),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_shutter_mode),
+                value =
+                    when (snapshot.shutterMode) {
+                        CameraShutterMode.ANGLE -> "Angle"
+                        CameraShutterMode.SPEED -> "Speed"
+                        null -> null
+                    },
+                control = CameraControl.SHUTTER_MODE,
+                blockedReason = strings.resolve(R.string.command_reason_shutter_modes),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_shutter_lock),
+                value = snapshot.shutterLocked?.let { if (it) "Locked" else "Unlocked" },
+                control = CameraControl.SHUTTER_LOCK,
+                blockedReason = strings.resolve(R.string.command_reason_shutter_lock),
+            ),
+            advertisedEditable(
+                title = strings.resolve(R.string.command_title_wb_tint),
+                value = snapshot.whiteBalanceTint,
+                control = CameraControl.WHITE_BALANCE_TINT,
+                blockedReason = strings.resolve(R.string.command_reason_wb_tint),
+            ),
+        )
+
+    val camera =
+        (sessionState as? CameraSessionState.Connected)
+            ?.identity
+            ?.let { identity ->
+                identity.name.takeIf(String::isNotBlank)
+                    ?.trim()
+                    ?: identity.model.monitorValueOrNull()
+            }
+            ?: "—"
+    return CommandDashboardPresentation(
+        tiles = normalizeCommandTileOrder(tileOrder).mapNotNull(tilesByKind::get),
+        sideSections =
+            listOf(
+                CommandSideSectionPresentation(
+                    kind = CommandSideSectionKind.IMAGE,
+                    title = strings.resolve(R.string.command_section_image),
+                    cells = listOf(
+                        readOnly(
+                            title = strings.resolve(R.string.command_title_grid),
+                            value = snapshot.cameraGrid,
+                            reason = strings.resolve(R.string.command_reason_grid_read_only),
+                        ),
+                        readOnly(
+                            title = strings.resolve(R.string.command_title_tone),
+                            value = snapshot.tone,
+                            reason = strings.resolve(R.string.command_reason_tone),
+                        ),
+                        advertisedEditable(
+                            title = strings.resolve(R.string.command_title_vr),
+                            value = snapshot.vibrationReduction,
+                            control = CameraControl.VIBRATION_REDUCTION,
+                            blockedReason = strings.resolve(R.string.command_reason_movie_vr),
+                        ),
+                        advertisedEditable(
+                            title = strings.resolve(R.string.command_title_evr),
+                            value = snapshot.electronicVr,
+                            control = CameraControl.ELECTRONIC_VR,
+                            blockedReason = strings.resolve(R.string.command_reason_evr),
+                        ),
+                    ),
+                ),
+                CommandSideSectionPresentation(
+                    CommandSideSectionKind.EXPOSURE,
+                    strings.resolve(R.string.command_section_exposure),
+                    exposureCells,
+                ),
+                CommandSideSectionPresentation(
+                    CommandSideSectionKind.FOCUS,
+                    strings.resolve(R.string.command_section_focus),
+                    focusCells,
+                ),
+                CommandSideSectionPresentation(
+                    CommandSideSectionKind.AUDIO,
+                    strings.resolve(R.string.command_section_audio),
+                    audioCells,
+                ),
+            ),
+        temperature = commandTemperature(snapshot.temperatureStatus, strings),
+        storage = monitorStorageLabel(snapshot.storage),
+        camera = camera,
+        lens = snapshot.lens.monitorValueOrNull() ?: "—",
+        frameRate = monitorFrameRateLabel(frameRate),
+        refreshSummary = commandRefreshSummary(refreshStatus, strings),
+    )
+}
+
+private fun commandPropertyUnavailableReason(
+    sessionState: CameraSessionState,
+    refreshStatus: CameraPropertyRefreshStatus,
+    strings: PhoneStringResolver,
+): String =
+    when {
+        sessionState !is CameraSessionState.Connected ->
+            strings.resolve(R.string.command_not_connected)
+        refreshStatus is CameraPropertyRefreshStatus.Refreshing ->
+            strings.resolve(R.string.command_wait_readback)
+        refreshStatus is CameraPropertyRefreshStatus.Degraded ->
+            strings.resolve(
+                R.string.command_limited_readback,
+                commandRefreshFailure(refreshStatus.failure, strings),
+            )
+        else -> strings.resolve(R.string.command_not_reported)
+    }
+
+private fun commandRefreshSummary(
+    status: CameraPropertyRefreshStatus,
+    strings: PhoneStringResolver,
+): String =
+    when (status) {
+        CameraPropertyRefreshStatus.Idle -> strings.resolve(R.string.status_idle)
+        CameraPropertyRefreshStatus.Refreshing -> strings.resolve(R.string.status_refreshing)
+        CameraPropertyRefreshStatus.Ready -> strings.resolve(R.string.status_ready)
+        is CameraPropertyRefreshStatus.Degraded -> commandRefreshFailure(status.failure, strings)
+    }
+
+private fun commandRefreshFailure(
+    failure: CameraPropertyRefreshFailure,
+    strings: PhoneStringResolver,
+): String =
+    when (failure) {
+        CameraPropertyRefreshFailure.NOT_CONNECTED -> strings.resolve(R.string.command_failure_no_camera)
+        CameraPropertyRefreshFailure.CORE_UNAVAILABLE -> strings.resolve(R.string.command_failure_core)
+        CameraPropertyRefreshFailure.MEDIA_BUSY -> strings.resolve(R.string.command_failure_media)
+        CameraPropertyRefreshFailure.UNSUPPORTED_PROPERTY -> strings.resolve(R.string.command_failure_unsupported)
+        CameraPropertyRefreshFailure.TRANSPORT_FAILED -> strings.resolve(R.string.command_failure_transport)
+    }
+
+private fun commandTemperature(
+    status: CameraTemperatureStatus?,
+    strings: PhoneStringResolver,
+): String =
+    when (status) {
+        CameraTemperatureStatus.NORMAL -> strings.resolve(R.string.temperature_ok)
+        CameraTemperatureStatus.WARNING -> strings.resolve(R.string.temperature_check)
+        CameraTemperatureStatus.HOT -> strings.resolve(R.string.temperature_hot)
+        null -> "—"
+    }
+
+/** True only when a completed property refresh reflects the accepted control write. */
+internal fun cameraPropertyConfirmsSelection(
+    snapshot: CameraPropertySnapshot,
+    control: CameraControl,
+    label: String,
+): Boolean =
+    when (control) {
+        CameraControl.ISO -> snapshot.iso?.toString() == label
+        CameraControl.SHUTTER ->
+            when (snapshot.shutterMode) {
+                CameraShutterMode.ANGLE -> snapshot.shutterAngle == label
+                CameraShutterMode.SPEED -> snapshot.shutterSpeed == label
+                null -> false
+            }
+        CameraControl.IRIS -> snapshot.iris == label
+        CameraControl.WHITE_BALANCE ->
+            if (label.endsWith("K")) {
+                snapshot.whiteBalanceMode == COLOR_TEMPERATURE_MODE &&
+                    snapshot.whiteBalanceKelvin?.let { "${it}K" } == label
+            } else {
+                snapshot.whiteBalanceMode == label
+            }
+        CameraControl.FOCUS_MODE -> snapshot.focusMode == label
+        CameraControl.FOCUS_AREA -> snapshot.focusArea == label
+        CameraControl.FOCUS_SUBJECT -> snapshot.focusSubject == label
+        CameraControl.EXPOSURE_MODE -> snapshot.exposureMode == label
+        CameraControl.AUDIO_SENSITIVITY -> snapshot.audioSensitivity == label
+        CameraControl.AUDIO_INPUT -> snapshot.audioInput == label
+        CameraControl.WIND_FILTER -> snapshot.windFilter == label
+        CameraControl.ATTENUATOR -> snapshot.inputAttenuator == label
+        CameraControl.AUDIO_32_BIT_FLOAT -> snapshot.audio32BitFloat == label
+        CameraControl.BASE_ISO -> snapshot.baseIso == label
+        CameraControl.SHUTTER_MODE ->
+            when (snapshot.shutterMode) {
+                CameraShutterMode.ANGLE -> label == "Angle"
+                CameraShutterMode.SPEED -> label == "Speed"
+                null -> false
+            }
+        CameraControl.SHUTTER_LOCK ->
+            snapshot.shutterLocked?.let { (if (it) "Locked" else "Unlocked") == label } == true
+        CameraControl.WHITE_BALANCE_TINT -> snapshot.whiteBalanceTint == label
+        CameraControl.RESOLUTION_FRAMERATE -> snapshot.resolutionFrameRate == label
+        CameraControl.CODEC -> snapshot.codecSelection == label
+        CameraControl.VIBRATION_REDUCTION -> snapshot.vibrationReduction == label
+        CameraControl.ELECTRONIC_VR -> snapshot.electronicVr == label
+    }
+
+/* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
+private const val COLOR_TEMPERATURE_MODE = "Color temp"
+
+private val EXPOSURE_MODE_OPTIONS = listOf("Auto", "P", "A", "S", "M", "U1", "U2", "U3")
+
+/**
+ * The DISP 3 command dashboard: camera-backed health and primary controls at
+ * left, with an iOS-shaped Image / Focus / Audio companion column at right.
+ */
+@Composable
+internal fun CommandDashboard(
+    recording: Boolean,
+    timecode: LiveFrameTimecode?,
+    presentation: CommandDashboardPresentation,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    onMoveTile: (CommandTileKind, Int) -> Unit,
+    onReorderStarted: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(
+            Modifier.weight(2.35f).fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RecordChip(recording)
+                CommandTimecode(timecode, sizeSp = 44f)
+            }
+            CommandHealthStrip(presentation)
+            CommandGrid(
+                tiles = presentation.tiles,
+                controlsEnabled = controlsEnabled,
+                pendingControl = pendingControl,
+                onOpenControl = onOpenControl,
+                onMoveTile = onMoveTile,
+                onReorderStarted = onReorderStarted,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+        }
+        CommandSideColumn(
+            sections = presentation.sideSections,
+            controlsEnabled = controlsEnabled,
+            pendingControl = pendingControl,
+            onOpenControl = onOpenControl,
+            modifier = Modifier.weight(0.85f).fillMaxHeight(),
+        )
+    }
+}
+
+/**
+ * The portrait command surface keeps the system rail outside its viewport and
+ * makes every secondary control reachable through one labeled scroll region.
+ */
+@Composable
+internal fun PortraitCommandDashboard(
+    presentation: CommandDashboardPresentation,
+    timecode: LiveFrameTimecode?,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    onMoveTile: (CommandTileKind, Int) -> Unit,
+    onReorderStarted: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    CommandDashboardScrollContainer(
+        accessibilityLabel = stringResource(R.string.command_dashboard_description),
+        modifier = modifier.background(LiveDesign.background),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            BoxWithConstraints(
+                Modifier.fillMaxWidth().height(80.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                FitScale(maxWidth) {
+                    CommandTimecode(
+                        timecode = timecode,
+                        sizeSp = 52f,
+                    )
+                }
+            }
+            CommandGrid(
+                tiles = presentation.tiles,
+                controlsEnabled = controlsEnabled,
+                pendingControl = pendingControl,
+                onOpenControl = onOpenControl,
+                onMoveTile = onMoveTile,
+                onReorderStarted = onReorderStarted,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(portraitCommandGridHeightDp(presentation.tiles.size).dp),
+            )
+            CommandSecondarySections(
+                sections = presentation.sideSections,
+                controlsEnabled = controlsEnabled,
+                pendingControl = pendingControl,
+                onOpenControl = onOpenControl,
+                compact = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/** Hero timecode with the accent frame field (iOS `CommandTimecodeReadout`). */
+@Composable
+internal fun CommandTimecode(
+    timecode: LiveFrameTimecode?,
+    sizeSp: Float,
+    modifier: Modifier = Modifier,
+) {
+    CameraTimecodeReadout(timecode = timecode, sizeSp = sizeSp, modifier = modifier)
+}
+
+/** Camera-derived Temp / Storage / Camera / Lens / Frame-rate health blocks. */
+@Composable
+private fun CommandHealthStrip(presentation: CommandDashboardPresentation) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(LiveDesign.surface, ChromeShape)
+            .border(1.dp, LiveDesign.hairline, ChromeShape)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CommandStatusBlock(
+            stringResource(R.string.command_health_temp),
+            presentation.temperature,
+            Modifier.weight(0.65f),
+            good = presentation.temperature == stringResource(R.string.temperature_ok),
+        )
+        CommandStatusBlock(stringResource(R.string.command_health_storage), presentation.storage, Modifier.weight(1.1f))
+        CommandStatusBlock(stringResource(R.string.command_health_camera), presentation.camera, Modifier.weight(1f))
+        CommandStatusBlock(stringResource(R.string.command_health_lens), presentation.lens, Modifier.weight(1.25f))
+        CommandStatusBlock(stringResource(R.string.command_health_fps), presentation.frameRate, Modifier.weight(0.65f))
+        CommandStatusBlock(stringResource(R.string.command_health_read), presentation.refreshSummary, Modifier.weight(0.8f))
+    }
+}
+
+@Composable
+private fun CommandStatusBlock(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    good: Boolean = false,
+) {
+    val description = stringResource(R.string.command_health_value_description, label, value)
+    Column(
+        modifier.semantics { contentDescription = description },
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            label.uppercase(),
+            style = chromeStyle(8f, FontWeight.Bold),
+            color = LiveDesign.faint,
+            maxLines = 1,
+        )
+        Text(
+            value,
+            style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
+            color = if (good) LiveDesign.good else LiveDesign.text,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
+    }
+}
+
+/** The three-column primary grid, shared by landscape DISP 3 and portrait controls. */
+@Composable
+internal fun CommandGrid(
+    tiles: List<CommandTilePresentation>,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    onMoveTile: (CommandTileKind, Int) -> Unit,
+    onReorderStarted: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val columns = COMMAND_GRID_COLUMNS
+    val spacing = COMMAND_GRID_SPACING_DP.dp
+    val rows = commandPrimaryGridRows(tiles.size, columns)
+    val latestTiles by rememberUpdatedState(tiles)
+    val latestMoveTile by rememberUpdatedState(onMoveTile)
+    val latestReorderStarted by rememberUpdatedState(onReorderStarted)
+    val latestOpenControl by rememberUpdatedState(onOpenControl)
+    var draggingKind by remember { mutableStateOf<CommandTileKind?>(null) }
+    var dragPosition by remember { mutableStateOf(Offset.Zero) }
+    var suppressCameraClicksUntil by remember { mutableLongStateOf(0L) }
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier.clipToBounds()) {
+        val rowHeight = maxOf(66.dp, (maxHeight - spacing * (rows - 1)) / rows)
+        val spacingPx = with(density) { spacing.toPx() }
+        val tileWidth = (maxWidth - spacing * (columns - 1)) / columns
+        val tileWidthPx = with(density) { tileWidth.toPx() }
+        val rowHeightPx = with(density) { rowHeight.toPx() }
+        val viewportWidthPx = constraints.maxWidth.toFloat()
+        val viewportHeightPx = constraints.maxHeight.toFloat()
+        Box(
+            Modifier.fillMaxSize()
+                .pointerInput(tileWidthPx, rowHeightPx, spacingPx, columns) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { start ->
+                            val current = latestTiles
+                            if (current.isNotEmpty()) {
+                                val index =
+                                    commandGridHitSlot(
+                                        start,
+                                        tileWidthPx,
+                                        rowHeightPx,
+                                        spacingPx,
+                                        columns,
+                                        current.size,
+                                    )
+                                index?.let(current::getOrNull)?.kind?.let { kind ->
+                                    suppressCameraClicksUntil = Long.MAX_VALUE
+                                    draggingKind = kind
+                                    dragPosition = start
+                                    latestReorderStarted()
+                                }
+                            }
+                        },
+                        onDrag = { change, _ ->
+                            val kind = draggingKind
+                            if (kind != null) {
+                                change.consume()
+                                dragPosition = change.position
+                                val current = latestTiles
+                                if (current.isNotEmpty()) {
+                                    val target =
+                                        commandGridSlot(
+                                            change.position,
+                                            tileWidthPx,
+                                            rowHeightPx,
+                                            spacingPx,
+                                            columns,
+                                            current.size,
+                                        )
+                                    if (current.indexOfFirst { it.kind == kind } != target) {
+                                        latestMoveTile(kind, target)
+                                    }
+                                }
+                            }
+                        },
+                        onDragEnd = {
+                            if (draggingKind != null) {
+                                suppressCameraClicksUntil =
+                                    SystemClock.uptimeMillis() +
+                                    COMMAND_REORDER_CLICK_SUPPRESSION_MS
+                            }
+                            draggingKind = null
+                        },
+                        onDragCancel = {
+                            if (draggingKind != null) {
+                                suppressCameraClicksUntil =
+                                    SystemClock.uptimeMillis() +
+                                    COMMAND_REORDER_CLICK_SUPPRESSION_MS
+                            }
+                            draggingKind = null
+                        },
+                    )
+                },
+        ) {
+            tiles.forEachIndexed { index, tile ->
+                val kind = tile.kind
+                key(kind ?: "${tile.title}-$index") {
+                    val dragging = kind != null && kind == draggingKind
+                    val slotX = (index % columns) * (tileWidthPx + spacingPx)
+                    val slotY = (index / columns) * (rowHeightPx + spacingPx)
+                    val offset =
+                        if (dragging) {
+                            IntOffset(
+                                (dragPosition.x - tileWidthPx / 2f)
+                                    .coerceIn(0f, (viewportWidthPx - tileWidthPx).coerceAtLeast(0f))
+                                    .roundToInt(),
+                                (dragPosition.y - rowHeightPx / 2f)
+                                    .coerceIn(0f, (viewportHeightPx - rowHeightPx).coerceAtLeast(0f))
+                                    .roundToInt(),
+                            )
+                        } else {
+                            IntOffset(slotX.roundToInt(), slotY.roundToInt())
+                        }
+                    CommandTile(
+                        tile = tile,
+                        index = index,
+                        tileCount = tiles.size,
+                        controlsEnabled = controlsEnabled,
+                        pendingControl = pendingControl,
+                        onOpenControl = { request ->
+                            if (SystemClock.uptimeMillis() >= suppressCameraClicksUntil) {
+                                latestOpenControl(request)
+                            }
+                        },
+                        onMoveTo = { target ->
+                            kind?.let {
+                                latestMoveTile(it, target)
+                                latestReorderStarted()
+                            }
+                        },
+                        modifier =
+                            Modifier.offset { offset }
+                                .width(tileWidth)
+                                .height(rowHeight)
+                                .graphicsLayer {
+                                    scaleX = if (dragging) 1.04f else 1f
+                                    scaleY = if (dragging) 1.04f else 1f
+                                    shadowElevation = if (dragging) 14.dp.toPx() else 0f
+                                    shape = ChromeShape
+                                }
+                                .zIndex(if (dragging) 1f else 0f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One camera value tile with direct drag and accessibility reorder actions. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CommandTile(
+    tile: CommandTilePresentation,
+    index: Int,
+    tileCount: Int,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    onMoveTo: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val request = tile.request
+    val pending = pendingControl != null
+    val applyingThisControl = request?.control == pendingControl
+    val controlEnabled = request != null && controlsEnabled && !pending
+    // Dashboard layout is app-local, so even read-only camera values remain
+    // reorderable without implying that their Nikon property can be changed.
+    val canMove = tile.kind != null
+    val interactive = controlEnabled || canMove
+    val moveEarlierLabel = stringResource(R.string.command_move_earlier, tile.title)
+    val moveLaterLabel = stringResource(R.string.command_move_later, tile.title)
+    val applyingDescription = stringResource(R.string.command_state_applying)
+    val pendingDescription = stringResource(R.string.command_state_pending)
+    val readOnlyDescription = tile.unavailableReason ?: stringResource(R.string.command_state_read_only)
+    val readOnlyReorderDescription =
+        stringResource(R.string.command_state_read_only_reorder, readOnlyDescription)
+    val lockedReorderDescription = stringResource(R.string.command_state_locked_reorder)
+    val changeReorderDescription = stringResource(R.string.command_state_change_reorder)
+    val changeLabel = stringResource(R.string.command_change_description, tile.title)
+    val valueDescription = stringResource(R.string.command_value_description, tile.title, tile.value)
+    val reorderActions =
+        buildList {
+            if (canMove && index > 0) {
+                add(
+                    CustomAccessibilityAction(moveEarlierLabel) {
+                        onMoveTo(index - 1)
+                        true
+                    },
+                )
+            }
+            if (canMove && index < tileCount - 1) {
+                add(
+                    CustomAccessibilityAction(moveLaterLabel) {
+                        onMoveTo(index + 1)
+                        true
+                    },
+                )
+            }
+        }
+    val description =
+        buildString {
+            append(valueDescription)
+            when {
+                applyingThisControl -> append(applyingDescription)
+                pending -> append(pendingDescription)
+                request == null -> append(readOnlyReorderDescription)
+                !controlsEnabled -> append(lockedReorderDescription)
+                else -> append(changeReorderDescription)
+            }
+        }
+    Column(
+        modifier
+            .background(LiveDesign.surface, ChromeShape)
+            .border(1.dp, LiveDesign.hairline, ChromeShape)
+            .semantics(mergeDescendants = true) {
+                contentDescription = description
+                customActions = reorderActions
+                if (!interactive) disabled()
+            }
+            .combinedClickable(
+                enabled = interactive,
+                onClickLabel = if (controlEnabled) changeLabel else null,
+                onClick = { request?.takeIf { controlEnabled }?.let(onOpenControl) },
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            tile.title.uppercase(),
+            style = chromeStyle(10f, FontWeight.Bold),
+            color = LiveDesign.faint,
+            maxLines = 2,
+            overflow = TextOverflow.Clip,
+        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            FitScale(maxWidth) {
+                Text(
+                    tile.value,
+                    style =
+                        chromeStyle(
+                            commandTileValueSize(tile.value),
+                            FontWeight.Medium,
+                            mono = true,
+                        ),
+                    color = if (controlEnabled) LiveDesign.text else LiveDesign.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+        }
+    }
+}
+
+/** Keeps full camera values visible inside the tight three-column portrait grid. */
+internal fun commandTileValueSize(value: String): Float =
+    when {
+        value.length <= 8 -> 24f
+        value.length <= 11 -> 20f
+        else -> 16f
+    }
+
+/** The compact iOS-shaped Image / Focus / Audio companion column. */
+@Composable
+private fun CommandSideColumn(
+    sections: List<CommandSideSectionPresentation>,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    CommandDashboardScrollContainer(
+        accessibilityLabel = stringResource(R.string.command_side_description),
+        modifier = modifier,
+    ) {
+        CommandSecondarySections(
+            sections = sections,
+            controlsEnabled = controlsEnabled,
+            pendingControl = pendingControl,
+            onOpenControl = onOpenControl,
+            compact = true,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        )
+    }
+}
+
+/** The shared Image / Focus / Audio section stack for both dashboard orientations. */
+@Composable
+private fun CommandSecondarySections(
+    sections: List<CommandSideSectionPresentation>,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier,
+        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
+    ) {
+        sections.forEach { section ->
+            CommandSideSection(
+                section = section,
+                controlsEnabled = controlsEnabled,
+                pendingControl = pendingControl,
+                onOpenControl = onOpenControl,
+                compact = compact,
+            )
+        }
+    }
+}
+
+/**
+ * iOS-shaped vertical command scroller with an explicit visual and TalkBack
+ * affordance whenever more settings remain below the viewport.
+ */
+@Composable
+private fun CommandDashboardScrollContainer(
+    accessibilityLabel: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    val moreDescription = stringResource(R.string.command_more_description)
+    Box(modifier.clipToBounds()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .semantics { contentDescription = accessibilityLabel },
+        ) {
+            content()
+        }
+        if (scrollState.canScrollForward) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, LiveDesign.background),
+                        ),
+                    ),
+            )
+            Text(
+                stringResource(R.string.command_more),
+                style = chromeStyle(9f, FontWeight.Bold),
+                color = LiveDesign.muted,
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 3.dp)
+                        .semantics {
+                            contentDescription = moreDescription
+                        },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CommandSideSection(
+    section: CommandSideSectionPresentation,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    compact: Boolean,
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
+    ) {
+        Text(
+            section.title.uppercase(),
+            style = chromeStyle(if (compact) 8.5f else 9.5f, FontWeight.Bold),
+            color = LiveDesign.faint,
+            modifier = Modifier.padding(start = 2.dp),
+        )
+        section.cells.chunked(2).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                row.forEach { cell ->
+                    CommandSmallTile(
+                        cell = cell,
+                        controlsEnabled = controlsEnabled,
+                        pendingControl = pendingControl,
+                        onOpenControl = onOpenControl,
+                        compact = compact,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                repeat(2 - row.size) { Box(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun CommandSmallTile(
+    cell: CommandTilePresentation,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenControl: (CommandControlRequest) -> Unit,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val request = cell.request
+    val pending = pendingControl != null
+    val applyingThisControl = request?.control == pendingControl
+    val enabled = request != null && controlsEnabled && !pending
+    val applyingDescription = stringResource(R.string.command_state_applying)
+    val pendingDescription = stringResource(R.string.command_state_pending)
+    val readOnlyDescription = cell.unavailableReason ?: stringResource(R.string.command_state_read_only)
+    val lockedDescription = stringResource(R.string.command_state_locked)
+    val changeDescription = stringResource(R.string.camera_state_change_hint)
+    val changeLabel = stringResource(R.string.command_change_description, cell.title)
+    val valueDescription = stringResource(R.string.command_value_description, cell.title, cell.value)
+    val readOnlyValueDescription =
+        stringResource(R.string.command_read_only_description, readOnlyDescription)
+    val description =
+        buildString {
+            append(valueDescription)
+            when {
+                applyingThisControl -> append(applyingDescription)
+                pending -> append(pendingDescription)
+                request == null -> append(readOnlyValueDescription)
+                !controlsEnabled -> append(lockedDescription)
+                else -> append(changeDescription)
+            }
+        }
+    Column(
+        modifier
+            .height(
+                if (compact) COMMAND_COMPACT_SIDE_TILE_HEIGHT else COMMAND_PORTRAIT_SIDE_TILE_HEIGHT,
+            )
+            .background(LiveDesign.surface, ChromeShape)
+            .border(1.dp, LiveDesign.hairline, ChromeShape)
+            .semantics(mergeDescendants = true) {
+                contentDescription = description
+                if (!enabled) disabled()
+            }
+            .combinedClickable(
+                enabled = enabled,
+                onClickLabel = changeLabel,
+                onClick = { request?.let(onOpenControl) },
+            )
+            .padding(horizontal = 8.dp, vertical = if (compact) 3.dp else 5.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 1.dp else 2.dp),
+    ) {
+        Text(
+            cell.title.uppercase(),
+            style = chromeStyle(if (compact) 7.5f else 8.5f, FontWeight.Bold),
+            color = LiveDesign.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
+        Text(
+            cell.value,
+            style = chromeStyle(if (compact) 11.5f else 13f, FontWeight.Medium, mono = true),
+            color = if (enabled) LiveDesign.text else LiveDesign.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
+    }
+}
+
+/** Accessible picker for the fixed set of Swift-validated control labels. */
+@Composable
+internal fun CommandControlDialog(
+    request: CommandControlRequest,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    feedback: CommandControlFeedback?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val pending = pendingControl != null
+    val options = commandControlOptions(request, pendingControl, controlsEnabled)
+    val selectedSuffix = stringResource(R.string.camera_option_selected_suffix)
+    AlertDialog(
+        onDismissRequest = {
+            if (!pending) onDismiss()
+        },
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(request.title)
+                Text(
+                    stringResource(R.string.command_current_value, request.currentValue),
+                    style = chromeStyle(13f, FontWeight.Medium, mono = true),
+                    color = LiveDesign.muted,
+                )
+            }
+        },
+        text = {
+            Column(
+                Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (feedback != null) {
+                    Text(
+                        feedback.message,
+                        color = if (feedback.isError) LiveDesign.rec else LiveDesign.good,
+                        style = chromeStyle(12f, FontWeight.Medium),
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+                if (!controlsEnabled) {
+                    Text(
+                        stringResource(R.string.camera_controls_unavailable),
+                        color = LiveDesign.muted,
+                        style = chromeStyle(12f, FontWeight.Medium),
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+                options.forEach { option ->
+                    val optionDescription =
+                        stringResource(
+                            R.string.camera_option_description,
+                            request.title,
+                            option.label,
+                        ) + if (option.selected) selectedSuffix else ""
+                    TextButton(
+                        onClick = { onSelect(option.label) },
+                        enabled = option.enabled,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    if (option.selected) LiveDesign.accentDim else Color.Transparent,
+                                    ChromeShape,
+                                )
+                                .border(
+                                    1.dp,
+                                    if (option.selected) LiveDesign.accent else LiveDesign.hairline,
+                                    ChromeShape,
+                                )
+                                .semantics {
+                                    contentDescription = optionDescription
+                                },
+                    ) {
+                        Text(
+                            option.label,
+                            style = chromeStyle(16f, FontWeight.Medium, mono = true),
+                            color = if (option.selected) LiveDesign.accent else LiveDesign.text,
+                        )
+                    }
+                }
+                if (pending) {
+                    Text(
+                        stringResource(R.string.camera_applying_change),
+                        style = chromeStyle(12f, FontWeight.Medium),
+                        color = LiveDesign.muted,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss, enabled = !pending) {
+                Text(stringResource(R.string.action_done))
+            }
+        },
+    )
+}

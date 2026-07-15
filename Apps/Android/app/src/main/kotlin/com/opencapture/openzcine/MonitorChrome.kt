@@ -24,7 +24,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -42,8 +41,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick as semanticsOnClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import com.opencapture.openzcine.core.LiveFrameTimecode
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
 // MonitorControls.swift + MonitorExperience.swift). Layout frames come from the
@@ -54,14 +61,19 @@ import androidx.compose.ui.unit.Dp
 /** Rounded chrome shape (iOS `LiveDesign.cornerRadius`). */
 val ChromeShape = RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)
 
-/** iOS `liquidGlass` fallback treatment: glass fill + hairline stroke. */
-fun Modifier.glass(shape: Shape = ChromeShape): Modifier =
-    background(LiveDesign.glass, shape).border(1.dp, LiveDesign.hairline, shape)
+// The glass treatment itself (Modifier.glass / Modifier.chipGlass and the
+// tiered GPU backdrop pipeline behind it) lives in GlassChrome.kt.
 
 /** Click without the Material ripple (chrome buttons highlight by state, not ripple). */
 @Composable
 fun Modifier.chromeClickable(onClick: () -> Unit): Modifier =
+    chromeClickable(enabled = true, onClick = onClick)
+
+/** Disabled chrome controls keep their visual state but reject touch input. */
+@Composable
+fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier =
     clickable(
+        enabled = enabled,
         interactionSource = remember { MutableInteractionSource() },
         indication = null,
         onClick = onClick,
@@ -77,14 +89,44 @@ fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextSty
         platformStyle = PlatformTextStyle(includeFontPadding = false),
     )
 
-/** `HH:MM:SS` in text with the `:FF` frame field tinted accent (iOS TimecodeReadout). */
-fun timecodeAnnotated(frameCount: Long, fps: Int): AnnotatedString {
-    val seconds = frameCount / fps
-    val main = "%02d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60)
-    val frames = ":%02d".format(frameCount % fps)
+/** Camera `HH:MM:SS` with the exact camera-provided `:FF` field tinted accent. */
+fun timecodeAnnotated(timecode: LiveFrameTimecode): AnnotatedString {
+    val label = cameraTimecodeLabel(timecode)
+    val main = label.take(8)
+    val frames = label.drop(8)
     return buildAnnotatedString {
         withStyle(SpanStyle(color = LiveDesign.text)) { append(main) }
         withStyle(SpanStyle(color = LiveDesign.accent)) { append(frames) }
+    }
+}
+
+/** Camera timecode text that never substitutes an elapsed shell clock. */
+@Composable
+fun CameraTimecodeReadout(
+    timecode: LiveFrameTimecode?,
+    sizeSp: Float,
+    weight: FontWeight = FontWeight.Normal,
+    modifier: Modifier = Modifier,
+) {
+    val available = authoritativeTimecode(timecode)
+    if (available == null) {
+        val description = stringResource(R.string.timecode_unavailable_description)
+        Text(
+            UNAVAILABLE_TIMECODE,
+            style = chromeStyle(sizeSp, weight, mono = true),
+            color = LiveDesign.muted,
+            maxLines = 1,
+            modifier = modifier.semantics { contentDescription = description },
+        )
+    } else {
+        val label = cameraTimecodeLabel(available)
+        val description = stringResource(R.string.timecode_description, label)
+        Text(
+            timecodeAnnotated(available),
+            style = chromeStyle(sizeSp, weight, mono = true),
+            maxLines = 1,
+            modifier = modifier.semantics { contentDescription = description },
+        )
     }
 }
 
@@ -92,7 +134,7 @@ fun timecodeAnnotated(frameCount: Long, fps: Int): AnnotatedString {
 @Composable
 fun RecordChip(recording: Boolean) {
     Row(
-        modifier = Modifier.glass(CircleShape).padding(horizontal = 12.dp, vertical = 7.dp),
+        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 12.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -101,7 +143,11 @@ fun RecordChip(recording: Boolean) {
                 .background(if (recording) LiveDesign.rec else LiveDesign.faint, CircleShape),
         )
         Text(
-            text = if (recording) "REC" else "STBY",
+            text =
+                stringResource(
+                    if (recording) R.string.record_state_rec
+                    else R.string.record_state_standby_short,
+                ),
             style = chromeStyle(11f, FontWeight.Bold, mono = true),
             color = if (recording) LiveDesign.text else LiveDesign.muted,
         )
@@ -112,7 +158,7 @@ fun RecordChip(recording: Boolean) {
 @Composable
 fun ReadoutPill(value: String, icon: @Composable () -> Unit) {
     Row(
-        modifier = Modifier.glass(CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -137,13 +183,13 @@ fun FpsChip(signalBars: Int, fps: String) {
             else -> LiveDesign.faint
         }
     Row(
-        modifier = Modifier.glass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
+        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         SignalBarsGlyph(bars = signalBars, tint = tint)
         Text(
-            "FPS",
+            stringResource(R.string.monitor_fps),
             style = chromeStyle(8f, FontWeight.Bold, mono = true),
             color = LiveDesign.faint,
         )
@@ -239,17 +285,23 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
 fun DispButton(
     activeIndex: Int,
     modeCount: Int,
+    isLiveActive: Boolean = activeIndex == 0,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    // iOS tints the whole control info-blue while the LIVE mode (index 0) is active.
-    val labelColor = if (activeIndex == 0) LiveDesign.info else LiveDesign.text
+    // The operator can reorder modes, so live tint follows typed mode state
+    // rather than assuming indicator position zero is always Live.
+    val labelColor = if (isLiveActive) LiveDesign.info else LiveDesign.text
     Column(
         modifier = modifier.glass(ChromeShape).chromeClickable(onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("DISP", style = chromeStyle(12f, FontWeight.Bold), color = labelColor)
+        Text(
+            stringResource(R.string.monitor_disp),
+            style = chromeStyle(12f, FontWeight.Bold),
+            color = labelColor,
+        )
         Row(
             Modifier.padding(top = 3.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -286,8 +338,33 @@ fun AuxCircleButton(
 
 /** Record control: red gradient disc, white ring, disc→stop square (iOS `RecordButton`). */
 @Composable
-fun RecordButton(recording: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Canvas(modifier.chromeClickable(onClick)) {
+fun RecordButton(
+    recording: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    val actionLabel =
+        stringResource(if (recording) R.string.record_action_stop else R.string.record_action_start)
+    val recordingState =
+        stringResource(
+            if (recording) R.string.record_state_recording else R.string.record_state_standby,
+        )
+    Canvas(
+        modifier
+            .chromeClickable(enabled = enabled, onClick = onClick)
+            .semantics {
+                contentDescription = actionLabel
+                stateDescription = recordingState
+                role = Role.Button
+                if (enabled) {
+                    semanticsOnClick(label = actionLabel) {
+                        onClick()
+                        true
+                    }
+                }
+            },
+    ) {
         val d = size.minDimension
         val center = Offset(size.width / 2, size.height / 2)
         if (recording) {
@@ -324,24 +401,48 @@ fun RecordButton(recording: Boolean, modifier: Modifier = Modifier, onClick: () 
     }
 }
 
-/** Battery glyph + percent + device glyph column (iOS `BatteryIndicator`, `.rail`). */
+/** Battery glyph + authoritative value + device glyph column (iOS `BatteryIndicator`, `.rail`). */
 @Composable
-fun BatteryIndicatorColumn(percent: Int, isCamera: Boolean, modifier: Modifier = Modifier) {
-    val low = if (isCamera) percent < 10 else percent <= 15
+fun BatteryIndicatorColumn(
+    percent: Int?,
+    isCamera: Boolean,
+    modifier: Modifier = Modifier,
+    externalPower: Boolean? = null,
+) {
+    val presentation = monitorBatteryPresentation(percent, externalPower)
+    val batteryPercent = presentation.percent
+    val low = batteryPercent?.let { if (isCamera) it < 10 else it <= 15 } == true
     val tint =
         when {
             low -> Color.Red
+            batteryPercent == null && externalPower != true -> LiveDesign.faint
             isCamera -> LiveDesign.accent
             else -> LiveDesign.text.copy(alpha = 0.85f)
         }
+    val source =
+        stringResource(if (isCamera) R.string.battery_source_camera else R.string.battery_source_phone)
+    val description =
+        when {
+            batteryPercent != null && externalPower == true ->
+                stringResource(R.string.battery_description_power, source, batteryPercent)
+            batteryPercent != null ->
+                stringResource(R.string.battery_description_percent, source, batteryPercent)
+            externalPower == true -> stringResource(R.string.battery_description_external, source)
+            else -> stringResource(R.string.battery_description_unavailable, source)
+        }
     Column(
-        modifier = modifier,
+        modifier = modifier.semantics { contentDescription = description },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
     ) {
-        BatteryGlyph(percent = percent, tint = tint, modifier = Modifier.size(22.dp, 11.dp))
+        BatteryGlyph(
+            percent = batteryPercent,
+            tint = tint,
+            modifier = Modifier.size(22.dp, 11.dp),
+            externalPower = presentation.externalPower,
+        )
         Text(
-            "$percent%",
+            presentation.label,
             style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
             color = LiveDesign.text.copy(alpha = 0.72f),
         )
@@ -355,16 +456,22 @@ fun BatteryIndicatorColumn(percent: Int, isCamera: Boolean, modifier: Modifier =
 
 // MARK: - Canvas glyphs (SF Symbol approximations)
 
-/** SF `battery.NNpercent` (horizontal body, quarter-bucket fill). */
+/** SF `battery.NNpercent` (horizontal body, quarter-bucket fill), empty when unavailable. */
 @Composable
-fun BatteryGlyph(percent: Int, tint: Color, modifier: Modifier = Modifier) {
+fun BatteryGlyph(
+    percent: Int?,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    externalPower: Boolean = false,
+) {
+    val batteryPercent = validBatteryPercent(percent)
     // iOS buckets the fill at 0/25/50/75/100%.
     val fill =
         when {
-            percent < 13 -> 0f
-            percent < 38 -> 0.25f
-            percent < 63 -> 0.5f
-            percent < 88 -> 0.75f
+            batteryPercent == null || batteryPercent < 13 -> 0f
+            batteryPercent < 38 -> 0.25f
+            batteryPercent < 63 -> 0.5f
+            batteryPercent < 88 -> 0.75f
             else -> 1f
         }
     Canvas(modifier) {
@@ -393,7 +500,31 @@ fun BatteryGlyph(percent: Int, tint: Color, modifier: Modifier = Modifier) {
                 cornerRadius = CornerRadius(size.height * 0.18f),
             )
         }
+        if (externalPower) {
+            drawBatteryPowerMarker(bodyWidth)
+        }
     }
+}
+
+/** Dark charging bolt with a light keyline, matching iOS's visible powered-state treatment. */
+private fun DrawScope.drawBatteryPowerMarker(bodyWidth: Float): Unit {
+    val centerX = bodyWidth * 0.5f
+    val marker =
+        Path().apply {
+            moveTo(centerX + size.height * 0.08f, size.height * 0.08f)
+            lineTo(centerX - size.height * 0.25f, size.height * 0.53f)
+            lineTo(centerX + size.height * 0.02f, size.height * 0.53f)
+            lineTo(centerX - size.height * 0.14f, size.height * 0.92f)
+            lineTo(centerX + size.height * 0.38f, size.height * 0.42f)
+            lineTo(centerX + size.height * 0.11f, size.height * 0.42f)
+            close()
+        }
+    drawPath(
+        path = marker,
+        color = LiveDesign.text.copy(alpha = 0.92f),
+        style = Stroke(width = 0.9.dp.toPx()),
+    )
+    drawPath(path = marker, color = LiveDesign.background)
 }
 
 /** SF `iphone` outline. */
