@@ -228,28 +228,3 @@ extension OperatorPreferences.QualityBias {
         }
     }
 }
-
-extension OperatorPreferences.StreamPreset {
-    /// `LiveViewImageSize` (0xD1AC) — UINT8 1 QVGA / 2 VGA / 3 XGA, per libgphoto2's Nikon table.
-    /// Bigger preview = more bandwidth, so Fast streams the smallest size.
-    var liveViewImageSize: UInt8 {
-        switch self {
-        case .fast: 1
-        case .balanced: 2
-        case .quality: 3
-        }
-    }
-}
-
-extension OperatorPreferences.QualityBias {
-    /// `LiveViewImageCompression` (0xD1BC). The ZR runtime-enumerates this (no documented table), so
-    /// the mapping is best-effort and **verify-on-HW** — flip the order if the camera reports the
-    /// opposite sense. Higher = lighter compression = more detail.
-    var liveViewImageCompression: UInt8 {
-        switch self {
-        case .latency: 1
-        case .balanced: 2
-        case .detail: 3
-        }
-    }
-}

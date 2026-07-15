@@ -100,7 +100,9 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   poll pacing) bridged into the `LiveFrameSource` seam by `bridge/SwiftCoreLiveFrameSource`;
   `MonitorScreen` streams a connected Swift-core session's frames automatically (gated on a
   STARTED lifecycle), and ending collection — disconnect or backgrounding — always sends
-  `EndLiveView` (the heat-audit rule). Each frame can also carry optional stereo dBFS + peak-hold
+  `EndLiveView` (the heat-audit rule). DISP 3 has no frame, audio, scope, or health collector, so
+  opening the command dashboard also releases the disposable live-view pump. Each frame can also
+  carry optional stereo dBFS + peak-hold
   data resolved by the Swift core from the Nikon live-view sound indicator; Kotlin only presents
   that typed payload and never decodes header offsets or invents meter ballistics. Drive the real
   shell against a camera or fake server:
@@ -108,6 +110,24 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
+- **Link health + preview policy:** Operator Setup → Link presents the same shared Swift
+  `CameraLinkHealthScorer`/`LinkSignalBars` result as iOS, fed only by the Android session state,
+  delivered native live-view frames, and observed property-refresh transport failures. The current
+  facade has no RTT measurement, so it sends `null` rather than inventing a radio value; a requested
+  stream that never produces its first frame ages into recovery. Stream Preset and Quality Bias are
+  app-local operator intent. `AndroidLiveViewPolicyWire` resolves them with the shared thermal and
+  recording caps before `PTPIPClientSession` writes only `LiveViewImageSize` and
+  `LiveViewImageCompression` before a preview-pump restart; the cadence changes only Android's
+  disposable `GetLiveViewImageEx` pulls. Android `PowerManager` severe/critical status reduces that
+  preview request, never a camera recording format, frame rate, codec, or card write. Link-tab
+  preview application reports pending, confirmed, or rejected state; a rejected request starts no
+  new pump unless the last confirmed request can be restored, and health excludes replay from a
+  former stream generation. Link-tab Disconnect/Reconnect returns through `SavedCamerasExperience`,
+  the existing profile-scoped owner of camera-AP, hotspot, and USB cleanup. An explicit USB
+  Disconnect remains on saved-camera home until the physical body detaches/replugs or the operator
+  explicitly reconnects. **[VERIFY-ON-HW]** Test the size/compression selectors,
+  camera warning behavior (only explicit `HOT` currently triggers the strict cap), and a thermal
+  soak with a supported Nikon camera; no generic `WARNING` bit is treated as overheating.
 - **Live focus + level metadata:** optional AF/subject boxes and virtual-horizon angles stay paired
   with the JPEG frame through the Swift/JNI `LiveFrameSource` seam, so Compose draws them against
   the exact aspect-fit, locally de-squeezed feed rect rather than the larger monitor zone. View
@@ -178,11 +198,12 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   indicator stays explicitly `NO DATA`. The debug feed is the only synthetic source and expands
   the panel to visibly say `DEBUG FIXTURE — NOT CAMERA AUDIO`; release builds cannot enable that
   feed. This is camera-header metering, not a phone-audio or decoded-playback tap.
-- **Local framing assists:** Operator Setup → View Assist persists a monitor-only rule-of-thirds
-  grid, centre crosshair, 2.39:1 / 16:9 delivery-frame guide, and horizontal anamorphic
-  presentation choice. `FramingAssists.kt` composes them inside the existing shared-core feed
-  zone; clean output retains delivery framing and de-squeeze presentation while hiding the busier
-  grid and crosshair. These controls are explicitly local — they never write Nikon's camera-owned
+- **Local framing assists:** Operator Setup → View Assist persists monitor-only, multi-select
+  Film/Social delivery frames with optional outside masking; independent thirds, phi, and diagonal
+  grids; a centre crosshair; and 1×–2× horizontal or vertical de-squeeze. `FramingAssists.kt`
+  resolves the live overlay against the decoded image's exact aspect-fit content rectangle. Clean
+  output retains delivery framing, masking, and de-squeeze while hiding the busier grids and
+  crosshair. These controls are explicitly local; they never write Nikon's camera-owned
   `GridDisplay` property.
 - **Bluetooth / hardware media remote shutter:** Operator Setup → Controls has an **off by
   default** monitor-only media-remote switch. While a connected live monitor is frontmost and the

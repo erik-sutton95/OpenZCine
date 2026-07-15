@@ -79,9 +79,7 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
-import com.opencapture.openzcine.settings.LocalDesqueezePresentation
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import com.opencapture.openzcine.settings.LocalFramingGuide
 import kotlin.math.max
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -517,7 +515,13 @@ private fun ProgressivePlayer(
                     zoom = nextZoom,
                     horizontalPresentationScale =
                         if (framingAssistsVisible) {
-                            framingConfiguration.desqueezePresentation.horizontalPresentationScale
+                            framingConfiguration.horizontalPresentationScale
+                        } else {
+                            1f
+                        },
+                    verticalPresentationScale =
+                        if (framingAssistsVisible) {
+                            framingConfiguration.verticalPresentationScale
                         } else {
                             1f
                         },
@@ -563,7 +567,9 @@ private fun ProgressivePlayer(
 
     val cacheFailed = entry.state == MediaCacheState.FAILED
     val horizontalPresentationScale =
-        if (framingAssistsVisible) framingConfiguration.desqueezePresentation.horizontalPresentationScale else 1f
+        if (framingAssistsVisible) framingConfiguration.horizontalPresentationScale else 1f
+    val verticalPresentationScale =
+        if (framingAssistsVisible) framingConfiguration.verticalPresentationScale else 1f
     Box(
         Modifier.fillMaxSize()
             .clipToBounds()
@@ -580,7 +586,7 @@ private fun ProgressivePlayer(
                 Modifier.fillMaxSize()
                     .graphicsLayer {
                         scaleX = zoom * horizontalPresentationScale
-                        scaleY = zoom
+                        scaleY = zoom * verticalPresentationScale
                         translationX = pan.x
                         translationY = pan.y
                     },
@@ -708,7 +714,13 @@ private fun ProgressivePlayer(
                             zoom = zoom,
                             horizontalPresentationScale =
                                 if (framingAssistsVisible) {
-                                    framingConfiguration.desqueezePresentation.horizontalPresentationScale
+                                    framingConfiguration.horizontalPresentationScale
+                                } else {
+                                    1f
+                                },
+                            verticalPresentationScale =
+                                if (framingAssistsVisible) {
+                                    framingConfiguration.verticalPresentationScale
                                 } else {
                                     1f
                                 },
@@ -734,10 +746,10 @@ private fun ProgressivePlayer(
 
 private val LocalFramingAssistConfiguration.hasPlaybackFramingOverlay: Boolean
     get() =
-        ruleOfThirdsEnabled ||
+        drawsGrid ||
             centerCrosshairEnabled ||
-            guide != LocalFramingGuide.OFF ||
-            desqueezePresentation != LocalDesqueezePresentation.OFF
+            drawsGuides ||
+            desqueezeEnabled
 
 private fun playbackFailureMessage(
     error: PlaybackException?,

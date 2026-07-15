@@ -141,6 +141,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var liveViewPumpActive = false
     private var liveViewStopRequested = false
     private var mediaModeActive = false
+    /// Preview-only pacing selected by the shared Android live-view policy.
+    /// Access while `commandLifecycleLock` is held before start, then copied
+    /// into the pump under `liveViewCondition`; this never changes camera
+    /// recording settings or the camera's card write cadence.
+    private var configuredLiveViewFrameIntervalNanoseconds =
+        PTPIPClientSession.liveViewFrameIntervalNanoseconds
 
     /// Event-channel ownership. PTP-IP events arrive on their own TCP socket,
     /// so a dedicated reader can drain sparse camera pushes without blocking
@@ -603,6 +609,61 @@ public final class PTPIPClientSession: @unchecked Sendable {
         try transactExpectingOK(operation)
     }
 
+    // MARK: - Android live-view configuration
+
+    /// Applies one shared-policy preview request before the next live-view start.
+    ///
+    /// The two Nikon properties control only the monitor JPEG stream. They are
+    /// deliberately configured through the same `SetDevicePropValueEx` path
+    /// as the iOS shell, and the frame interval only changes Android's
+    /// `GetLiveViewImageEx` pull cadence. No recording property is read or
+    /// written here.
+    @discardableResult
+    public func configureLiveView(
+        imageSize: UInt8,
+        compression: UInt8,
+        frameIntervalNanoseconds: UInt64
+    ) -> Bool {
+        guard
+            (1...3).contains(imageSize),
+            (1...3).contains(compression),
+            frameIntervalNanoseconds >= Self.liveViewFrameIntervalNanoseconds,
+            frameIntervalNanoseconds <= Self.liveViewFrameIntervalNanoseconds * 2
+        else { return false }
+
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else { return false }
+
+        liveViewCondition.lock()
+        guard !liveViewPumpActive else {
+            liveViewCondition.unlock()
+            return false
+        }
+        configuredLiveViewFrameIntervalNanoseconds = frameIntervalNanoseconds
+        liveViewCondition.unlock()
+
+        let sizeApplied = setLiveViewByte(.liveViewImageSize, value: imageSize)
+        let compressionApplied = setLiveViewByte(.liveViewImageCompression, value: compression)
+        return sizeApplied && compressionApplied
+    }
+
+    /// Mirrors iOS's best-effort preview property write. A body may reject an
+    /// unverified compression enum, but the monitor still attempts to start
+    /// with the latest safe request instead of mutating a recording setting.
+    private func setLiveViewByte(_ property: PTPPropertyCode, value: UInt8) -> Bool {
+        do {
+            try transactExpectingOK(
+                .setDevicePropValueEx,
+                parameters: [property.rawValue],
+                dataPhase: .dataOut,
+                dataOut: Data([value]))
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Camera controls
 
     /// Applies one human-readable Android camera-control selection through the
@@ -1035,7 +1096,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Poll pacing uses an absolute schedule (`start + n × interval`), never an
     /// elapsed-time gate, per the wall-clock aliasing lesson.
     public func startLiveView(
-        frameIntervalNanoseconds: UInt64 = PTPIPClientSession.liveViewFrameIntervalNanoseconds,
+        frameIntervalNanoseconds: UInt64? = nil,
         onFrame: @escaping @Sendable (PTPLiveViewFrame, Int64) -> Void,
         onEnded: @escaping @Sendable () -> Void
     ) throws {
@@ -1050,6 +1111,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
         liveViewPumpActive = true
         liveViewStopRequested = false
+        let effectiveFrameIntervalNanoseconds =
+            frameIntervalNanoseconds ?? configuredLiveViewFrameIntervalNanoseconds
         liveViewCondition.unlock()
 
         do {
@@ -1064,7 +1127,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
         Thread.detachNewThread { [self] in
             runLiveViewPump(
-                frameIntervalNanoseconds: frameIntervalNanoseconds,
+                frameIntervalNanoseconds: effectiveFrameIntervalNanoseconds,
                 onFrame: onFrame, onEnded: onEnded)
         }
     }

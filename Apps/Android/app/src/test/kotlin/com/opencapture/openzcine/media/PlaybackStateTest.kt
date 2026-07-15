@@ -95,6 +95,17 @@ class PlaybackStateTest {
                 horizontalPresentationScale = 0.5f,
             ),
         )
+        assertEquals(
+            PlaybackPan(x = 1_500f, y = -300f),
+            clampPlaybackPan(
+                requested = PlaybackPan(x = 2_000f, y = -900f),
+                viewportWidth = 1_000f,
+                viewportHeight = 600f,
+                zoom = 4f,
+                horizontalPresentationScale = 1f,
+                verticalPresentationScale = 0.5f,
+            ),
+        )
     }
 
     private fun clip(

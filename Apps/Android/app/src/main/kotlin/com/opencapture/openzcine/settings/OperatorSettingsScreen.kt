@@ -59,14 +59,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.openzcine.AndroidThermalTier
 import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
+import com.opencapture.openzcine.bridge.LinkHealthPresentation
+import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.core.CameraSession
+import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
@@ -82,6 +89,7 @@ import com.opencapture.openzcine.lut.RedLutDownloadGate
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutEntry
 import com.opencapture.openzcine.lut.StoredLutFailure
+import com.opencapture.openzcine.rememberAndroidThermalTier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -90,9 +98,8 @@ import kotlinx.coroutines.withContext
 /**
  * Operator Setup rail tabs — the Android v1 subset of the iOS
  * `OperatorSettingsTab` set (Link / View Assist / Controls / Display /
- * Storage / System). Android exposes every tab whose current controls are
- * locally actionable; camera-property and integration tabs arrive with their
- * underlying platform adapters.
+ * Storage / System). The Link tab is bound to the active Android session;
+ * every other tab exposes controls the shell can already honor.
  */
 public enum class OperatorSettingsTab(
     public val title: String,
@@ -101,6 +108,7 @@ public enum class OperatorSettingsTab(
     public val subtitle: String,
     public val pill: String,
 ) {
+    LINK("Link", "Link", "Connection", "Transport & preview", "LIVE"),
     ASSIST("View Assist", "Assist", "Scopes & overlays", "Behavior for live-view tools.", "ASSIST"),
     CONTROLS("Controls", "Controls", "Dials & safety", "Touch behavior and safety.", "TOUCH"),
     DISPLAY("Display", "Display", "Live view", "Live view buttons and chrome.", "VISIBILITY"),
@@ -128,6 +136,11 @@ internal fun OperatorSettingsScreen(
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
     lutLibrary: AndroidLutLibrary? = null,
+    linkHealth: AndroidLinkHealthMonitor? = null,
+    liveViewSource: SwiftCoreLiveFrameSource? = null,
+    activeTransportLabel: String? = null,
+    onDisconnect: (() -> Unit)? = null,
+    onReconnect: (() -> Unit)? = null,
     initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
     onClose: () -> Unit,
 ) {
@@ -173,16 +186,22 @@ internal fun OperatorSettingsScreen(
             // The floating PanelCloseButton overlays this row's leading corner
             // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
             // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
-            SettingsHeader(session, compact)
+            SettingsHeader(session, linkHealth, compact)
             if (compact) {
                 SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
                 SettingsContentPane(
                     selectedTab,
+                    session,
                     settings,
                     assistState,
                     mediaCacheStore,
                     frameioController,
                     lutLibrary,
+                    linkHealth,
+                    liveViewSource,
+                    activeTransportLabel,
+                    onDisconnect,
+                    onReconnect,
                     onSettingToggle = toggleSetting,
                     onAssistToggle = toggleAssist,
                     onInteraction = emitHaptic,
@@ -197,11 +216,17 @@ internal fun OperatorSettingsScreen(
                     SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
                     SettingsContentPane(
                         selectedTab,
+                        session,
                         settings,
                         assistState,
                         mediaCacheStore,
                         frameioController,
                         lutLibrary,
+                        linkHealth,
+                        liveViewSource,
+                        activeTransportLabel,
+                        onDisconnect,
+                        onReconnect,
                         onSettingToggle = toggleSetting,
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
@@ -219,14 +244,18 @@ internal fun OperatorSettingsScreen(
 
 /** Eyebrow + title with the live tile pinned trailing (iOS `settingsTop`). */
 @Composable
-private fun SettingsHeader(session: CameraSession?, compact: Boolean) {
+private fun SettingsHeader(
+    session: CameraSession?,
+    linkHealth: AndroidLinkHealthMonitor?,
+    compact: Boolean,
+) {
     if (compact) {
         Column(
             Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             SettingsTitle(Modifier.padding(start = 45.dp))
-            SettingsLiveTile(session, Modifier.fillMaxWidth(), expanded = true)
+            SettingsLiveTile(session, linkHealth, Modifier.fillMaxWidth(), expanded = true)
         }
     } else {
         Row(
@@ -235,7 +264,7 @@ private fun SettingsHeader(session: CameraSession?, compact: Boolean) {
         ) {
             SettingsTitle()
             Spacer(Modifier.weight(1f))
-            SettingsLiveTile(session, expanded = false)
+            SettingsLiveTile(session, linkHealth, expanded = false)
         }
     }
 }
@@ -262,6 +291,7 @@ private fun SettingsTitle(modifier: Modifier = Modifier) {
 @Composable
 private fun SettingsLiveTile(
     session: CameraSession?,
+    linkHealth: AndroidLinkHealthMonitor?,
     modifier: Modifier = Modifier,
     expanded: Boolean,
 ) {
@@ -269,13 +299,21 @@ private fun SettingsLiveTile(
     val state by (session?.state ?: disconnectedState).collectAsState()
     val standalone = session == null
     val linked = state is CameraSessionState.Connected
-    val tint = if (linked) LiveDesign.good else LiveDesign.faint
+    val health = linkHealth?.presentation ?: LinkHealthPresentation()
+    val tint =
+        when {
+            !linked -> LiveDesign.faint
+            health.signalBars >= 3 -> LiveDesign.good
+            health.signalBars == 2 -> LiveDesign.accent
+            else -> LiveDesign.rec
+        }
     val detail =
         if (standalone) {
             "No camera · local setup only"
         } else {
             when (val current = state) {
-                is CameraSessionState.Connected -> "${current.identity.name} · PTP-IP"
+                is CameraSessionState.Connected ->
+                    health.detail.ifBlank { "${current.identity.name} · PTP-IP" }
                 CameraSessionState.Connecting -> "Connecting…"
                 CameraSessionState.Disconnected -> "No camera"
             }
@@ -305,14 +343,12 @@ private fun SettingsLiveTile(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // ponytail: bars are binary (4 or 0) until Android grows the iOS
-        // linkHealth score; swap in the quartile mapping with it.
         Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
             repeat(4) { index ->
                 Box(
                     Modifier.size(width = 3.dp, height = (6 + index * 3).dp)
                         .background(
-                            if (linked) tint.copy(alpha = 0.52f + index * 0.12f)
+                            if (index < health.signalBars) tint.copy(alpha = 0.52f + index * 0.12f)
                             else LiveDesign.hairline,
                             CircleShape,
                         )
@@ -419,11 +455,17 @@ private fun SettingsTabButton(tab: OperatorSettingsTab, active: Boolean, onClick
 @Composable
 private fun SettingsContentPane(
     tab: OperatorSettingsTab,
+    session: CameraSession?,
     settings: OperatorSettings,
     assistState: AssistState,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController?,
     lutLibrary: AndroidLutLibrary?,
+    linkHealth: AndroidLinkHealthMonitor?,
+    liveViewSource: SwiftCoreLiveFrameSource?,
+    activeTransportLabel: String?,
+    onDisconnect: (() -> Unit)?,
+    onReconnect: (() -> Unit)?,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
@@ -482,6 +524,17 @@ private fun SettingsContentPane(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     when (tab) {
+                        OperatorSettingsTab.LINK ->
+                            LinkRows(
+                                session = session,
+                                settings = settings,
+                                linkHealth = linkHealth,
+                                liveViewSource = liveViewSource,
+                                activeTransportLabel = activeTransportLabel,
+                                onDisconnect = onDisconnect,
+                                onReconnect = onReconnect,
+                                onInteraction = onInteraction,
+                            )
                         OperatorSettingsTab.ASSIST ->
                             AssistRows(
                                 settings,
@@ -503,6 +556,175 @@ private fun SettingsContentPane(
     }
 }
 
+/** Active camera transport, health, and Swift-owned preview policy. */
+@Composable
+private fun LinkRows(
+    session: CameraSession?,
+    settings: OperatorSettings,
+    linkHealth: AndroidLinkHealthMonitor?,
+    liveViewSource: SwiftCoreLiveFrameSource?,
+    activeTransportLabel: String?,
+    onDisconnect: (() -> Unit)?,
+    onReconnect: (() -> Unit)?,
+    onInteraction: () -> Unit,
+) {
+    val disconnectedProperties = remember { MutableStateFlow(CameraPropertySnapshot()) }
+    val cameraProperties by (session?.cameraProperties ?: disconnectedProperties).collectAsState()
+    val noPreviewApplication =
+        remember { MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle) }
+    val previewApplication by
+        (liveViewSource?.previewState ?: noPreviewApplication).collectAsState()
+    val health = linkHealth?.presentation ?: LinkHealthPresentation()
+    val thermalTier = rememberAndroidThermalTier()
+    val warningLabel =
+        when (cameraProperties.temperatureStatus) {
+            CameraTemperatureStatus.NORMAL -> "OK"
+            CameraTemperatureStatus.WARNING -> "CHECK"
+            CameraTemperatureStatus.HOT -> "HOT"
+            null -> "Not reported"
+        }
+    val thermalPreviewLabel =
+        when (thermalTier) {
+            AndroidThermalTier.NOMINAL -> "Nominal · full preview request"
+            AndroidThermalTier.FAIR -> "Fair · full preview request"
+            AndroidThermalTier.SERIOUS -> "Serious · preview reduced"
+            AndroidThermalTier.CRITICAL -> "Critical · preview minimized"
+        }
+    val previewApplicationLabel =
+        when (val state = previewApplication) {
+            SwiftLiveViewPreviewState.Idle -> "Waiting for live view"
+            is SwiftLiveViewPreviewState.Pending -> "Applying preview request"
+            is SwiftLiveViewPreviewState.Applied -> "Applied"
+            is SwiftLiveViewPreviewState.Rejected ->
+                if (state.retainedRequest != null) {
+                    "Rejected · keeping prior stream"
+                } else {
+                    "Rejected · live view paused"
+                }
+        }
+
+    SettingsGroupCard(
+        title = "Link Health",
+        caption =
+            if (session == null) {
+                "No active camera. Link measurements appear only after a session connects."
+            } else {
+                health.detail
+            },
+    ) {
+        LinkHealthMeter(score = health.score, signalBars = health.signalBars)
+        SettingsInlineRow(title = "Health", showTopDivider = false) {
+            SettingsValueText(if (session == null) "No Link" else "${health.score}%")
+        }
+        SettingsInlineRow(title = "Current Transport") {
+            SettingsValueText(activeTransportLabel ?: "Not reported")
+        }
+    }
+
+    SettingsGroupCard(
+        title = "Preview Stream",
+        caption =
+            "These choices restart only the disposable live-view JPEG stream through Swift. Recording format and card writes stay unchanged.",
+    ) {
+        Text(
+            "Stream Preset",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        Row(
+            Modifier.fillMaxWidth().selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            LiveViewStreamPreset.entries.forEach { preset ->
+                FramingAssistChoice(
+                    label = preset.label,
+                    selected = settings.streamPreset == preset,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    settings.streamPreset = preset
+                    onInteraction()
+                }
+            }
+        }
+        Text(
+            "Quality Bias",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        Row(
+            Modifier.fillMaxWidth().selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            LiveViewQualityBias.entries.forEach { bias ->
+                FramingAssistChoice(
+                    label = bias.label,
+                    selected = settings.qualityBias == bias,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    settings.qualityBias = bias
+                    onInteraction()
+                }
+            }
+        }
+        SettingsInlineRow(title = "Thermal Preview", showTopDivider = false) {
+            SettingsValueText(thermalPreviewLabel)
+        }
+        SettingsInlineRow(title = "Preview Apply") {
+            SettingsValueText(
+                if (liveViewSource == null) "Native source unavailable" else previewApplicationLabel,
+            )
+        }
+        SettingsInlineRow(title = "Camera Warning") { SettingsValueText(warningLabel) }
+    }
+
+    SettingsGroupCard(
+        title = "Connection",
+        caption =
+            "Reconnect returns to the saved-camera owner so Wi-Fi and USB cleanup stay scoped to the active profile.",
+    ) {
+        SettingsInlineRow(title = "Disconnect", showTopDivider = false) {
+            if (onDisconnect == null) {
+                SettingsValueText(if (session == null) "No active camera" else "No saved profile")
+            } else {
+                SettingsLinkAction("Disconnect", onDisconnect)
+            }
+        }
+        SettingsInlineRow(title = "Reconnect") {
+            if (onReconnect == null) {
+                SettingsValueText("No saved profile")
+            } else {
+                SettingsLinkAction("Reconnect", onReconnect)
+            }
+        }
+    }
+}
+
+/** Compact iOS-style dash meter backed by the shared Swift score and bars. */
+@Composable
+private fun LinkHealthMeter(score: Int, signalBars: Int) {
+    val tint =
+        when {
+            signalBars >= 3 -> LiveDesign.good
+            signalBars == 2 -> LiveDesign.accent
+            signalBars == 1 -> LiveDesign.rec
+            else -> LiveDesign.faint
+        }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(12) { index ->
+            val threshold = (index + 1) * 100 / 12
+            Box(
+                Modifier.weight(1f)
+                    .height(6.dp)
+                    .background(if (score >= threshold) tint else LiveDesign.hairline, CircleShape),
+            )
+        }
+    }
+}
+
 /**
  * View Assist tab. Effect switches are alternate controls for the monitor's
  * shared [AssistState]; local framing controls use [OperatorSettings] and
@@ -518,7 +740,12 @@ private fun AssistRows(
     onInteraction: () -> Unit,
 ) {
     SettingsRowCard {
-        AssistTool.entries.forEachIndexed { index, tool ->
+        // Local framing tools have their own configuration group below. They
+        // do not belong to AssistState, which intentionally owns only image
+        // effects, scopes, and audio metering.
+        AssistTool.entries
+            .filterNot { it in AssistTool.framingTools }
+            .forEachIndexed { index, tool ->
             SettingsSwitchRow(
                 tool.settingsTitle,
                 isOn = assistState.isOn(tool),
@@ -602,15 +829,67 @@ private fun AssistRows(
     }
     SettingsGroupCard(
         title = "Local Framing",
-        caption = "OpenZCine draws these monitor-only overlays. They never change the camera's Grid Display setting.",
+        caption = "OpenZCine draws these monitor-only overlays over the visible feed. They never change the camera's Grid Display setting.",
     ) {
         FramingAssistSwitchRow(
-            title = "Rule-of-Thirds Grid",
-            isOn = settings.ruleOfThirdsEnabled.value,
+            title = "Show Delivery Guides",
+            isOn = settings.guidesVisible.value,
             showTopDivider = false,
         ) {
-            onSettingToggle(settings.ruleOfThirdsEnabled)
+            // Use the same seeding behavior as the monitor toolbar: turning
+            // on an empty guide selection must produce the iOS-default 2.39:1
+            // frame instead of an apparently broken empty overlay.
+            settings.toggleLocalFramingTool(AssistTool.GUIDES)
+            onInteraction()
         }
+        Text(
+            "Delivery Guide Family",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        FramingGuideFamilyChoices(
+            selected = settings.guideFamily,
+            onSelect = { family ->
+                settings.guideFamily = family
+                onInteraction()
+            },
+        )
+        FramingGuideChoices(
+            family = settings.guideFamily,
+            selected = settings.selectedGuideRatios,
+            onToggle = { ratio ->
+                settings.toggleGuideRatio(ratio)
+                onInteraction()
+            },
+        )
+        FramingAssistSwitchRow(
+            title = "Mask Outside Selected Frames",
+            isOn = settings.guideMaskEnabled.value,
+        ) {
+            onSettingToggle(settings.guideMaskEnabled)
+        }
+        Text(
+            "Composition Grid",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        FramingAssistSwitchRow(
+            title = "Show Composition Grid",
+            isOn = settings.localGridVisible.value,
+        ) {
+            // Likewise, re-enabling an otherwise empty grid starts with
+            // thirds so the visible result always matches the control state.
+            settings.toggleLocalFramingTool(AssistTool.GRID)
+            onInteraction()
+        }
+        FramingGridChoices(
+            thirds = settings.ruleOfThirdsEnabled.value,
+            phi = settings.phiGridEnabled.value,
+            diagonal = settings.diagonalGridEnabled.value,
+            onToggleThirds = { onSettingToggle(settings.ruleOfThirdsEnabled) },
+            onTogglePhi = { onSettingToggle(settings.phiGridEnabled) },
+            onToggleDiagonal = { onSettingToggle(settings.diagonalGridEnabled) },
+        )
         FramingAssistSwitchRow(
             title = "Centre Crosshair",
             isOn = settings.centerCrosshairEnabled.value,
@@ -618,31 +897,42 @@ private fun AssistRows(
             onSettingToggle(settings.centerCrosshairEnabled)
         }
         Text(
-            "Frame Guide",
+            "Desqueeze",
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
-        FramingGuideChoices(
-            selected = settings.framingGuide,
-            onSelect = { guide ->
-                settings.framingGuide = guide
+        FramingAssistSwitchRow(
+            title = "Enable Local Desqueeze",
+            isOn = settings.desqueezeEnabled.value,
+        ) {
+            onSettingToggle(settings.desqueezeEnabled)
+        }
+        Text(
+            "Ratio",
+            style = chromeStyle(11.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        DesqueezeRatioChoices(
+            selected = settings.desqueezeRatio,
+            onSelect = { ratio ->
+                settings.desqueezeRatio = ratio
                 onInteraction()
             },
         )
         Text(
-            "Desqueeze Presentation",
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            "Compressed Axis",
+            style = chromeStyle(11.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
-        DesqueezePresentationChoices(
-            selected = settings.desqueezePresentation,
-            onSelect = { presentation ->
-                settings.desqueezePresentation = presentation
+        DesqueezeOrientationChoices(
+            selected = settings.desqueezeOrientation,
+            onSelect = { orientation ->
+                settings.desqueezeOrientation = orientation
                 onInteraction()
             },
         )
         Text(
-            "Camera Grid Display remains camera-owned and unchanged.",
+            "Guides, masks, grids, crosshair, and desqueeze are local display assists. Camera Grid Display remains camera-owned and unchanged.",
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
@@ -921,47 +1211,111 @@ private fun FramingAssistSwitchRow(
     }
 }
 
-/** Radio-choice row for the supported local delivery-frame ratios. */
+/** Radio choices for the active delivery-guide family tab. */
 @Composable
-private fun FramingGuideChoices(
-    selected: LocalFramingGuide,
-    onSelect: (LocalFramingGuide) -> Unit,
+private fun FramingGuideFamilyChoices(
+    selected: LocalFramingGuideFamily,
+    onSelect: (LocalFramingGuideFamily) -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        LocalFramingGuide.entries.forEach { guide ->
+        LocalFramingGuideFamily.entries.forEach { family ->
             FramingAssistChoice(
-                label = guide.label,
-                selected = guide == selected,
+                label = family.label,
+                selected = family == selected,
                 modifier = Modifier.weight(1f),
-            ) { onSelect(guide) }
+            ) { onSelect(family) }
         }
     }
 }
 
-/** Two compact radio rows for every supported local de-squeeze factor. */
+/** Multi-select ratio rows for the active iOS-equivalent delivery family. */
 @Composable
-private fun DesqueezePresentationChoices(
-    selected: LocalDesqueezePresentation,
-    onSelect: (LocalDesqueezePresentation) -> Unit,
+private fun FramingGuideChoices(
+    family: LocalFramingGuideFamily,
+    selected: Set<LocalFramingAspectRatio>,
+    onToggle: (LocalFramingAspectRatio) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalFramingAspectRatio.forFamily(family).chunked(3).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                row.forEach { ratio ->
+                    FramingAssistToggleChoice(
+                        label = ratio.label,
+                        checked = ratio in selected,
+                        modifier = Modifier.weight(1f),
+                    ) { onToggle(ratio) }
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+/** Independent thirds, phi, and diagonal composition-grid choices. */
+@Composable
+private fun FramingGridChoices(
+    thirds: Boolean,
+    phi: Boolean,
+    diagonal: Boolean,
+    onToggleThirds: () -> Unit,
+    onTogglePhi: () -> Unit,
+    onToggleDiagonal: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        FramingAssistToggleChoice(
+            label = "Thirds",
+            checked = thirds,
+            modifier = Modifier.weight(1f),
+            onClick = onToggleThirds,
+        )
+        FramingAssistToggleChoice(
+            label = "Phi Grid",
+            checked = phi,
+            modifier = Modifier.weight(1f),
+            onClick = onTogglePhi,
+        )
+        FramingAssistToggleChoice(
+            label = "Diagonal",
+            checked = diagonal,
+            modifier = Modifier.weight(1f),
+            onClick = onToggleDiagonal,
+        )
+    }
+}
+
+/** Compact radio rows for every supported local de-squeeze factor. */
+@Composable
+private fun DesqueezeRatioChoices(
+    selected: LocalDesqueezeRatio,
+    onSelect: (LocalDesqueezeRatio) -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth().selectableGroup(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        LocalDesqueezePresentation.entries.chunked(3).forEach { row ->
+        LocalDesqueezeRatio.entries.chunked(3).forEach { row ->
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                row.forEach { presentation ->
+                row.forEach { ratio ->
                     FramingAssistChoice(
-                        label = presentation.label,
-                        selected = presentation == selected,
+                        label = ratio.label,
+                        selected = ratio == selected,
                         modifier = Modifier.weight(1f),
-                    ) { onSelect(presentation) }
+                    ) { onSelect(ratio) }
                 }
             }
         }
@@ -984,6 +1338,26 @@ private fun LevelStyleChoices(
                 selected = style == selected,
                 modifier = Modifier.weight(1f),
             ) { onSelect(style) }
+        }
+    }
+}
+
+/** Radio choice for the source axis compressed by the local anamorphic capture. */
+@Composable
+private fun DesqueezeOrientationChoices(
+    selected: LocalDesqueezeOrientation,
+    onSelect: (LocalDesqueezeOrientation) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalDesqueezeOrientation.entries.forEach { orientation ->
+            FramingAssistChoice(
+                label = orientation.label,
+                selected = orientation == selected,
+                modifier = Modifier.weight(1f),
+            ) { onSelect(orientation) }
         }
     }
 }
@@ -1011,6 +1385,39 @@ private fun FramingAssistChoice(
             label,
             style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
             color = if (selected) LiveDesign.accent else LiveDesign.muted,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Accessible multi-select choice shared by guide-ratio and grid-pattern controls. */
+@Composable
+private fun FramingAssistToggleChoice(
+    label: String,
+    checked: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier
+            .height(48.dp)
+            .background(
+                if (checked) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
+                ChromeShape,
+            )
+            .border(1.dp, if (checked) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
+            .toggleable(
+                value = checked,
+                role = Role.Checkbox,
+                onValueChange = { onClick() },
+            )
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
+            color = if (checked) LiveDesign.accent else LiveDesign.muted,
             maxLines = 1,
         )
     }

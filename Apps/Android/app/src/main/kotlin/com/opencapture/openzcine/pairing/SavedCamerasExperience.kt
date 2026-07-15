@@ -62,6 +62,40 @@ private sealed interface SavedCameraPhase {
 }
 
 /**
+ * Applies a deliberate monitor action to USB auto-reconnect suppression. A
+ * disconnect holds an already-attached profile at saved-camera home; an
+ * explicit reconnect clears only that profile's hold.
+ */
+internal fun usbAutoReconnectSuppressionAfterUserAction(
+    suppressedHosts: Set<String>,
+    record: SavedCameraRecord?,
+    reconnect: Boolean,
+): Set<String> =
+    when {
+        record?.transport != SavedCameraTransport.USB_C -> suppressedHosts
+        reconnect -> suppressedHosts - record.host
+        else -> suppressedHosts + record.host
+    }
+
+/** Suppressions only survive while the physical USB attachment is still present. */
+internal fun attachedUsbAutoReconnectSuppressions(
+    suppressedHosts: Set<String>,
+    attachedHosts: Set<String>,
+): Set<String> = suppressedHosts.intersect(attachedHosts)
+
+/** Whether an attached saved USB profile may receive its one auto-reconnect attempt. */
+internal fun mayAutoReconnectUsb(
+    record: SavedCameraRecord,
+    attachedHosts: Set<String>,
+    attemptedHosts: Set<String>,
+    suppressedHosts: Set<String>,
+): Boolean =
+    record.transport == SavedCameraTransport.USB_C &&
+        record.host in attachedHosts &&
+        record.host !in attemptedHosts &&
+        record.host !in suppressedHosts
+
+/**
  * Saved-camera startup surface, matching the iOS shell's durable camera home.
  *
  * It is deliberately the reconnect owner: camera-AP records rejoin only their
@@ -77,6 +111,10 @@ public fun SavedCamerasExperience(
     onPairNewCamera: () -> Unit,
     onOpenSettings: () -> Unit,
     onRecordsChanged: (List<SavedCameraRecord>) -> Unit,
+    requestedReconnectID: String? = null,
+    onReconnectRequestConsumed: () -> Unit = {},
+    suppressedUsbAutoReconnectHosts: Set<String> = emptySet(),
+    onUsbAutoReconnectSuppressionCleared: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
@@ -116,9 +154,15 @@ public fun SavedCamerasExperience(
         }?.host ?: record.host
     }
 
-    fun reconnect(record: SavedCameraRecord) {
+    fun reconnect(record: SavedCameraRecord, explicit: Boolean = true) {
         if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
+        if (explicit && record.transport == SavedCameraTransport.USB_C) {
+            onUsbAutoReconnectSuppressionCleared(record.host)
+        }
         handedOff.value = false
+        // Mark synchronously so an explicit Link-tab reconnect and the USB
+        // attachment observer cannot race into two profile-owned sessions.
+        phase = SavedCameraPhase.Connecting(record.displayTitle)
         work.value =
             scope.launch {
                 var session: com.opencapture.openzcine.core.CameraSession? = null
@@ -252,22 +296,43 @@ public fun SavedCamerasExperience(
     // USB attachment. The key drops out of this set on detach, re-arming the
     // next plug-in without spinning retries against a body that rejected a
     // session or was unplugged mid-connect.
-    LaunchedEffect(cameras, usbCameras, phase) {
+    LaunchedEffect(cameras, usbCameras, phase, suppressedUsbAutoReconnectHosts, requestedReconnectID) {
         val attachedHosts =
             usbCameras
                 .filter { it.access == UsbPtpCameraAccess.READY }
                 .mapNotNull(UsbPtpCamera::hostKey)
                 .toSet()
         attemptedUsbReconnectHosts = attemptedUsbReconnectHosts.intersect(attachedHosts)
-        if (phase != SavedCameraPhase.Idle) return@LaunchedEffect
+        val attachedSuppressions =
+            attachedUsbAutoReconnectSuppressions(
+                suppressedHosts = suppressedUsbAutoReconnectHosts,
+                attachedHosts = attachedHosts,
+            )
+        (suppressedUsbAutoReconnectHosts - attachedSuppressions)
+            .forEach(onUsbAutoReconnectSuppressionCleared)
+        if (phase != SavedCameraPhase.Idle || requestedReconnectID != null) return@LaunchedEffect
         val match =
             cameras.firstOrNull { record ->
-                record.transport == SavedCameraTransport.USB_C &&
-                    record.host in attachedHosts &&
-                    record.host !in attemptedUsbReconnectHosts
+                mayAutoReconnectUsb(
+                    record = record,
+                    attachedHosts = attachedHosts,
+                    attemptedHosts = attemptedUsbReconnectHosts,
+                    suppressedHosts = attachedSuppressions,
+                )
             } ?: return@LaunchedEffect
         attemptedUsbReconnectHosts += match.host
-        reconnect(match)
+        reconnect(match, explicit = false)
+    }
+
+    // Link settings returns here after it has released the active monitor
+    // session. Keep reconnection in this saved-profile owner so camera AP,
+    // hotspot, and USB routes retain their established lifecycle rules.
+    LaunchedEffect(requestedReconnectID, cameras, phase) {
+        val requestedID = requestedReconnectID ?: return@LaunchedEffect
+        if (phase != SavedCameraPhase.Idle) return@LaunchedEffect
+        val requested = cameras.firstOrNull { it.id == requestedID }
+        onReconnectRequestConsumed()
+        requested?.let(::reconnect)
     }
 
     val busy = phase is SavedCameraPhase.Joining || phase is SavedCameraPhase.Connecting

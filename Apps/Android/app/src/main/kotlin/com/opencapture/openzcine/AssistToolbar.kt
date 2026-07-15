@@ -44,12 +44,14 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.lut.StoredLutSelection
+import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 
 /**
  * The assist-toolbar tools, mirroring the iOS bottom-left strip
  * (`MonitorAssistTool` in the shared core): four feed effects, five scopes,
- * and camera-derived audio meters. The iOS-only framing aids
- * (guides/grid/crosshair/level/de-sq) land with their engines.
+ * and camera-derived audio meters, plus the Android-owned framing controls.
+ * Camera horizon remains a separate OPE-58 concern; framing commands only
+ * change local monitor composition and never Nikon camera state.
  */
 enum class AssistTool(val label: String, val settingsTitle: String) {
     LUT("LUT", "LUT"),
@@ -61,11 +63,18 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     HISTO("HISTO", "Histogram"),
     VECTOR("VECTOR", "Vectorscope"),
     LIGHTS("LIGHTS", "Traffic Lights"),
+    GUIDES("GUIDES", "Frame Guides"),
+    GRID("GRID", "Composition Grid"),
+    CROSS("CROSS", "Centre Crosshair"),
+    DESQ("DE-SQ", "Desqueeze"),
     AUDIO("AUDIO", "Audio Levels"),
 
     ;
 
     companion object {
+        /** Local framing tools rendered from [OperatorSettings], never camera state. */
+        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, DESQ)
+
         /** Decodes a persisted enum name while safely ignoring retired or malformed values. */
         internal fun fromStoredName(value: String): AssistTool? =
             entries.firstOrNull { it.name == value }
@@ -149,6 +158,15 @@ class AssistState(
             AssistTool.VECTOR -> ScopeKind.VECTORSCOPE in selectedScopes
             AssistTool.LIGHTS -> ScopeKind.TRAFFIC_LIGHTS in selectedScopes
             AssistTool.AUDIO -> audioMetersEnabled
+            // Framing tools are persisted by OperatorSettings instead of this
+            // feed-effects state. AssistToolbar routes them through its local
+            // framing callback; keeping this fallback false prevents an
+            // accidental settings caller from treating them as image effects.
+            AssistTool.GUIDES,
+            AssistTool.GRID,
+            AssistTool.CROSS,
+            AssistTool.DESQ,
+            -> false
         }
 
     /**
@@ -185,6 +203,13 @@ class AssistState(
                 audioMetersEnabled = !audioMetersEnabled
                 persistState()
             }
+            // See isOn: monitor and settings framing controls are routed to
+            // OperatorSettings so they cannot mutate camera or effect state.
+            AssistTool.GUIDES,
+            AssistTool.GRID,
+            AssistTool.CROSS,
+            AssistTool.DESQ,
+            -> Unit
         }
     }
 
@@ -407,6 +432,8 @@ fun AssistToolbar(
     state: AssistState,
     modifier: Modifier = Modifier,
     visibleTools: List<AssistTool> = AssistTool.entries.toList(),
+    framingConfiguration: LocalFramingAssistConfiguration? = null,
+    onToggleFramingTool: (AssistTool) -> Unit = {},
     hapticsEnabled: Boolean = true,
 ) {
     val scroll = rememberScrollState()
@@ -456,8 +483,19 @@ fun AssistToolbar(
                             .background(LiveDesign.hairlineStrong),
                     )
                 }
-                AssistToolCell(tool, state.isOn(tool)) {
-                    state.toggle(tool)
+                val isFramingTool = tool in AssistTool.framingTools
+                val isOn =
+                    if (isFramingTool) {
+                        framingConfiguration?.isToolEnabled(tool) ?: false
+                    } else {
+                        state.isOn(tool)
+                    }
+                AssistToolCell(tool, isOn) {
+                    if (isFramingTool) {
+                        onToggleFramingTool(tool)
+                    } else {
+                        state.toggle(tool)
+                    }
                     if (hapticsEnabled) {
                         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                     }
@@ -468,6 +506,16 @@ fun AssistToolbar(
         ScrollChevron(leading = false, visible = trailingFade, Modifier.align(Alignment.CenterEnd))
     }
 }
+
+/** Maps local framing configuration to the four toolbar toggles without a camera-control seam. */
+private fun LocalFramingAssistConfiguration.isToolEnabled(tool: AssistTool): Boolean =
+    when (tool) {
+        AssistTool.GUIDES -> drawsGuides
+        AssistTool.GRID -> drawsGrid
+        AssistTool.CROSS -> centerCrosshairEnabled
+        AssistTool.DESQ -> desqueezeEnabled
+        else -> false
+    }
 
 /** Gold edge chevron hinting at off-screen tools (iOS `scrollChevron`). */
 @Composable
@@ -657,6 +705,51 @@ private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = 
                     drawLine(tint, Offset(x - size.width * 0.10f, centre), Offset(x + size.width * 0.10f, centre), 1.2.dp.toPx())
                     drawCircle(tint, size.minDimension * 0.075f, Offset(x, bottom))
                 }
+            }
+            // SF `rectangle.dashed`: delivery frame guides.
+            AssistTool.GUIDES -> {
+                val inset = size.minDimension * 0.16f
+                val dash = size.minDimension * 0.16f
+                val top = inset
+                val bottom = size.height - inset
+                val left = inset * 0.58f
+                val right = size.width - left
+                drawLine(tint, Offset(left, top), Offset(left + dash, top), 1.5.dp.toPx())
+                drawLine(tint, Offset(right - dash, top), Offset(right, top), 1.5.dp.toPx())
+                drawLine(tint, Offset(left, bottom), Offset(left + dash, bottom), 1.5.dp.toPx())
+                drawLine(tint, Offset(right - dash, bottom), Offset(right, bottom), 1.5.dp.toPx())
+                drawLine(tint, Offset(left, top), Offset(left, top + dash), 1.5.dp.toPx())
+                drawLine(tint, Offset(right, top), Offset(right, top + dash), 1.5.dp.toPx())
+                drawLine(tint, Offset(left, bottom - dash), Offset(left, bottom), 1.5.dp.toPx())
+                drawLine(tint, Offset(right, bottom - dash), Offset(right, bottom), 1.5.dp.toPx())
+            }
+            // SF `grid`: thirds and phi composition lines.
+            AssistTool.GRID -> {
+                val fractions = listOf(1f / 3f, 2f / 3f)
+                fractions.forEach { fraction ->
+                    val x = size.width * fraction
+                    val y = size.height * fraction
+                    drawLine(tint, Offset(x, 1.dp.toPx()), Offset(x, size.height - 1.dp.toPx()), 1.3.dp.toPx())
+                    drawLine(tint, Offset(1.dp.toPx(), y), Offset(size.width - 1.dp.toPx(), y), 1.3.dp.toPx())
+                }
+            }
+            // SF `plus`: centre crosshair.
+            AssistTool.CROSS -> {
+                val centre = Offset(size.width / 2, size.height / 2)
+                val arm = size.minDimension * 0.42f
+                drawLine(tint, Offset(centre.x - arm, centre.y), Offset(centre.x + arm, centre.y), 1.7.dp.toPx())
+                drawLine(tint, Offset(centre.x, centre.y - arm), Offset(centre.x, centre.y + arm), 1.7.dp.toPx())
+            }
+            // SF `arrow.left.and.right`: local anamorphic de-squeeze.
+            AssistTool.DESQ -> {
+                val y = size.height / 2
+                val inset = size.width * 0.12f
+                val head = size.minDimension * 0.20f
+                drawLine(tint, Offset(inset, y), Offset(size.width - inset, y), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(inset, y), Offset(inset + head, y - head), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(inset, y), Offset(inset + head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y - head), 1.7.dp.toPx(), StrokeCap.Round)
+                drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
             }
             // SF `slider.vertical.3`: three compact audio level bars.
             AssistTool.AUDIO -> {
