@@ -67,8 +67,10 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   poll pacing) bridged into the `LiveFrameSource` seam by `bridge/SwiftCoreLiveFrameSource`;
   `MonitorScreen` streams a connected Swift-core session's frames automatically (gated on a
   STARTED lifecycle), and ending collection — disconnect or backgrounding — always sends
-  `EndLiveView` (the heat-audit rule). Drive the real shell against a
-  camera or fake server:
+  `EndLiveView` (the heat-audit rule). Each frame can also carry optional stereo dBFS + peak-hold
+  data resolved by the Swift core from the Nikon live-view sound indicator; Kotlin only presents
+  that typed payload and never decodes header offsets or invents meter ballistics. Drive the real
+  shell against a camera or fake server:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.session.host <ipv4>`
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
@@ -111,6 +113,12 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
   --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
   with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).
+- **Live audio meters:** the trailing `AUDIO` assist toggle persists independently from image
+  assists and scopes. In landscape it opens a draggable, normalized-placement stereo dBFS panel
+  with the camera's peak markers and microphone-sensitivity readback; an absent camera sound
+  indicator stays explicitly `NO DATA`. The debug feed is the only synthetic source and expands
+  the panel to visibly say `DEBUG FIXTURE — NOT CAMERA AUDIO`; release builds cannot enable that
+  feed. This is camera-header metering, not a phone-audio or decoded-playback tap.
 - **Local framing assists:** Operator Setup → View Assist persists a monitor-only rule-of-thirds
   grid, centre crosshair, 2.39:1 / 16:9 delivery-frame guide, and horizontal anamorphic
   presentation choice. `FramingAssists.kt` composes them inside the existing shared-core feed

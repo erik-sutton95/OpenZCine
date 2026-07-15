@@ -66,6 +66,7 @@ import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
@@ -540,6 +541,19 @@ fun MonitorScreen(
                                 lifecycleState.isAtLeast(Lifecycle.State.STARTED)
                         }
             }
+        val audioMetersEnabled = assist.audioMetersEnabled
+        var liveAudioLevels by
+            remember(activeFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
+        LaunchedEffect(activeFrameSource, audioMetersEnabled) {
+            if (!audioMetersEnabled || activeFrameSource == null) {
+                liveAudioLevels = null
+                return@LaunchedEffect
+            }
+            activeFrameSource.frames.collect { frame ->
+                liveAudioLevels = frame.audioLevels
+            }
+        }
+        val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
 
         // Backdrop geometry for the glass pipeline: the viewport and the feed
         // zone in root px. The blurred texture covers the whole viewport
@@ -767,7 +781,15 @@ fun MonitorScreen(
                 feed = zones.feed,
                 infoBar = zones.infoBar,
                 scopeZone = zones.scopes,
-                viewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight),
+                viewport = physicalViewport,
+            )
+        }
+        if (!isCommand && !isPortrait && audioMetersEnabled) {
+            AudioMetersOverlay(
+                levels = liveAudioLevels,
+                sensitivity = cameraProperties.microphoneSensitivity,
+                feed = zones.feed,
+                viewport = physicalViewport,
             )
         }
 

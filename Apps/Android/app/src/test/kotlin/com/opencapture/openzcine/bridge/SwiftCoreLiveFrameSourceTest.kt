@@ -39,7 +39,7 @@ class SwiftCoreLiveFrameSourceTest {
     }
 
     @Test
-    fun `bridges callbacks into frames and recording state`() = runTest {
+    fun `bridges callbacks into frames recording state and camera audio`() = runTest {
         val jpeg = byteArrayOf(1, 2, 3)
         lateinit var listener: SwiftCore.LiveFrameListener
         var recordingState: Boolean? = null
@@ -54,7 +54,16 @@ class SwiftCoreLiveFrameSourceTest {
 
         val result = async { source.frames.first() }
         runCurrent()
-        listener.onFrame(jpeg, 7L, true)
+        listener.onFrame(
+            jpeg = jpeg,
+            timestampNanos = 7L,
+            isRecording = true,
+            leftLevelDb = -24.0,
+            leftPeakDb = -6.0,
+            rightLevelDb = -36.0,
+            rightPeakDb = -18.0,
+            hasAudioLevels = true,
+        )
         runCurrent()
         val frame = result.await()
 
@@ -62,6 +71,30 @@ class SwiftCoreLiveFrameSourceTest {
         assertEquals(7L, frame.timestampNanos)
         assertTrue(frame.isRecording)
         assertEquals(true, recordingState)
+        assertEquals(-24.0, frame.audioLevels?.left?.levelDb)
+        assertEquals(-6.0, frame.audioLevels?.left?.peakDb)
+        assertEquals(-36.0, frame.audioLevels?.right?.levelDb)
+        assertEquals(-18.0, frame.audioLevels?.right?.peakDb)
+        assertEquals(false, frame.audioLevels?.isDebugFixture)
+    }
+
+    @Test
+    fun `missing camera audio remains unavailable rather than synthetic silence`() = runTest {
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener = it },
+                stop = {},
+                sharingScope = backgroundScope,
+            )
+
+        val result = async { source.frames.first() }
+        runCurrent()
+        listener.onFrame(byteArrayOf(4), 8L, false)
+        runCurrent()
+
+        assertEquals(null, result.await().audioLevels)
     }
 
     @Test

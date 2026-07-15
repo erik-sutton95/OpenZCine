@@ -46,9 +46,9 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The assist-toolbar tools, mirroring the iOS bottom-left strip
- * (`MonitorAssistTool` in the shared core): four feed effects and five scopes.
- * The iOS-only framing aids (guides/grid/crosshair/level/de-sq) and audio
- * meters land with their engines.
+ * (`MonitorAssistTool` in the shared core): four feed effects, five scopes,
+ * and camera-derived audio meters. The iOS-only framing aids
+ * (guides/grid/crosshair/level/de-sq) land with their engines.
  */
 enum class AssistTool(val label: String, val settingsTitle: String) {
     LUT("LUT", "LUT"),
@@ -60,6 +60,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     HISTO("HISTO", "Histogram"),
     VECTOR("VECTOR", "Vectorscope"),
     LIGHTS("LIGHTS", "Traffic Lights"),
+    AUDIO("AUDIO", "Audio Levels"),
 
     ;
 
@@ -88,8 +89,10 @@ class AssistState(
     initialLut: FeedLut = initialEffects.lut ?: FeedLut.LOG3G10_709,
     initialFalseColorScale: FeedFalseColorScale =
         initialEffects.falseColor ?: FeedFalseColorScale.STOPS,
+    initialAudioMetersEnabled: Boolean = false,
     private val persistSelections: (FeedLut, FeedFalseColorScale) -> Unit = { _, _ -> },
     private val persistScopeSelections: (Set<ScopeKind>, List<ScopeKind>) -> Unit = { _, _ -> },
+    private val persistAudioMeters: (Boolean) -> Unit = {},
     private val persist: (FeedEffects, ScopeKind?) -> Unit = { _, _ -> },
 ) {
     var effects: FeedEffects by mutableStateOf(initialEffects)
@@ -123,6 +126,10 @@ class AssistState(
     var selectedFalseColorScale: FeedFalseColorScale by mutableStateOf(initialFalseColorScale)
         private set
 
+    /** Whether the live monitor shows the camera-derived stereo meter panel. */
+    var audioMetersEnabled: Boolean by mutableStateOf(initialAudioMetersEnabled)
+        private set
+
     init {
         FeedEffectsState.current = initialEffects
     }
@@ -139,6 +146,7 @@ class AssistState(
             AssistTool.HISTO -> ScopeKind.HISTOGRAM in selectedScopes
             AssistTool.VECTOR -> ScopeKind.VECTORSCOPE in selectedScopes
             AssistTool.LIGHTS -> ScopeKind.TRAFFIC_LIGHTS in selectedScopes
+            AssistTool.AUDIO -> audioMetersEnabled
         }
 
     /**
@@ -171,6 +179,10 @@ class AssistState(
             AssistTool.HISTO -> toggleScope(ScopeKind.HISTOGRAM)
             AssistTool.VECTOR -> toggleScope(ScopeKind.VECTORSCOPE)
             AssistTool.LIGHTS -> toggleScope(ScopeKind.TRAFFIC_LIGHTS)
+            AssistTool.AUDIO -> {
+                audioMetersEnabled = !audioMetersEnabled
+                persistState()
+            }
         }
     }
 
@@ -219,12 +231,14 @@ class AssistState(
         persist(effects, scope)
         persistScopeSelections(selectedScopes, scopeActivationOrder)
         persistSelections(selectedLut, selectedFalseColorScale)
+        persistAudioMeters(audioMetersEnabled)
     }
 
     companion object {
         private const val PREFS = "assist"
         private const val SCOPES_KEY = "scopes"
         private const val SCOPE_ACTIVATION_ORDER_KEY = "scopeActivationOrder"
+        private const val AUDIO_METERS_KEY = "audioMeters"
 
         /** Serializes [effects] back into the `zc.assist` token grammar. */
         fun tokens(effects: FeedEffects): String =
@@ -315,11 +329,15 @@ class AssistState(
                 },
                 initialLut = effects.lut ?: storedLut,
                 initialFalseColorScale = effects.falseColor ?: storedFalseColorScale,
+                initialAudioMetersEnabled = preferences.getBoolean(AUDIO_METERS_KEY, false),
                 persistSelections = { lut, falseColorScale ->
                     preferences.edit()
                         .putString("lut", lut.id)
                         .putString("fcScale", falseColorScale.id)
                         .apply()
+                },
+                persistAudioMeters = { enabled ->
+                    preferences.edit().putBoolean(AUDIO_METERS_KEY, enabled).apply()
                 },
             )
         }
@@ -587,6 +605,24 @@ private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = 
                     drawLine(tint, Offset(x, top + size.height * 0.13f), Offset(x, bottom - size.height * 0.13f), 1.6.dp.toPx())
                     drawLine(tint, Offset(x - size.width * 0.10f, centre), Offset(x + size.width * 0.10f, centre), 1.2.dp.toPx())
                     drawCircle(tint, size.minDimension * 0.075f, Offset(x, bottom))
+                }
+            }
+            // SF `slider.vertical.3`: three compact audio level bars.
+            AssistTool.AUDIO -> {
+                val columns = listOf(0.25f, 0.5f, 0.75f)
+                val levels = listOf(0.48f, 0.84f, 0.62f)
+                val top = size.height * 0.14f
+                val bottom = size.height * 0.86f
+                columns.zip(levels).forEach { (fraction, level) ->
+                    val x = size.width * fraction
+                    drawLine(tint.copy(alpha = 0.36f), Offset(x, top), Offset(x, bottom), 1.4.dp.toPx())
+                    drawLine(
+                        tint,
+                        Offset(x, bottom - (bottom - top) * level),
+                        Offset(x, bottom),
+                        2.2.dp.toPx(),
+                        cap = StrokeCap.Round,
+                    )
                 }
             }
         }

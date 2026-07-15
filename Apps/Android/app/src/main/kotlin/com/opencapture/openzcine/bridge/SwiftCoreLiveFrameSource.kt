@@ -1,6 +1,8 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.openzcine.core.LiveAudioMeterChannel
+import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFrameSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,9 +59,30 @@ class SwiftCoreLiveFrameSource(
                             jpeg: ByteArray,
                             timestampNanos: Long,
                             isRecording: Boolean,
+                            leftLevelDb: Double,
+                            leftPeakDb: Double,
+                            rightLevelDb: Double,
+                            rightPeakDb: Double,
+                            hasAudioLevels: Boolean,
                         ) {
                             onRecordingState(isRecording)
-                            trySend(LiveFrame(timestampNanos, jpeg, isRecording))
+                            val audioLevels =
+                                if (hasAudioLevels) {
+                                    LiveAudioMeterLevels(
+                                        left = LiveAudioMeterChannel(leftLevelDb, leftPeakDb),
+                                        right = LiveAudioMeterChannel(rightLevelDb, rightPeakDb),
+                                    )
+                                } else {
+                                    null
+                                }
+                            trySend(
+                                LiveFrame(
+                                    timestampNanos = timestampNanos,
+                                    jpegData = jpeg,
+                                    isRecording = isRecording,
+                                    audioLevels = audioLevels,
+                                ),
+                            )
                         }
 
                         override fun onEnded() {
