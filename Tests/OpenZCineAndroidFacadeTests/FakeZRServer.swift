@@ -86,6 +86,11 @@ final class FakeZRServer: @unchecked Sendable {
     private let options: Options
     private let listenDescriptor: Int32
     private let lock = NSLock()
+    /// `stop()` does not return until the listener thread has exited. Without
+    /// that handoff, the OS may recycle this raw descriptor for a later fake
+    /// server while the old accept loop is still scheduled. The old fixture
+    /// could then accept the new server's client and reply with its own script.
+    private let acceptLoopExitCondition = NSCondition()
     private let eventConnectionCondition = NSCondition()
     private let eventSendLock = NSLock()
     private var operationLog: [PTPOperationCode] = []
@@ -94,6 +99,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
     private var stopped = false
+    private var acceptLoopHasExited = false
     private var liveViewActive = false
     private var liveViewEpoch = Date()
     private var recording = false
@@ -141,10 +147,14 @@ final class FakeZRServer: @unchecked Sendable {
 
     func stop() {
         lock.lock()
+        let needsShutdown = !stopped
         stopped = true
         lock.unlock()
-        shutdown(listenDescriptor, Int32(SHUT_RDWR))
-        close(listenDescriptor)
+        if needsShutdown {
+            shutdown(listenDescriptor, Int32(SHUT_RDWR))
+            close(listenDescriptor)
+        }
+        waitForAcceptLoopExit()
     }
 
     /// Every PTP operation received, in arrival order, across all connections.
@@ -245,10 +255,37 @@ final class FakeZRServer: @unchecked Sendable {
     // MARK: - Connection handling
 
     private func acceptLoop() {
+        defer {
+            acceptLoopExitCondition.lock()
+            acceptLoopHasExited = true
+            acceptLoopExitCondition.broadcast()
+            acceptLoopExitCondition.unlock()
+        }
         while true {
+            lock.lock()
+            let shouldStop = stopped
+            lock.unlock()
+            guard !shouldStop else { return }
+
             let connection = accept(listenDescriptor, nil, nil)
             guard connection >= 0 else { return }
+
+            lock.lock()
+            let stoppedAfterAccept = stopped
+            lock.unlock()
+            guard !stoppedAfterAccept else {
+                close(connection)
+                return
+            }
             Thread.detachNewThread { [weak self] in self?.serve(connection) }
+        }
+    }
+
+    private func waitForAcceptLoopExit() {
+        acceptLoopExitCondition.lock()
+        defer { acceptLoopExitCondition.unlock() }
+        while !acceptLoopHasExited {
+            acceptLoopExitCondition.wait()
         }
     }
 

@@ -240,6 +240,34 @@ struct PTPIPClientSessionTests {
         #expect(!server.isRecording())
     }
 
+    @Test func rapidFakeServerTurnoverRetainsEachCameraScript() throws {
+        func verifyRejectingServer() throws {
+            let priorServer = try FakeZRServer()
+            priorServer.stop()
+
+            var options = FakeZRServer.Options()
+            options.startRecordingResponseCode = PTPResponseCode.deviceBusy.rawValue
+            let rejectingServer = try FakeZRServer(options: options)
+            defer { rejectingServer.stop() }
+
+            let session = try connect(to: rejectingServer)
+            defer { session.disconnect() }
+            #expect(
+                throws: PTPIPClientSessionError.operationRejected(
+                    .startMovieRecInCard, .deviceBusy)
+            ) {
+                try session.startRecording()
+            }
+        }
+
+        // Start/stop cycles exercise the raw-descriptor reuse case that can
+        // otherwise make a concurrently scheduled test connect to a prior
+        // fake camera's accept loop.
+        for _ in 0..<24 {
+            try verifyRejectingServer()
+        }
+    }
+
     @Test func disconnectSendsGracefulCloseSession() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
