@@ -144,9 +144,13 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   resolution and codec controls remain read-only. **[VERIFY-ON-HW]** Confirm picker writes and the
   tightest fit/fill portrait plus landscape states against a supported Nikon body and inspect all
   four screen edges on the Android hardware floor.
-- **Android monitor feed texture parity** (OPE-72, to do) — mirror iOS's feed-local vignette and
-  deterministic static grain after the camera frame/effect pipeline, clipped to the visible image
-  without affecting clean-source analysis, framing/focus/horizon geometry, or monitor chrome.
+- **Android monitor feed texture parity** (OPE-72, in review): the Android monitor now mirrors
+  iOS's feed-local vignette and deterministic static grain after the camera frame/effect pipeline.
+  Resolution-only state and cached draw resources keep same-resolution frames from rebuilding its
+  render plan, while the exact fit/fill and de-squeezed visible-image intersection excludes
+  letterbox and chrome and leaves clean-source analysis plus framing/focus/horizon geometry
+  unchanged. **[VERIFY-ON-HW]** Confirm the presentation ordering with every API 33 effect and a
+  supported Nikon live stream.
 - **Android custom and RED LUT library parity** (in review) — operator-selected `.cube` imports
   are strictly parsed by the shared Swift core, copied into app-private storage under generated
   names, and restored as stored monitor selections. The RED surface is deliberately fail-closed
