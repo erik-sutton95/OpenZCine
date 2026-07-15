@@ -1,6 +1,8 @@
 package com.opencapture.openzcine.settings
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
@@ -66,6 +68,9 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.frameio.FrameioConnectionState
+import com.opencapture.openzcine.frameio.FrameioDeliveryController
+import com.opencapture.openzcine.frameio.FrameioNetworkState
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
 import kotlinx.coroutines.Dispatchers
@@ -107,11 +112,12 @@ public enum class OperatorSettingsTab(
  * app-owned progressive cache, not camera or share-provider storage.
  */
 @Composable
-public fun OperatorSettingsScreen(
+internal fun OperatorSettingsScreen(
     session: CameraSession?,
     assistState: AssistState,
     settings: OperatorSettings,
     mediaCacheStore: MediaCacheStore,
+    frameioController: FrameioDeliveryController? = null,
     initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
     onClose: () -> Unit,
 ) {
@@ -165,6 +171,7 @@ public fun OperatorSettingsScreen(
                     settings,
                     assistState,
                     mediaCacheStore,
+                    frameioController,
                     onSettingToggle = toggleSetting,
                     onAssistToggle = toggleAssist,
                     onInteraction = emitHaptic,
@@ -182,6 +189,7 @@ public fun OperatorSettingsScreen(
                         settings,
                         assistState,
                         mediaCacheStore,
+                        frameioController,
                         onSettingToggle = toggleSetting,
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
@@ -402,6 +410,7 @@ private fun SettingsContentPane(
     settings: OperatorSettings,
     assistState: AssistState,
     mediaCacheStore: MediaCacheStore,
+    frameioController: FrameioDeliveryController?,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
@@ -465,7 +474,7 @@ private fun SettingsContentPane(
                         OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
                         OperatorSettingsTab.DISPLAY ->
                             DisplayRows(settings, compact, onSettingToggle, onInteraction)
-                        OperatorSettingsTab.STORAGE -> StorageRows(mediaCacheStore, condensed)
+                        OperatorSettingsTab.STORAGE -> StorageRows(mediaCacheStore, frameioController, condensed)
                         OperatorSettingsTab.SYSTEM -> SystemRows()
                     }
                 }
@@ -963,7 +972,11 @@ private fun AssistChoice(label: String, selected: Boolean, onClick: () -> Unit) 
 
 /** Local progressive-media cache controls, available before a camera connects. */
 @Composable
-private fun StorageRows(mediaCacheStore: MediaCacheStore, condensed: Boolean) {
+private fun StorageRows(
+    mediaCacheStore: MediaCacheStore,
+    frameioController: FrameioDeliveryController?,
+    condensed: Boolean,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val storageState = remember(mediaCacheStore) { MediaCacheSettingsState(mediaCacheStore) }
@@ -1084,6 +1097,74 @@ private fun StorageRows(mediaCacheStore: MediaCacheStore, condensed: Boolean) {
                 TextButton(onClick = { showClearConfirmation = false }) { Text("Cancel") }
             },
         )
+    }
+
+    frameioController?.let { controller ->
+        FrameioStorageRows(controller, condensed)
+    }
+}
+
+/** Frame.io account entry point; upload project selection lives beside media selection. */
+@Composable
+private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed: Boolean) {
+    val context = LocalContext.current
+    LaunchedEffect(controller) { controller.refresh() }
+
+    fun beginSignIn() {
+        val authorizationURL = controller.beginSignIn() ?: return
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authorizationURL)))
+        } catch (_: Exception) {
+            controller.signInBrowserUnavailable()
+        }
+    }
+
+    val connectionLabel =
+        when (controller.connectionState) {
+            FrameioConnectionState.UNCONFIGURED -> "Not configured"
+            FrameioConnectionState.SIGNED_OUT -> "Not connected"
+            FrameioConnectionState.AUTHORIZING -> "Waiting for sign-in"
+            FrameioConnectionState.CONNECTED -> "Connected"
+            FrameioConnectionState.ERROR -> "Needs attention"
+        }
+    val networkLabel =
+        when (controller.networkState) {
+            FrameioNetworkState.ONLINE -> "Ready"
+            FrameioNetworkState.CAMERA_ACCESS_POINT -> "Camera Wi-Fi"
+            FrameioNetworkState.OFFLINE -> "Offline"
+        }
+    val caption =
+        if (!controller.isConfigured) {
+            "This Android build is intentionally unavailable until an approved Adobe Native App client and exact redirect are supplied."
+        } else if (condensed) {
+            "Adobe PKCE sign-in. Delivery accepts only final cache copies; native Share is unchanged."
+        } else {
+            "Adobe PKCE sign-in and project selection for complete cached media. OpenZCine never switches away from camera Wi-Fi to reach Frame.io."
+        }
+
+    SettingsGroupCard(title = "Frame.io Delivery", caption = caption) {
+        SettingsInlineRow(title = "Connection", showTopDivider = false) {
+            when (controller.connectionState) {
+                FrameioConnectionState.CONNECTED ->
+                    SettingsLinkAction("Disconnect") { controller.disconnect() }
+                FrameioConnectionState.SIGNED_OUT ->
+                    SettingsLinkAction("Sign in") { beginSignIn() }
+                FrameioConnectionState.ERROR ->
+                    SettingsLinkAction("Try again") { beginSignIn() }
+                else -> SettingsValueText(connectionLabel)
+            }
+        }
+        SettingsInlineRow(title = "Internet") { SettingsValueText(networkLabel) }
+        SettingsInlineRow(title = "Upload Project") {
+            SettingsValueText(controller.selectedDestination?.projectName ?: "Choose in media")
+        }
+        controller.errorMessage?.let { message ->
+            Text(
+                message,
+                style = chromeStyle(10.5f, FontWeight.Normal),
+                color = LiveDesign.accent,
+            )
+        }
     }
 }
 

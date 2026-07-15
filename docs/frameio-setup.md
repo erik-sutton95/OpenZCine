@@ -1,9 +1,9 @@
 # Frame.io integration setup
 
-OpenZCine can upload clips (the LUT-baked export, or the cached original) to Frame.io from the Media
-player's paperplane button. Auth is **OAuth 2.0 (PKCE)** via **Adobe IMS** — the Frame.io V4 API does
-not accept tokens from the legacy Frame.io developer portal (`applications.frame.io`). There is no
-client secret. A one-time Adobe Developer Console registration is required.
+OpenZCine can upload clips to Frame.io with **OAuth 2.0 (PKCE)** via **Adobe IMS** — the Frame.io V4
+API does not accept tokens from the legacy Frame.io developer portal (`applications.frame.io`). There
+is no client secret. iOS can upload a LUT-baked export or cached original; Android currently accepts
+only a finalized cache copy. A one-time Adobe Developer Console registration is required.
 
 > **Requires iOS 17.4+** for the Frame.io feature (`ASWebAuthenticationSession`). The rest of the app
 > still targets iOS 17.0.
@@ -14,7 +14,7 @@ client secret. A one-time Adobe Developer Console registration is required.
 2. **Create new project** (e.g. `OpenZCine`).
 3. **Add API** → search for **Frame.io API** → add it to the project.
 4. Under **Credentials**, choose **OAuth Native App** (PKCE — no client secret). Do **not** use Single
-   Page App for the iOS shell.
+   Page App for either mobile shell.
 5. Open the credential → copy **Client ID** and the full **Default redirect URI**.
 
 Adobe **auto-generates** the Native App redirect URI. It is **not** a URL you choose — it looks like:
@@ -71,7 +71,60 @@ you add the local file.
 - [ ] Redirect URI in xcconfig matches Adobe Console exactly (including `adobe+` and `/adobeid/…`)
 - [ ] App deleted and reinstalled after changing redirect/scheme (clears stale Keychain tokens)
 
+## Android configuration — deliberately fail closed
+
+Android uses the same Adobe IMS PKCE flow, but it does **not** inherit the iOS credential or invent
+a client identity. A fresh Android build has an intentionally unusable manifest callback and
+shows **Not configured** in Settings → Storage. Native Share continues to work independently.
+
+An Adobe Developer Console maintainer must register or approve the Android **OAuth Native App**
+client, add the Frame.io API, and provide the exact public client ID and callback URI for the Android
+package. There is still no client secret.
+
+Copy the ignored local file, then fill in only the values supplied by Adobe:
+
+```sh
+cp Apps/Android/frameio.local.properties.example Apps/Android/frameio.local.properties
+```
+
+```properties
+frameio.clientId=
+frameio.redirectUri=
+```
+
+For CI or one-off builds, the same values may be passed as Gradle properties
+(`-Pframeio.clientId=… -Pframeio.redirectUri=…`) or environment variables
+(`FRAMEIO_CLIENT_ID`, `FRAMEIO_REDIRECT_URI`). Gradle derives the manifest scheme and host from the
+URI; do not add a separate hand-maintained callback value. Explicit Gradle properties take precedence,
+then environment values, then the ignored local file. Neither file nor a real client ID belongs in git.
+
+The committed fallback is `openzcine-frameio-unconfigured://unconfigured`. It is intentionally not
+an Adobe registration and must never be released as a usable sign-in path.
+
+### Android external authority and hardware checklist
+
+The following work is external to code completion and must be performed by an Adobe Developer Console
+maintainer and an Android hardware tester:
+
+- **[VERIFY-ON-HW]** Register/approve the Android OAuth Native App with the exact client ID and
+  custom-scheme redirect URI, then inject those values only through the local/CI configuration above.
+- **[VERIFY-ON-HW]** Install the configured signed APK, test both cold launch and an existing task,
+  and confirm the browser callback returns to OpenZCine only for the exact registered URI.
+- **[VERIFY-ON-HW]** Confirm a rejected, stale, or state-mismatched redirect never stores a token;
+  confirm a successful token and pending PKCE state remain only in Android Keystore-encrypted storage.
+- **[VERIFY-ON-HW]** While the process is bound to a Nikon camera access point, verify sign-in,
+  project loading, refresh, and upload are blocked without releasing the camera binding. Reconnect to
+  a validated internet network explicitly before retrying.
+- **[VERIFY-ON-HW]** Upload one disposable, fully completed cached artifact and verify the Create
+  File → HTTPS parts → status-poll sequence. Confirm a growing `.part` cache file and arbitrary
+  filesystem paths are refused, and that the existing native Share chooser still works afterward.
+- **[VERIFY-ON-HW]** Capture the Settings and Media delivery states on the supported Android device
+  sizes, including the densest multi-selection state, and inspect every screen edge for clipping or
+  truncated controls before treating the UI as visually verified.
+
 ## 3. Use it
+
+### iOS
 
 Open a clip in the Media player or select clips in the media grid → tap **Share**. Choose **Frame.io**,
 then pick a destination **project** from the dropdown (or tap **Create new project** below it). Your
@@ -81,12 +134,25 @@ delivery options (LUT bake, metadata, re-upload) and start the upload — progre
 First Frame.io use triggers Adobe IMS sign-in (`ASWebAuthenticationSession`); the token is stored in
 the iOS Keychain and refreshed automatically (via `offline_access`).
 
-## What's verified vs. needs your credentials
+### Android
+
+After the maintainer has configured the Android OAuth client, sign in from **Settings → Storage**.
+Select one or more complete cached clips in the media grid, tap **FRAME.IO**, then load or create and
+choose a project. The selected project is retained across launches; delivery creates the Frame.io
+file, uploads its HTTPS parts, and polls its completion state.
+
+Android deliberately accepts only the finalized `cacheDir/share/ready` copy that native Share uses.
+It does not currently bake LUTs, create metadata sidecars, expose re-upload controls, cache selected
+camera-only clips on demand, or leave/rejoin camera Wi-Fi for cloud delivery. While the process is
+bound to the Nikon camera access point it fail-closes every Adobe/Frame.io request; reconnect to a
+validated internet network before retrying. Native Share stays available as the independent fallback.
+
+## What's verified vs. needs external authority
 
 - **Unit-tested (no account needed):** PKCE (RFC 7636 S256), the authorize/token request construction
   against Adobe IMS, redirect scheme parsing, and the V4 JSON model decoding
   (`Tests/OpenZCineCoreTests/Frameio*Tests.swift`).
-- **`[verify-with-credentials]`:** the live sign-in + the upload (Create File → S3 `PUT`). Create File
+- **[VERIFY-ON-HW]:** the live sign-in + the upload (Create File → S3 `PUT`). Create File
   accepts only `name` and `file_size` in the request body (V4 rejects `media_type` there); set
   `Content-Type` on the S3 `PUT` to match the file. The exact V4 endpoint paths for projects and
   Create File are modeled from the public docs and may need a small `CodingKeys`/path tweak against
@@ -100,7 +166,7 @@ scheme instead — no website or AASA required.
 
 ## Follow-ups (intentionally not in this slice)
 
-- A Settings **Connect/Disconnect** row for Frame.io.
-- **Granular upload progress** + **multipart** for clips large enough that Create File returns more
-  than one `upload_url`.
 - Comments / review-links after upload.
+- Android internet-hop/rejoin automation. Android currently chooses the safe behavior: it refuses
+  cloud activity while the camera access-point binding is active instead of silently interrupting
+  camera control.

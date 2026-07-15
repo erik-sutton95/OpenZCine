@@ -50,6 +50,70 @@ object SwiftCore {
      */
     external fun parseCameraWifiScreen(transcript: String): String?
 
+    // ── Frame.io (OAuth/API policy remains in the portable Swift core) ──
+
+    /**
+     * Starts a Frame.io Adobe IMS PKCE transaction in the shared core.
+     *
+     * The returned process-local JSON contains `authorizationURL`, `state`,
+     * and `verifier`. It is sensitive OAuth transaction material: callers
+     * must encrypt it at rest, never log it, and clear it after the redirect.
+     * Returns null when the build's public client configuration is absent or
+     * malformed.
+     */
+    external fun frameioBeginAuthorization(clientID: String, redirectURI: String): String?
+
+    /**
+     * Verifies a returned callback against the configured redirect URI and
+     * shared-core OAuth state. Returns the authorization code only on a valid
+     * match; Kotlin must not parse query parameters or decide state policy.
+     */
+    external fun frameioParseRedirect(
+        redirectURI: String,
+        callbackURI: String,
+        expectedState: String,
+    ): String?
+
+    /**
+     * Builds the Adobe IMS form POST for `exchange` or `refresh` using the
+     * shared OAuth policy. The process-local JSON contains `url`, `method`,
+     * and `body`; body data can include a code or refresh token and must never
+     * be logged.
+     */
+    external fun frameioTokenRequest(
+        kind: String,
+        clientID: String,
+        redirectURI: String,
+        code: String?,
+        verifier: String?,
+        refreshToken: String?,
+    ): String?
+
+    /**
+     * Builds one Frame.io V4 request from the portable endpoint and Codable
+     * model policy. The Android HTTPS adapter attaches its encrypted bearer
+     * token; it must not recreate endpoint paths or request bodies locally.
+     */
+    external fun frameioAPIRequest(
+        operation: String,
+        accountID: String?,
+        workspaceID: String?,
+        folderID: String?,
+        fileID: String?,
+        name: String?,
+        fileSize: Long,
+    ): String?
+
+    /**
+     * Canonicalizes a Frame.io API response through the shared Codable models.
+     * Null means the response did not match the known V4 model and must fail
+     * closed rather than being guessed by the Android shell.
+     */
+    external fun frameioDecodeResponse(operation: String, response: String): String?
+
+    /** Resolves an upload MIME family through the shared Frame.io core policy. */
+    external fun frameioMediaTypeForFilename(filename: String): String
+
     /** Operator-facing device title for a raw PTP name (`ZR_6001234` → `Nikon ZR`). */
     external fun resolveDisplayName(rawName: String): String
 

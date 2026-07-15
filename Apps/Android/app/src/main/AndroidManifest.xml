@@ -57,11 +57,26 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:screenOrientation="user"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Adobe IMS returns a PKCE authorization code through the custom
+              redirect registered for this Android build. The committed fallback
+              scheme is intentionally unusable by the Frame.io configuration gate;
+              a release is only capable of
+              sign-in after a maintainer supplies an Adobe registration through
+              the ignored/local build configuration documented in frameio-setup. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="${frameioRedirectScheme}"
+                    android:host="${frameioRedirectHost}" />
             </intent-filter>
         </activity>
     </application>

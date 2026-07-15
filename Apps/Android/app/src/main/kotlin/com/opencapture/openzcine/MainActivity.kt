@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.net.nsd.NsdManager
@@ -35,6 +36,8 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.frameio.FrameioRedirectCallback
+import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.pairing.PairedCamera
@@ -51,6 +54,7 @@ import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import com.opencapture.openzcine.transport.NsdCameraSessionFactory
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 
 private enum class MonitorOverlay {
@@ -73,9 +77,15 @@ private enum class StartupSurface {
 class MainActivity : ComponentActivity() {
     private lateinit var mediaRemoteShutter: AndroidMediaRemoteShutter
 
+    // A replayable activity-local callback is enough for both a cold launch and
+    // an existing singleTop task. The controller validates the exact URI and
+    // PKCE state before it ever makes a network request.
+    private val frameioRedirectCallback = MutableStateFlow<FrameioRedirectCallback?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
+        publishFrameioRedirect(intent)
         if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
         // Camera-monitor chrome owns the whole panel, like the iOS shell:
         // sticky-immersive system bars (hidden; a swipe reveals them
@@ -106,6 +116,16 @@ class MainActivity : ComponentActivity() {
                             applicationContext.noBackupFilesDir.resolve("media-cache").toPath(),
                         )
                     }
+                val frameioController = remember { frameioDeliveryController(applicationContext) }
+                val frameioRedirect by frameioRedirectCallback.collectAsState()
+                LaunchedEffect(frameioController, frameioRedirect) {
+                    frameioRedirect?.let { callback ->
+                        frameioController.completeRedirect(callback.uri)
+                        if (frameioRedirectCallback.value === callback) {
+                            frameioRedirectCallback.value = null
+                        }
+                    }
+                }
                 var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
                 // Keep the process-wide camera-AP binding alive while its
                 // handed-off session is active, then release it alongside the
@@ -213,6 +233,7 @@ class MainActivity : ComponentActivity() {
                                 assistState = standaloneAssist,
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
+                                frameioController = frameioController,
                                 initialTab = OperatorSettingsTab.STORAGE,
                                 onClose = { standaloneSettingsPresented = false },
                             )
@@ -290,6 +311,7 @@ class MainActivity : ComponentActivity() {
                                         assistState = assist,
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
+                                        frameioController = frameioController,
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                                 MonitorOverlay.MEDIA ->
@@ -298,6 +320,7 @@ class MainActivity : ComponentActivity() {
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
                                         operatorSettings = operatorSettings,
+                                        frameioController = frameioController,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
@@ -336,6 +359,22 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         if (::mediaRemoteShutter.isInitialized) mediaRemoteShutter.close()
         super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        publishFrameioRedirect(intent)
+    }
+
+    private fun publishFrameioRedirect(newIntent: Intent) {
+        if (newIntent.action != Intent.ACTION_VIEW) return
+        newIntent.dataString?.takeIf(String::isNotBlank)?.let { callbackURI ->
+            frameioRedirectCallback.value = FrameioRedirectCallback(callbackURI)
+            // Do not retain an OAuth callback (and its one-time code) in the
+            // Activity intent after handing it to the process-local verifier.
+            newIntent.data = null
+        }
     }
 
     /** Hides (monitor) or shows (pairing) the system bars; styling stays transparent-dark. */

@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
@@ -79,9 +80,14 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
+import com.opencapture.openzcine.frameio.FrameioDeliveryController
+import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.settings.OperatorSettings
+import java.nio.file.Files
 import java.nio.file.LinkOption
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -114,6 +120,67 @@ private data class BatchShareResult(
 )
 
 /**
+ * Stages the exact same immutable ready copies for native share and Frame.io
+ * delivery. This is intentionally the only bridge from a camera cache entry
+ * to either external destination; progressive `.part` files never reach it.
+ */
+private fun stageSelectedMedia(
+    context: Context,
+    cacheStore: MediaCacheStore,
+    cameraID: String,
+    selection: List<MediaClipRecord>,
+): BatchShareResult {
+    val stager = MediaShareStager(context.cacheDir.toPath())
+    val staged = mutableListOf<StagedMediaShare>()
+    var incomplete = 0
+    var failed = 0
+    var firstFailure: String? = null
+    selection.forEach { clip ->
+        val entry =
+            runCatching {
+                cacheStore.completedEntryOrNull(
+                    cameraID,
+                    MediaCacheObjectIdentity(clip),
+                    clip.sizeBytes,
+                )
+            }.getOrNull()
+        if (entry == null) {
+            incomplete += 1
+            return@forEach
+        }
+        try {
+            staged += stager.stage(entry, clip)
+        } catch (error: Exception) {
+            failed += 1
+            if (firstFailure == null) firstFailure = error.message
+        }
+    }
+    return BatchShareResult(staged, incomplete, failed, firstFailure)
+}
+
+private fun frameioDeliverySummary(
+    state: FrameioDeliveryState,
+    errorMessage: String?,
+    skippedBeforeUpload: Int,
+): String =
+    when (state) {
+        is FrameioDeliveryState.Completed ->
+            buildString {
+                append("Delivered ${state.uploadedCount} cached item")
+                if (state.uploadedCount != 1) append('s')
+                if (state.failedCount > 0) {
+                    append("; ${state.failedCount} failed")
+                }
+                if (skippedBeforeUpload > 0) {
+                    append("; $skippedBeforeUpload not prepared")
+                }
+            }
+        is FrameioDeliveryState.Failed -> state.message
+        FrameioDeliveryState.Idle -> errorMessage ?: "Frame.io delivery didn't start."
+        is FrameioDeliveryState.Uploading -> "Frame.io delivery is still in progress."
+    }
+
+/**
  * Full-screen Android media library.
  *
  * The camera source is the shared Swift core's bounded listing wire. The local
@@ -123,10 +190,11 @@ private data class BatchShareResult(
  * searches filesystem paths, or performs PTP work.
  */
 @Composable
-fun MediaBrowseScreen(
+internal fun MediaBrowseScreen(
     cameraID: String,
     cameraConnected: Boolean,
     operatorSettings: OperatorSettings,
+    frameioController: FrameioDeliveryController,
     autoPlayFirstProxy: Boolean = false,
     onClose: () -> Unit,
 ) {
@@ -161,6 +229,8 @@ fun MediaBrowseScreen(
     var shareInProgress by remember { mutableStateOf(false) }
     var shareMessage by remember { mutableStateOf<String?>(null) }
     var shareJob by remember { mutableStateOf<Job?>(null) }
+    var frameioDeliveryPresented by remember { mutableStateOf(false) }
+    var frameioPreparationInProgress by remember { mutableStateOf(false) }
 
     fun updateOptions(updated: MediaLibraryViewOptions) {
         options = updated
@@ -301,32 +371,7 @@ fun MediaBrowseScreen(
                 try {
                     val result =
                         withContext(Dispatchers.IO) {
-                            val stager = MediaShareStager(context.cacheDir.toPath())
-                            val staged = mutableListOf<StagedMediaShare>()
-                            var incomplete = 0
-                            var failed = 0
-                            var firstFailure: String? = null
-                            selectionSnapshot.forEach { clip ->
-                                val entry =
-                                    runCatching {
-                                        cacheStore.completedEntryOrNull(
-                                            cameraID,
-                                            MediaCacheObjectIdentity(clip),
-                                            clip.sizeBytes,
-                                        )
-                                    }.getOrNull()
-                                if (entry == null) {
-                                    incomplete += 1
-                                    return@forEach
-                                }
-                                try {
-                                    staged += stager.stage(entry, clip)
-                                } catch (error: Exception) {
-                                    failed += 1
-                                    if (firstFailure == null) firstFailure = error.message
-                                }
-                            }
-                            BatchShareResult(staged, incomplete, failed, firstFailure)
+                            stageSelectedMedia(context, cacheStore, cameraID, selectionSnapshot)
                         }
                     if (result.staged.isEmpty()) {
                         shareMessage =
@@ -351,6 +396,59 @@ fun MediaBrowseScreen(
                 } catch (error: Exception) {
                     shareMessage = error.message ?: "Couldn't prepare the selected media for sharing."
                 } finally {
+                    shareInProgress = false
+                    shareJob = null
+                }
+            }
+    }
+
+    fun presentFrameioDelivery() {
+        if (shareInProgress || selectedClips.isEmpty()) return
+        frameioController.refresh()
+        frameioDeliveryPresented = true
+    }
+
+    fun beginFrameioDelivery() {
+        if (shareInProgress || selectedClips.isEmpty()) return
+        val selectionSnapshot = selectedClips
+        frameioDeliveryPresented = false
+        shareInProgress = true
+        frameioPreparationInProgress = true
+        shareMessage = null
+        shareJob =
+            scope.launch {
+                try {
+                    val result =
+                        withContext(Dispatchers.IO) {
+                            stageSelectedMedia(context, cacheStore, cameraID, selectionSnapshot)
+                        }
+                    if (result.staged.isEmpty()) {
+                        shareMessage =
+                            result.firstFailure
+                                ?: "Only complete cached media can be delivered to Frame.io."
+                        return@launch
+                    }
+                    val artifacts =
+                        withContext(Dispatchers.IO) {
+                            result.staged.map { share ->
+                                FrameioDeliveryArtifact(share, Files.size(share.file))
+                            }
+                        }
+                    frameioController.deliver(artifacts)
+                    shareMessage =
+                        frameioDeliverySummary(
+                            state = frameioController.deliveryState,
+                            errorMessage = frameioController.errorMessage,
+                            skippedBeforeUpload = result.incompleteCount + result.failedCount,
+                        )
+                    val completed = frameioController.deliveryState as? FrameioDeliveryState.Completed
+                    if (completed != null && completed.failedCount == 0) exitSelection()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    shareMessage = "Couldn't prepare the selected media for Frame.io delivery."
+                } finally {
+                    frameioPreparationInProgress = false
                     shareInProgress = false
                     shareJob = null
                 }
@@ -414,10 +512,13 @@ fun MediaBrowseScreen(
                         selectedCount = selectedClips.size,
                         readyCount = readySelectionIDs.size,
                         shareInProgress = shareInProgress,
+                        frameioPreparationInProgress = frameioPreparationInProgress,
+                        frameioDeliveryState = frameioController.deliveryState,
                         layout = options.layout,
                         sortOrder = options.sortOrder,
                         onExitSelection = ::exitSelection,
                         onShare = ::beginBatchShare,
+                        onFrameioDelivery = ::presentFrameioDelivery,
                         onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
                         onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                     )
@@ -464,10 +565,13 @@ fun MediaBrowseScreen(
                             selectedCount = selectedClips.size,
                             readyCount = readySelectionIDs.size,
                             shareInProgress = shareInProgress,
+                            frameioPreparationInProgress = frameioPreparationInProgress,
+                            frameioDeliveryState = frameioController.deliveryState,
                             layout = options.layout,
                             sortOrder = options.sortOrder,
                             onExitSelection = ::exitSelection,
                             onShare = ::beginBatchShare,
+                            onFrameioDelivery = ::presentFrameioDelivery,
                             onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
                             onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                         )
@@ -506,6 +610,15 @@ fun MediaBrowseScreen(
             MediaStatusMessage(
                 message = message,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+            )
+        }
+
+        if (frameioDeliveryPresented) {
+            FrameioDeliveryDialog(
+                controller = frameioController,
+                readyCount = readySelectionIDs.size,
+                onDismiss = { frameioDeliveryPresented = false },
+                onDeliver = ::beginFrameioDelivery,
             )
         }
 
@@ -667,10 +780,13 @@ private fun MediaLibraryHeader(
     selectedCount: Int,
     readyCount: Int,
     shareInProgress: Boolean,
+    frameioPreparationInProgress: Boolean,
+    frameioDeliveryState: FrameioDeliveryState,
     layout: MediaLibraryLayout,
     sortOrder: MediaLibrarySortOrder,
     onExitSelection: () -> Unit,
     onShare: () -> Unit,
+    onFrameioDelivery: () -> Unit,
     onLayoutChange: (MediaLibraryLayout) -> Unit,
     onSortChange: (MediaLibrarySortOrder) -> Unit,
 ) {
@@ -679,8 +795,11 @@ private fun MediaLibraryHeader(
             selectedCount = selectedCount,
             readyCount = readyCount,
             shareInProgress = shareInProgress,
+            frameioPreparationInProgress = frameioPreparationInProgress,
+            frameioDeliveryState = frameioDeliveryState,
             onExit = onExitSelection,
             onShare = onShare,
+            onFrameioDelivery = onFrameioDelivery,
         )
         return
     }
@@ -727,8 +846,11 @@ private fun SelectionHeader(
     selectedCount: Int,
     readyCount: Int,
     shareInProgress: Boolean,
+    frameioPreparationInProgress: Boolean,
+    frameioDeliveryState: FrameioDeliveryState,
     onExit: () -> Unit,
     onShare: () -> Unit,
+    onFrameioDelivery: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -753,8 +875,32 @@ private fun SelectionHeader(
             maxLines = 1,
         )
         val enabled = readyCount > 0 && !shareInProgress
+        val upload = frameioDeliveryState as? FrameioDeliveryState.Uploading
+        val frameioLabel =
+            upload?.let { state ->
+                "UP ${state.itemIndex}/${state.itemCount} ${(state.progress * 100).roundToInt()}%"
+            } ?: if (frameioPreparationInProgress) "PREPARING…" else "FRAME.IO $readyCount"
         Text(
-            if (shareInProgress) "PREPARING…" else "SHARE $readyCount",
+            frameioLabel,
+            style = chromeStyle(11f, FontWeight.Bold, mono = true),
+            color = if (enabled || upload != null) LiveDesign.accent else LiveDesign.faint,
+            modifier =
+                Modifier.glass(CapsuleShape)
+                    .semantics {
+                        contentDescription =
+                            upload?.let { state ->
+                                "Uploading Frame.io clip ${state.itemIndex} of ${state.itemCount}: ${(state.progress * 100).roundToInt()} percent"
+                            } ?: "Deliver $readyCount complete cached media items to Frame.io"
+                        role = Role.Button
+                    }.chromeClickable(enabled) { onFrameioDelivery() }
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+        )
+        Text(
+            if (shareInProgress && !frameioPreparationInProgress && upload == null) {
+                "PREPARING…"
+            } else {
+                "SHARE $readyCount"
+            },
             style = chromeStyle(11f, FontWeight.Bold, mono = true),
             color = if (enabled) LiveDesign.accent else LiveDesign.faint,
             modifier =
