@@ -307,8 +307,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   successfully decoded real Swift-camera frame, never a disconnected or synthetic fixture, and
   blocks phone, remote, and Wear camera commands while visible. Settings can replay it now when a
   real frame is available or schedule the next real frame.
-- **Public launch landing actions**: keep TestFlight available while Android and the
-  public repository are presented as clearly unavailable until their launches.
+- **Public launch landing actions**: the repository went public on 2026-07-15, so the landing page
+  links to it directly. Android stays presented as clearly unavailable until it ships.
 - **Landing-page camera compatibility** (in progress): identify the Nikon ZR, Z9, and Z5II as
   working, and the Z6, Z6II, Z6III, Zf, Z8, Z7, and Z7II as untested.
 
