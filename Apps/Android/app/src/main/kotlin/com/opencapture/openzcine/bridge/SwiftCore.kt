@@ -431,6 +431,50 @@ object SwiftCore {
         )
 
         /**
+         * Additive rich live-frame callback. The Swift facade prefers this
+         * descriptor when it exists, while retaining [onFrame]'s established
+         * descriptor as a safe fallback for older listeners.
+         *
+         * Focus coordinates and virtual-horizon angles were parsed and
+         * normalized by the Swift core. [focusBoxes] is a flat sequence of
+         * `[centerX, centerY, width, height]`; [hasFocus] and [hasLevel]
+         * distinguish unavailable camera metadata from a valid zero value.
+         */
+        fun onFrameWithMetadata(
+            jpeg: ByteArray,
+            timestampNanos: Long,
+            isRecording: Boolean,
+            leftLevelDb: Double,
+            leftPeakDb: Double,
+            rightLevelDb: Double,
+            rightPeakDb: Double,
+            hasAudioLevels: Boolean,
+            hasFocus: Boolean,
+            focusCoordinateWidth: Int,
+            focusCoordinateHeight: Int,
+            focusResult: Int,
+            subjectDetectionActive: Boolean,
+            trackingAFActive: Boolean,
+            selectedBoxIndex: Int,
+            focusBoxes: IntArray,
+            hasLevel: Boolean,
+            levelRollDegrees: Double,
+            levelPitchDegrees: Double,
+            levelYawDegrees: Double,
+        ) {
+            onFrame(
+                jpeg = jpeg,
+                timestampNanos = timestampNanos,
+                isRecording = isRecording,
+                leftLevelDb = leftLevelDb,
+                leftPeakDb = leftPeakDb,
+                rightLevelDb = rightLevelDb,
+                rightPeakDb = rightPeakDb,
+                hasAudioLevels = hasAudioLevels,
+            )
+        }
+
+        /**
          * The stream ended — stop, disconnect, a transport error, or an
          * immediately-failed start. Called exactly once per
          * [sessionStartLiveView].

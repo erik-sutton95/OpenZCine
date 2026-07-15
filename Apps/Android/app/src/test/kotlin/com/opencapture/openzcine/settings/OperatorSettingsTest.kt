@@ -26,8 +26,10 @@ class OperatorSettingsTest {
         assertTrue(settings.keepScreenAwake.value)
         assertFalse(settings.ruleOfThirdsEnabled.value)
         assertFalse(settings.centerCrosshairEnabled.value)
+        assertFalse(settings.levelAssistEnabled.value)
         assertEquals(LocalFramingGuide.OFF, settings.framingGuide)
         assertEquals(LocalDesqueezePresentation.OFF, settings.desqueezePresentation)
+        assertEquals(LocalLevelStyle.HORIZON, settings.levelStyle)
     }
 
     @Test
@@ -137,15 +139,19 @@ class OperatorSettingsTest {
         OperatorSettings(store).apply {
             ruleOfThirdsEnabled.value = true
             centerCrosshairEnabled.value = true
+            levelAssistEnabled.value = true
             framingGuide = LocalFramingGuide.CINEMA_239
             desqueezePresentation = LocalDesqueezePresentation.X165
+            levelStyle = LocalLevelStyle.GAUGE
         }
 
         val restored = OperatorSettings(store)
         assertTrue(restored.ruleOfThirdsEnabled.value)
         assertTrue(restored.centerCrosshairEnabled.value)
+        assertTrue(restored.levelAssistEnabled.value)
         assertEquals(LocalFramingGuide.CINEMA_239, restored.framingGuide)
         assertEquals(LocalDesqueezePresentation.X165, restored.desqueezePresentation)
+        assertEquals(LocalLevelStyle.GAUGE, restored.levelStyle)
         assertTrue(restored.localFramingAssistConfiguration.accessibilitySummary.contains("unchanged"))
     }
 
@@ -197,11 +203,13 @@ class OperatorSettingsTest {
         store.edit()
             .putString("assist.local.framingGuide.v1", "NOT_A_GUIDE")
             .putString("assist.local.desqueezePresentation.v1", "NOT_A_PRESENTATION")
+            .putString("assist.local.levelStyle.v1", "NOT_A_LEVEL_STYLE")
             .apply()
 
         val restored = OperatorSettings(store)
         assertEquals(LocalFramingGuide.OFF, restored.framingGuide)
         assertEquals(LocalDesqueezePresentation.OFF, restored.desqueezePresentation)
+        assertEquals(LocalLevelStyle.HORIZON, restored.levelStyle)
     }
 
     @Test

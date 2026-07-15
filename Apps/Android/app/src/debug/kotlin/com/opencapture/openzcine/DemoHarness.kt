@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.flow
  * ```
  * adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
  * ```
+ * Add `--es zc.demo.levelSource none` to omit the fixture horizon and exercise
+ * the visibly labelled device-tilt fallback instead.
  *
  * Drive the pairing wizard to any state (screenshot verification):
  * ```
@@ -68,6 +70,13 @@ object DemoHarness {
 
     /** Boolean intent extra that switches the synthetic demo feed on. */
     const val EXTRA_DEMO_FEED = "zc.demo.feed"
+
+    /**
+     * Debug-only virtual-horizon source selector. `none` omits synthetic
+     * camera-level metadata so the monitor exercises its device-gravity
+     * fallback; every other value keeps the explicitly labelled fixture.
+     */
+    private const val EXTRA_DEMO_LEVEL_SOURCE = "zc.demo.levelSource"
 
     /** String intent extra selecting the pairing wizard state to script. */
     const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
@@ -154,7 +163,8 @@ object DemoHarness {
             FakeCameraSession(
                 CameraIdentity(name = "Demo Feed", model = "OpenZCine Demo", serialNumber = "DEMO"),
             )
-        return session to DemoFrameSource()
+        val includeDebugCameraLevel = intent.getStringExtra(EXTRA_DEMO_LEVEL_SOURCE) != "none"
+        return session to DemoFrameSource(includeDebugCameraLevel = includeDebugCameraLevel)
     }
 
     /**

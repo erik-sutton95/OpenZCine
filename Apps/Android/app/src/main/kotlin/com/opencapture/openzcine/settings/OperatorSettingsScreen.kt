@@ -618,6 +618,35 @@ private fun AssistRows(
             color = LiveDesign.muted,
         )
     }
+    SettingsGroupCard(
+        title = "Camera Level",
+        caption = "Uses the camera virtual horizon when its live-view header reports a reliable value.",
+    ) {
+        FramingAssistSwitchRow(
+            title = "Level",
+            isOn = settings.levelAssistEnabled.value,
+            showTopDivider = false,
+        ) {
+            onSettingToggle(settings.levelAssistEnabled)
+        }
+        Text(
+            "Style",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        LevelStyleChoices(
+            selected = settings.levelStyle,
+            onSelect = { style ->
+                settings.levelStyle = style
+                onInteraction()
+            },
+        )
+        Text(
+            "If the camera does not provide a level, the monitor may use labelled device tilt fallback.",
+            style = chromeStyle(10.5f, FontWeight.Normal),
+            color = LiveDesign.muted,
+        )
+    }
 }
 
 /** A 48dp local-framing switch with native checked semantics. */
@@ -685,6 +714,26 @@ private fun DesqueezePresentationChoices(
                     ) { onSelect(presentation) }
                 }
             }
+        }
+    }
+}
+
+/** Two iOS-matching presentation choices for the local camera-level assist. */
+@Composable
+private fun LevelStyleChoices(
+    selected: LocalLevelStyle,
+    onSelect: (LocalLevelStyle) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalLevelStyle.entries.forEach { style ->
+            FramingAssistChoice(
+                label = style.label,
+                selected = style == selected,
+                modifier = Modifier.weight(1f),
+            ) { onSelect(style) }
         }
     }
 }

@@ -34,6 +34,80 @@ public data class LiveAudioMeterLevels(
     public val isDebugFixture: Boolean = false,
 )
 
+/** Camera-reported autofocus state for the primary AF box. */
+public enum class LiveFocusResult {
+    /** The camera did not report a recognized focus result. */
+    UNKNOWN,
+    /** The camera reports that the active AF point is not yet focused. */
+    NOT_FOCUSED,
+    /** The camera reports that the active AF point is in focus. */
+    FOCUSED,
+}
+
+/**
+ * One AF or subject-detection box in the camera's live-view coordinate space.
+ *
+ * The center and size remain in the camera's coordinate system. Presentation
+ * code maps the box into the decoded frame's actual aspect-fit rectangle; it
+ * must not assume that the monitor zone itself has the same aspect ratio.
+ */
+public data class LiveFocusBox(
+    /** Horizontal centre in [LiveFocusInfo.coordinateWidth] units. */
+    public val centerX: Int,
+    /** Vertical centre in [LiveFocusInfo.coordinateHeight] units. */
+    public val centerY: Int,
+    /** Box width in camera coordinate units. */
+    public val width: Int,
+    /** Box height in camera coordinate units. */
+    public val height: Int,
+)
+
+/**
+ * Camera-derived AF and subject-detection metadata carried with one live frame.
+ *
+ * Kotlin receives already-decoded coordinates and state from the portable
+ * Swift core; it never parses Nikon live-view headers. [isDebugFixture] is
+ * true only for the debug synthetic feed and lets the UI avoid presenting
+ * fixture boxes as camera data.
+ */
+public data class LiveFocusInfo(
+    /** Camera coordinate-space width for every [boxes] entry. */
+    public val coordinateWidth: Int,
+    /** Camera coordinate-space height for every [boxes] entry. */
+    public val coordinateHeight: Int,
+    /** Focus state reported for the active AF point. */
+    public val result: LiveFocusResult,
+    /** Whether the camera reports face/subject detection as active. */
+    public val subjectDetectionActive: Boolean,
+    /** Whether the camera reports an active tracking-AF lock. */
+    public val trackingAFActive: Boolean,
+    /** Selected subject-box index, or `null` when the body did not select one. */
+    public val selectedBoxIndex: Int?,
+    /** AF point followed by any detected face or eye boxes. */
+    public val boxes: List<LiveFocusBox>,
+    /** True only when this metadata comes from the debug synthetic feed. */
+    public val isDebugFixture: Boolean = false,
+)
+
+/**
+ * Camera virtual-horizon angles already decoded by the portable Swift core.
+ *
+ * [rollDegrees] and [pitchDegrees] are signed about level (`-180…180`) so
+ * Android only renders an operator readout and does not duplicate the Nikon
+ * header or wrap policy. [isDebugFixture] is true only for synthetic debug
+ * frames, never for the Swift camera bridge.
+ */
+public data class LiveCameraLevel(
+    /** Signed horizon roll in degrees. */
+    public val rollDegrees: Double,
+    /** Signed fore/aft pitch in degrees. */
+    public val pitchDegrees: Double,
+    /** Camera yaw in degrees, retained for future camera-level instruments. */
+    public val yawDegrees: Double,
+    /** True only when this level comes from the debug synthetic feed. */
+    public val isDebugFixture: Boolean = false,
+)
+
 /**
  * One decoded-ready live-view frame from the camera.
  *
@@ -46,12 +120,18 @@ public data class LiveAudioMeterLevels(
  *   frame's live-view header.
  * @property audioLevels Camera-derived stereo meter values, or `null` when
  *   the live-view header did not contain a sound indicator.
+ * @property focus Camera-derived AF and subject-detection data, or `null`
+ *   when the live-view header did not contain valid focus metadata.
+ * @property level Camera-derived virtual-horizon angles, or `null` when the
+ *   camera did not report a reliable level.
  */
 public class LiveFrame(
     public val timestampNanos: Long,
     public val jpegData: ByteArray,
     public val isRecording: Boolean = false,
     public val audioLevels: LiveAudioMeterLevels? = null,
+    public val focus: LiveFocusInfo? = null,
+    public val level: LiveCameraLevel? = null,
 )
 
 /**

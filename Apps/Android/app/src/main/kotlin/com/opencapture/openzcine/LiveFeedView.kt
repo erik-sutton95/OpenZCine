@@ -7,9 +7,13 @@ import android.os.Build
 import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -17,6 +21,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import com.opencapture.openzcine.core.LiveCameraLevel
+import com.opencapture.openzcine.core.LiveFocusInfo
+import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -24,6 +31,96 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val TAG = "ZCLiveFeed"
+
+/** The exact integer destination rectangle used by the aspect-fit feed Canvas. */
+internal data class LiveFeedContentRect(
+    val left: Int,
+    val top: Int,
+    val width: Int,
+    val height: Int,
+)
+
+/**
+ * Resolves the same pixel-rounded aspect-fit rectangle the feed renderer
+ * draws. Feed overlays call this instead of estimating against the monitor
+ * zone, which can contain black letterbox space.
+ */
+internal fun liveFeedContentRect(
+    containerWidth: Float,
+    containerHeight: Float,
+    sourceWidth: Int,
+    sourceHeight: Int,
+): LiveFeedContentRect? {
+    if (containerWidth <= 0f || containerHeight <= 0f || sourceWidth <= 0 || sourceHeight <= 0) {
+        return null
+    }
+    val scale = min(containerWidth / sourceWidth, containerHeight / sourceHeight)
+    val width = (sourceWidth * scale).roundToInt()
+    val height = (sourceHeight * scale).roundToInt()
+    if (width <= 0 || height <= 0) return null
+    return LiveFeedContentRect(
+        left = ((containerWidth - width) / 2f).roundToInt(),
+        top = ((containerHeight - height) / 2f).roundToInt(),
+        width = width,
+        height = height,
+    )
+}
+
+/** One immutable image-and-metadata record accepted by the latest-wins feed. */
+@Immutable
+private data class LiveFeedPresentation(
+    val image: ImageBitmap,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+    val focus: LiveFocusInfo?,
+    val level: LiveCameraLevel?,
+)
+
+/**
+ * Presentation data paired with the bitmap that the feed actually accepted
+ * after latest-wins conflation. It prevents focus and virtual-horizon overlays
+ * from drifting onto a different decoded frame by publishing one immutable
+ * image-and-metadata record, rather than a sequence of mutable fields.
+ */
+@Stable
+public class LiveFeedPresentationState {
+    private var presentation: LiveFeedPresentation? by mutableStateOf(null)
+
+    /** The exact image whose metadata the other accessors describe. */
+    internal val image: ImageBitmap?
+        get() = presentation?.image
+
+    /** Width of the decoded image currently on screen, or zero before a frame. */
+    public val sourceWidth: Int
+        get() = presentation?.sourceWidth ?: 0
+
+    /** Height of the decoded image currently on screen, or zero before a frame. */
+    public val sourceHeight: Int
+        get() = presentation?.sourceHeight ?: 0
+
+    /** Camera-origin focus metadata paired with the visible image. */
+    public val focus: LiveFocusInfo?
+        get() = presentation?.focus
+
+    /** Camera-origin virtual-horizon metadata paired with the visible image. */
+    public val level: LiveCameraLevel?
+        get() = presentation?.level
+
+    internal fun present(frame: LiveFrame, bitmap: Bitmap) {
+        presentation =
+            LiveFeedPresentation(
+                image = bitmap.asImageBitmap(),
+                sourceWidth = bitmap.width,
+                sourceHeight = bitmap.height,
+                focus = frame.focus,
+                level = frame.level,
+            )
+    }
+
+    internal fun clear() {
+        presentation = null
+    }
+}
 
 /**
  * Decodes the live-view JPEG stream into a small ring of reused [Bitmap]s.
@@ -83,6 +180,8 @@ class JpegFrameDecoder {
  * [onFrame] observes each presented frame on the decode thread — the glass
  * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
+ * [presentationState], when supplied, retains the same frame's camera
+ * metadata and image dimensions for feed-aligned overlays.
  *
  * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra,
  * see [FeedEffectsRenderer]) into the drawn frame. The default preserves the
@@ -94,9 +193,10 @@ fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
+    presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects = FeedEffectsState.current,
 ) {
-    val frame = remember { mutableStateOf<ImageBitmap?>(null) }
+    val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
     val renderer =
         remember(effects) {
             when {
@@ -109,7 +209,9 @@ fun LiveFeedView(
             }
         }
 
-    LaunchedEffect(source) {
+    LaunchedEffect(source, presentationState) {
+        presentationState?.clear()
+        fallbackFrame.value = null
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "hardware MJPEG decoder available: ${hasMjpegDecoder()}")
         }
@@ -118,27 +220,33 @@ fun LiveFeedView(
         // ponytail: pumps while composed; lifecycle pause/resume lands with the
         // real camera source wiring.
         withContext(Dispatchers.Default) {
-            pumpFrames(
+            pumpFramesWithSourceFrame(
                 frames = source.frames,
                 stats = stats,
                 decode = decoder::decode,
-                present = {
-                    frame.value = it.asImageBitmap()
-                    onFrame?.invoke(it)
+                present = { sourceFrame, bitmap ->
+                    if (presentationState != null) {
+                        presentationState.present(sourceFrame, bitmap)
+                    } else {
+                        fallbackFrame.value = bitmap.asImageBitmap()
+                    }
+                    onFrame?.invoke(bitmap)
                 },
             )
         }
     }
 
     Canvas(modifier) {
-        val image = frame.value ?: return@Canvas
-        val scale = min(size.width / image.width, size.height / image.height)
-        val dstSize = IntSize((image.width * scale).roundToInt(), (image.height * scale).roundToInt())
-        val dstOffset =
-            IntOffset(
-                ((size.width - dstSize.width) / 2f).roundToInt(),
-                ((size.height - dstSize.height) / 2f).roundToInt(),
-            )
+        val image = presentationState?.image ?: fallbackFrame.value ?: return@Canvas
+        val content =
+            liveFeedContentRect(
+                containerWidth = size.width,
+                containerHeight = size.height,
+                sourceWidth = image.width,
+                sourceHeight = image.height,
+            ) ?: return@Canvas
+        val dstSize = IntSize(content.width, content.height)
+        val dstOffset = IntOffset(content.left, content.top)
         if (Build.VERSION.SDK_INT >= 33 && renderer != null) {
             renderer.draw(
                 canvas = drawContext.canvas.nativeCanvas,

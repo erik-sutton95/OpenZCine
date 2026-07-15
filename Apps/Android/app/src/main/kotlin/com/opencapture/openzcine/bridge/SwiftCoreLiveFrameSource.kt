@@ -65,6 +65,82 @@ class SwiftCoreLiveFrameSource(
                             rightPeakDb: Double,
                             hasAudioLevels: Boolean,
                         ) {
+                            emitFrame(
+                                jpeg = jpeg,
+                                timestampNanos = timestampNanos,
+                                isRecording = isRecording,
+                                leftLevelDb = leftLevelDb,
+                                leftPeakDb = leftPeakDb,
+                                rightLevelDb = rightLevelDb,
+                                rightPeakDb = rightPeakDb,
+                                hasAudioLevels = hasAudioLevels,
+                            )
+                        }
+
+                        override fun onFrameWithMetadata(
+                            jpeg: ByteArray,
+                            timestampNanos: Long,
+                            isRecording: Boolean,
+                            leftLevelDb: Double,
+                            leftPeakDb: Double,
+                            rightLevelDb: Double,
+                            rightPeakDb: Double,
+                            hasAudioLevels: Boolean,
+                            hasFocus: Boolean,
+                            focusCoordinateWidth: Int,
+                            focusCoordinateHeight: Int,
+                            focusResult: Int,
+                            subjectDetectionActive: Boolean,
+                            trackingAFActive: Boolean,
+                            selectedBoxIndex: Int,
+                            focusBoxes: IntArray,
+                            hasLevel: Boolean,
+                            levelRollDegrees: Double,
+                            levelPitchDegrees: Double,
+                            levelYawDegrees: Double,
+                        ) {
+                            emitFrame(
+                                jpeg = jpeg,
+                                timestampNanos = timestampNanos,
+                                isRecording = isRecording,
+                                leftLevelDb = leftLevelDb,
+                                leftPeakDb = leftPeakDb,
+                                rightLevelDb = rightLevelDb,
+                                rightPeakDb = rightPeakDb,
+                                hasAudioLevels = hasAudioLevels,
+                                focus =
+                                    liveFocusInfoFromWire(
+                                        hasFocus = hasFocus,
+                                        coordinateWidth = focusCoordinateWidth,
+                                        coordinateHeight = focusCoordinateHeight,
+                                        focusResult = focusResult,
+                                        subjectDetectionActive = subjectDetectionActive,
+                                        trackingAFActive = trackingAFActive,
+                                        selectedBoxIndex = selectedBoxIndex,
+                                        flattenedBoxes = focusBoxes,
+                                    ),
+                                level =
+                                    liveCameraLevelFromWire(
+                                        hasLevel = hasLevel,
+                                        rollDegrees = levelRollDegrees,
+                                        pitchDegrees = levelPitchDegrees,
+                                        yawDegrees = levelYawDegrees,
+                                    ),
+                            )
+                        }
+
+                        private fun emitFrame(
+                            jpeg: ByteArray,
+                            timestampNanos: Long,
+                            isRecording: Boolean,
+                            leftLevelDb: Double,
+                            leftPeakDb: Double,
+                            rightLevelDb: Double,
+                            rightPeakDb: Double,
+                            hasAudioLevels: Boolean,
+                            focus: com.opencapture.openzcine.core.LiveFocusInfo? = null,
+                            level: com.opencapture.openzcine.core.LiveCameraLevel? = null,
+                        ) {
                             onRecordingState(isRecording)
                             val audioLevels =
                                 if (hasAudioLevels) {
@@ -81,6 +157,8 @@ class SwiftCoreLiveFrameSource(
                                     jpegData = jpeg,
                                     isRecording = isRecording,
                                     audioLevels = audioLevels,
+                                    focus = focus,
+                                    level = level,
                                 ),
                             )
                         }

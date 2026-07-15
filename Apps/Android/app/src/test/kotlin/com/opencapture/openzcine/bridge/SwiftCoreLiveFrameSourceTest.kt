@@ -98,6 +98,51 @@ class SwiftCoreLiveFrameSourceTest {
     }
 
     @Test
+    fun `rich callback carries camera focus and virtual horizon with its frame`() = runTest {
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener = it },
+                stop = {},
+                sharingScope = backgroundScope,
+            )
+
+        val result = async { source.frames.first() }
+        runCurrent()
+        listener.onFrameWithMetadata(
+            jpeg = byteArrayOf(7, 8, 9),
+            timestampNanos = 12L,
+            isRecording = false,
+            leftLevelDb = -60.0,
+            leftPeakDb = -60.0,
+            rightLevelDb = -60.0,
+            rightPeakDb = -60.0,
+            hasAudioLevels = false,
+            hasFocus = true,
+            focusCoordinateWidth = 6_048,
+            focusCoordinateHeight = 3_400,
+            focusResult = 2,
+            subjectDetectionActive = true,
+            trackingAFActive = true,
+            selectedBoxIndex = 1,
+            focusBoxes = intArrayOf(3_024, 1_700, 800, 600, 2_900, 1_450, 180, 180),
+            hasLevel = true,
+            levelRollDegrees = -0.5,
+            levelPitchDegrees = 1.25,
+            levelYawDegrees = 0.0,
+        )
+        runCurrent()
+
+        val frame = result.await()
+        assertEquals(2, frame.focus?.boxes?.size)
+        assertEquals(1, frame.focus?.selectedBoxIndex)
+        assertEquals(true, frame.focus?.trackingAFActive)
+        assertEquals(-0.5, frame.level?.rollDegrees)
+        assertEquals(1.25, frame.level?.pitchDegrees)
+    }
+
+    @Test
     fun `two collectors share one pump and the last cancellation stops it`() = runTest {
         var starts = 0
         var stops = 0
