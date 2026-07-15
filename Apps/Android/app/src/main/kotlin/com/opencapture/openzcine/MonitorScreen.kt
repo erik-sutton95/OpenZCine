@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -805,17 +806,24 @@ fun MonitorScreen(
         // (black letterbox included), so pills over black sample the same
         // map. setLayout is idempotent per geometry, so calling it on every
         // recomposition is free.
-        with(density) {
+        val backdropFeedRect =
+            with(density) {
+                android.graphics.RectF(
+                    zones.feed.x.dp.toPx(),
+                    zones.feed.y.dp.toPx(),
+                    (zones.feed.x + zones.feed.width).dp.toPx(),
+                    (zones.feed.y + zones.feed.height).dp.toPx(),
+                )
+            }
+        // setLayout resets the backdrop's draw-observed frame counter when
+        // dimensions change. Commit that mutation after composition so a
+        // concurrent decode-thread submit cannot conflict with the initial
+        // landscape/portrait subcomposition during rotation.
+        SideEffect {
             glass.backdrop.setLayout(
                 rootWidthPx = constraints.maxWidth.toFloat(),
                 rootHeightPx = constraints.maxHeight.toFloat(),
-                feedRectPx =
-                    android.graphics.RectF(
-                        zones.feed.x.dp.toPx(),
-                        zones.feed.y.dp.toPx(),
-                        (zones.feed.x + zones.feed.width).dp.toPx(),
-                        (zones.feed.y + zones.feed.height).dp.toPx(),
-                    ),
+                feedRectPx = backdropFeedRect,
                 aspectFill = isPortraitFill,
             )
         }
@@ -1169,6 +1177,11 @@ fun MonitorScreen(
                     effectsState = liveFeedEffectsPresentation,
                     feed = zones.feed,
                     viewport = falseColorBounds,
+                    // Portrait fill owns a persistent assist rail at the
+                    // feed's leading edge. Seat the movable reference at the
+                    // trailing edge by default so VIEW remains visible and
+                    // tappable before the operator customises placement.
+                    defaultHorizontalFraction = if (isPortraitFill) 1f else 0f,
                 )
             }
         }

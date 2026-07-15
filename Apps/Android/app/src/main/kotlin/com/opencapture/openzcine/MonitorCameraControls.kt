@@ -246,14 +246,22 @@ internal fun monitorPickerFrame(
         } else {
             min(420f, max(0f, anchorFrame?.width ?: zones.feed.width))
         }
+    val horizontalBounds = if (isPortrait) viewport else zones.feed
     val rawX =
         if (isPortrait) {
             viewport.x + outerMargin
         } else {
-            (anchorFrame ?: zones.feed).let { it.x + it.width - width }
+            min(
+                (anchorFrame ?: zones.feed).let { it.x + it.width },
+                horizontalBounds.x + horizontalBounds.width - outerMargin,
+            ) - width
         }
-    val minX = viewport.x + outerMargin
-    val maxX = max(minX, viewport.x + viewport.width - width - outerMargin)
+    val minX = horizontalBounds.x + outerMargin
+    val maxX =
+        max(
+            minX,
+            horizontalBounds.x + horizontalBounds.width - width - outerMargin,
+        )
     return ZoneFrame(
         x = rawX.coerceIn(minX, maxX),
         y = max(topLimit, bottomLimit - height),
@@ -273,13 +281,15 @@ internal fun portraitFillAssistRailFrame(
 ): ZoneFrame {
     val edge = 10f
     val width = if (expanded) 60f else 44f
-    val height = if (expanded) max(0f, feed.height - edge * 2f) else 44f
-    val bottomClearance = (captureStrip?.height ?: 0f) + edge
+    val feedBottom = feed.y + feed.height
+    val railBottom = captureStrip?.y?.coerceIn(feed.y, feedBottom) ?: feedBottom
+    val top = feed.y + edge
+    val height = if (expanded) max(0f, railBottom - top - edge) else 44f
     val y =
         if (expanded) {
-            feed.y + edge
+            top
         } else {
-            max(feed.y + edge, feed.y + feed.height - height - bottomClearance)
+            max(top, railBottom - height - edge)
         }
     return ZoneFrame(feed.x + edge, y, width, height)
 }

@@ -1,6 +1,10 @@
 package com.opencapture.openzcine
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.os.Build
+import android.os.SystemClock
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -9,6 +13,8 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -55,12 +61,50 @@ class CriticalCameraFlowsTest {
         device.waitForContentDescription(LIVE_VIEW, LIVE_VIEW_TIMEOUT_MILLIS)
     }
 
+    @Test
+    fun fullGlassLiveViewSurvivesRepeatedOrientationChanges() {
+        assumeTrue(Build.VERSION.SDK_INT >= 33)
+        relaunch(
+            launchMainActivity()
+                .putExtra(EXTRA_DEMO_FEED, true)
+                .putExtra(EXTRA_GLASS_TIER, GLASS_TIER_FULL),
+        )
+        device.waitForContentDescription(LIVE_VIEW, LIVE_VIEW_TIMEOUT_MILLIS)
+
+        repeat(4) {
+            rotateAndAssert(
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+                Configuration.ORIENTATION_LANDSCAPE,
+            )
+            rotateAndAssert(
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+                Configuration.ORIENTATION_PORTRAIT,
+            )
+        }
+    }
+
     private fun launchMainActivity(): Intent =
         Intent(instrumentation.targetContext, MainActivity::class.java)
 
     private fun relaunch(intent: Intent) {
         scenario?.close()
         scenario = ActivityScenario.launch(intent)
+    }
+
+    private fun rotateAndAssert(requested: Int, expected: Int) {
+        val launched = requireNotNull(scenario)
+        launched.onActivity { activity -> activity.requestedOrientation = requested }
+        val deadline = SystemClock.uptimeMillis() + ORIENTATION_TIMEOUT_MILLIS
+        var actual = Configuration.ORIENTATION_UNDEFINED
+        while (SystemClock.uptimeMillis() < deadline) {
+            launched.onActivity { activity ->
+                actual = activity.resources.configuration.orientation
+            }
+            if (actual == expected) break
+            SystemClock.sleep(ORIENTATION_POLL_MILLIS)
+        }
+        assertEquals("Activity did not reach the requested orientation", expected, actual)
+        device.waitForContentDescription(LIVE_VIEW, LIVE_VIEW_TIMEOUT_MILLIS)
     }
 
     private fun UiDevice.waitForText(text: String, timeoutMillis: Long): UiObject2 =
@@ -76,6 +120,8 @@ class CriticalCameraFlowsTest {
 
     private companion object {
         const val EXTRA_DEMO_FEED = "zc.demo.feed"
+        const val EXTRA_GLASS_TIER = "zc.glass.tier"
+        const val GLASS_TIER_FULL = "full"
         const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
         const val PAIRING_CONNECTING = "connecting"
         const val LIVE_VIEW = "Live view active"
@@ -83,5 +129,7 @@ class CriticalCameraFlowsTest {
         const val LIVE_VIEW_TIMEOUT_MILLIS = 10_000L
         const val CONNECTING_TIMEOUT_MILLIS = 5_000L
         const val CONNECTION_TIMEOUT_MILLIS = 15_000L
+        const val ORIENTATION_TIMEOUT_MILLIS = 5_000L
+        const val ORIENTATION_POLL_MILLIS = 50L
     }
 }

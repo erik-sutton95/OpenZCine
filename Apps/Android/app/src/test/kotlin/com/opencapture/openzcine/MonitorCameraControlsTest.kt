@@ -147,6 +147,27 @@ class MonitorCameraControlsTest {
     }
 
     @Test
+    fun `landscape picker leaves both system rails exposed`() {
+        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val zones =
+            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
+                feed = ZoneFrame(59f, 0f, 734f, 393f),
+                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            )
+
+        val frame =
+            monitorPickerFrame(
+                viewport,
+                zones,
+                isPortrait = false,
+                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
+            )
+
+        assertTrue(frame.x >= zones.feed.x + 8f)
+        assertTrue(frame.x + frame.width <= zones.feed.x + zones.feed.width - 8f)
+    }
+
+    @Test
     fun `portrait fill rail stays inside feed and above capture strip`() {
         val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
         val collapsed =
@@ -166,6 +187,26 @@ class MonitorCameraControlsTest {
         assertTrue(expanded.x >= zones.feed.x)
         assertTrue(expanded.y >= zones.feed.y)
         assertTrue(expanded.y + expanded.height <= zones.feed.y + zones.feed.height)
+        assertTrue(expanded.y + expanded.height <= requireNotNull(zones.captureStrip).y - 10f)
+    }
+
+    @Test
+    fun `portrait fill trailing false color key leaves collapsed rail reachable`() {
+        val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
+        val rail =
+            portraitFillAssistRailFrame(
+                zones.feed,
+                zones.captureStrip,
+                expanded = false,
+            )
+        val reference =
+            falseColorReferenceDefaultFrame(
+                feed = zones.feed,
+                viewport = zones.feed,
+                horizontalFraction = 1f,
+            )
+
+        assertTrue(reference.x >= rail.x + rail.width)
     }
 
     @Test

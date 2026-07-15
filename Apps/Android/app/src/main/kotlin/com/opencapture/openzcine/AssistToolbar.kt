@@ -154,8 +154,14 @@ class AssistState(
     var audioMetersEnabled: Boolean by mutableStateOf(initialAudioMetersEnabled)
         private set
 
-    init {
-        if (mirrorFeedEffectsState) FeedEffectsState.current = initialEffects
+    /**
+     * Activates the process-local compatibility mirror after composition has
+     * committed. Constructing this state often happens inside `remember`, so
+     * writing another Compose state from the initializer can race an activity
+     * configuration change's initial composition.
+     */
+    fun activateEffectsMirror() {
+        if (mirrorFeedEffectsState) FeedEffectsState.current = effects
     }
 
     /** Whether [tool]'s pill renders lit. */

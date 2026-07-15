@@ -102,6 +102,18 @@ class AssistStateTest {
     }
 
     @Test
+    fun `initial effects mirror activates explicitly after construction`() {
+        FeedEffectsState.current = FeedEffects.NONE
+        val expected = FeedEffects(peaking = true, zebra = true)
+        val state = AssistState(expected, null)
+
+        assertEquals(FeedEffects.NONE, FeedEffectsState.current)
+        state.activateEffectsMirror()
+
+        assertEquals(expected, FeedEffectsState.current)
+    }
+
+    @Test
     fun `audio meter toggle persists independently of image assists and scopes`() {
         val preferences = TestSharedPreferences()
         val state = AssistState.restore(preferences, null, null)

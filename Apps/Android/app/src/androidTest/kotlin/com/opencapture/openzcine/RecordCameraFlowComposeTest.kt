@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasContentDescription
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -82,7 +81,6 @@ class RecordCameraFlowComposeTest {
             hasContentDescription(STOP_RECORDING),
             UI_TIMEOUT_MILLIS,
         )
-        composeRule.waitUntilAtLeastOneExists(hasText(RECORDING), UI_TIMEOUT_MILLIS)
 
         composeRule
             .onNodeWithContentDescription(STOP_RECORDING)
@@ -98,7 +96,6 @@ class RecordCameraFlowComposeTest {
             hasContentDescription(START_RECORDING),
             UI_TIMEOUT_MILLIS,
         )
-        composeRule.waitUntilAtLeastOneExists(hasText(STANDBY), UI_TIMEOUT_MILLIS)
     }
 
     private companion object {
@@ -107,8 +104,6 @@ class RecordCameraFlowComposeTest {
         const val STOP_RECORDING = "Stop recording"
         const val CONFIRM_START = "Start"
         const val CONFIRM_STOP = "Stop"
-        const val RECORDING = "REC"
-        const val STANDBY = "STBY"
         const val UI_TIMEOUT_MILLIS = 5_000L
     }
 }

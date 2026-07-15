@@ -879,13 +879,21 @@ private fun CommandTile(
         )
         Text(
             tile.value,
-            style = chromeStyle(24f, FontWeight.Medium, mono = true),
+            style = chromeStyle(commandTileValueSize(tile.value), FontWeight.Medium, mono = true),
             color = if (controlEnabled) LiveDesign.text else LiveDesign.muted,
             maxLines = 1,
             overflow = TextOverflow.Clip,
         )
     }
 }
+
+/** Keeps full camera values visible inside the tight three-column portrait grid. */
+internal fun commandTileValueSize(value: String): Float =
+    when {
+        value.length <= 8 -> 24f
+        value.length <= 11 -> 20f
+        else -> 16f
+    }
 
 /** The compact iOS-shaped Image / Focus / Audio companion column. */
 @Composable

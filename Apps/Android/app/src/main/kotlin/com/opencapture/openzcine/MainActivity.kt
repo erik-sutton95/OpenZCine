@@ -118,6 +118,10 @@ class MainActivity : ComponentActivity() {
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
+        val operatorSettings =
+            OperatorSettings(applicationContext).also { settings ->
+                debugPortraitAspect?.let { settings.portraitFeedAspect = it }
+            }
         setContent {
             OpenZCineTheme {
                 var monitorSession by remember { mutableStateOf(debugSession) }
@@ -130,12 +134,6 @@ class MainActivity : ComponentActivity() {
                 val connectionScope = rememberCoroutineScope()
                 val savedCameraStore =
                     remember { SharedPreferencesSavedCameraStore(applicationContext) }
-                val operatorSettings =
-                    remember {
-                        OperatorSettings(applicationContext).also { settings ->
-                            debugPortraitAspect?.let { settings.portraitFeedAspect = it }
-                        }
-                    }
                 // The app-private LUT library owns transient SAF import and Swift-packed render
                 // payloads. It is deliberately process-local; only generated selections persist.
                 val lutLibrary = remember { AndroidLutLibrary(applicationContext) }
@@ -276,6 +274,9 @@ class MainActivity : ComponentActivity() {
                                         availableStoredLut = lutLibrary::contains,
                                     )
                                 }
+                            LaunchedEffect(standaloneAssist) {
+                                standaloneAssist.activateEffectsMirror()
+                            }
                             OperatorSettingsScreen(
                                 session = null,
                                 assistState = standaloneAssist,
@@ -324,6 +325,7 @@ class MainActivity : ComponentActivity() {
                                 availableStoredLut = lutLibrary::contains,
                             )
                         }
+                        LaunchedEffect(assist) { assist.activateEffectsMirror() }
                         val currentSessionState by active.state.collectAsState()
                         val currentCameraProperties by active.cameraProperties.collectAsState()
                         val playbackExposureAssistCameraInput =

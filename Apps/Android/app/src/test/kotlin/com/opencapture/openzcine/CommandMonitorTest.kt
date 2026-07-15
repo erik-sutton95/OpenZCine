@@ -18,6 +18,13 @@ import kotlin.test.assertTrue
 
 class CommandMonitorTest {
     @Test
+    fun `long command values shrink instead of clipping in the portrait grid`() {
+        assertEquals(24f, commandTileValueSize("5600K"))
+        assertEquals(20f, commandTileValueSize("R3D NE HQ"))
+        assertEquals(16f, commandTileValueSize("6000x3336 · 25p"))
+    }
+
+    @Test
     fun `dashboard maps real snapshot values and only exposes safe control intents`() {
         val presentation =
             commandDashboardPresentation(
