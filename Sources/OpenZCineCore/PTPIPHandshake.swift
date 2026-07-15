@@ -15,6 +15,14 @@ public enum PTPIPInitiator {
             0x65, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
         ])
 
+    /// Preserves a valid installed identity, seeding ``appGUID`` only for a fresh or corrupt store.
+    /// Camera pairing profiles are keyed to these 16 bytes, so branding changes must never replace
+    /// an identity that has already been persisted on the device.
+    public static func resolvedAppGUID(persistedGUID: Data?) -> Data {
+        guard let persistedGUID, persistedGUID.count == 16 else { return appGUID }
+        return persistedGUID
+    }
+
     /// This string is part of the paired initiator identity; keep it stable.
     public static let friendlyName = "WTU-iPhone"
 

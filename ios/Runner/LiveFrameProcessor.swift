@@ -9,6 +9,7 @@ import os
 enum LUTCubeCache {
     private struct State {
         var cache: [String: CubeLUT] = [:]
+        var revisions: [String: UInt] = [:]
         /// Access order, least-recent first — drives the LRU eviction.
         var order: [String] = []
 
@@ -25,7 +26,25 @@ enum LUTCubeCache {
     private static let maxEntries = 24
     private static let state = OSAllocatedUnfairLock(initialState: State())
 
+    /// Adds the current revision to a stable selection key so long-lived renderers cannot reuse a
+    /// stale filter after a stored LUT is deleted and later re-imported under the same file name.
+    static func versionedKey(forKey key: String) -> String {
+        state.withLock { "\(key)#\($0.revisions[key, default: 0])" }
+    }
+
+    /// Invalidates a stored selection across the process. Existing renderer-local filters become
+    /// unreachable because their revision suffix no longer matches.
+    static func invalidate(forKey key: String) {
+        state.withLock { state in
+            let oldKey = "\(key)#\(state.revisions[key, default: 0])"
+            state.cache.removeValue(forKey: oldKey)
+            state.order.removeAll { $0 == oldKey }
+            state.revisions[key, default: 0] &+= 1
+        }
+    }
+
     static func cube(forKey key: String, _ make: () -> CubeLUT?) -> CubeLUT? {
+        let key = versionedKey(forKey: key)
         let cached = state.withLock { state -> CubeLUT? in
             guard let cube = state.cache[key] else { return nil }
             state.markUsed(key)
@@ -455,15 +474,16 @@ final class LiveFrameProcessor {
 
     private func applyBaseCube(to input: CIImage, key: String, makeCube: () -> CubeLUT?) -> CIImage
     {
+        let versionedKey = LUTCubeCache.versionedKey(forKey: key)
         let filter: CIFilter?
-        if let cached = cubeFilters[key] {
+        if let cached = cubeFilters[versionedKey] {
             filter = cached
         } else if let cube = LUTCubeCache.cube(forKey: key, makeCube) {
             let data = cube.rgbaComponents.withUnsafeBytes { Data($0) }
             let built = CIFilter(
                 name: "CIColorCube",
                 parameters: ["inputCubeDimension": cube.size, "inputCubeData": data])
-            cubeFilters[key] = built
+            cubeFilters[versionedKey] = built
             filter = built
         } else {
             filter = nil

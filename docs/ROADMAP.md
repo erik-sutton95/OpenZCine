@@ -223,6 +223,21 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
   preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and
   confirmed credentials enter encrypted storage only after a successful join.
+- **External beta diagnostics & support** (in progress) — Apple-native crash diagnostics,
+  privacy-safe support reports, and direct System links for help, bugs, feature requests, source,
+  privacy, and terms.
+- **First-live-view control guide** (in progress) — a replayable three-step introduction to camera
+  controls, View Assist tap and press-and-hold behavior, and monitor system controls on iOS.
+- **Stored LUT library management** (in progress) — native long-press deletion for imported Custom
+  and downloaded RED LUTs, with built-in looks protected and active selections reconciled safely.
+- **Waveform/parade brightness calibration** (in progress) — a useful 0–200% trace-intensity range
+  where 100% matches the former 25% appearance and saved iOS settings migrate without a visual jump.
+- **Android beta-readiness parity** (planned) — port the diagnostics, support links, and live-view
+  guide after the iOS behavior is validated with external testers.
+- **Public launch landing actions**: keep TestFlight available while Android and the
+  public repository are presented as clearly unavailable until their launches.
+- **Landing-page camera compatibility** (in progress): identify the Nikon ZR, Z9, and Z5II as
+  working, and the Z6, Z6II, Z6III, Zf, Z8, Z7, and Z7II as untested.
 
 ## Milestone Success Criteria
 

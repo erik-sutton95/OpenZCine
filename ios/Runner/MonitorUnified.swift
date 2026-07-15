@@ -674,6 +674,10 @@ struct MonitorSystemCluster: View {
         }
         .buttonStyle(.zcTapTarget)
         .sensoryFeedback(.impact(weight: .medium), trigger: locked)
+        .accessibilityLabel(locked ? "Unlock monitor controls" : "Lock monitor controls")
+        .accessibilityHint("Prevents accidental camera and View Assist changes")
+        .accessibilityIdentifier("monitor.system.lock")
+        .liveViewGuideAnchor(.lock)
     }
 
     private var settingsButton: some View {
@@ -687,6 +691,9 @@ struct MonitorSystemCluster: View {
             )
         }
         .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Open Operator Setup")
+        .accessibilityIdentifier("monitor.system.settings")
+        .liveViewGuideAnchor(.settings)
     }
 
     private var mediaButton: some View {
@@ -700,6 +707,9 @@ struct MonitorSystemCluster: View {
             )
         }
         .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Open Media")
+        .accessibilityIdentifier("monitor.system.media")
+        .liveViewGuideAnchor(.media)
     }
 
     private var displayButton: some View {
@@ -729,6 +739,9 @@ struct MonitorSystemCluster: View {
                 in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
         }
         .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Change display mode")
+        .accessibilityIdentifier("monitor.system.display")
+        .liveViewGuideAnchor(.display)
     }
 
     // MARK: - .axisHorizontal (former `PortraitSystemBar`)
@@ -741,6 +754,9 @@ struct MonitorSystemCluster: View {
             lockButton
             Spacer(minLength: 14)
             PortraitDisplayButton()
+                .accessibilityLabel("Change display mode")
+                .accessibilityIdentifier("monitor.system.display")
+                .liveViewGuideAnchor(.display)
             Spacer(minLength: 14)
             recordButton
             Spacer(minLength: 14)
@@ -761,6 +777,11 @@ struct MonitorSystemCluster: View {
             RecordButton(isRecording: model.cameraState.recordState == .recording)
         }
         .buttonStyle(.zcTapTarget)
+        .accessibilityLabel(
+            model.cameraState.recordState == .recording ? "Stop recording" : "Start recording"
+        )
+        .accessibilityIdentifier("monitor.system.record")
+        .liveViewGuideAnchor(.record)
         .alert(recordConfirmationTitle, isPresented: isRecordConfirmationPresented) {
             Button("Cancel", role: .cancel) {
                 model.cancelRecordToggle()
@@ -992,6 +1013,7 @@ struct MonitorShell: View {
         if chrome.statusBarVisible {
             MonitorInfoBar(style: .infoPill, compact: isClean)
                 .environment(model)
+                .liveViewGuideAnchor(.infoBar)
                 .frame(maxWidth: CGFloat(deck.width))
                 .position(x: CGFloat(deck.midX), y: CGFloat(deck.midY))
         }
@@ -1014,6 +1036,7 @@ struct MonitorShell: View {
                         // vertical portrait rail). Rendering stays `axis`-driven (D5).
                         MonitorAssistStrip(axis: .horizontal, collapsible: false)
                             .environment(model)
+                            .liveViewGuideAnchor(.viewAssist)
                             .frame(
                                 maxWidth: captureVisible ? .infinity : CGFloat(assist.frame.width),
                                 alignment: .leading
@@ -1024,6 +1047,7 @@ struct MonitorShell: View {
                     if captureVisible {
                         MonitorCaptureStrip(fitsWidth: true)
                             .environment(model)
+                            .liveViewGuideAnchor(.cameraControls)
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(1)
                             .frame(maxHeight: .infinity)
@@ -1214,6 +1238,7 @@ struct MonitorShell: View {
             // Overlaid top bar.
             MonitorInfoBar(style: .infoBar)
                 .environment(model)
+                .liveViewGuideAnchor(.infoBar)
                 .frame(width: map.infoBar.frame.width, height: map.infoBar.frame.height)
                 .offset(x: map.infoBar.frame.x, y: map.infoBar.frame.y)
 
@@ -1245,6 +1270,7 @@ struct MonitorShell: View {
             if let capture = map.captureStrip {
                 MonitorCaptureStrip(fitsWidth: false)
                     .environment(model)
+                    .liveViewGuideAnchor(.cameraControls)
                     .opacity(model.interfaceLocked ? 0.4 : 1)
                     .frame(width: capture.frame.width, height: capture.frame.height)
                     .offset(x: capture.frame.x, y: capture.frame.y)
@@ -1267,6 +1293,7 @@ struct MonitorShell: View {
                     columns: 3
                 )
                 .environment(model)
+                .liveViewGuideAnchor(.cameraControls)
                 .padding(.horizontal, 12)
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .frame(width: grid.frame.width, height: grid.frame.height - tcBand)
@@ -1279,6 +1306,7 @@ struct MonitorShell: View {
             if let assist = map.assistStrip {
                 MonitorAssistStrip(axis: .horizontal, collapsible: false)
                     .environment(model)
+                    .liveViewGuideAnchor(.viewAssist)
                     .opacity(model.interfaceLocked ? 0.4 : 1)
                     .frame(width: assist.frame.width - 24, height: assist.frame.height - 8)
                     .offset(x: assist.frame.x + 12, y: assist.frame.y + 4)
@@ -1304,6 +1332,7 @@ struct MonitorShell: View {
                     expanded: $railExpanded
                 )
                 .environment(model)
+                .liveViewGuideAnchor(.viewAssist)
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .frame(
                     width: railExpanded ? MonitorAssistStrip.expandedWidth : 44,

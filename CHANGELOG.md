@@ -13,12 +13,17 @@ All notable changes to this project are documented here. The format is based on
   Wi-Fi (PTP-IP) and USB-C now share one session layer behind a transaction-level
   `CameraTransport` boundary. Hardware verification on the ZR is pending.
 - Third-party license notices (`THIRD-PARTY-NOTICES.md`) and an app privacy policy page
-  (`website/public/privacy/`).
+  (`site/privacy/`).
 - Contributor guide for running the app without camera hardware (demo session).
 - TestFlight CI: automated upload on merge to `main`, centralized iOS versioning, and maintainer setup
   docs (`docs/testflight-ci.md`).
 - Repository foundation: governance docs, tooling (`just`, meta-checks), native CI, and agent
   configuration.
+
+### Changed
+
+- TestFlight notes are now reviewed, tester-written copy with concrete test steps. CI rejects stale
+  notes, commit titles, and common implementation jargon before an iOS build can ship.
 
 ### Security
 

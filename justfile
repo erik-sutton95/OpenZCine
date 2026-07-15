@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check typos lint-md check-links check-editorconfig lint-actions secrets check-demo-isolation swift-lint swift-test
+check: hygiene site-check testflight-notes-check typos lint-md check-links check-editorconfig lint-actions secrets check-demo-isolation swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -24,6 +24,11 @@ hygiene:
 # Validate the deploy-ready landing-page tree and all local asset references.
 site-check:
     ./scripts/check-site.sh
+
+# Validate the reviewed TestFlight copy and its regression guardrails.
+testflight-notes-check:
+    ./scripts/ios-release-notes-check.sh
+    ./scripts/ios-release-notes-test.sh
 
 # Spell-check the repository.
 typos:
@@ -85,6 +90,19 @@ swift-check: swift-lint swift-test
 ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 
+# Run the iOS shell's Swift Testing suite on the first available iPhone simulator.
+ios-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    device_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ && !found { print $2; found = 1 }')"
+    if [ -z "$device_id" ]; then
+        echo "No available iPhone simulator found." >&2
+        exit 1
+    fi
+    xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+      -destination "platform=iOS Simulator,id=$device_id" \
+      test
+
 # Build the watchOS companion app for the simulator.
 watch-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme OpenZCineWatch -destination 'generic/platform=watchOS Simulator' CODE_SIGNING_ALLOWED=NO build
@@ -129,7 +147,7 @@ testflight:
     IOS_UPLOAD_VIA_ALTOOL=1 ./scripts/ios-testflight-upload.sh
 
 # Run all native production checks that do not require camera hardware.
-native-check: check-demo-isolation swift-check ios-build watch-build
+native-check: check-demo-isolation swift-check ios-test ios-build watch-build
 
 # Format production Swift sources.
 format: swift-format

@@ -95,7 +95,7 @@ the Watch companion, and the full iPad experience continue to be hardened with r
 
 The roadmap lives in [GitHub Discussions](https://github.com/erik-sutton95/OpenZCine/discussions/22),
 where every proposed feature has its own thread. Browse the
-[Ideas category](https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas) to vote,
+[Ideas category](https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas-feature-requests) to vote,
 add production context, or propose what OpenZCine should tackle next. Roadmap discussions describe
 direction, not promised dates or release commitments. Engineering-phase detail lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -173,7 +173,7 @@ Please also read our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). For security is
 
 [Apache 2.0](LICENSE). Third-party licenses are listed in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The app's privacy policy lives at
-[`website/public/privacy/`](website/public/privacy/index.html).
+[openzcine.app/privacy](https://openzcine.app/privacy/).
 
 "Nikon", "Nikon Z", "ZR", and "Z Cinema" are trademarks of Nikon Corporation, used here for
 identification only.

@@ -106,10 +106,10 @@ jobs:
             echo "::warning::FRAMEIO_CLIENT_ID secret is not set — Frame.io login will be disabled in this build."
           fi
 
-      - name: Generate release notes
+      - name: Load reviewed release notes
         run: |
           mkdir -p build/ios
-          ./scripts/ios-release-notes.sh 25 > build/ios/release-notes.txt
+          ./scripts/ios-release-notes.sh > build/ios/release-notes.txt
           cat build/ios/release-notes.txt
 
       - name: Archive and upload to TestFlight

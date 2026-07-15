@@ -24,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Repository hygiene
@@ -31,6 +32,24 @@ jobs:
 
       - name: Landing-page assets
         run: ./scripts/check-site.sh
+
+      - name: TestFlight notes
+        run: |
+          ./scripts/ios-release-notes-check.sh
+          ./scripts/ios-release-notes-test.sh
+
+      - name: Require reviewed notes for TestFlight-triggering pull requests
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          if grep -Eq '^(Sources/|Tests/|ios/|Package\.swift$|scripts/|justfile$)' <<< "$changed_files"; then
+            if ! grep -Fxq 'ios/TestFlight/WhatToTest.en-US.txt' <<< "$changed_files"; then
+              echo "Update ios/TestFlight/WhatToTest.en-US.txt with plain-language changes and test steps." >&2
+              exit 1
+            fi
+          fi
 
       - name: Spell check
         uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
@@ -93,6 +112,8 @@ jobs:
               - 'scripts/add-*.rb'
               - 'scripts/ios-*.sh'
               - 'justfile'
+              # Changing how the native job builds must re-run the native job.
+              - '.github/workflows/ci.yml'
             android:
               - 'Apps/Android/**'
               - 'Sources/OpenZCineCore/**'
@@ -108,19 +129,49 @@ jobs:
     needs: changes
     # Skip the slow macOS build for docs-only changes; Meta checks still lint the docs.
     if: ${{ needs.changes.outputs.code == 'true' }}
-    # Self-hosted Mac while the repo is private (hosted macOS minutes bill at 10x). The machine's
-    # default toolchain is Xcode 26.2, so no setup-xcode step. IMPORTANT: switch back to
-    # macos-latest before the repository goes public — self-hosted runners must never serve
-    # fork PRs.
-    runs-on: [self-hosted, macOS]
+    # Hosted macOS: free and unlimited on public repositories, and a fresh VM per job. Never move
+    # this job to a self-hosted runner — it runs `just native-check` from the pull request, so a
+    # fork PR would execute attacker-controlled code on a persistent machine.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
       - name: Install native tooling
         run: brew install just swift-format || true
       - name: Run native checks
         run: just native-check
+
+  gate:
+    name: CI gate
+    # The single required status check. `native` and `android` are conditional, and a required
+    # check that never reports leaves a pull request blocked forever — so this job always runs and
+    # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
+    # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
+    if: always()
+    needs: [meta, secrets, changes, native, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have passed or been deliberately skipped
+        env:
+          # success | failure | cancelled | skipped, one per job in `needs`.
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          for result in $RESULTS; do
+            case "$result" in
+              # `skipped` is legitimate: the paths filter proved the job had nothing to do.
+              success | skipped) ;;
+              *)
+                echo "::error::a CI job reported '$result'"
+                exit 1
+                ;;
+            esac
+          done
+          echo "All CI jobs passed or were skipped: $RESULTS"
 
   android:
     name: Android
