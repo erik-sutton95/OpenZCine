@@ -103,9 +103,9 @@ Android.
 - Swift SDK for Android integration verified for the current core build and runtime path.
 - Saved-camera reconnect and Wi-Fi pairing, plus Compose monitor record/live-view control surfaces.
 - Camera-property readback, command dashboard, and monitor-assist controls (in progress).
-- Media browse, progressive playback, still viewing, and complete-cache-only Android sharing,
-  including Camera/On-device library sources, categories, sorting, favorites, grid/list layouts,
-  and batch selection (in progress).
+- Media browse, full progressive-proxy playback, still viewing, and complete-cache-only Android
+  sharing, including Camera/On-device library sources, categories, sorting, favorites, grid/list
+  layouts, filtered playback navigation, transport/scrub/mute, and batch selection (in progress).
 - Standalone Operator Setup and app-owned progressive-media cache management (in progress).
 
 **Status:** In progress. Android follows the same product shell while platform-specific USB-camera

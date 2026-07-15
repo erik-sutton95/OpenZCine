@@ -277,6 +277,7 @@ class MainActivity : ComponentActivity() {
                                         cameraID = cameraID,
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
+                                        operatorSettings = operatorSettings,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
