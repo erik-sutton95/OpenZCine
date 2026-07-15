@@ -518,7 +518,12 @@ private fun AssistRows(
     onInteraction: () -> Unit,
 ) {
     SettingsRowCard {
-        AssistTool.entries.forEachIndexed { index, tool ->
+        // Local framing tools have their own configuration group below. They
+        // do not belong to AssistState, which intentionally owns only image
+        // effects, scopes, and audio metering.
+        AssistTool.entries
+            .filterNot { it in AssistTool.framingTools }
+            .forEachIndexed { index, tool ->
             SettingsSwitchRow(
                 tool.settingsTitle,
                 isOn = assistState.isOn(tool),
@@ -602,15 +607,67 @@ private fun AssistRows(
     }
     SettingsGroupCard(
         title = "Local Framing",
-        caption = "OpenZCine draws these monitor-only overlays. They never change the camera's Grid Display setting.",
+        caption = "OpenZCine draws these monitor-only overlays over the visible feed. They never change the camera's Grid Display setting.",
     ) {
         FramingAssistSwitchRow(
-            title = "Rule-of-Thirds Grid",
-            isOn = settings.ruleOfThirdsEnabled.value,
+            title = "Show Delivery Guides",
+            isOn = settings.guidesVisible.value,
             showTopDivider = false,
         ) {
-            onSettingToggle(settings.ruleOfThirdsEnabled)
+            // Use the same seeding behavior as the monitor toolbar: turning
+            // on an empty guide selection must produce the iOS-default 2.39:1
+            // frame instead of an apparently broken empty overlay.
+            settings.toggleLocalFramingTool(AssistTool.GUIDES)
+            onInteraction()
         }
+        Text(
+            "Delivery Guide Family",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        FramingGuideFamilyChoices(
+            selected = settings.guideFamily,
+            onSelect = { family ->
+                settings.guideFamily = family
+                onInteraction()
+            },
+        )
+        FramingGuideChoices(
+            family = settings.guideFamily,
+            selected = settings.selectedGuideRatios,
+            onToggle = { ratio ->
+                settings.toggleGuideRatio(ratio)
+                onInteraction()
+            },
+        )
+        FramingAssistSwitchRow(
+            title = "Mask Outside Selected Frames",
+            isOn = settings.guideMaskEnabled.value,
+        ) {
+            onSettingToggle(settings.guideMaskEnabled)
+        }
+        Text(
+            "Composition Grid",
+            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        FramingAssistSwitchRow(
+            title = "Show Composition Grid",
+            isOn = settings.localGridVisible.value,
+        ) {
+            // Likewise, re-enabling an otherwise empty grid starts with
+            // thirds so the visible result always matches the control state.
+            settings.toggleLocalFramingTool(AssistTool.GRID)
+            onInteraction()
+        }
+        FramingGridChoices(
+            thirds = settings.ruleOfThirdsEnabled.value,
+            phi = settings.phiGridEnabled.value,
+            diagonal = settings.diagonalGridEnabled.value,
+            onToggleThirds = { onSettingToggle(settings.ruleOfThirdsEnabled) },
+            onTogglePhi = { onSettingToggle(settings.phiGridEnabled) },
+            onToggleDiagonal = { onSettingToggle(settings.diagonalGridEnabled) },
+        )
         FramingAssistSwitchRow(
             title = "Centre Crosshair",
             isOn = settings.centerCrosshairEnabled.value,
@@ -618,31 +675,42 @@ private fun AssistRows(
             onSettingToggle(settings.centerCrosshairEnabled)
         }
         Text(
-            "Frame Guide",
+            "Desqueeze",
             style = chromeStyle(12.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
-        FramingGuideChoices(
-            selected = settings.framingGuide,
-            onSelect = { guide ->
-                settings.framingGuide = guide
+        FramingAssistSwitchRow(
+            title = "Enable Local Desqueeze",
+            isOn = settings.desqueezeEnabled.value,
+        ) {
+            onSettingToggle(settings.desqueezeEnabled)
+        }
+        Text(
+            "Ratio",
+            style = chromeStyle(11.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+        )
+        DesqueezeRatioChoices(
+            selected = settings.desqueezeRatio,
+            onSelect = { ratio ->
+                settings.desqueezeRatio = ratio
                 onInteraction()
             },
         )
         Text(
-            "Desqueeze Presentation",
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
+            "Compressed Axis",
+            style = chromeStyle(11.5f, FontWeight.SemiBold),
             color = LiveDesign.text,
         )
-        DesqueezePresentationChoices(
-            selected = settings.desqueezePresentation,
-            onSelect = { presentation ->
-                settings.desqueezePresentation = presentation
+        DesqueezeOrientationChoices(
+            selected = settings.desqueezeOrientation,
+            onSelect = { orientation ->
+                settings.desqueezeOrientation = orientation
                 onInteraction()
             },
         )
         Text(
-            "Camera Grid Display remains camera-owned and unchanged.",
+            "Guides, masks, grids, crosshair, and desqueeze are local display assists. Camera Grid Display remains camera-owned and unchanged.",
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
@@ -921,47 +989,111 @@ private fun FramingAssistSwitchRow(
     }
 }
 
-/** Radio-choice row for the supported local delivery-frame ratios. */
+/** Radio choices for the active delivery-guide family tab. */
 @Composable
-private fun FramingGuideChoices(
-    selected: LocalFramingGuide,
-    onSelect: (LocalFramingGuide) -> Unit,
+private fun FramingGuideFamilyChoices(
+    selected: LocalFramingGuideFamily,
+    onSelect: (LocalFramingGuideFamily) -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        LocalFramingGuide.entries.forEach { guide ->
+        LocalFramingGuideFamily.entries.forEach { family ->
             FramingAssistChoice(
-                label = guide.label,
-                selected = guide == selected,
+                label = family.label,
+                selected = family == selected,
                 modifier = Modifier.weight(1f),
-            ) { onSelect(guide) }
+            ) { onSelect(family) }
         }
     }
 }
 
-/** Two compact radio rows for every supported local de-squeeze factor. */
+/** Multi-select ratio rows for the active iOS-equivalent delivery family. */
 @Composable
-private fun DesqueezePresentationChoices(
-    selected: LocalDesqueezePresentation,
-    onSelect: (LocalDesqueezePresentation) -> Unit,
+private fun FramingGuideChoices(
+    family: LocalFramingGuideFamily,
+    selected: Set<LocalFramingAspectRatio>,
+    onToggle: (LocalFramingAspectRatio) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalFramingAspectRatio.forFamily(family).chunked(3).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                row.forEach { ratio ->
+                    FramingAssistToggleChoice(
+                        label = ratio.label,
+                        checked = ratio in selected,
+                        modifier = Modifier.weight(1f),
+                    ) { onToggle(ratio) }
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+/** Independent thirds, phi, and diagonal composition-grid choices. */
+@Composable
+private fun FramingGridChoices(
+    thirds: Boolean,
+    phi: Boolean,
+    diagonal: Boolean,
+    onToggleThirds: () -> Unit,
+    onTogglePhi: () -> Unit,
+    onToggleDiagonal: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        FramingAssistToggleChoice(
+            label = "Thirds",
+            checked = thirds,
+            modifier = Modifier.weight(1f),
+            onClick = onToggleThirds,
+        )
+        FramingAssistToggleChoice(
+            label = "Phi Grid",
+            checked = phi,
+            modifier = Modifier.weight(1f),
+            onClick = onTogglePhi,
+        )
+        FramingAssistToggleChoice(
+            label = "Diagonal",
+            checked = diagonal,
+            modifier = Modifier.weight(1f),
+            onClick = onToggleDiagonal,
+        )
+    }
+}
+
+/** Compact radio rows for every supported local de-squeeze factor. */
+@Composable
+private fun DesqueezeRatioChoices(
+    selected: LocalDesqueezeRatio,
+    onSelect: (LocalDesqueezeRatio) -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth().selectableGroup(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        LocalDesqueezePresentation.entries.chunked(3).forEach { row ->
+        LocalDesqueezeRatio.entries.chunked(3).forEach { row ->
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                row.forEach { presentation ->
+                row.forEach { ratio ->
                     FramingAssistChoice(
-                        label = presentation.label,
-                        selected = presentation == selected,
+                        label = ratio.label,
+                        selected = ratio == selected,
                         modifier = Modifier.weight(1f),
-                    ) { onSelect(presentation) }
+                    ) { onSelect(ratio) }
                 }
             }
         }
@@ -984,6 +1116,26 @@ private fun LevelStyleChoices(
                 selected = style == selected,
                 modifier = Modifier.weight(1f),
             ) { onSelect(style) }
+        }
+    }
+}
+
+/** Radio choice for the source axis compressed by the local anamorphic capture. */
+@Composable
+private fun DesqueezeOrientationChoices(
+    selected: LocalDesqueezeOrientation,
+    onSelect: (LocalDesqueezeOrientation) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalDesqueezeOrientation.entries.forEach { orientation ->
+            FramingAssistChoice(
+                label = orientation.label,
+                selected = orientation == selected,
+                modifier = Modifier.weight(1f),
+            ) { onSelect(orientation) }
         }
     }
 }
@@ -1011,6 +1163,39 @@ private fun FramingAssistChoice(
             label,
             style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
             color = if (selected) LiveDesign.accent else LiveDesign.muted,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Accessible multi-select choice shared by guide-ratio and grid-pattern controls. */
+@Composable
+private fun FramingAssistToggleChoice(
+    label: String,
+    checked: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier
+            .height(48.dp)
+            .background(
+                if (checked) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
+                ChromeShape,
+            )
+            .border(1.dp, if (checked) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
+            .toggleable(
+                value = checked,
+                role = Role.Checkbox,
+                onValueChange = { onClick() },
+            )
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
+            color = if (checked) LiveDesign.accent else LiveDesign.muted,
             maxLines = 1,
         )
     }

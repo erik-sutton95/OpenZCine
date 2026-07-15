@@ -90,7 +90,7 @@ internal data class PlaybackPan(
 
 /**
  * Bounds a zoomed video to its viewport. A configured anamorphic presentation
- * can shrink the horizontal image before zooming, so the horizontal and
+ * can shrink either source axis before zooming, so the horizontal and
  * vertical limits are intentionally independent.
  */
 internal fun clampPlaybackPan(
@@ -99,10 +99,11 @@ internal fun clampPlaybackPan(
     viewportHeight: Float,
     zoom: Float,
     horizontalPresentationScale: Float,
+    verticalPresentationScale: Float = 1f,
 ): PlaybackPan {
     val safeZoom = zoom.coerceAtLeast(1f)
     val scaledWidth = safeZoom * horizontalPresentationScale.coerceAtLeast(0f)
-    val scaledHeight = safeZoom
+    val scaledHeight = safeZoom * verticalPresentationScale.coerceAtLeast(0f)
     val maxX = (viewportWidth.coerceAtLeast(0f) * (scaledWidth - 1f).coerceAtLeast(0f)) / 2f
     val maxY = (viewportHeight.coerceAtLeast(0f) * (scaledHeight - 1f).coerceAtLeast(0f)) / 2f
     return PlaybackPan(

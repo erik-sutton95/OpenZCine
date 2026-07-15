@@ -125,6 +125,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   device-tilt fallback when a frame has no reliable camera level (direct gravity sensor
   where available; normalized low-pass accelerometer approximation otherwise). Physical Nikon validation
   remains required; debug-fixture metadata is never presented as camera data.
+- **Android advanced framing-assist parity** (OPE-59, in progress) — local multi-select Film/Social
+  delivery frames with inverse-union masking, independent thirds/phi/diagonal grids, centre
+  crosshair, and horizontal/vertical de-squeeze. Live-monitor assists resolve against the same
+  exact aspect-fit content rect as focus and horizon, and never change Nikon Grid Display.
 - **Android monitor feed texture parity** (OPE-72, to do) — mirror iOS's feed-local vignette and
   deterministic static grain after the camera frame/effect pipeline, clipped to the visible image
   without affecting clean-source analysis, framing/focus/horizon geometry, or monitor chrome.

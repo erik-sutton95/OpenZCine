@@ -103,6 +103,25 @@ class LiveFrameMetadataOverlaysTest {
     }
 
     @Test
+    fun `vertical desqueeze keeps focus and level geometry centred in the rendered feed`() {
+        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        assertNotNull(content)
+
+        val feed =
+            liveOverlayFeedRect(
+                content = content,
+                horizontalPresentationScale = 1f,
+                verticalPresentationScale = 0.5f,
+            )
+
+        assertNotNull(feed)
+        assertEquals(0f, feed.left)
+        assertEquals(359.75f, feed.top)
+        assertEquals(1_000f, feed.width)
+        assertEquals(281.5f, feed.height)
+    }
+
+    @Test
     fun `camera horizon always wins over device gravity fallback`() {
         val reading =
             resolveLiveLevel(
