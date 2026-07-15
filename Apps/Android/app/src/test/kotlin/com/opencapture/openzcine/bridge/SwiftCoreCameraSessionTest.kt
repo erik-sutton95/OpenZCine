@@ -3,6 +3,8 @@ package com.opencapture.openzcine.bridge
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraFocusException
+import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraRecordingState
@@ -14,6 +16,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
@@ -24,6 +27,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 
 /**
@@ -268,6 +272,108 @@ class SwiftCoreCameraSessionTest {
         }
 
         assertEquals(1, bridge.disconnects)
+    }
+
+    @Test
+    fun `focus commands pass typed coordinates and reset through the Swift bridge`() = runTest {
+        val bridge = FakeBridge()
+        val session = connectedSession(bridge)
+
+        assertTrue(session.changeAfArea(CameraFocusPoint(3_024, 1_700)))
+        session.resetFocusPoint()
+
+        assertEquals(listOf(CameraFocusPoint(3_024, 1_700)), bridge.focusRequests)
+        assertEquals(1, bridge.focusResetRequests)
+    }
+
+    @Test
+    fun `focus commands map every native result to a typed exception`() = runTest {
+        val bridge = FakeBridge()
+        val session = connectedSession(bridge)
+
+        val cases =
+            listOf(
+                SwiftCore.FOCUS_COMMAND_NO_SESSION to CameraFocusException.NotConnected,
+                SwiftCore.FOCUS_COMMAND_MEDIA_BUSY to CameraFocusException.MediaBusy,
+                SwiftCore.FOCUS_COMMAND_UNAVAILABLE to CameraFocusException.Unavailable,
+                SwiftCore.FOCUS_COMMAND_REJECTED to CameraFocusException.CommandRejected,
+                SwiftCore.FOCUS_COMMAND_TRANSPORT_FAILED to CameraFocusException.TransportFailed,
+                99 to CameraFocusException.TransportFailed,
+            )
+        for ((result, expected) in cases) {
+            bridge.focusResult = result
+            assertEquals(
+                expected,
+                assertFailsWith<CameraFocusException> {
+                    session.changeAfArea(CameraFocusPoint(10, 20))
+                },
+            )
+        }
+
+        bridge.focusResult = SwiftCore.FOCUS_COMMAND_ACCEPTED
+        bridge.focusResetResult = SwiftCore.FOCUS_COMMAND_MEDIA_BUSY
+        assertEquals(
+            CameraFocusException.MediaBusy,
+            assertFailsWith<CameraFocusException> { session.resetFocusPoint() },
+        )
+
+        bridge.available = false
+        assertEquals(
+            CameraFocusException.CoreUnavailable,
+            assertFailsWith<CameraFocusException> {
+                session.changeAfArea(CameraFocusPoint(10, 20))
+            },
+        )
+    }
+
+    @Test
+    fun `focus command rejects a disconnected session before native work`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+
+        assertEquals(
+            CameraFocusException.NotConnected,
+            assertFailsWith<CameraFocusException> {
+                session.changeAfArea(CameraFocusPoint(10, 20))
+            },
+        )
+        assertEquals(emptyList(), bridge.focusRequests)
+    }
+
+    @Test
+    fun `focus waiters are latest wins while an accepted native request finishes`() = runTest {
+        val bridge = FakeBridge()
+        val session = connectedSession(bridge)
+        val firstStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        bridge.focusHandler = { point ->
+            if (point == CameraFocusPoint(100, 100)) {
+                firstStarted.countDown()
+                check(releaseFirst.await(5, TimeUnit.SECONDS))
+            }
+            SwiftCore.FOCUS_COMMAND_ACCEPTED
+        }
+
+        val first = async(Dispatchers.Default) { session.changeAfArea(CameraFocusPoint(100, 100)) }
+        try {
+            assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+            val stale = async { session.changeAfArea(CameraFocusPoint(200, 200)) }
+            runCurrent()
+            val latest = async { session.changeAfArea(CameraFocusPoint(300, 300)) }
+            runCurrent()
+
+            releaseFirst.countDown()
+            assertTrue(first.await())
+            assertFalse(stale.await())
+            assertTrue(latest.await())
+        } finally {
+            releaseFirst.countDown()
+        }
+
+        assertEquals(
+            listOf(CameraFocusPoint(100, 100), CameraFocusPoint(300, 300)),
+            bridge.focusRequests,
+        )
     }
 
     @Test
@@ -612,13 +718,17 @@ class SwiftCoreCameraSessionTest {
             val propertyCode: Long,
         )
 
-        override val isAvailable: Boolean = true
+        @Volatile var available: Boolean = true
+        override val isAvailable: Boolean
+            get() = available
         val listeners = mutableListOf<SwiftCore.SessionListener>()
         val hostConnects = mutableListOf<String>()
         val usbConnects = mutableListOf<UsbConnect>()
         val eventListeners = mutableListOf<SwiftCore.SessionEventListener>()
         val recordingRequests = mutableListOf<Boolean>()
         val controlRequests = mutableListOf<Pair<CameraControl, String>>()
+        val focusRequests = mutableListOf<CameraFocusPoint>()
+        var focusResetRequests = 0
         val disconnectOwners = mutableListOf<Long>()
         private val refreshLock = Any()
         private val propertyRefreshRequests = mutableListOf<PropertyRefreshRequest>()
@@ -629,6 +739,9 @@ class SwiftCoreCameraSessionTest {
         @Volatile var disconnectHandler: ((Long) -> Unit)? = null
         var controlResult = SwiftCore.CONTROL_COMMAND_ACCEPTED
         var controlHandler: ((CameraControl, String) -> Int)? = null
+        var focusResult = SwiftCore.FOCUS_COMMAND_ACCEPTED
+        var focusResetResult = SwiftCore.FOCUS_COMMAND_ACCEPTED
+        var focusHandler: ((CameraFocusPoint) -> Int)? = null
         var disconnects = 0
 
         override fun connect(
@@ -696,6 +809,16 @@ class SwiftCoreCameraSessionTest {
             return controlHandler?.invoke(control, label) ?: controlResult
         }
 
+        override fun changeAfArea(point: CameraFocusPoint): Int {
+            synchronized(focusRequests) { focusRequests += point }
+            return focusHandler?.invoke(point) ?: focusResult
+        }
+
+        override fun resetFocusPoint(): Int {
+            focusResetRequests += 1
+            return focusResetResult
+        }
+
         override fun disconnect(connectionOwner: Long) {
             disconnects++
             disconnectOwners += connectionOwner
@@ -743,6 +866,15 @@ class SwiftCoreCameraSessionTest {
         } catch (actual: CameraControlException) {
             assertEquals(expected, actual)
         }
+    }
+
+    private suspend fun TestScope.connectedSession(bridge: FakeBridge): SwiftCoreCameraSession {
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        return session
     }
 
     private companion object {

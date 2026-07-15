@@ -1,5 +1,8 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.core.LiveFocusBox
+import com.opencapture.openzcine.core.LiveFocusInfo
+import com.opencapture.openzcine.core.LiveFocusResult
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -8,6 +11,33 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FocusFeedGesturesTest {
+    @Test
+    fun `focus reset requires meaningful camera displacement or a tracking latch`() {
+        fun focus(
+            centerX: Int = 500,
+            centerY: Int = 250,
+            tracking: Boolean = false,
+            debug: Boolean = false,
+        ): LiveFocusInfo =
+            LiveFocusInfo(
+                coordinateWidth = 1_000,
+                coordinateHeight = 500,
+                result = LiveFocusResult.FOCUSED,
+                subjectDetectionActive = tracking,
+                trackingAFActive = tracking,
+                selectedBoxIndex = if (tracking) 0 else null,
+                boxes = listOf(LiveFocusBox(centerX, centerY, 100, 100)),
+                isDebugFixture = debug,
+            )
+
+        assertEquals(false, focusResetAvailable(focus(), focusPointLocked = false))
+        assertEquals(false, focusResetAvailable(focus(centerX = 540), focusPointLocked = false))
+        assertTrue(focusResetAvailable(focus(centerX = 541), focusPointLocked = false))
+        assertTrue(focusResetAvailable(focus(tracking = true), focusPointLocked = false))
+        assertEquals(false, focusResetAvailable(focus(tracking = true), focusPointLocked = true))
+        assertEquals(false, focusResetAvailable(focus(debug = true), focusPointLocked = false))
+    }
+
     @Test
     fun `landscape fit maps exact inclusive edges and rejects letterbox input`() {
         val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
@@ -141,12 +171,37 @@ class FocusFeedGesturesTest {
     }
 
     @Test
-    fun `missing authoritative dimensions and invalid presentation geometry are unavailable`() {
+    fun `missing AF dimensions preserve display geometry but never invent focus coordinates`() {
         val content = LiveFeedContentRect(0, 0, 100, 100)
         val viewport = LiveOverlayRect(0f, 0f, 100f, 100f)
 
-        assertNull(focusFeedGeometry(content, 1f, viewport = viewport, coordinateWidth = 0, coordinateHeight = 100, generation = 1))
-        assertNull(focusFeedGeometry(content, 1f, viewport = viewport, coordinateWidth = 100, coordinateHeight = 0, generation = 1))
+        val noWidth =
+            focusFeedGeometry(
+                content,
+                1f,
+                viewport = viewport,
+                coordinateWidth = 0,
+                coordinateHeight = 100,
+                generation = 1,
+            )
+        requireNotNull(noWidth)
+        assertEquals(false, noWidth.hasAuthoritativeCoordinateSpace)
+        assertTrue(noWidth.acceptsGestureAt(point(50f, 50f)))
+        assertNull(noWidth.cameraCoordinateAt(point(50f, 50f)))
+
+        val noHeight =
+            focusFeedGeometry(
+                content,
+                1f,
+                viewport = viewport,
+                coordinateWidth = 100,
+                coordinateHeight = 0,
+                generation = 1,
+            )
+        requireNotNull(noHeight)
+        assertEquals(false, noHeight.hasAuthoritativeCoordinateSpace)
+        assertNull(noHeight.cameraCoordinateAt(point(50f, 50f)))
+
         assertNull(focusFeedGeometry(content, 0f, viewport = viewport, coordinateWidth = 100, coordinateHeight = 100, generation = 1))
         assertNull(
             focusFeedGeometry(
@@ -158,6 +213,46 @@ class FocusFeedGesturesTest {
                 generation = 1,
             ),
         )
+    }
+
+    @Test
+    fun `pre-frame viewport geometry supports display hit testing without AF coordinates`() {
+        val geometry =
+            focusFeedViewportGeometry(
+                viewport = LiveOverlayRect(0f, 0f, 400f, 220f),
+                generation = 3,
+            )
+        requireNotNull(geometry)
+
+        assertTrue(geometry.acceptsGestureAt(point(200f, 110f)))
+        assertNull(geometry.cameraCoordinateAt(point(200f, 110f)))
+        assertNull(
+            focusFeedViewportGeometry(
+                viewport = LiveOverlayRect(0f, 0f, 0f, 220f),
+                generation = 3,
+            ),
+        )
+    }
+
+    @Test
+    fun `direct focus metadata requires real dimensions and at least one camera box`() {
+        fun focus(boxes: List<LiveFocusBox>, debug: Boolean = false): LiveFocusInfo =
+            LiveFocusInfo(
+                coordinateWidth = 1_000,
+                coordinateHeight = 500,
+                result = LiveFocusResult.FOCUSED,
+                subjectDetectionActive = false,
+                trackingAFActive = false,
+                selectedBoxIndex = null,
+                boxes = boxes,
+                isDebugFixture = debug,
+            )
+
+        val box = LiveFocusBox(500, 250, 100, 80)
+        assertTrue(focusMetadataSupportsDirectInput(focus(listOf(box))))
+        assertEquals(false, focusMetadataSupportsDirectInput(focus(emptyList())))
+        assertEquals(false, focusMetadataSupportsDirectInput(focus(listOf(box), debug = true)))
+        assertEquals(false, focusMetadataSupportsDirectInput(null))
     }
 
     @Test
@@ -400,14 +495,43 @@ class FocusFeedGesturesTest {
     }
 
     @Test
-    fun `interface unavailable pending and media gates suppress feed actions`() {
+    fun `rendered feed change cancels with identical generation and focus dimensions`() {
+        val initial = gestureContext(generation = 7)
+        val tracking = down(initial, point(40f, 40f))
+        val changedGeometry =
+            requireNotNull(initial.geometry).copy(
+                presentedFeed = LiveOverlayRect(10f, 5f, 80f, 90f),
+                hitBounds = LiveOverlayRect(10f, 5f, 80f, 90f),
+            )
+        val changed = initial.copy(geometry = changedGeometry)
+
+        val cancelled =
+            reduceFocusFeedGesture(
+                tracking,
+                FocusFeedGestureEvent.ContextChanged,
+                changed,
+            )
+        assertEquals(FocusFeedGestureState.Idle, cancelled.state)
+        assertNull(cancelled.action)
+
+        val remapped =
+            reduceFocusFeedGesture(
+                down(changed, point(50f, 50f)),
+                FocusFeedGestureEvent.Up(point(50f, 50f), 100),
+                changed,
+            )
+        assertEquals(
+            FocusFeedGestureAction.SetFocusPoint(FocusFeedCoordinate(500, 500)),
+            remapped.action,
+        )
+    }
+
+    @Test
+    fun `interface lock and missing presentation geometry suppress every feed action`() {
         val contexts =
             listOf(
                 gestureContext().copy(interfaceLocked = true),
                 gestureContext().copy(geometry = null),
-                gestureContext().copy(focusAvailable = false),
-                gestureContext().copy(commandPending = true),
-                gestureContext().copy(mediaBusy = true),
             )
 
         contexts.forEach { context ->
@@ -421,15 +545,50 @@ class FocusFeedGesturesTest {
             assertNull(reduction.action)
         }
 
-        val ready = gestureContext()
-        val tracking = down(ready, point(50f, 50f))
-        val becamePending =
-            reduceFocusFeedGesture(
-                tracking,
-                FocusFeedGestureEvent.ContextChanged,
-                ready.copy(commandPending = true),
+    }
+
+    @Test
+    fun `DISP swipe survives unavailable AF metadata while focus actions fail closed`() {
+        val presentationOnly =
+            requireNotNull(
+                focusFeedViewportGeometry(
+                    viewport = LiveOverlayRect(0f, 0f, 100f, 100f),
+                    generation = 1,
+                ),
             )
-        assertEquals(FocusFeedGestureState.Idle, becamePending.state)
+        val contexts =
+            listOf(
+                FocusFeedGestureContext(
+                    geometry = presentationOnly,
+                    focusAvailable = false,
+                ),
+                gestureContext().copy(focusAvailable = false),
+                gestureContext().copy(commandPending = true),
+                gestureContext().copy(mediaBusy = true),
+            )
+
+        contexts.forEach { context ->
+            val tap =
+                reduceFocusFeedGesture(
+                    down(context, point(50f, 50f)),
+                    FocusFeedGestureEvent.Up(point(50f, 50f), 100),
+                    context,
+                )
+            assertNull(tap.action)
+
+            val hold =
+                reduceFocusFeedGesture(
+                    down(context, point(50f, 50f)),
+                    FocusFeedGestureEvent.HoldTimeout(300),
+                    context,
+                )
+            assertNull(hold.action)
+
+            assertEquals(
+                FocusFeedGestureAction.RequestDisplayMode(MonitorDisplayMode.CLEAN),
+                dragRelease(context, deltaX = 0f, deltaY = 50f).action,
+            )
+        }
     }
 
     @Test

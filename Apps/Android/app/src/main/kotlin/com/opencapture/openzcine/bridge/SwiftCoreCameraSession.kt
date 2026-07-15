@@ -3,6 +3,8 @@ package com.opencapture.openzcine.bridge
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraFocusException
+import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraPropertySnapshot
@@ -63,6 +65,10 @@ internal interface SwiftCoreSessionBridge {
 
     fun applyControl(control: CameraControl, label: String): Int
 
+    fun changeAfArea(point: CameraFocusPoint): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
+
+    fun resetFocusPoint(): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
+
     fun disconnect(connectionOwner: Long)
 
     data object Production : SwiftCoreSessionBridge {
@@ -104,6 +110,11 @@ internal interface SwiftCoreSessionBridge {
 
         override fun applyControl(control: CameraControl, label: String): Int =
             SwiftCore.sessionApplyControl(control.nativeSelector, label)
+
+        override fun changeAfArea(point: CameraFocusPoint): Int =
+            SwiftCore.sessionChangeAfArea(point.x, point.y)
+
+        override fun resetFocusPoint(): Int = SwiftCore.sessionResetFocusPoint()
 
         override fun disconnect(connectionOwner: Long) {
             SwiftCore.sessionDisconnect(connectionOwner)
@@ -217,6 +228,9 @@ class SwiftCoreCameraSession internal constructor(
      * property-control transaction.
      */
     private val cameraCommandMutex = Mutex()
+
+    /** Newer tap generations invalidate coordinates still waiting for native work. */
+    private val focusRequestVersion = AtomicLong()
 
     /**
      * The iOS shell defers camera-header readback for 1.5 seconds after an app
@@ -432,7 +446,64 @@ class SwiftCoreCameraSession internal constructor(
         }
     }
 
+    /**
+     * Sends at most the newest waiting AF coordinate. A command already inside
+     * native I/O is allowed to finish, while every superseded waiter becomes a
+     * no-op instead of replaying stale taps afterward.
+     */
+    override suspend fun changeAfArea(point: CameraFocusPoint): Boolean {
+        val requestVersion = focusRequestVersion.incrementAndGet()
+        return cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected) {
+                throw CameraFocusException.NotConnected
+            }
+            if (!core.isAvailable) {
+                throw CameraFocusException.CoreUnavailable
+            }
+            if (requestVersion != focusRequestVersion.get()) return@withLock false
+
+            try {
+                val nativeResult =
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        core.changeAfArea(point)
+                    }
+                nativeResult.throwIfFocusCommandFailed()
+                true
+            } catch (error: CameraFocusException) {
+                throw error
+            } catch (_: Throwable) {
+                throw CameraFocusException.TransportFailed
+            }
+        }
+    }
+
+    /** Runs the shared camera-authoritative recenter sequence on native I/O. */
+    override suspend fun resetFocusPoint() {
+        focusRequestVersion.incrementAndGet()
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected) {
+                throw CameraFocusException.NotConnected
+            }
+            if (!core.isAvailable) {
+                throw CameraFocusException.CoreUnavailable
+            }
+
+            try {
+                val nativeResult =
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        core.resetFocusPoint()
+                    }
+                nativeResult.throwIfFocusCommandFailed()
+            } catch (error: CameraFocusException) {
+                throw error
+            } catch (_: Throwable) {
+                throw CameraFocusException.TransportFailed
+            }
+        }
+    }
+
     override suspend fun disconnect() {
+        focusRequestVersion.incrementAndGet()
         // A manual refresh is not owned by either cancellable refresh job, so
         // clear state only after this mutex waits for any such JNI call. That
         // prevents its final readback from repopulating a disconnected session.
@@ -757,6 +828,19 @@ class SwiftCoreCameraSession internal constructor(
             SwiftCore.CONTROL_COMMAND_TRANSPORT_FAILED ->
                 throw CameraControlException.TransportFailed
             else -> throw CameraControlException.TransportFailed
+        }
+    }
+
+    private fun Int.throwIfFocusCommandFailed() {
+        when (this) {
+            SwiftCore.FOCUS_COMMAND_ACCEPTED -> Unit
+            SwiftCore.FOCUS_COMMAND_NO_SESSION -> throw CameraFocusException.NotConnected
+            SwiftCore.FOCUS_COMMAND_MEDIA_BUSY -> throw CameraFocusException.MediaBusy
+            SwiftCore.FOCUS_COMMAND_UNAVAILABLE -> throw CameraFocusException.Unavailable
+            SwiftCore.FOCUS_COMMAND_REJECTED -> throw CameraFocusException.CommandRejected
+            SwiftCore.FOCUS_COMMAND_TRANSPORT_FAILED ->
+                throw CameraFocusException.TransportFailed
+            else -> throw CameraFocusException.TransportFailed
         }
     }
 

@@ -170,6 +170,16 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   landscape, reorder/disable persistence, active-mode recovery, two-mode DISP cycling, hidden-rail
   Settings recovery, and the tight 602dp noncompact grid. **[VERIFY-ON-HW]** Repeat command-mode
   stream release and recording safety against a supported Nikon body.
+- **Android direct AF-point and feed-gesture parity** (OPE-71, in progress): inverse-map feed taps
+  through the exact fit/fill and de-squeezed image rectangle into authoritative camera focus
+  coordinates, then send Nikon `ChangeAfArea` and tracking-safe reset sequences only through the
+  shared Swift session. One gesture arbiter preserves portrait pinch, uses vertical swipes for
+  explicitly enabled Live/Clean modes, and provides a session-local long-hold AF-point lock with
+  truthful progress, haptics, and accessibility state. Real sessions fail closed when focus
+  dimensions or headers are unavailable; debug fixtures never pretend that a camera accepted a
+  move. **[VERIFY-ON-HW]** Confirm tap coordinates, tracking release/re-latch reset order, lock and
+  reset affordances, pinch/swipe arbitration, and every feed edge on the Samsung hardware floor
+  against a supported Nikon body.
 - **Android monitor feed texture parity** (OPE-72, in review): the Android monitor now mirrors
   iOS's feed-local vignette and deterministic static grain after the camera frame/effect pipeline.
   Resolution-only state and cached draw resources keep same-resolution frames from rebuilding its

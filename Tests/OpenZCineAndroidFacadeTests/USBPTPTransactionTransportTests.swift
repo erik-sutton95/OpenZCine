@@ -48,6 +48,27 @@ struct USBPTPTransactionTransportTests {
         #expect(raw.writes.isEmpty)
     }
 
+    @Test func changeAfAreaWritesOneCommandContainerAndNoUSBDataPayload() throws {
+        let raw = FakeUSBPTPRawIO(bulkReads: [response(transactionID: 1)])
+        let transport = AndroidUSBPTPTransport(rawIO: raw)
+
+        _ = try transport.executeTransactionSynchronously(
+            operationCode: .changeAfArea,
+            parameters: [1_234, 567],
+            dataPhase: .noDataOrDataIn,
+            dataOut: nil)
+
+        #expect(raw.writes.count == 1)
+        let commandBytes = try #require(raw.writes.first)
+        let command = try PTPUSBContainer(serializedBytes: commandBytes)
+        #expect(command.type == .command)
+        #expect(command.code == PTPOperationCode.changeAfArea.rawValue)
+        #expect(command.transactionID == 1)
+        #expect(
+            command.payload
+                == Data(ByteCoding.uint32LE(1_234) + ByteCoding.uint32LE(567)))
+    }
+
     @Test func reopeningAPTPSessionRestartsItsTransactionSequenceAtOne() throws {
         let raw = FakeUSBPTPRawIO(
             bulkReads: [

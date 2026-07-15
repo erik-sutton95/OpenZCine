@@ -361,6 +361,51 @@ public sealed class CameraControlException(message: String) : Exception(message)
 }
 
 /**
+ * One autofocus-area centre in the camera's authoritative live-view coordinate space.
+ *
+ * Coordinates are semantic values only. The shared Swift core owns Nikon operation codes,
+ * transaction framing, and transport-specific containers.
+ */
+public data class CameraFocusPoint(
+    /** Inclusive horizontal coordinate reported by the latest camera focus header. */
+    public val x: Int,
+    /** Inclusive vertical coordinate reported by the latest camera focus header. */
+    public val y: Int,
+) {
+    init {
+        require(x >= 0) { "Focus-point x must not be negative." }
+        require(y >= 0) { "Focus-point y must not be negative." }
+    }
+}
+
+/** Typed failures from [CameraSession.changeAfArea] and [CameraSession.resetFocusPoint]. */
+public sealed class CameraFocusException(message: String) : Exception(message) {
+    /** A focus command needs a connected camera session. */
+    public data object NotConnected :
+        CameraFocusException("Connect to a camera before changing the focus point.")
+
+    /** The Swift protocol library was not bundled into the installed APK. */
+    public data object CoreUnavailable :
+        CameraFocusException("The shared camera core is unavailable in this app build.")
+
+    /** Camera media owns the serialized command channel. */
+    public data object MediaBusy :
+        CameraFocusException("Close camera media before changing the focus point.")
+
+    /** Current camera-owned focus dimensions or reset state are not authoritative yet. */
+    public data object Unavailable :
+        CameraFocusException("Camera focus metadata is not available yet.")
+
+    /** The camera received and rejected the autofocus-area command. */
+    public data object CommandRejected :
+        CameraFocusException("The camera rejected the focus-point change.")
+
+    /** The command channel failed before the camera confirmed the command. */
+    public data object TransportFailed :
+        CameraFocusException("The camera connection failed while changing the focus point.")
+}
+
+/**
  * A control session with one camera — the seam the Android shell talks to.
  *
  * Implementations own transport, protocol, and threading; the shell only
@@ -433,6 +478,32 @@ public interface CameraSession {
     @Throws(CameraControlException::class)
     public suspend fun applyControl(control: CameraControl, label: String) {
         throw CameraControlException.UnsupportedSelection
+    }
+
+    /**
+     * Moves the camera autofocus area to [point].
+     *
+     * Implementations serialize this with recording, property writes, media ownership, and
+     * teardown. Rapid calls may be coalesced so only the newest waiting coordinate reaches the
+     * camera. Protocol encoding must stay behind the shared Swift boundary.
+     *
+     * @return `true` only when the camera accepted this coordinate, or `false` when a newer call
+     *   superseded it before native I/O.
+     */
+    @Throws(CameraFocusException::class)
+    public suspend fun changeAfArea(point: CameraFocusPoint): Boolean {
+        throw CameraFocusException.Unavailable
+    }
+
+    /**
+     * Recentres the autofocus area using the latest camera-owned dimensions and focus state.
+     *
+     * A subject-tracking reset may release tracking, wait for authoritative live-view headers,
+     * recenter, and restore unchanged camera modes. It never starts tracking.
+     */
+    @Throws(CameraFocusException::class)
+    public suspend fun resetFocusPoint() {
+        throw CameraFocusException.Unavailable
     }
 
     /**

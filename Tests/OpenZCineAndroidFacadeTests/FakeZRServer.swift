@@ -20,6 +20,20 @@ import OpenZCineCore
 struct FakeZRRequest: Equatable {
     let operation: PTPOperationCode
     let parameters: [UInt32]
+    let dataPhase: PTPDataPhase
+    let dataOut: Data?
+
+    init(
+        operation: PTPOperationCode,
+        parameters: [UInt32],
+        dataPhase: PTPDataPhase = .noDataOrDataIn,
+        dataOut: Data? = nil
+    ) {
+        self.operation = operation
+        self.parameters = parameters
+        self.dataPhase = dataPhase
+        self.dataOut = dataOut
+    }
 }
 
 /// One property-write data phase received by the scripted camera.
@@ -62,6 +76,8 @@ final class FakeZRServer: @unchecked Sendable {
         var batteryPercent: UInt8 = 80
         /// Properties the fake rejects as unsupported for readback tests.
         var unsupportedPropertyCodes: Set<UInt32> = []
+        /// Properties that return valid bytes once, then an accepted short payload.
+        var shortPropertyCodesAfterFirstRead: Set<UInt32> = []
         /// Active-card capacity exposed by `GetStorageInfo` for monitor state tests.
         var storageTotalCapacityBytes: UInt64 = 1_000_000_000_000
         /// Active-card free capacity exposed by `GetStorageInfo` for monitor state tests.
@@ -79,6 +95,34 @@ final class FakeZRServer: @unchecked Sendable {
         /// Response sent for either standard or extended property writes.
         /// Tests use a real PTP rejection code to verify command propagation.
         var propertyWriteResponseCode: UInt16 = 0x2001
+        /// Response sent for Nikon `ChangeAfArea`.
+        var changeAfAreaResponseCode: UInt16 = 0x2001
+        /// Response sent for Nikon `EndTracking`.
+        var endTrackingResponseCode: UInt16 = 0x2001
+        /// Response sent for Nikon `AfDriveCancel`.
+        var afDriveCancelResponseCode: UInt16 = 0x2001
+        /// Whether synthesized live-view headers contain authoritative focus data.
+        var focusMetadataEnabled = true
+        var focusCoordinateWidth: UInt16 = 6_048
+        var focusCoordinateHeight: UInt16 = 3_400
+        var focusCenterX: UInt16 = 4_200
+        var focusCenterY: UInt16 = 1_200
+        var focusTrackingAFActive = true
+        var focusSubjectDetectionActive = true
+        /// New live-view frames needed after EndTracking before the header clears.
+        var focusTrackingReleaseFrames: UInt64 = 3
+        /// Removes the complete focus object after release, matching bodies that clear dimensions.
+        var focusMetadataDisappearsAfterRelease = false
+        /// Keeps dimensions but removes every AF box after release.
+        var focusBoxesDisappearAfterRelease = false
+        /// Keeps tracking set through the 15-frame settle ceiling.
+        var focusTrackingNeverReleases = false
+        /// Simulates ChangeAfArea re-latching tracking before the second release.
+        var focusRelatchesAfterChange = false
+        /// Current camera focus properties, expressed as real camera raw values.
+        var focusModeRaw: UInt8 = 1  // AF-C
+        var focusAreaRaw: UInt16 = 0x8033  // Subject
+        var focusSubjectRaw: UInt8 = 2  // People
     }
 
     let port: UInt16
@@ -94,8 +138,10 @@ final class FakeZRServer: @unchecked Sendable {
     private let eventConnectionCondition = NSCondition()
     private let eventSendLock = NSLock()
     private var operationLog: [PTPOperationCode] = []
+    private var rawOperationLog: [UInt16] = []
     private var requestLog: [FakeZRRequest] = []
     private var propertyWriteLog: [FakeZRPropertyWrite] = []
+    private var propertyReadCounts: [UInt32: Int] = [:]
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
     private var stopped = false
@@ -103,10 +149,26 @@ final class FakeZRServer: @unchecked Sendable {
     private var liveViewActive = false
     private var liveViewEpoch = Date()
     private var recording = false
+    private var focusCenterX: UInt16
+    private var focusCenterY: UInt16
+    private var focusTrackingAFActive: Bool
+    private var focusSubjectDetectionActive: Bool
+    private var focusReleaseAtFrame: UInt64?
+    private var focusHasReleased = false
+    private var focusModeRaw: UInt8
+    private var focusAreaRaw: UInt16
+    private var focusSubjectRaw: UInt8
     private var eventConnection: Int32 = -1
 
     init(options: Options = Options()) throws {
         self.options = options
+        focusCenterX = options.focusCenterX
+        focusCenterY = options.focusCenterY
+        focusTrackingAFActive = options.focusTrackingAFActive
+        focusSubjectDetectionActive = options.focusSubjectDetectionActive
+        focusModeRaw = options.focusModeRaw
+        focusAreaRaw = options.focusAreaRaw
+        focusSubjectRaw = options.focusSubjectRaw
 
         let descriptor = socket(AF_INET, SOCK_STREAM, Int32(IPPROTO_TCP))
         guard descriptor >= 0 else { throw FakeZRServerError.socketFailed }
@@ -162,6 +224,13 @@ final class FakeZRServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return operationLog
+    }
+
+    /// Every raw PTP operation code, including vendor codes the production enum does not expose.
+    func receivedRawOperationCodes() -> [UInt16] {
+        lock.lock()
+        defer { lock.unlock() }
+        return rawOperationLog
     }
 
     /// Full operation/parameter records for transfer-range assertions.
@@ -333,17 +402,29 @@ final class FakeZRServer: @unchecked Sendable {
                 } else {
                     dataOut = nil
                 }
-                respond(connection, requestPayload: requestPayload, dataOut: dataOut)
+                respond(
+                    connection,
+                    requestPayload: requestPayload,
+                    dataPhase: PTPDataPhase(rawValue: dataPhase) ?? .noDataOrDataIn,
+                    dataOut: dataOut)
             default:
                 return
             }
         }
     }
 
-    private func respond(_ connection: Int32, requestPayload bytes: [UInt8], dataOut: Data?) {
+    private func respond(
+        _ connection: Int32,
+        requestPayload bytes: [UInt8],
+        dataPhase: PTPDataPhase,
+        dataOut: Data?
+    ) {
         guard bytes.count >= 10 else { return }
         let rawOperation = ByteCoding.readUInt16LE(bytes, at: 4)
         let transactionID = ByteCoding.readUInt32LE(bytes, at: 6)
+        lock.lock()
+        rawOperationLog.append(rawOperation)
+        lock.unlock()
         guard let operation = PTPOperationCode(rawValue: rawOperation) else {
             sendResponse(connection, code: 0x2005, transactionID: transactionID)
             return
@@ -356,7 +437,12 @@ final class FakeZRServer: @unchecked Sendable {
         }
         lock.lock()
         operationLog.append(operation)
-        requestLog.append(FakeZRRequest(operation: operation, parameters: parameters))
+        requestLog.append(
+            FakeZRRequest(
+                operation: operation,
+                parameters: parameters,
+                dataPhase: dataPhase,
+                dataOut: dataOut))
         transactionIDLog.append(transactionID)
         lock.unlock()
         if options.traceOperations {
@@ -390,6 +476,42 @@ final class FakeZRServer: @unchecked Sendable {
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .deviceReady:
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
+        case .changeAfArea:
+            guard parameters.count == 2 else {
+                sendResponse(connection, code: 0x2005, transactionID: transactionID)
+                return
+            }
+            lock.lock()
+            let changeResponse = options.changeAfAreaResponseCode
+            if changeResponse == PTPResponseCode.ok.rawValue {
+                focusCenterX = UInt16(clamping: parameters[0])
+                focusCenterY = UInt16(clamping: parameters[1])
+                if options.focusRelatchesAfterChange {
+                    focusTrackingAFActive = true
+                    focusSubjectDetectionActive = true
+                    focusReleaseAtFrame = nil
+                    focusHasReleased = false
+                }
+            }
+            lock.unlock()
+            sendResponse(connection, code: changeResponse, transactionID: transactionID)
+        case .endTracking:
+            lock.lock()
+            let endTrackingResponse = options.endTrackingResponseCode
+            if endTrackingResponse == PTPResponseCode.ok.rawValue,
+                !options.focusTrackingNeverReleases
+            {
+                focusReleaseAtFrame =
+                    currentLiveViewFrameIndexLocked()
+                    + options.focusTrackingReleaseFrames
+            }
+            lock.unlock()
+            sendResponse(connection, code: endTrackingResponse, transactionID: transactionID)
+        case .afDriveCancel:
+            sendResponse(
+                connection,
+                code: options.afDriveCancelResponseCode,
+                transactionID: transactionID)
         case .endLiveView:
             lock.lock()
             liveViewActive = false
@@ -527,7 +649,16 @@ final class FakeZRServer: @unchecked Sendable {
                 sendResponse(connection, code: 0x2002, transactionID: transactionID)
                 return
             }
-            sendDataIn(connection, data: data, transactionID: transactionID)
+            lock.lock()
+            let readCount = (propertyReadCounts[propertyCode] ?? 0) + 1
+            propertyReadCounts[propertyCode] = readCount
+            let sendsShortPayload =
+                readCount > 1 && options.shortPropertyCodesAfterFirstRead.contains(propertyCode)
+            lock.unlock()
+            sendDataIn(
+                connection,
+                data: sendsShortPayload ? Data() : data,
+                transactionID: transactionID)
         case .setDevicePropValue, .setDevicePropValueEx:
             guard let property = parameters.first, let dataOut else {
                 sendResponse(connection, code: 0x2005, transactionID: transactionID)
@@ -537,6 +668,9 @@ final class FakeZRServer: @unchecked Sendable {
             propertyWriteLog.append(
                 FakeZRPropertyWrite(operation: operation, property: property, data: dataOut))
             let responseCode = options.propertyWriteResponseCode
+            if responseCode == PTPResponseCode.ok.rawValue {
+                applyCameraPropertyWriteLocked(property: property, data: dataOut)
+            }
             lock.unlock()
             sendResponse(connection, code: responseCode, transactionID: transactionID)
         default:
@@ -642,11 +776,17 @@ final class FakeZRServer: @unchecked Sendable {
         case .lensApertureMin:
             return Data(ByteCoding.uint16LE(280))
         case .movieFocusMode:
-            return Data([1])  // AF-C
+            lock.lock()
+            defer { lock.unlock() }
+            return Data([focusModeRaw])
         case .movieFocusMeteringMode:
-            return Data(ByteCoding.uint16LE(0x8033))  // Subject
+            lock.lock()
+            defer { lock.unlock() }
+            return Data(ByteCoding.uint16LE(focusAreaRaw))
         case .movieAFSubjectDetection:
-            return Data([2])  // People
+            lock.lock()
+            defer { lock.unlock() }
+            return Data([focusSubjectRaw])
         case .movMicrophone:
             return Data([0])  // Auto
         case .movRecordMicrophoneLevelValue:
@@ -697,6 +837,7 @@ final class FakeZRServer: @unchecked Sendable {
             : FakeZRLiveViewFrames.colorBarsMarkerJPEG
         var header = [UInt8](repeating: 0, count: 1024)
         header.replaceSubrange(12..<16, with: ByteCoding.uint32LE(UInt32(jpeg.count)))
+        applyFocusHeader(to: &header, frameIndex: frameIndex)
         header[831] = 1  // timecode on
         header[832] = UInt8((frameIndex >> 24) & 0xFF)
         header[833] = UInt8((frameIndex >> 16) & 0xFF)
@@ -704,6 +845,68 @@ final class FakeZRServer: @unchecked Sendable {
         header[835] = UInt8(frameIndex & 0xFF)
         header[828] = isRecording ? 1 : 0
         return Data(header + jpeg)
+    }
+
+    private func applyFocusHeader(to header: inout [UInt8], frameIndex: UInt64) {
+        guard options.focusMetadataEnabled else { return }
+        lock.lock()
+        if let release = focusReleaseAtFrame, frameIndex >= release {
+            focusTrackingAFActive = false
+            focusReleaseAtFrame = nil
+            focusHasReleased = true
+        }
+        let centerX = focusCenterX
+        let centerY = focusCenterY
+        let tracking = focusTrackingAFActive
+        let subject = focusSubjectDetectionActive
+        let released = focusHasReleased
+        lock.unlock()
+
+        if released && options.focusMetadataDisappearsAfterRelease { return }
+
+        func writeBE(_ value: UInt16, at offset: Int) {
+            header[offset] = UInt8(value >> 8)
+            header[offset + 1] = UInt8(value & 0xFF)
+        }
+        writeBE(options.focusCoordinateWidth, at: 16)
+        writeBE(options.focusCoordinateHeight, at: 18)
+        header[42] = 2
+        header[43] = subject ? 1 : 0
+        header[44] = subject ? 2 : 1
+        header[45] = subject ? 1 : 0
+        header[46] = tracking ? 1 : 0
+        if !released || !options.focusBoxesDisappearAfterRelease {
+            writeBE(720, at: 48)
+            writeBE(480, at: 50)
+            writeBE(centerX, at: 52)
+            writeBE(centerY, at: 54)
+        }
+        if subject && (!released || !options.focusBoxesDisappearAfterRelease) {
+            writeBE(900, at: 56)
+            writeBE(1_100, at: 58)
+            writeBE(centerX, at: 60)
+            writeBE(centerY, at: 62)
+        }
+    }
+
+    private func currentLiveViewFrameIndexLocked() -> UInt64 {
+        let elapsedNanos = UInt64(max(0, -liveViewEpoch.timeIntervalSinceNow) * 1e9)
+        return elapsedNanos / options.liveViewFrameIntervalNanoseconds
+    }
+
+    private func applyCameraPropertyWriteLocked(property: UInt32, data: Data) {
+        let bytes = Array(data)
+        switch PTPPropertyCode(rawValue: property) {
+        case .movieFocusMode where !bytes.isEmpty:
+            focusModeRaw = bytes[0]
+        case .movieFocusMeteringMode where bytes.count >= 2:
+            focusAreaRaw = ByteCoding.readUInt16LE(bytes, at: 0)
+        case .movieAFSubjectDetection where !bytes.isEmpty:
+            focusSubjectRaw = bytes[0]
+            focusSubjectDetectionActive = bytes[0] != 0
+        default:
+            break
+        }
     }
 
     /// Standard PTP `ObjectInfo` dataset (PIMA 15740 §5.3.1): the 52-byte

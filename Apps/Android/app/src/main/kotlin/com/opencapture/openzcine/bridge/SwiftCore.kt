@@ -506,6 +506,24 @@ object SwiftCore {
     /** The command channel failed before every requested write completed. */
     const val CONTROL_COMMAND_TRANSPORT_FAILED: Int = 5
 
+    /** A focus command completed and the camera accepted its operation sequence. */
+    const val FOCUS_COMMAND_ACCEPTED: Int = 0
+
+    /** No active facade session existed when the focus command ran. */
+    const val FOCUS_COMMAND_NO_SESSION: Int = 1
+
+    /** Camera media owns the command channel, so the focus point cannot change. */
+    const val FOCUS_COMMAND_MEDIA_BUSY: Int = 2
+
+    /** Authoritative camera focus dimensions, header state, or modes are unavailable. */
+    const val FOCUS_COMMAND_UNAVAILABLE: Int = 3
+
+    /** The camera sent a non-OK response to the focus operation sequence. */
+    const val FOCUS_COMMAND_REJECTED: Int = 4
+
+    /** The command channel failed before the focus operation sequence completed. */
+    const val FOCUS_COMMAND_TRANSPORT_FAILED: Int = 5
+
     /**
      * Connects to the camera at [host] (numeric IPv4, port 15740): PTP-IP Init
      * handshake on both channels, then the Nikon open/pair/identify sequence,
@@ -605,6 +623,20 @@ object SwiftCore {
      * [CONTROL_COMMAND_TRANSPORT_FAILED].
      */
     external fun sessionApplyControl(control: Int, label: String): Int
+
+    /**
+     * Moves the AF area to semantic camera-space [x]/[y] coordinates. Swift
+     * owns the Nikon operation, its two UINT32 parameters, transaction ID, and
+     * PTP-IP/USB framing. Blocking; call from an IO dispatcher.
+     */
+    external fun sessionChangeAfArea(x: Int, y: Int): Int
+
+    /**
+     * Recentres the AF area from current camera headers and focus properties,
+     * including the shared subject-tracking release/restore policy. Blocking;
+     * call from an IO dispatcher.
+     */
+    external fun sessionResetFocusPoint(): Int
 
     /**
      * Gracefully tears down the active session: best-effort `CloseSession` so

@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -20,8 +21,10 @@ internal data class FocusFeedCoordinate(
 /** Geometry identity captured when a feed gesture begins. */
 internal data class FocusFeedGeometrySignature(
     val generation: Long,
-    val coordinateWidth: Int,
-    val coordinateHeight: Int,
+    val presentedFeed: LiveOverlayRect,
+    val hitBounds: LiveOverlayRect,
+    val coordinateWidth: Int?,
+    val coordinateHeight: Int?,
 )
 
 /**
@@ -35,41 +38,58 @@ internal data class FocusFeedGeometrySignature(
 internal data class FocusFeedGeometry(
     val presentedFeed: LiveOverlayRect,
     val hitBounds: LiveOverlayRect,
-    val coordinateWidth: Int,
-    val coordinateHeight: Int,
+    val coordinateWidth: Int?,
+    val coordinateHeight: Int?,
     val generation: Long,
 ) {
     init {
         require(presentedFeed.hasFinitePositiveSize())
         require(hitBounds.hasFinitePositiveSize())
-        require(coordinateWidth > 0)
-        require(coordinateHeight > 0)
+        require((coordinateWidth == null) == (coordinateHeight == null))
+        require(coordinateWidth == null || coordinateWidth > 0)
+        require(coordinateHeight == null || coordinateHeight > 0)
     }
+
+    /** True only when real camera metadata supplied a usable AF coordinate space. */
+    val hasAuthoritativeCoordinateSpace: Boolean
+        get() = coordinateWidth != null && coordinateHeight != null
 
     val signature: FocusFeedGeometrySignature
         get() =
             FocusFeedGeometrySignature(
                 generation = generation,
+                presentedFeed = presentedFeed,
+                hitBounds = hitBounds,
                 coordinateWidth = coordinateWidth,
                 coordinateHeight = coordinateHeight,
             )
 
-    /** Maps a visible feed-local pixel to an inclusive camera coordinate, or rejects the point. */
+    /** Whether [point] lands on the visible rendered feed, independent of AF metadata. */
+    fun acceptsGestureAt(point: FocusFeedPixelPoint): Boolean =
+        point.x.isFinite() && point.y.isFinite() && hitBounds.containsInclusive(point)
+
+    /**
+     * Maps a visible feed-local pixel to a camera coordinate, or rejects the point.
+     *
+     * Nikon's dimensions describe a zero-based coordinate space, so inclusive endpoints are
+     * `0...(dimension - 1)`. The right and bottom feed edges must never emit the dimension itself.
+     */
     fun cameraCoordinateAt(point: FocusFeedPixelPoint): FocusFeedCoordinate? {
-        if (!point.x.isFinite() || !point.y.isFinite()) return null
-        if (!hitBounds.containsInclusive(point)) return null
+        val width = coordinateWidth ?: return null
+        val height = coordinateHeight ?: return null
+        if (!acceptsGestureAt(point)) return null
 
         val normalizedX = ((point.x - presentedFeed.left) / presentedFeed.width).coerceIn(0f, 1f)
         val normalizedY = ((point.y - presentedFeed.top) / presentedFeed.height).coerceIn(0f, 1f)
         return FocusFeedCoordinate(
             x =
-                (normalizedX * (coordinateWidth - 1))
+                (normalizedX * (width - 1))
                     .roundToInt()
-                    .coerceIn(0, coordinateWidth - 1),
+                    .coerceIn(0, width - 1),
             y =
-                (normalizedY * (coordinateHeight - 1))
+                (normalizedY * (height - 1))
                     .roundToInt()
-                    .coerceIn(0, coordinateHeight - 1),
+                    .coerceIn(0, height - 1),
         )
     }
 }
@@ -77,21 +97,20 @@ internal data class FocusFeedGeometry(
 /**
  * Builds direct-AF geometry from the exact feed destination and local presentation transforms.
  *
- * Camera coordinate dimensions have no fallback here. A real feed without authoritative positive
- * dimensions is unavailable for direct AF input.
+ * Camera coordinate dimensions have no fallback here. The presentation geometry remains usable
+ * for DISP swipes when authoritative positive AF dimensions are absent, while direct AF mapping
+ * remains unavailable.
  */
 internal fun focusFeedGeometry(
     content: LiveFeedContentRect,
     horizontalPresentationScale: Float,
     verticalPresentationScale: Float = 1f,
     viewport: LiveOverlayRect,
-    coordinateWidth: Int,
-    coordinateHeight: Int,
+    coordinateWidth: Int? = null,
+    coordinateHeight: Int? = null,
     generation: Long,
 ): FocusFeedGeometry? {
-    if (coordinateWidth <= 0 || coordinateHeight <= 0 || !viewport.hasFinitePositiveSize()) {
-        return null
-    }
+    if (!viewport.hasFinitePositiveSize()) return null
     val presented =
         liveOverlayFeedRect(
             content = content,
@@ -99,13 +118,73 @@ internal fun focusFeedGeometry(
             verticalPresentationScale = verticalPresentationScale,
         ) ?: return null
     val visible = intersectLiveOverlayRects(presented, viewport) ?: return null
+    val hasCoordinateSpace =
+        coordinateWidth != null &&
+            coordinateHeight != null &&
+            coordinateWidth > 0 &&
+            coordinateHeight > 0
     return FocusFeedGeometry(
         presentedFeed = presented,
         hitBounds = visible,
-        coordinateWidth = coordinateWidth,
-        coordinateHeight = coordinateHeight,
+        coordinateWidth = coordinateWidth.takeIf { hasCoordinateSpace },
+        coordinateHeight = coordinateHeight.takeIf { hasCoordinateSpace },
         generation = generation,
     )
+}
+
+/** Display-only feed-zone geometry used before the first decoded frame reports source dimensions. */
+internal fun focusFeedViewportGeometry(
+    viewport: LiveOverlayRect,
+    generation: Long,
+): FocusFeedGeometry? {
+    if (!viewport.hasFinitePositiveSize()) return null
+    return FocusFeedGeometry(
+        presentedFeed = viewport,
+        hitBounds = viewport,
+        coordinateWidth = null,
+        coordinateHeight = null,
+        generation = generation,
+    )
+}
+
+/** Whether real camera metadata can safely authorize AF placement and app-lock gestures. */
+internal fun focusMetadataSupportsDirectInput(focus: LiveFocusInfo?): Boolean =
+    focus != null &&
+        !focus.isDebugFixture &&
+        focus.coordinateWidth > 0 &&
+        focus.coordinateHeight > 0 &&
+        focus.boxes.isNotEmpty()
+
+/** Whether the camera-authoritative primary box or tracking state makes reset useful. */
+internal fun focusResetAvailable(
+    focus: LiveFocusInfo?,
+    focusPointLocked: Boolean,
+): Boolean {
+    if (
+        focusPointLocked ||
+            !focusMetadataSupportsDirectInput(focus)
+    ) {
+        return false
+    }
+    val authoritativeFocus = requireNotNull(focus)
+    val primary = authoritativeFocus.boxes.first()
+    val trackingLatched =
+        authoritativeFocus.trackingAFActive ||
+            (
+                authoritativeFocus.subjectDetectionActive &&
+                    (
+                        authoritativeFocus.boxes.size > 1 ||
+                            (authoritativeFocus.selectedBoxIndex ?: 0) > 0
+                    )
+                )
+    if (trackingLatched) return true
+    val horizontalOffset =
+        abs(primary.centerX - authoritativeFocus.coordinateWidth / 2f) /
+            authoritativeFocus.coordinateWidth
+    val verticalOffset =
+        abs(primary.centerY - authoritativeFocus.coordinateHeight / 2f) /
+            authoritativeFocus.coordinateHeight
+    return horizontalOffset > 0.04f || verticalOffset > 0.04f
 }
 
 /** Feed and command conditions sampled for each pure gesture-reducer event. */
@@ -117,13 +196,23 @@ internal data class FocusFeedGestureContext(
     val commandPending: Boolean = false,
     val mediaBusy: Boolean = false,
 ) {
-    val canRecognizeGesture: Boolean
+    /** DISP gestures only need a visible feed and the app-wide interface lock to be open. */
+    val canRecognizeDisplayGesture: Boolean
         get() =
             geometry != null &&
-                !interfaceLocked &&
+                !interfaceLocked
+
+    /** AF placement and app-lock gestures require authoritative, non-busy camera focus state. */
+    val canRecognizeFocusGesture: Boolean
+        get() =
+            canRecognizeDisplayGesture &&
                 focusAvailable &&
                 !commandPending &&
-                !mediaBusy
+                !mediaBusy &&
+                geometry?.hasAuthoritativeCoordinateSpace == true
+
+    val canSetFocusPoint: Boolean
+        get() = canRecognizeFocusGesture && !focusPointLocked
 }
 
 /** Motion and timing thresholds, expressed in the same local units as pointer positions. */
@@ -238,8 +327,8 @@ internal data class FocusFeedGestureReduction(
  * Reduces one feed-pointer event without retaining state or performing side effects.
  *
  * The caller must provide pointer counts including the lifted primary pointer on
- * [FocusFeedGestureEvent.Up]. Any second pointer, consumed event, unavailable command gate, or
- * geometry identity change cancels the entire touch sequence until a fresh
+ * [FocusFeedGestureEvent.Up]. Any second pointer, consumed event, interface lock, or geometry
+ * identity change cancels the entire touch sequence until a fresh
  * [FocusFeedGestureEvent.Down].
  */
 internal fun reduceFocusFeedGesture(
@@ -250,7 +339,7 @@ internal fun reduceFocusFeedGesture(
 ): FocusFeedGestureReduction {
     if (event === FocusFeedGestureEvent.Cancel) return idleReduction()
     if (event.invalidatesPointerSequence()) return idleReduction()
-    if (!context.canRecognizeGesture) return idleReduction()
+    if (!context.canRecognizeDisplayGesture) return idleReduction()
 
     val geometry = context.geometry ?: return idleReduction()
     val stateSignature = state.geometrySignatureOrNull()
@@ -261,11 +350,22 @@ internal fun reduceFocusFeedGesture(
             FocusFeedGestureState.Idle
         }
     return when (event) {
-        is FocusFeedGestureEvent.Down -> reduceDown(currentState, event, geometry)
-        is FocusFeedGestureEvent.Move -> reduceMove(currentState, event, thresholds)
-        is FocusFeedGestureEvent.HoldTimeout -> reduceHoldTimeout(currentState, event, thresholds)
+        is FocusFeedGestureEvent.Down -> reduceDown(currentState, event, geometry, context)
+        is FocusFeedGestureEvent.Move -> reduceMove(currentState, event, context, thresholds)
+        is FocusFeedGestureEvent.HoldTimeout ->
+            reduceHoldTimeout(currentState, event, context, thresholds)
         is FocusFeedGestureEvent.Up -> reduceUp(currentState, event, context, thresholds)
-        FocusFeedGestureEvent.ContextChanged -> FocusFeedGestureReduction(currentState)
+        FocusFeedGestureEvent.ContextChanged ->
+            FocusFeedGestureReduction(
+                if (currentState is FocusFeedGestureState.Tracking) {
+                    currentState.copy(
+                        holdEligible =
+                            currentState.holdEligible && context.canRecognizeFocusGesture,
+                    )
+                } else {
+                    currentState
+                },
+            )
         FocusFeedGestureEvent.Cancel -> idleReduction()
     }
 }
@@ -274,15 +374,16 @@ private fun reduceDown(
     state: FocusFeedGestureState,
     event: FocusFeedGestureEvent.Down,
     geometry: FocusFeedGeometry,
+    context: FocusFeedGestureContext,
 ): FocusFeedGestureReduction {
     if (state !== FocusFeedGestureState.Idle) return idleReduction()
-    if (geometry.cameraCoordinateAt(event.position) == null) return idleReduction()
+    if (!geometry.acceptsGestureAt(event.position)) return idleReduction()
     return FocusFeedGestureReduction(
         FocusFeedGestureState.Tracking(
             down = event.position,
             current = event.position,
             downUptimeMillis = event.uptimeMillis,
-            holdEligible = true,
+            holdEligible = context.canRecognizeFocusGesture,
             geometrySignature = geometry.signature,
         ),
     )
@@ -291,6 +392,7 @@ private fun reduceDown(
 private fun reduceMove(
     state: FocusFeedGestureState,
     event: FocusFeedGestureEvent.Move,
+    context: FocusFeedGestureContext,
     thresholds: FocusFeedGestureThresholds,
 ): FocusFeedGestureReduction =
     when (state) {
@@ -311,6 +413,7 @@ private fun reduceMove(
                         ),
                     )
                 updated.holdEligible &&
+                    context.canRecognizeFocusGesture &&
                     event.uptimeMillis - state.downUptimeMillis >= thresholds.holdDurationMillis ->
                     heldReduction(state.geometrySignature)
                 else -> FocusFeedGestureReduction(updated)
@@ -325,6 +428,7 @@ private fun reduceMove(
 private fun reduceHoldTimeout(
     state: FocusFeedGestureState,
     event: FocusFeedGestureEvent.HoldTimeout,
+    context: FocusFeedGestureContext,
     thresholds: FocusFeedGestureThresholds,
 ): FocusFeedGestureReduction {
     if (state !is FocusFeedGestureState.Tracking || !state.holdEligible) {
@@ -332,7 +436,11 @@ private fun reduceHoldTimeout(
     }
     val elapsed = event.uptimeMillis - state.downUptimeMillis
     return if (elapsed >= thresholds.holdDurationMillis) {
-        heldReduction(state.geometrySignature)
+        if (context.canRecognizeFocusGesture) {
+            heldReduction(state.geometrySignature)
+        } else {
+            FocusFeedGestureReduction(state.copy(holdEligible = false))
+        }
     } else {
         FocusFeedGestureReduction(state)
     }
@@ -363,6 +471,7 @@ private fun reduceTrackingUp(
     }
     val elapsed = event.uptimeMillis - state.downUptimeMillis
     if (
+        context.canRecognizeFocusGesture &&
         state.holdEligible &&
             distance <= thresholds.holdSlop &&
             elapsed >= thresholds.holdDurationMillis
@@ -372,7 +481,7 @@ private fun reduceTrackingUp(
             action = FocusFeedGestureAction.ToggleFocusPointLock,
         )
     }
-    if (context.focusPointLocked) return idleReduction()
+    if (!context.canSetFocusPoint) return idleReduction()
     val coordinate = context.geometry?.cameraCoordinateAt(event.position) ?: return idleReduction()
     return FocusFeedGestureReduction(
         state = FocusFeedGestureState.Idle,

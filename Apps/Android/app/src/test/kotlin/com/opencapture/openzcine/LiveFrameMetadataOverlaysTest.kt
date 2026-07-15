@@ -12,6 +12,27 @@ import kotlin.test.assertTrue
 
 class LiveFrameMetadataOverlaysTest {
     @Test
+    fun `focus lock label clamps its full width at both visible feed edges`() {
+        val feed = LiveOverlayRect(left = -100f, top = 0f, width = 600f, height = 300f)
+        val viewport = LiveOverlayRect(left = 0f, top = 0f, width = 400f, height = 300f)
+
+        assertEquals(
+            5f,
+            focusLockLabelLeft(feed, viewport, preferredLeft = -40f, labelWidth = 96f, inset = 5f),
+        )
+        val rightEdge =
+            focusLockLabelLeft(
+                feed,
+                viewport,
+                preferredLeft = 380f,
+                labelWidth = 96f,
+                inset = 5f,
+            )
+        assertEquals(299f, rightEdge)
+        assertTrue(rightEdge + 96f <= viewport.right)
+    }
+
+    @Test
     fun `landscape gauge seats within the visible feed and above bottom chrome`() {
         val feed = LiveOverlayRect(left = 40f, top = 0f, width = 800f, height = 390f)
         val visible = LiveOverlayRect(left = 0f, top = 0f, width = 874f, height = 402f)
