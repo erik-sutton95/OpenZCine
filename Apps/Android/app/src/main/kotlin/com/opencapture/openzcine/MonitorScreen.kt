@@ -280,6 +280,7 @@ internal fun MonitorScreen(
     glassTierOverride: String? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
     isMonitorFront: Boolean = true,
+    sessionRecoveryEnabled: Boolean = true,
     linkHealth: AndroidLinkHealthMonitor? = null,
     activeTransportIsUsb: Boolean = false,
     isDemoSession: Boolean = false,
@@ -325,7 +326,7 @@ internal fun MonitorScreen(
         remember { MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle) }
     val previewApplication by
         (swiftLiveFrameSource?.previewState ?: noPreviewApplication).collectAsState()
-    LaunchedEffect(session) { session.connect() }
+    MonitorSessionRecoveryEffect(session, enabled = sessionRecoveryEnabled)
 
     // Shared glass state: the active tier plus the one blurred backdrop
     // texture every glass pill samples. The frame-clock loop is the perf

@@ -135,6 +135,13 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
+  An unexpected command or event-channel loss publishes `Disconnected`; the mounted monitor then
+  retries the same full `CameraSession.connect()` path with jittered exponential backoff capped at
+  eight seconds. Recovery exists only while the monitor owner is at least STARTED, resets after a
+  successful connection, and is cancelled for backgrounding, unmount, an explicit Settings
+  disconnect, or a consented Frame.io network hop. Disposable live-view pump endings keep using
+  their existing in-session stream retry; Android exposes no repeated terminal-failure signal that
+  would justify a separate full-session reconnect path.
 - **Link health + preview policy:** Operator Setup → Link presents the same shared Swift
   `CameraLinkHealthScorer`/`LinkSignalBars` result as iOS, fed only by the Android session state,
   delivered native live-view frames, and observed property-refresh transport failures. The current

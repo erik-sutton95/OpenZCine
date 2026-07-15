@@ -42,6 +42,7 @@ import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
+import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
@@ -85,6 +86,10 @@ private enum class StartupSurface {
     SAVED_CAMERAS,
     PAIRING,
 }
+
+/** A consented Frame.io network hop exclusively owns disconnect/reconnect until it settles. */
+private fun FrameioInternetHopState.allowsMonitorSessionRecovery(): Boolean =
+    this is FrameioInternetHopState.Idle || this is FrameioInternetHopState.Rejoined
 
 /**
  * App entry point: persisted cameras open the reconnect home; first-run and
@@ -372,6 +377,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } else {
+                    var monitorSessionRecoveryEnabled by
+                        remember(active) { mutableStateOf(true) }
                     LaunchedEffect(active, pairingEnvironment) {
                         try {
                             awaitCancellation()
@@ -459,6 +466,7 @@ class MainActivity : ComponentActivity() {
                         val disconnectToSavedCameraHome: (Boolean) -> Unit = { reconnect ->
                             val exitingSession = active
                             val reconnectID = activeSavedCamera?.id
+                            monitorSessionRecoveryEnabled = false
                             suppressedUsbAutoReconnectHosts =
                                 usbAutoReconnectSuppressionAfterUserAction(
                                     suppressedHosts = suppressedUsbAutoReconnectHosts,
@@ -508,6 +516,10 @@ class MainActivity : ComponentActivity() {
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == MonitorOverlay.NONE,
+                                sessionRecoveryEnabled =
+                                    monitorSessionRecoveryEnabled &&
+                                        frameioController.internetHopState
+                                            .allowsMonitorSessionRecovery(),
                                 linkHealth = monitorLinkHealth,
                                 activeTransportIsUsb =
                                     activeSavedCamera?.transport == SavedCameraTransport.USB_C,
@@ -582,7 +594,11 @@ class MainActivity : ComponentActivity() {
                             overlay = MonitorOverlay.NONE
                         }
                     } else {
-                        MonitorShell(active, frameSource = demo?.second)
+                        MonitorShell(
+                            active,
+                            frameSource = demo?.second,
+                            sessionRecoveryEnabled = monitorSessionRecoveryEnabled,
+                        )
                     }
                 }
             }
@@ -676,10 +692,14 @@ class MainActivity : ComponentActivity() {
  * falls back to the status text ("No camera" when disconnected).
  */
 @Composable
-fun MonitorShell(session: CameraSession, frameSource: LiveFrameSource? = null) {
+fun MonitorShell(
+    session: CameraSession,
+    frameSource: LiveFrameSource? = null,
+    sessionRecoveryEnabled: Boolean = true,
+) {
     val state by session.state.collectAsState()
 
-    LaunchedEffect(session) { session.connect() }
+    MonitorSessionRecoveryEffect(session, enabled = sessionRecoveryEnabled)
 
     Box(
         modifier = Modifier.fillMaxSize().background(BrandColors.background),
