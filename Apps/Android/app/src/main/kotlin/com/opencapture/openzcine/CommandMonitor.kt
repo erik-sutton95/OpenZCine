@@ -868,13 +868,22 @@ private fun CommandTile(
             maxLines = 2,
             overflow = TextOverflow.Clip,
         )
-        Text(
-            tile.value,
-            style = chromeStyle(commandTileValueSize(tile.value), FontWeight.Medium, mono = true),
-            color = if (controlEnabled) LiveDesign.text else LiveDesign.muted,
-            maxLines = 1,
-            overflow = TextOverflow.Clip,
-        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            FitScale(maxWidth) {
+                Text(
+                    tile.value,
+                    style =
+                        chromeStyle(
+                            commandTileValueSize(tile.value),
+                            FontWeight.Medium,
+                            mono = true,
+                        ),
+                    color = if (controlEnabled) LiveDesign.text else LiveDesign.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+        }
     }
 }
 
