@@ -110,6 +110,8 @@ class MainActivity : ComponentActivity() {
         window.attributes.layoutInDisplayCutoutMode =
             WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         val demo = DemoHarness.demoLiveFeed(intent)
+        val debugAssistEffects = DemoHarness.assistEffects(intent)
+        val debugScopes = DemoHarness.scopeKinds(intent)
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
@@ -261,7 +263,7 @@ class MainActivity : ComponentActivity() {
                                 remember {
                                     AssistState.restore(
                                         applicationContext,
-                                        FeedEffects.NONE,
+                                        intentEffects = null,
                                         intentScope = null,
                                         availableStoredLut = lutLibrary::contains,
                                     )
@@ -308,9 +310,9 @@ class MainActivity : ComponentActivity() {
                         val assist = remember(active) {
                             AssistState.restore(
                                 applicationContext,
-                                FeedEffectsState.current,
-                                DemoHarness.scopeKind(intent),
-                                intentScopes = DemoHarness.scopeKinds(intent),
+                                debugAssistEffects,
+                                debugScopes?.firstOrNull(),
+                                intentScopes = debugScopes,
                                 availableStoredLut = lutLibrary::contains,
                             )
                         }

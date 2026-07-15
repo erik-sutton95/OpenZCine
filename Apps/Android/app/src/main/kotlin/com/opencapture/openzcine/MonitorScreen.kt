@@ -223,6 +223,14 @@ fun MonitorScreen(
         }
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
+    val exposureAssistCameraInput =
+        remember(cameraProperties.codec, cameraProperties.iso, cameraProperties.baseIso) {
+            ExposureAssistCameraInput(
+                codec = cameraProperties.codec,
+                iso = cameraProperties.iso,
+                baseIso = cameraProperties.baseIso,
+            )
+        }
     val thermalTier = rememberAndroidThermalTier()
     val actualLinkHealth = linkHealth ?: remember(session) { AndroidLinkHealthMonitor() }
     val swiftLiveFrameSource =
@@ -702,6 +710,8 @@ fun MonitorScreen(
         }
         val liveFeedPresentation =
             remember(monitorFrameSource) { LiveFeedPresentationState() }
+        val liveFeedEffectsPresentation =
+            remember(monitorFrameSource) { LiveFeedEffectsPresentationState() }
         val audioMetersEnabled = assist.audioMetersEnabled
         var liveAudioLevels by
             remember(monitorFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
@@ -760,7 +770,11 @@ fun MonitorScreen(
                         },
                         onFrame = glass::submit,
                         presentationState = liveFeedPresentation,
+                        effects = assist.effects,
+                        configuration = operatorSettings.feedEffectsConfiguration,
+                        cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
+                        effectsPresentationState = liveFeedEffectsPresentation,
                     )
                 } else {
                     Text(
@@ -788,7 +802,6 @@ fun MonitorScreen(
                 )
             }
         }
-
         CompositionLocalProvider(LocalMonitorGlass provides glass) {
             if (isPortrait) {
                 PortraitChrome(
@@ -882,6 +895,7 @@ fun MonitorScreen(
                                     framingConfiguration = localFraming,
                                     onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                                    enabled = !locked,
                                 )
                             }
                         }
@@ -951,6 +965,15 @@ fun MonitorScreen(
                 portraitScopes = portraitScopes,
                 crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
                 histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
+                configuration = operatorSettings.scopeAssistConfiguration,
+                cameraInput = exposureAssistCameraInput,
+                lutSelection = assist.effects.lut,
+                lutLibrary = lutLibrary,
+                onScaleChange = { kind, scale ->
+                    operatorSettings.scopeAssistConfiguration =
+                        operatorSettings.scopeAssistConfiguration.withScale(kind, scale)
+                },
+                thermalTier = thermalTier,
                 source = monitorFrameSource,
                 isPortrait = isPortrait,
                 feed = zones.feed,
@@ -966,6 +989,17 @@ fun MonitorScreen(
                 feed = zones.feed,
                 viewport = physicalViewport,
             )
+        }
+        // Match iOS z-order: the false-colour key is mounted after floating
+        // scopes and audio so nothing can obscure or intercept its drag target.
+        if (!isCommand && !isPortrait) {
+            CompositionLocalProvider(LocalMonitorGlass provides glass) {
+                FalseColorReferenceOverlay(
+                    effectsState = liveFeedEffectsPresentation,
+                    feed = zones.feed,
+                    viewport = physicalViewport,
+                )
+            }
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).
@@ -1086,6 +1120,7 @@ private fun PortraitChrome(
     onOpenCommandControl: (CommandControlRequest) -> Unit,
     onMoveCommandTileLater: (CommandTileKind) -> Unit,
 ) {
+    val context = LocalContext.current
     if (operatorSettings.statusBarVisible.value) {
         PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
     }
@@ -1104,6 +1139,15 @@ private fun PortraitChrome(
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
                 onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                 hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                enabled = !locked,
+                maximumActiveScopes = 2,
+                onScopeLimitReached = {
+                    Toast.makeText(
+                        context,
+                        "2 scopes max in fit view. Close one or rotate to landscape.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
             )
         }
     }

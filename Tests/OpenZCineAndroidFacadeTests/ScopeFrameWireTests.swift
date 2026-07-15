@@ -129,6 +129,26 @@ struct ScopeFrameWireTests {
         #expect(levels[3] > anchors[2])
     }
 
+    @Test func tracesUseTheCameraResolvedClipEndpoint() {
+        let (rgba, width, height) = syntheticBuffer()
+        let clip: Double = 215
+        let mapping = ExposureSignalMapping(curve: .redLog3G10, clipNative: clip)
+        let flat = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0, clipNative: clip)
+        let count = Int(flat[0])
+        let levels = (0..<count).map { flat[1 + $0 * ScopeFrameWire.pointStride + 1] }.sorted()
+        let expected = Float(
+            ScopeDisplayScale.waveformLevel(
+                signalNative: ExposureToneCurve.redLog3G10.defaultClipNative,
+                mapping: mapping))
+        // The synthetic clip code is now below the higher camera warning;
+        // the core remaps it below the fixed clip line rather than Kotlin
+        // applying a stale Log3G10 endpoint.
+        #expect(abs(levels[2] - expected) < 0.01)
+        #expect(levels[2] < ScopeFrameWire.anchors(curveOrdinal: 0)[2])
+    }
+
     @Test func histogramsCarryEverySampledPixel() {
         let (rgba, width, height) = syntheticBuffer()
         let flat = ScopeFrameWire.traces(
@@ -143,6 +163,21 @@ struct ScopeFrameWireTests {
             ]
             #expect(Int(bins.reduce(0, +).rounded()) == count)
         }
+    }
+
+    @Test func histogramOnlyPayloadOmitsScatterPoints() {
+        let (rgba, width, height) = syntheticBuffer()
+        let flat = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0, includePoints: false)
+
+        #expect(flat[0] == 0)
+        #expect(
+            flat.count
+                == 1 + 4 * ScopeFrameWire.histogramBins
+                + ScopeFrameWire.trafficTrailerFloatCount)
+        let histogramTotal = flat[1..<(1 + ScopeFrameWire.histogramBins)].reduce(0, +)
+        #expect(histogramTotal > 0)
     }
 
     @Test func invalidBufferYieldsEmptyPayload() {
@@ -263,9 +298,114 @@ struct ScopeFrameWireTests {
         #expect(occupied > 0)
     }
 
+    @Test func vectorDisplayPayloadCarriesGaussianSoftThenCrispImages() {
+        let rgba = Array(repeating: [UInt8](arrayLiteral: 200, 40, 40, 255), count: 16)
+            .flatMap { $0 }
+        let crisp = ScopeFrameWire.vectorPixels(
+            rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0)
+        let display = ScopeFrameWire.vectorDisplayPixels(
+            rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0)
+        #expect(display.count == crisp.count * 2)
+        #expect(Array(display.suffix(crisp.count)) == crisp)
+        let soft = Array(display.prefix(crisp.count))
+        #expect(soft != crisp)
+        for offset in Swift.stride(from: 0, to: soft.count, by: 4) {
+            let alpha = soft[offset + 3]
+            #expect(soft[offset] <= alpha)
+            #expect(soft[offset + 1] <= alpha)
+            #expect(soft[offset + 2] <= alpha)
+        }
+    }
+
+    @Test func vectorGaussianPreservesConstantsAndSpreadsPremultipliedDensity() {
+        let constant = [UInt8](repeating: 64, count: 5 * 5 * 4)
+        #expect(
+            ScopeFrameWire.gaussianBlurredPremultipliedRGBA(constant, side: 5) == constant)
+
+        var impulse = [UInt8](repeating: 0, count: 5 * 5 * 4)
+        let centre = (2 * 5 + 2) * 4
+        impulse[centre] = 255
+        impulse[centre + 3] = 255
+        let soft = ScopeFrameWire.gaussianBlurredPremultipliedRGBA(impulse, side: 5)
+        let centreRed = soft[centre]
+        let neighbourRed = soft[centre + 4]
+        #expect(centreRed > 0 && centreRed < 255)
+        #expect(neighbourRed > 0 && neighbourRed < centreRed)
+        #expect(soft[centre + 3] == centreRed)
+        #expect(soft[centre + 1] == 0)
+    }
+
     @Test func emptyFrameYieldsEmptyVectorImage() {
         let pixels = ScopeFrameWire.vectorPixels(
             rgba: [], width: 0, height: 0, bytesPerRow: 0, curveOrdinal: 0)
         #expect(pixels.isEmpty)
+    }
+
+    @Test func vectorBrightnessIsAppliedBeforePremultipliedUpload() {
+        let rgba = Array(repeating: [UInt8](arrayLiteral: 200, 40, 40, 255), count: 16)
+            .flatMap { $0 }
+        let dim = ScopeFrameWire.vectorPixels(
+            rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0,
+            brightnessPercent: 50)
+        let boosted = ScopeFrameWire.vectorPixels(
+            rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0,
+            brightnessPercent: 200)
+        let dimAlpha = Swift.stride(from: 3, to: dim.count, by: 4).reduce(0) { $0 + Int(dim[$1]) }
+        let boostedAlpha = Swift.stride(from: 3, to: boosted.count, by: 4).reduce(0) {
+            $0 + Int(boosted[$1])
+        }
+
+        #expect(boostedAlpha > dimAlpha)
+    }
+
+    @Test func invalidVectorscopeZoomFailsClosed() {
+        let pixels = ScopeFrameWire.vectorPixels(
+            rgba: [255, 0, 0, 255], width: 1, height: 1, bytesPerRow: 4,
+            curveOrdinal: 0, zoomOrdinal: 9)
+        #expect(pixels.isEmpty)
+    }
+
+    @Test func registeredBuiltInMonoChangesTheVectorscopeMonitorDomain() {
+        let rgba = Array(repeating: [UInt8](arrayLiteral: 220, 25, 40, 255), count: 16)
+            .flatMap { $0 }
+        let fallback = ScopeFrameWire.vectorPixels(
+            rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0)
+        let handle = ScopeFrameWire.registerVectorCube(lookOrdinal: 2)
+        #expect(handle != nil)
+        let mono = ScopeFrameWire.vectorPixels(
+            rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0,
+            lutHandle: handle ?? -1)
+        ScopeFrameWire.unregisterVectorCube(handle: handle ?? -1)
+
+        #expect(!mono.isEmpty)
+        #expect(mono != fallback)
+        #expect(
+            ScopeFrameWire.vectorPixels(
+                rgba: rgba, width: 4, height: 4, bytesPerRow: 16, curveOrdinal: 0,
+                lutHandle: handle ?? -1
+            ).isEmpty)
+    }
+
+    @Test func packedStoredCubeRegistersOnceAndRejectsMalformedGeometry() {
+        let identity = CubeLUT(
+            size: 2,
+            rgb: [
+                0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0,
+                0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1,
+            ])
+        let packed = FeedEffectsWire.packedRGBA(cube: identity)
+        let decoded = ScopeFrameWire.unpackedVectorCube(packedRGBA: packed, size: 2)
+        #expect(decoded == identity)
+
+        let handle = ScopeFrameWire.registerVectorCube(
+            lookOrdinal: -1, packedRGBA: packed, size: 2)
+        #expect(handle != nil)
+        ScopeFrameWire.unregisterVectorCube(handle: handle ?? -1)
+        #expect(
+            ScopeFrameWire.registerVectorCube(
+                lookOrdinal: -1, packedRGBA: Array(packed.dropLast()), size: 2) == nil)
+        #expect(
+            ScopeFrameWire.registerVectorCube(
+                lookOrdinal: -1, packedRGBA: packed, size: 65) == nil)
     }
 }

@@ -111,17 +111,29 @@ public enum ScopeFrameWire {
     /// goal-post fill. Invalid buffer geometry yields `[0]`, four empty
     /// histograms, and the core's empty-sample reading.
     ///
+    /// - Parameter clipNative: Camera-resolved clip warning endpoint. It is
+    ///   optional for source compatibility, but Android passes the same Swift
+    ///   camera mapping used by false colour and zebras when it is available.
     /// - Parameter crushClipCompensationRaw: Raw value for the persisted
     ///   shared-core `CrushClipCompensation` selector. It defaults to iOS's
     ///   `.quarter` migration default for direct Swift callers.
     public static func traces(
         rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int,
-        crushClipCompensationRaw: Int = AssistConfiguration.CrushClipCompensation.quarter.rawValue
+        clipNative: Double? = nil,
+        crushClipCompensationRaw: Int = AssistConfiguration.CrushClipCompensation.quarter.rawValue,
+        includePoints: Bool = true
     ) -> [Float] {
-        let mapping = ExposureSignalMapping(curve: curve(ordinal: curveOrdinal))
+        let curve = curve(ordinal: curveOrdinal)
+        let resolvedClip: Double
+        if let clipNative, clipNative.isFinite {
+            resolvedClip = clipNative
+        } else {
+            resolvedClip = curve.defaultClipNative
+        }
+        let mapping = ExposureSignalMapping(curve: curve, clipNative: resolvedClip)
         let samples = ScopeSampler.sample(
             rgba: rgba, width: width, height: height, bytesPerRow: bytesPerRow,
-            stride: sampleStride)
+            stride: sampleStride, includePoints: includePoints)
         var out = [Float]()
         out.reserveCapacity(
             1 + samples.points.count * pointStride + 4 * histogramBins
@@ -189,32 +201,116 @@ public enum ScopeFrameWire {
     }
 
     /// Built-in monitor looks for the vectorscope's tone-mapped domain, built
-    /// once — the same `MonitorLUT` cubes the iOS shell falls back to when no
-    /// operator LUT is active.
+    /// once. Registered Android selections reuse these immutable values rather
+    /// than rebuilding a 33³ cube on every scope tick.
     private static let log3G10MonitorCube = MonitorLUT.log3G10Rec709.cube()
     private static let nLogMonitorCube = MonitorLUT.nLogRec709.cube()
+    private static let monochromeMonitorCube = MonitorLUT.monochrome.cube()
+
+    /// Lock-protected native handles for the process's active vectorscope
+    /// samplers. Each Compose collector registers once when its LUT selection
+    /// changes and releases the handle on cancellation; frame ticks carry only
+    /// the small handle, never a 33–64³ cube payload.
+    private final class VectorCubeStorage: @unchecked Sendable {
+        let lock = NSLock()
+        var nextHandle: Int64 = 1
+        var cubes: [Int64: CubeLUT] = [:]
+    }
+
+    private static let vectorCubeStorage = VectorCubeStorage()
+
+    /// Registers one built-in or Swift-validated packed operator cube for
+    /// vectorscope sampling and returns its positive native handle. Built-in
+    /// ordinals mirror `FeedEffectsWire.look`; a negative ordinal requires a
+    /// packed RGBA cube. Invalid records return `nil`.
+    public static func registerVectorCube(
+        lookOrdinal: Int, packedRGBA: [UInt8]? = nil, size: Int = 0
+    ) -> Int64? {
+        let cube: CubeLUT?
+        switch lookOrdinal {
+        case 0: cube = log3G10MonitorCube
+        case 1: cube = nLogMonitorCube
+        case 2: cube = monochromeMonitorCube
+        default:
+            cube = packedRGBA.flatMap { unpackedVectorCube(packedRGBA: $0, size: size) }
+        }
+        guard let cube else { return nil }
+        vectorCubeStorage.lock.lock()
+        defer { vectorCubeStorage.lock.unlock() }
+        let handle = vectorCubeStorage.nextHandle
+        vectorCubeStorage.nextHandle = handle == Int64.max ? 1 : handle + 1
+        vectorCubeStorage.cubes[handle] = cube
+        return handle
+    }
+
+    /// Releases a vectorscope cube handle after its Android sampler stops.
+    public static func unregisterVectorCube(handle: Int64) {
+        guard handle > 0 else { return }
+        vectorCubeStorage.lock.lock()
+        vectorCubeStorage.cubes.removeValue(forKey: handle)
+        vectorCubeStorage.lock.unlock()
+    }
+
+    /// Decodes the facade's packed-2D RGBA layout back into a core red-fastest
+    /// cube. Size and byte count are checked before any allocation.
+    static func unpackedVectorCube(packedRGBA: [UInt8], size: Int) -> CubeLUT? {
+        guard CubeLUT.supportedSizeRange.contains(size) else { return nil }
+        let (square, squareOverflow) = size.multipliedReportingOverflow(by: size)
+        let (sampleCount, cubeOverflow) = square.multipliedReportingOverflow(by: size)
+        let (byteCount, byteOverflow) = sampleCount.multipliedReportingOverflow(by: 4)
+        guard !squareOverflow, !cubeOverflow, !byteOverflow, packedRGBA.count == byteCount else {
+            return nil
+        }
+        var rgb = [Float](repeating: 0, count: sampleCount * 3)
+        for green in 0..<size {
+            for blue in 0..<size {
+                for red in 0..<size {
+                    let source = (green * size * size + blue * size + red) * 4
+                    let destination = (red + green * size + blue * size * size) * 3
+                    rgb[destination] = Float(packedRGBA[source]) / 255
+                    rgb[destination + 1] = Float(packedRGBA[source + 1]) / 255
+                    rgb[destination + 2] = Float(packedRGBA[source + 2]) / 255
+                }
+            }
+        }
+        return CubeLUT(size: size, rgb: rgb)
+    }
+
+    private static func vectorCube(handle: Int64, curveOrdinal: Int) -> CubeLUT? {
+        if handle == 0 {
+            return curveOrdinal == 1 ? nLogMonitorCube : log3G10MonitorCube
+        }
+        guard handle > 0 else { return nil }
+        vectorCubeStorage.lock.lock()
+        defer { vectorCubeStorage.lock.unlock() }
+        return vectorCubeStorage.cubes[handle]
+    }
 
     /// Samples one downsampled RGBA frame for the vectorscope and returns the
     /// 128×128 premultiplied-RGBA density image (row 0 at +Cr, ready to blit).
     ///
-    /// The clean log points are pushed through the built-in display tone map
-    /// (`MonitorLUT` — v1 has no operator LUTs on Android, matching the iOS
-    /// no-LUT fallback), binned by BT.709 CbCr, then rasterized with the same
-    /// log-density ramp and trace tint as the iOS shell's
-    /// `VectorscopeDensityRasterizer` at default brightness. Empty when the
-    /// frame yields no samples.
+    /// The clean log points are pushed through the registered active monitor
+    /// LUT, or through the camera-curve fallback when `lutHandle` is zero,
+    /// matching iOS. They are then binned by BT.709 CbCr and rasterized with
+    /// the same log-density ramp, trace tint, and 0…200 brightness multiplier
+    /// as `VectorscopeDensityRasterizer`. Empty for an invalid handle or when
+    /// the frame yields no samples.
     public static func vectorPixels(
-        rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int
+        rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int,
+        zoomOrdinal: Int = 0, brightnessPercent: Int = 100, lutHandle: Int64 = 0
     ) -> [UInt8] {
+        guard let gain = vectorscopeGain(zoomOrdinal),
+            let cube = vectorCube(handle: lutHandle, curveOrdinal: curveOrdinal)
+        else { return [] }
         let samples = ScopeSampler.sample(
             rgba: rgba, width: width, height: height, bytesPerRow: bytesPerRow,
             stride: sampleStride)
-        let cube = curveOrdinal == 1 ? nLogMonitorCube : log3G10MonitorCube
         let monitorPoints = VectorscopeSampler.monitorPoints(samples.points, through: cube)
         let bins = VectorscopeSampler.accumulate(
-            points: monitorPoints, binCount: vectorBinCount, gain: 1)
+            points: monitorPoints, binCount: vectorBinCount, gain: gain)
         let n = bins.binCount
         guard n > 0, bins.peak > 0 else { return [] }
+        let brightness = Double(min(max(brightnessPercent, 0), 200)) / 100
         let peak = Double(bins.peak)
         var pixels = [UInt8](repeating: 0, count: n * n * 4)
         for index in 0..<bins.counts.count {
@@ -223,7 +319,7 @@ public enum ScopeFrameWire {
             // Logarithmic density ramp (phosphor-style) — keeps single-pixel
             // chroma readable while dense regions still glow.
             let density = log(1 + Double(count)) / log(1 + peak)
-            let alpha = min(1, max(0, 0.4 + 0.6 * density))
+            let alpha = min(1, max(0, (0.4 + 0.6 * density) * brightness))
             let tint = bins.averageColor(at: index).traceTint
             // Flip rows so +Cr renders upward (bins store row 0 at −Cr).
             let row = n - 1 - index / n
@@ -235,5 +331,71 @@ public enum ScopeFrameWire {
             pixels[offset + 3] = UInt8(255 * alpha)
         }
         return pixels
+    }
+
+    /// Renderer-ready vectorscope payload: one 1.1-bin Gaussian soft pass
+    /// followed by the original crisp premultiplied-RGBA raster. Android draws
+    /// the first image additively, then the second at 0.35 opacity, matching
+    /// the iOS monitor without doing per-pixel Kotlin work on every scope tick.
+    public static func vectorDisplayPixels(
+        rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int,
+        zoomOrdinal: Int = 0, brightnessPercent: Int = 100, lutHandle: Int64 = 0
+    ) -> [UInt8] {
+        let crisp = vectorPixels(
+            rgba: rgba, width: width, height: height, bytesPerRow: bytesPerRow,
+            curveOrdinal: curveOrdinal, zoomOrdinal: zoomOrdinal,
+            brightnessPercent: brightnessPercent, lutHandle: lutHandle)
+        guard crisp.count == vectorBinCount * vectorBinCount * 4 else { return [] }
+        return gaussianBlurredPremultipliedRGBA(crisp, side: vectorBinCount) + crisp
+    }
+
+    /// Fixed 1.1-bin Gaussian used by ``vectorDisplayPixels``. Integer weights
+    /// sum to 10,000, keeping constant premultiplied colours byte-exact while
+    /// avoiding floating-point work in the per-tick Android facade path.
+    static func gaussianBlurredPremultipliedRGBA(_ source: [UInt8], side: Int) -> [UInt8] {
+        guard side > 0, source.count == side * side * 4 else { return [] }
+        let weights = [708, 2445, 3694, 2445, 708]
+        let neighbours = (0..<side).flatMap { coordinate in
+            (-2...2).map { min(side - 1, max(0, coordinate + $0)) }
+        }
+        var scratch = [UInt8](repeating: 0, count: source.count)
+        var target = [UInt8](repeating: 0, count: source.count)
+        for y in 0..<side {
+            for x in 0..<side {
+                let destination = (y * side + x) * 4
+                for component in 0..<4 {
+                    var total = 0
+                    for tap in 0..<5 {
+                        let sampleX = neighbours[x * 5 + tap]
+                        total += Int(source[(y * side + sampleX) * 4 + component]) * weights[tap]
+                    }
+                    scratch[destination + component] = UInt8((total + 5_000) / 10_000)
+                }
+            }
+        }
+        for y in 0..<side {
+            for x in 0..<side {
+                let destination = (y * side + x) * 4
+                for component in 0..<4 {
+                    var total = 0
+                    for tap in 0..<5 {
+                        let sampleY = neighbours[y * 5 + tap]
+                        total += Int(scratch[(sampleY * side + x) * 4 + component]) * weights[tap]
+                    }
+                    target[destination + component] = UInt8((total + 5_000) / 10_000)
+                }
+            }
+        }
+        return target
+    }
+
+    /// iOS `VectorscopeZoom` gains, exposed as a narrow stable wire ordinal.
+    private static func vectorscopeGain(_ ordinal: Int) -> Double? {
+        switch ordinal {
+        case 0: 1
+        case 1: 2
+        case 2: 4
+        default: nil
+        }
     }
 }

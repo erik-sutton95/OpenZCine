@@ -2,14 +2,18 @@ package com.opencapture.openzcine.settings
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
+import android.os.Build
 import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
@@ -34,6 +38,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,12 +56,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,10 +73,18 @@ import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.ChromeShape
+import com.opencapture.openzcine.ExposureAssistCameraInput
+import com.opencapture.openzcine.FeedPeakingColor
+import com.opencapture.openzcine.FeedPeakingSensitivity
+import com.opencapture.openzcine.FeedZebraStripeColor
+import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.LiveDesign
+import com.opencapture.openzcine.zebraEditorValue
+import com.opencapture.openzcine.zebraMonitorPercent
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
+import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
 import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.core.CameraSession
@@ -94,6 +111,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 /**
  * Operator Setup rail tabs — the Android v1 subset of the iOS
@@ -144,6 +162,17 @@ internal fun OperatorSettingsScreen(
     initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
     onClose: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+    val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
+    val cameraInput =
+        remember(cameraProperties?.codec, cameraProperties?.iso, cameraProperties?.baseIso) {
+            ExposureAssistCameraInput(
+                codec = cameraProperties?.codec,
+                iso = cameraProperties?.iso,
+                baseIso = cameraProperties?.baseIso,
+            )
+        }
     val feedbackView = LocalView.current
     val toggleSetting: (OperatorSettings.Toggle) -> Unit = { toggle ->
         val hapticsWereEnabled = settings.hapticsEnabled.value
@@ -154,8 +183,15 @@ internal fun OperatorSettingsScreen(
     }
     val toggleAssist: (AssistTool) -> Unit = { tool ->
         val hapticsEnabled = settings.hapticsEnabled.value
-        assistState.toggle(tool)
-        if (hapticsEnabled) {
+        val maximumScopes = if (session != null && isPortrait) 2 else null
+        val changed = assistState.toggle(tool, maximumActiveScopes = maximumScopes)
+        if (!changed) {
+            Toast.makeText(
+                context,
+                "2 scopes max in fit view. Close one or rotate to landscape.",
+                Toast.LENGTH_SHORT,
+            ).show()
+        } else if (hapticsEnabled) {
             feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
@@ -197,6 +233,7 @@ internal fun OperatorSettingsScreen(
                     mediaCacheStore,
                     frameioController,
                     lutLibrary,
+                    cameraInput,
                     linkHealth,
                     liveViewSource,
                     activeTransportLabel,
@@ -222,6 +259,7 @@ internal fun OperatorSettingsScreen(
                         mediaCacheStore,
                         frameioController,
                         lutLibrary,
+                        cameraInput,
                         linkHealth,
                         liveViewSource,
                         activeTransportLabel,
@@ -461,6 +499,7 @@ private fun SettingsContentPane(
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController?,
     lutLibrary: AndroidLutLibrary?,
+    cameraInput: ExposureAssistCameraInput,
     linkHealth: AndroidLinkHealthMonitor?,
     liveViewSource: SwiftCoreLiveFrameSource?,
     activeTransportLabel: String?,
@@ -540,6 +579,7 @@ private fun SettingsContentPane(
                                 settings,
                                 assistState,
                                 lutLibrary,
+                                cameraInput,
                                 onSettingToggle,
                                 onAssistToggle,
                                 onInteraction,
@@ -735,16 +775,20 @@ private fun AssistRows(
     settings: OperatorSettings,
     assistState: AssistState,
     lutLibrary: AndroidLutLibrary?,
+    cameraInput: ExposureAssistCameraInput,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
 ) {
+    val configuration = settings.feedEffectsConfiguration
+    val imageEffectsAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
     SettingsRowCard {
         // Local framing tools have their own configuration group below. They
         // do not belong to AssistState, which intentionally owns only image
         // effects, scopes, and audio metering.
         AssistTool.entries
             .filterNot { it in AssistTool.framingTools }
+            .filter { imageEffectsAvailable || it !in imageEffectTools }
             .forEachIndexed { index, tool ->
             SettingsSwitchRow(
                 tool.settingsTitle,
@@ -753,49 +797,112 @@ private fun AssistRows(
             ) { onAssistToggle(tool) }
         }
     }
-    if (lutLibrary != null) {
-        StoredLutLibraryRows(
-            library = lutLibrary,
-            assistState = assistState,
-            onInteraction = onInteraction,
-        )
-        RedLutWorkflowRows()
-    }
-    SettingsGroupCard(
-        title = "Image Processing",
-        caption = "Choose the look and false-color scale used when each assist is enabled.",
-    ) {
-        SettingsInlineRow(title = "LUT Look", showTopDivider = false) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                FeedLut.entries.forEach { lut ->
-                    AssistChoice(
-                        label = lut.label,
-                        selected = assistState.selectedLut == FeedLutSelection.BuiltIn(lut),
-                    ) {
-                        assistState.selectLut(lut)
-                        onInteraction()
+    if (imageEffectsAvailable) {
+        if (lutLibrary != null) {
+            StoredLutLibraryRows(
+                library = lutLibrary,
+                assistState = assistState,
+                onInteraction = onInteraction,
+            )
+            RedLutWorkflowRows()
+        }
+        SettingsGroupCard(
+            title = "Monitor LUT",
+            caption = "Choose the built-in monitor look used when LUT is enabled.",
+        ) {
+            SettingsInlineRow(title = "LUT Look", showTopDivider = false) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FeedLut.entries.forEach { lut ->
+                        AssistChoice(
+                            label = lut.label,
+                            selected = assistState.selectedLut == FeedLutSelection.BuiltIn(lut),
+                        ) {
+                            assistState.selectLut(lut)
+                            onInteraction()
+                        }
                     }
                 }
             }
         }
-        SettingsInlineRow(title = "False Color") {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                FeedFalseColorScale.entries.forEach { scale ->
-                    AssistChoice(
-                        label = scale.label,
-                        selected = assistState.selectedFalseColorScale == scale,
-                    ) {
-                        assistState.selectFalseColorScale(scale)
-                        onInteraction()
+        SettingsGroupCard(
+            title = "False Color",
+            caption = "Choose the camera-aware scale and optional movable reference display.",
+            onReset = {
+                assistState.resetFalseColorSelection()
+                settings.resetFalseColorConfiguration()
+                onInteraction()
+            },
+        ) {
+            SettingsInlineRow(title = "Scale", showTopDivider = false) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FeedFalseColorScale.entries.forEach { scale ->
+                        AssistChoice(
+                            label = scale.label,
+                            selected = assistState.selectedFalseColorScale == scale,
+                        ) {
+                            assistState.selectFalseColorScale(scale)
+                            onInteraction()
+                        }
                     }
                 }
             }
+            SettingsSwitchRow(
+                "Reference Display",
+                isOn = settings.feedEffectsConfiguration.falseColorReferenceEnabled,
+            ) {
+                val enabled = !configuration.falseColorReferenceEnabled
+                settings.feedEffectsConfiguration =
+                    settings.feedEffectsConfiguration.copy(
+                        falseColorReferenceEnabled = enabled,
+                    )
+                // iOS makes the key immediately useful by revealing False Color
+                // when it is enabled. Preserve the existing LUT activation; the
+                // renderer decides the visual precedence for the selected scale.
+                if (enabled && !assistState.isOn(AssistTool.FALSE)) {
+                    onAssistToggle(AssistTool.FALSE)
+                } else {
+                    onInteraction()
+                }
+            }
+            Text(
+                "Shows the Swift-derived palette key only while False Color is active.",
+                style = chromeStyle(10.5f, FontWeight.Normal),
+                color = LiveDesign.muted,
+            )
+        }
+        PeakingSettingsRows(settings, onInteraction)
+        ZebraSettingsRows(settings, cameraInput, onInteraction)
+    } else {
+        SettingsGroupCard(
+            title = "Image Processing",
+            caption = "LUT, False Color, Peaking, and Zebra require Android 13 or newer and the bundled Swift core.",
+        ) {
+            Text(
+                "Unavailable on this device. Scope and framing assists remain fully functional.",
+                style = chromeStyle(10.5f, FontWeight.Normal),
+                color = LiveDesign.muted,
+            )
         }
     }
+    ScopeSettingsRows(settings, onInteraction)
     SettingsGroupCard(
         title = "Traffic Lights",
         caption = "Configure the shared Swift meter used by the histogram and goal-post panel.",
+        onReset = {
+            settings.resetTrafficLightsConfiguration()
+            onInteraction()
+        },
     ) {
+        SettingsInlineRow(title = "Panel Scale", showTopDivider = false) {
+            ScopeScaleSlider(
+                selected = settings.scopeAssistConfiguration.trafficLightsScale,
+                onSelect = { value ->
+                    settings.scopeAssistConfiguration =
+                        settings.scopeAssistConfiguration.copy(trafficLightsScale = value)
+                    onInteraction()
+                },
+            )
+        }
         SettingsSwitchRow(
             "Histogram Traffic Lights",
             isOn = settings.histogramTrafficLightsEnabled.value,
@@ -965,6 +1072,390 @@ private fun AssistRows(
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
+    }
+}
+
+private val imageEffectTools: Set<AssistTool> =
+    setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
+
+/** iOS-matched peaking choices; Swift resolves the actual detector values and RGB. */
+@Composable
+private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
+    val configuration = settings.feedEffectsConfiguration
+    SettingsGroupCard(
+        title = "Focus Peaking",
+        caption = "Sensitivity and color are resolved by the shared Swift exposure-assist facade.",
+        onReset = {
+            settings.resetPeakingConfiguration()
+            onInteraction()
+        },
+    ) {
+        SettingsInlineRow(title = "Sensitivity", showTopDivider = false) {
+            Row(
+                Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                FeedPeakingSensitivity.entries.forEach { sensitivity ->
+                    AssistChoice(
+                        label = sensitivity.label,
+                        selected = configuration.peakingSensitivity == sensitivity,
+                    ) {
+                        settings.feedEffectsConfiguration =
+                            configuration.copy(peakingSensitivity = sensitivity)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        SettingsInlineRow(title = "Color") {
+            Row(
+                Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                FeedPeakingColor.entries.forEach { color ->
+                    AssistChoice(label = color.label, selected = configuration.peakingColor == color) {
+                        settings.feedEffectsConfiguration = configuration.copy(peakingColor = color)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Dual-zone zebra settings retain canonical monitor percentages across unit changes. */
+@Composable
+private fun ZebraSettingsRows(
+    settings: OperatorSettings,
+    cameraInput: ExposureAssistCameraInput,
+    onInteraction: () -> Unit,
+) {
+    val configuration = settings.feedEffectsConfiguration
+    SettingsGroupCard(
+        title = "Zebra",
+        caption = "Highlight and midtone warnings use the active camera curve; 0–255 changes only the editor.",
+        onReset = {
+            settings.resetZebraConfiguration()
+            onInteraction()
+        },
+    ) {
+        SettingsInlineRow(title = "Units", showTopDivider = false) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FeedZebraUnit.entries.forEach { unit ->
+                    AssistChoice(label = unit.label, selected = configuration.zebraUnit == unit) {
+                        settings.feedEffectsConfiguration = configuration.copy(zebraUnit = unit)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        SettingsSwitchRow("Highlight", isOn = configuration.zebraHighlightEnabled) {
+            settings.feedEffectsConfiguration =
+                configuration.copy(zebraHighlightEnabled = !configuration.zebraHighlightEnabled)
+            onInteraction()
+        }
+        SettingsInlineRow(title = "Highlight Threshold") {
+            ZebraThresholdStepper(
+                cameraInput = cameraInput,
+                unit = configuration.zebraUnit,
+                monitorPercent = configuration.zebraHighlightIre,
+                onChange = { monitorPercent ->
+                    settings.feedEffectsConfiguration =
+                        configuration.copy(zebraHighlightIre = monitorPercent)
+                    onInteraction()
+                },
+            )
+        }
+        SettingsInlineRow(title = "Highlight Color") {
+            ZebraColorChoices(
+                selected = configuration.zebraHighlightColor,
+                onSelect = { color ->
+                    settings.feedEffectsConfiguration = configuration.copy(zebraHighlightColor = color)
+                    onInteraction()
+                },
+            )
+        }
+        SettingsSwitchRow("Midtone", isOn = configuration.zebraMidtoneEnabled) {
+            settings.feedEffectsConfiguration =
+                configuration.copy(zebraMidtoneEnabled = !configuration.zebraMidtoneEnabled)
+            onInteraction()
+        }
+        SettingsInlineRow(title = "Midtone Threshold") {
+            ZebraThresholdStepper(
+                cameraInput = cameraInput,
+                unit = configuration.zebraUnit,
+                monitorPercent = configuration.zebraMidtoneIre,
+                onChange = { monitorPercent ->
+                    settings.feedEffectsConfiguration =
+                        configuration.copy(zebraMidtoneIre = monitorPercent)
+                    onInteraction()
+                },
+            )
+        }
+        SettingsInlineRow(title = "Midtone Color") {
+            ZebraColorChoices(
+                selected = configuration.zebraMidtoneColor,
+                onSelect = { color ->
+                    settings.feedEffectsConfiguration = configuration.copy(zebraMidtoneColor = color)
+                    onInteraction()
+                },
+            )
+        }
+    }
+}
+
+/** Swift-only native/IRE conversion stepper: no Kotlin exposure conversion is permitted here. */
+@Composable
+private fun ZebraThresholdStepper(
+    cameraInput: ExposureAssistCameraInput,
+    unit: FeedZebraUnit,
+    monitorPercent: Float,
+    onChange: (Float) -> Unit,
+) {
+    val editorValue =
+        remember(cameraInput, unit, monitorPercent) {
+            zebraEditorValue(cameraInput, unit, monitorPercent)
+        } ?: return
+    val maximum = if (unit == FeedZebraUnit.NATIVE) 255f else 100f
+    val rounded = editorValue.roundToInt().coerceIn(0, maximum.roundToInt())
+    var directEntry by remember(unit, rounded) { mutableStateOf(rounded.toString()) }
+    fun adjust(delta: Float) {
+        zebraMonitorPercent(cameraInput, unit, (editorValue + delta).coerceIn(0f, maximum))?.let(onChange)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+        AssistChoice(label = "−", selected = false) { adjust(-1f) }
+        OutlinedTextField(
+            value = directEntry,
+            onValueChange = { raw ->
+                val digits = raw.filter(Char::isDigit).take(3)
+                val normalized = normalizedZebraEntry(digits, maximum.roundToInt())
+                directEntry = normalized?.toString() ?: digits
+                if (normalized != null) {
+                    zebraMonitorPercent(cameraInput, unit, normalized.toFloat())?.let(onChange)
+                }
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = chromeStyle(12.5f, FontWeight.SemiBold),
+            modifier =
+                Modifier.width(72.dp).semantics {
+                    contentDescription = "Zebra threshold, 0 to ${maximum.roundToInt()}"
+                },
+        )
+        AssistChoice(label = "+", selected = false) { adjust(1f) }
+    }
+}
+
+/** Digits-only direct entry with the same closed-range clamp as iOS. */
+internal fun normalizedZebraEntry(raw: String, maximum: Int): Int? =
+    raw.toIntOrNull()?.coerceIn(0, maximum)
+
+@Composable
+private fun ZebraColorChoices(
+    selected: FeedZebraStripeColor,
+    onSelect: (FeedZebraStripeColor) -> Unit,
+) {
+    Row(
+        Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        FeedZebraStripeColor.entries.forEach { color ->
+            AssistChoice(label = color.label, selected = selected == color) { onSelect(color) }
+        }
+    }
+}
+
+/** Canvas-only scope controls. Each option below has a corresponding render/sampler path. */
+@Composable
+private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
+    val configuration = settings.scopeAssistConfiguration
+    SettingsGroupCard(
+        title = "Waveform",
+        caption = "Mode, trace brightness, guides, and footprint are applied by the clean-frame Canvas view.",
+        onReset = {
+            settings.resetWaveformConfiguration()
+            onInteraction()
+        },
+    ) {
+        SettingsInlineRow(title = "Mode", showTopDivider = false) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                ScopeWaveformMode.entries.forEach { mode ->
+                    AssistChoice(label = mode.label, selected = configuration.waveformMode == mode) {
+                        settings.scopeAssistConfiguration = configuration.copy(waveformMode = mode)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        ScopeBrightnessRow(
+            brightness = configuration.waveformBrightness,
+            onSelect = { value ->
+                settings.scopeAssistConfiguration = configuration.copy(waveformBrightness = value)
+                onInteraction()
+            },
+        )
+        ScopeScaleRow(
+            scale = configuration.waveformScale,
+            onSelect = { value ->
+                settings.scopeAssistConfiguration = configuration.copy(waveformScale = value)
+                onInteraction()
+            },
+        )
+        ScopeGuideRows(
+            guides = configuration.waveformGuides,
+            onChange = { guides ->
+                settings.scopeAssistConfiguration = configuration.copy(waveformGuides = guides)
+                onInteraction()
+            },
+        )
+    }
+    SettingsGroupCard(
+        title = "Parade",
+        caption = "RGB or YRGB channel layout with independent trace and guide controls.",
+        onReset = {
+            settings.resetParadeConfiguration()
+            onInteraction()
+        },
+    ) {
+        SettingsInlineRow(title = "Mode", showTopDivider = false) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                ScopeParadeMode.entries.forEach { mode ->
+                    AssistChoice(label = mode.label, selected = configuration.paradeMode == mode) {
+                        settings.scopeAssistConfiguration = configuration.copy(paradeMode = mode)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        ScopeBrightnessRow(
+            brightness = configuration.paradeBrightness,
+            onSelect = { value ->
+                settings.scopeAssistConfiguration = configuration.copy(paradeBrightness = value)
+                onInteraction()
+            },
+        )
+        ScopeScaleRow(
+            scale = configuration.paradeScale,
+            onSelect = { value ->
+                settings.scopeAssistConfiguration = configuration.copy(paradeScale = value)
+                onInteraction()
+            },
+        )
+        ScopeGuideRows(
+            guides = configuration.paradeGuides,
+            onChange = { guides ->
+                settings.scopeAssistConfiguration = configuration.copy(paradeGuides = guides)
+                onInteraction()
+            },
+        )
+    }
+    SettingsGroupCard(
+        title = "Vectorscope",
+        caption = "Zoom changes core density binning; brightness and footprint affect only the rendered trace.",
+        onReset = {
+            settings.resetVectorscopeConfiguration()
+            onInteraction()
+        },
+    ) {
+        SettingsInlineRow(title = "Trace Zoom", showTopDivider = false) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                ScopeVectorscopeZoom.entries.forEach { zoom ->
+                    AssistChoice(label = zoom.label, selected = configuration.vectorscopeZoom == zoom) {
+                        settings.scopeAssistConfiguration = configuration.copy(vectorscopeZoom = zoom)
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        ScopeBrightnessRow(
+            brightness = configuration.vectorscopeBrightness,
+            onSelect = { value ->
+                settings.scopeAssistConfiguration = configuration.copy(vectorscopeBrightness = value)
+                onInteraction()
+            },
+        )
+        ScopeScaleRow(
+            scale = configuration.vectorscopeScale,
+            onSelect = { value ->
+                settings.scopeAssistConfiguration = configuration.copy(vectorscopeScale = value)
+                onInteraction()
+            },
+        )
+    }
+    SettingsGroupCard(
+        title = "Histogram",
+        caption = "Histogram footprint and shared edge warnings remain independently persisted.",
+        onReset = {
+            settings.resetHistogramConfiguration()
+            onInteraction()
+        },
+    ) {
+        SettingsInlineRow(title = "Histogram Scale", showTopDivider = false) {
+            ScopeScaleSlider(
+                selected = configuration.histogramScale,
+                onSelect = { value ->
+                    settings.scopeAssistConfiguration = configuration.copy(histogramScale = value)
+                    onInteraction()
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScopeBrightnessRow(brightness: Int, onSelect: (Int) -> Unit) {
+    SettingsInlineRow(title = "Brightness") {
+        Row(
+            Modifier.widthIn(max = 250.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Slider(
+                value = brightness.toFloat(),
+                onValueChange = { onSelect(it.roundToInt()) },
+                valueRange =
+                    ScopeAssistConfiguration.MIN_BRIGHTNESS.toFloat()..
+                        ScopeAssistConfiguration.MAX_BRIGHTNESS.toFloat(),
+                steps = ScopeAssistConfiguration.MAX_BRIGHTNESS - ScopeAssistConfiguration.MIN_BRIGHTNESS - 1,
+                modifier = Modifier.weight(1f),
+            )
+            SettingsValueText("$brightness%")
+        }
+    }
+}
+
+@Composable
+private fun ScopeScaleRow(scale: Float, onSelect: (Float) -> Unit) {
+    SettingsInlineRow(title = "Panel Scale") { ScopeScaleSlider(scale, onSelect) }
+}
+
+@Composable
+private fun ScopeScaleSlider(selected: Float, onSelect: (Float) -> Unit) {
+    Row(
+        Modifier.widthIn(max = 250.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Slider(
+            value = selected,
+            onValueChange = { value -> onSelect((value * 100).roundToInt() / 100f) },
+            valueRange = ScopeAssistConfiguration.MIN_SCALE..ScopeAssistConfiguration.MAX_SCALE,
+            modifier = Modifier.weight(1f),
+        )
+        SettingsValueText("${(selected * 100).roundToInt()}%")
+    }
+}
+
+@Composable
+private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) -> Unit) {
+    SettingsSwitchRow("Safe Border Clip", isOn = guides.clip) {
+        onChange(guides.copy(clip = !guides.clip))
+    }
+    SettingsSwitchRow("Safe Border Crush", isOn = guides.crush) {
+        onChange(guides.copy(crush = !guides.crush))
+    }
+    SettingsSwitchRow("Middle Gray", isOn = guides.middle) {
+        onChange(guides.copy(middle = !guides.middle))
     }
 }
 

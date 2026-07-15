@@ -105,6 +105,23 @@ object DemoHarness {
     const val EXTRA_SCOPES = "zc.scopes"
 
     /**
+     * Explicit debug image-assist override, distinct from mutable runtime
+     * toolbar state. `null` means a normal launch must restore preferences;
+     * an explicitly empty `zc.assist` value intentionally means all effects
+     * off for the scripted session.
+     */
+    fun assistEffects(intent: Intent): FeedEffects? =
+        if (intent.hasExtra("zc.assist")) {
+            FeedEffects.parse(
+                intent.getStringExtra("zc.assist"),
+                intent.getStringExtra("zc.lut"),
+                intent.getStringExtra("zc.fc.scale"),
+            )
+        } else {
+            null
+        }
+
+    /**
      * The first scope selected by the debug intent, or null. Kept for callers
      * that still use the pre-multi-scope seam; new monitor wiring uses
      * [scopeKinds]. Activate with e.g.
@@ -143,12 +160,6 @@ object DemoHarness {
      * session with the synthetic 25 fps frame source.
      */
     fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource?>? {
-        FeedEffectsState.current =
-            FeedEffects.parse(
-                intent.getStringExtra("zc.assist"),
-                intent.getStringExtra("zc.lut"),
-                intent.getStringExtra("zc.fc.scale"),
-            )
         intent.getStringExtra(EXTRA_SESSION_HOST)?.let { host ->
             if (!SwiftCore.isAvailable) {
                 Log.w(TAG, "libOpenZCineAndroid.so not bundled — run `just android-core` first")

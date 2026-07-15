@@ -1,6 +1,11 @@
 package com.opencapture.openzcine.settings
 
 import com.opencapture.openzcine.AssistTool
+import com.opencapture.openzcine.FeedPeakingColor
+import com.opencapture.openzcine.FeedPeakingSensitivity
+import com.opencapture.openzcine.FeedEffectsConfiguration
+import com.opencapture.openzcine.FeedZebraStripeColor
+import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.TestSharedPreferences
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,6 +37,15 @@ class OperatorSettingsTest {
         assertFalse(settings.centerCrosshairEnabled.value)
         assertFalse(settings.levelAssistEnabled.value)
         assertEquals(LocalLevelStyle.HORIZON, settings.levelStyle)
+        assertTrue(settings.feedEffectsConfiguration.falseColorReferenceEnabled)
+        assertEquals(FeedPeakingSensitivity.MEDIUM, settings.feedEffectsConfiguration.peakingSensitivity)
+        assertEquals(FeedPeakingColor.RED, settings.feedEffectsConfiguration.peakingColor)
+        assertEquals(FeedZebraUnit.IRE, settings.feedEffectsConfiguration.zebraUnit)
+        assertEquals(100f, settings.feedEffectsConfiguration.zebraHighlightIre)
+        assertEquals(55f, settings.feedEffectsConfiguration.zebraMidtoneIre)
+        assertEquals(ScopeWaveformMode.LUMA, settings.scopeAssistConfiguration.waveformMode)
+        assertEquals(ScopeParadeMode.RGB, settings.scopeAssistConfiguration.paradeMode)
+        assertEquals(ScopeVectorscopeZoom.X1, settings.scopeAssistConfiguration.vectorscopeZoom)
         assertTrue(settings.selectedGuideRatios.isEmpty())
         assertFalse(settings.desqueezeEnabled.value)
         assertEquals(LocalDesqueezeRatio.X100, settings.desqueezeRatio)
@@ -246,6 +260,87 @@ class OperatorSettingsTest {
     }
 
     @Test
+    fun `advanced exposure assists persist canonical settings and clamp stale scope values`() {
+        val settings = OperatorSettings(store)
+        settings.feedEffectsConfiguration =
+            settings.feedEffectsConfiguration.copy(
+                falseColorReferenceEnabled = false,
+                peakingSensitivity = FeedPeakingSensitivity.HIGH,
+                peakingColor = FeedPeakingColor.BLUE,
+                zebraUnit = FeedZebraUnit.NATIVE,
+                zebraHighlightEnabled = false,
+                zebraHighlightIre = 101f,
+                zebraHighlightColor = FeedZebraStripeColor.CYAN,
+                zebraMidtoneEnabled = false,
+                zebraMidtoneIre = -5f,
+                zebraMidtoneColor = FeedZebraStripeColor.GREEN,
+            )
+        settings.scopeAssistConfiguration =
+            settings.scopeAssistConfiguration.copy(
+                waveformScale = 2f,
+                waveformMode = ScopeWaveformMode.RGB,
+                waveformGuides = ScopeGuideLines(clip = false, crush = true, middle = false),
+                waveformBrightness = 250,
+                paradeScale = 0f,
+                paradeMode = ScopeParadeMode.YRGB,
+                paradeGuides = ScopeGuideLines(clip = true, crush = false, middle = false),
+                paradeBrightness = -1,
+                vectorscopeScale = 1.2f,
+                vectorscopeZoom = ScopeVectorscopeZoom.X4,
+                vectorscopeBrightness = 150,
+                histogramScale = 0.8f,
+                trafficLightsScale = 1.6f,
+            )
+
+        val restored = OperatorSettings(store)
+        assertFalse(restored.feedEffectsConfiguration.falseColorReferenceEnabled)
+        assertEquals(FeedPeakingSensitivity.HIGH, restored.feedEffectsConfiguration.peakingSensitivity)
+        assertEquals(FeedPeakingColor.BLUE, restored.feedEffectsConfiguration.peakingColor)
+        assertEquals(FeedZebraUnit.NATIVE, restored.feedEffectsConfiguration.zebraUnit)
+        assertFalse(restored.feedEffectsConfiguration.zebraHighlightEnabled)
+        assertEquals(100f, restored.feedEffectsConfiguration.zebraHighlightIre)
+        assertEquals(FeedZebraStripeColor.CYAN, restored.feedEffectsConfiguration.zebraHighlightColor)
+        assertFalse(restored.feedEffectsConfiguration.zebraMidtoneEnabled)
+        assertEquals(0f, restored.feedEffectsConfiguration.zebraMidtoneIre)
+        assertEquals(FeedZebraStripeColor.GREEN, restored.feedEffectsConfiguration.zebraMidtoneColor)
+        assertEquals(ScopeAssistConfiguration.MAX_SCALE, restored.scopeAssistConfiguration.waveformScale)
+        assertEquals(ScopeWaveformMode.RGB, restored.scopeAssistConfiguration.waveformMode)
+        assertEquals(
+            ScopeGuideLines(clip = false, crush = true, middle = false),
+            restored.scopeAssistConfiguration.waveformGuides,
+        )
+        assertEquals(ScopeAssistConfiguration.MAX_BRIGHTNESS, restored.scopeAssistConfiguration.waveformBrightness)
+        assertEquals(ScopeAssistConfiguration.MIN_SCALE, restored.scopeAssistConfiguration.paradeScale)
+        assertEquals(ScopeParadeMode.YRGB, restored.scopeAssistConfiguration.paradeMode)
+        assertEquals(ScopeAssistConfiguration.MIN_BRIGHTNESS, restored.scopeAssistConfiguration.paradeBrightness)
+        assertEquals(ScopeVectorscopeZoom.X4, restored.scopeAssistConfiguration.vectorscopeZoom)
+        assertEquals(150, restored.scopeAssistConfiguration.vectorscopeBrightness)
+        assertEquals(0.8f, restored.scopeAssistConfiguration.histogramScale)
+        assertEquals(1.6f, restored.scopeAssistConfiguration.trafficLightsScale)
+    }
+
+    @Test
+    fun `nonfinite exposure and scope preferences recover to operator defaults`() {
+        val settings = OperatorSettings(store)
+        settings.feedEffectsConfiguration =
+            settings.feedEffectsConfiguration.copy(
+                zebraHighlightIre = Float.NaN,
+                zebraMidtoneIre = Float.POSITIVE_INFINITY,
+            )
+        settings.scopeAssistConfiguration =
+            settings.scopeAssistConfiguration.copy(
+                waveformScale = Float.NaN,
+                vectorscopeScale = Float.NEGATIVE_INFINITY,
+            )
+
+        val restored = OperatorSettings(store)
+        assertEquals(100f, restored.feedEffectsConfiguration.zebraHighlightIre)
+        assertEquals(55f, restored.feedEffectsConfiguration.zebraMidtoneIre)
+        assertEquals(ScopeAssistConfiguration.DEFAULT_SCALE, restored.scopeAssistConfiguration.waveformScale)
+        assertEquals(ScopeAssistConfiguration.DEFAULT_SCALE, restored.scopeAssistConfiguration.vectorscopeScale)
+    }
+
+    @Test
     fun `missing or legacy compensation values migrate with iOS-compatible defaults and clamps`() {
         assertEquals(ScopeCrushClipCompensation.QUARTER, OperatorSettings(store).scopeCrushClipCompensation)
 
@@ -307,6 +402,66 @@ class OperatorSettingsTest {
         assertEquals(LocalDesqueezeRatio.X100, restored.desqueezeRatio)
         assertEquals(LocalDesqueezeOrientation.HORIZONTAL, restored.desqueezeOrientation)
         assertEquals(LocalLevelStyle.HORIZON, restored.levelStyle)
+    }
+
+    @Test
+    fun `per tool exposure resets persist iOS defaults without moving unrelated scope panels`() {
+        val settings = OperatorSettings(store)
+        settings.feedEffectsConfiguration =
+            FeedEffectsConfiguration(
+                falseColorReferenceEnabled = false,
+                peakingSensitivity = FeedPeakingSensitivity.HIGH,
+                peakingColor = FeedPeakingColor.BLUE,
+                zebraUnit = FeedZebraUnit.NATIVE,
+                zebraHighlightEnabled = false,
+                zebraHighlightIre = 42f,
+                zebraHighlightColor = FeedZebraStripeColor.CYAN,
+                zebraMidtoneEnabled = false,
+                zebraMidtoneIre = 12f,
+                zebraMidtoneColor = FeedZebraStripeColor.GREEN,
+            )
+        settings.scopeAssistConfiguration =
+            ScopeAssistConfiguration(
+                waveformScale = 1.4f,
+                waveformMode = ScopeWaveformMode.RGB,
+                waveformGuides = ScopeGuideLines(false, false, false),
+                waveformBrightness = 180,
+                paradeScale = 1.3f,
+                paradeMode = ScopeParadeMode.YRGB,
+                paradeGuides = ScopeGuideLines(false, false, false),
+                paradeBrightness = 170,
+                vectorscopeScale = 1.2f,
+                vectorscopeZoom = ScopeVectorscopeZoom.X4,
+                vectorscopeBrightness = 160,
+                histogramScale = 0.8f,
+                trafficLightsScale = 1.6f,
+            )
+        settings.histogramTrafficLightsEnabled.value = false
+        settings.scopeCrushClipCompensation = ScopeCrushClipCompensation.ONE
+
+        settings.resetFalseColorConfiguration()
+        settings.resetPeakingConfiguration()
+        settings.resetZebraConfiguration()
+        settings.resetWaveformConfiguration()
+        settings.resetParadeConfiguration()
+        settings.resetHistogramConfiguration()
+        settings.resetVectorscopeConfiguration()
+        settings.resetTrafficLightsConfiguration()
+        val restored = OperatorSettings(store)
+
+        assertEquals(FeedEffectsConfiguration(), restored.feedEffectsConfiguration)
+        assertEquals(1.4f, restored.scopeAssistConfiguration.waveformScale)
+        assertEquals(ScopeWaveformMode.LUMA, restored.scopeAssistConfiguration.waveformMode)
+        assertEquals(ScopeGuideLines(), restored.scopeAssistConfiguration.waveformGuides)
+        assertEquals(100, restored.scopeAssistConfiguration.waveformBrightness)
+        assertEquals(1.3f, restored.scopeAssistConfiguration.paradeScale)
+        assertEquals(ScopeParadeMode.RGB, restored.scopeAssistConfiguration.paradeMode)
+        assertEquals(1.2f, restored.scopeAssistConfiguration.vectorscopeScale)
+        assertEquals(ScopeVectorscopeZoom.X1, restored.scopeAssistConfiguration.vectorscopeZoom)
+        assertEquals(0.8f, restored.scopeAssistConfiguration.histogramScale)
+        assertEquals(1f, restored.scopeAssistConfiguration.trafficLightsScale)
+        assertTrue(restored.histogramTrafficLightsEnabled.value)
+        assertEquals(ScopeCrushClipCompensation.QUARTER, restored.scopeCrushClipCompensation)
     }
 
     @Test
