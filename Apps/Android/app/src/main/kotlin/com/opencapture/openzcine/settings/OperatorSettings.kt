@@ -155,8 +155,10 @@ public data class LocalFramingAssistConfiguration(
  * `OperatorPreferences` (UserDefaults-backed). Every value is Compose-observable
  * and writes through to app-private [SharedPreferences] on change.
  *
- * Camera-owned values (exposure, codec, resolution, and live-view transport)
- * deliberately do not belong here. This store only owns local monitor behavior.
+ * Camera-owned values (exposure, codec, resolution, and recording format)
+ * deliberately do not belong here. The two Link choices are only an
+ * app-local request: Swift resolves them into safe preview configuration when
+ * an active session restarts, never a persisted camera setting.
  *
  * ponytail: plain SharedPreferences, not DataStore — this small synchronous
  * preference surface does not need coroutine plumbing or another dependency.
@@ -226,6 +228,24 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     private val desqueezePresentationState = mutableStateOf(loadDesqueezePresentation())
     private val levelStyleState = mutableStateOf(loadLevelStyle())
     private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
+    private val streamPresetState = mutableStateOf(loadStreamPreset())
+    private val qualityBiasState = mutableStateOf(loadQualityBias())
+
+    /** Requested preview-size profile, resolved by Swift before live view starts. */
+    public var streamPreset: LiveViewStreamPreset
+        get() = streamPresetState.value
+        set(new) {
+            streamPresetState.value = new
+            preferences.edit().putString(STREAM_PRESET_KEY, new.name).apply()
+        }
+
+    /** Requested preview-compression profile, resolved by Swift rather than Kotlin. */
+    public var qualityBias: LiveViewQualityBias
+        get() = qualityBiasState.value
+        set(new) {
+            qualityBiasState.value = new
+            preferences.edit().putString(QUALITY_BIAS_KEY, new.name).apply()
+        }
 
     /** Selected local delivery-frame guide; persisted immediately on change. */
     public var framingGuide: LocalFramingGuide
@@ -442,6 +462,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         return ScopeCrushClipCompensation.fromWireValue(raw)
     }
 
+    private fun loadStreamPreset(): LiveViewStreamPreset =
+        LiveViewStreamPreset.fromStoredName(preferences.getString(STREAM_PRESET_KEY, null))
+            ?: LiveViewStreamPreset.FAST
+
+    private fun loadQualityBias(): LiveViewQualityBias =
+        LiveViewQualityBias.fromStoredName(preferences.getString(QUALITY_BIAS_KEY, null))
+            ?: LiveViewQualityBias.LATENCY
+
     private companion object {
         const val STORE_NAME = "openzcine.operator-settings"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
@@ -454,6 +482,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
         const val LEVEL_STYLE_KEY = "assist.local.levelStyle.v1"
         const val SCOPE_METER_PREFERENCE = "scope-meter-v1"
+        const val STREAM_PRESET_KEY = "link.streamPreset.v1"
+        const val QUALITY_BIAS_KEY = "link.qualityBias.v1"
 
         private fun legacyScopeMeterPreference(): String =
             "assist.scopes." + "crushClipCompensation.v1"
