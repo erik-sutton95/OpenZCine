@@ -25,8 +25,9 @@
 
 ## Made for the shot
 
-OpenZCine turns your iPhone or iPad into a production monitor and remote for Nikon Z cinema
-cameras, with current development and testing centered on the **Nikon ZR**.
+OpenZCine turns an iPhone, iPad, or Android phone into a production monitor and remote for Nikon Z
+cinema cameras, with current development and testing centered on the **Nikon ZR**. The iOS beta is
+public today; Android and Google Play availability are coming soon.
 
 - **Read the image like a colorist.** Waveform, RGB parade, histogram, and vectorscope run live
   beside the image you are judging.
@@ -39,9 +40,9 @@ cameras, with current development and testing centered on the **Nikon ZR**.
 - **Review before striking the set.** Browse clips, scrub playback, check scopes and markers, and
   preview the selected look on-device.
 - **Ship it with the look baked in.** Apply built-in, RED, or custom `.cube` LUTs during export,
-  then send through native iOS sharing or directly to Frame.io.
-- **Keep the monitor on your wrist.** The Apple Watch companion mirrors the live feed with its LUT,
-  camera status, timecode, and remote record control.
+  then send through platform-native sharing or directly to Frame.io.
+- **Keep the monitor on your wrist.** Apple Watch and Wear OS companions mirror the live feed with
+  its LUT, camera status, timecode, and remote record control.
 
 ## See it in action
 
@@ -75,7 +76,7 @@ cameras, with current development and testing centered on the **Nikon ZR**.
   </a>
 </p>
 
-## Available in the open beta
+## Available in the iOS open beta
 
 - Resilient Wi-Fi discovery, pairing, saved-camera profiles, and automatic reconnect
 - Live-view monitoring, timecode, battery, storage, temperature, and camera warning readouts
@@ -88,8 +89,10 @@ cameras, with current development and testing centered on the **Nikon ZR**.
   under hardware validation
 - USB-C tethered transport foundation alongside the primary Wi-Fi workflow
 
-OpenZCine is in active beta. Nikon ZR is the primary hardware target today, while USB-C transport,
-the Watch companion, and the full iPad experience continue to be hardened with real-world testing.
+The native Android phone and Wear OS implementations live in this repository and are being closed
+out in draft PR #125. They are not available through Google Play yet. Nikon ZR is the primary
+hardware target today; USB-C transport, both wearable companions, and wider phone/tablet coverage
+continue to be hardened with real-world testing.
 
 ## Roadmap shaped in the open
 
@@ -114,7 +117,9 @@ Production targets a shared Swift business/protocol core with native platform sh
 | --- | --- | --- |
 | **Shared core** | `Sources/OpenZCineCore/` | PTP-IP protocol, camera state, Nikon property codes, discovery, pairing |
 | **iOS app** | `ios/` | SwiftUI shell, Bonjour discovery, live-view rendering, camera I/O |
-| **Android app** | `Apps/Android/` | Jetpack Compose (future) |
+| **Android app** | `Apps/Android/app/` | Jetpack Compose phone shell and Android platform adapters |
+| **Android facade** | `Sources/OpenZCineAndroidFacade/` | Swift session and JNI boundary for Android |
+| **Wear OS** | `Apps/Android/wear/`, `Apps/Android/wear-relay/` | Wear UI and phone-mediated relay |
 | **Tests** | `Tests/OpenZCineCoreTests/` | Swift package tests — packet encoding, property parsing, discovery, layout |
 | **Prototype** | `reference/flutter-prototype/` | Archived Flutter reference — not part of production CI |
 
@@ -157,6 +162,9 @@ just check        # run repository quality checks
 just format       # format Swift sources
 just test         # run Swift package tests
 just native-check # run Swift tests and build the native iOS app
+just android-build # build the Android app and staged Swift runtime
+just android-check # build, test, compile device tests, and lint Android
+just android-release-check # verify the signed phone/Wear release pair
 ```
 
 ## Contributing
