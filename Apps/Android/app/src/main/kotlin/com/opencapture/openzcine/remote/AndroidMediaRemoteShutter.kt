@@ -27,9 +27,10 @@ public enum class MediaRemoteShutterCommand {
  * Platform adapter for a monitor-only Android media remote shutter.
  *
  * Android does not report a trustworthy Bluetooth-versus-local identity for
- * every hardware media event, so this deliberately accepts only an explicit
- * media-key allowlist while armed. It never observes, consumes, or changes
- * phone-volume keys. The backing [MediaSession] is active only while the live
+ * every hardware event, so this accepts an explicit key allowlist while armed.
+ * Generic Bluetooth shutters commonly emit volume keys, and the phone's own
+ * volume buttons intentionally become shutter triggers in this monitor-only
+ * state to match iOS. The backing [MediaSession] is active only while the live
  * monitor is frontmost; callers must pair [arm] with [disarm] on every
  * lifecycle or surface transition and call [close] at activity teardown.
  */
@@ -165,12 +166,14 @@ internal class MediaRemoteShutterController(
     }
 }
 
-/** Explicit Android media-key allowlist; volume and generic keyboard keys are absent by design. */
+/** Explicit Android shutter-key allowlist used only while the monitor has armed the controller. */
 internal object MediaRemoteShutterKeyMap {
     fun commandFor(keyCode: Int): MediaRemoteShutterCommand? =
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_HEADSETHOOK,
+            KeyEvent.KEYCODE_VOLUME_UP,
+            KeyEvent.KEYCODE_VOLUME_DOWN,
             -> MediaRemoteShutterCommand.TOGGLE
 
             KeyEvent.KEYCODE_MEDIA_PLAY,

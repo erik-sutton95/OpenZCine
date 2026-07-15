@@ -17,7 +17,7 @@ class MediaRemoteShutterTest {
     private val controller = MediaRemoteShutterController { nowMillis }
 
     @Test
-    fun `only armed allowlisted media keys emit one command`() {
+    fun `only armed allowlisted hardware keys emit one command`() {
         assertFalse(key(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
 
         controller.arm(received::add)
@@ -26,8 +26,14 @@ class MediaRemoteShutterTest {
         assertEquals(listOf(MediaRemoteShutterCommand.TOGGLE), received)
         assertTrue(key(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.ACTION_UP))
         assertEquals(listOf(MediaRemoteShutterCommand.TOGGLE), received)
-        assertFalse(key(KeyEvent.KEYCODE_VOLUME_UP))
         assertFalse(key(KeyEvent.KEYCODE_CAMERA))
+
+        nowMillis += 600
+        assertTrue(key(KeyEvent.KEYCODE_VOLUME_UP))
+        assertEquals(
+            listOf(MediaRemoteShutterCommand.TOGGLE, MediaRemoteShutterCommand.TOGGLE),
+            received,
+        )
     }
 
     @Test
@@ -67,7 +73,7 @@ class MediaRemoteShutterTest {
     }
 
     @Test
-    fun `key map supports only documented media actions`() {
+    fun `key map supports documented media and volume shutter actions`() {
         assertEquals(
             MediaRemoteShutterCommand.TOGGLE,
             MediaRemoteShutterKeyMap.commandFor(KeyEvent.KEYCODE_HEADSETHOOK),
@@ -80,7 +86,15 @@ class MediaRemoteShutterTest {
             MediaRemoteShutterCommand.STOP,
             MediaRemoteShutterKeyMap.commandFor(KeyEvent.KEYCODE_MEDIA_PAUSE),
         )
-        assertNull(MediaRemoteShutterKeyMap.commandFor(KeyEvent.KEYCODE_VOLUME_DOWN))
+        assertEquals(
+            MediaRemoteShutterCommand.TOGGLE,
+            MediaRemoteShutterKeyMap.commandFor(KeyEvent.KEYCODE_VOLUME_DOWN),
+        )
+        assertEquals(
+            MediaRemoteShutterCommand.TOGGLE,
+            MediaRemoteShutterKeyMap.commandFor(KeyEvent.KEYCODE_VOLUME_UP),
+        )
+        assertNull(MediaRemoteShutterKeyMap.commandFor(KeyEvent.KEYCODE_CAMERA))
     }
 
     @Test

@@ -27,7 +27,7 @@ class OperatorSettingsTest {
         assertTrue(settings.mediaReadoutVisible.value)
         assertTrue(settings.fpsReadoutVisible.value)
         assertTrue(settings.recordConfirmationEnabled.value)
-        assertFalse(settings.mediaRemoteShutterEnabled.value)
+        assertTrue(settings.mediaRemoteShutterEnabled.value)
         assertTrue(settings.hapticsEnabled.value)
         assertTrue(settings.keepScreenAwake.value)
         assertFalse(settings.guidesVisible.value)
@@ -208,7 +208,7 @@ class OperatorSettingsTest {
         assertFalse(restored.assistToolbarVisible.value)
         assertFalse(restored.cameraValuesVisible.value)
         assertFalse(restored.recordConfirmationEnabled.value)
-        assertTrue(restored.mediaRemoteShutterEnabled.value)
+        assertFalse(restored.mediaRemoteShutterEnabled.value)
         assertFalse(restored.shouldKeepScreenAwake(monitorPresented = true))
         assertFalse(restored.shouldKeepScreenAwake(monitorPresented = false))
     }

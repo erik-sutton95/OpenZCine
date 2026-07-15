@@ -220,7 +220,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   until an authorized Android endpoint, terms acknowledgement, and delivery integration exist;
   its shared internet/camera-AP guard is already in place. Non-redistributable LUT assets are
   never bundled or committed.
-- **Bluetooth shutter remote** — record start/stop from a BT remote.
+- **Bluetooth shutter remote** — Android now accepts the same generic HID volume-button triggers
+  as iOS while the live monitor is armed, alongside media/headset controls, with default-on
+  preference, lifecycle disarm, and duplicate-event debounce. **[VERIFY-ON-HW]** Confirm volume,
+  Play/Pause, and headset variants on physical remotes and normal volume behavior after disarm.
 - **Media browser & playback** — on-camera and validated-local clip browsing with categories,
   sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;
   progressive proxy playback with an independent assist toolbar, clean-source waveform and

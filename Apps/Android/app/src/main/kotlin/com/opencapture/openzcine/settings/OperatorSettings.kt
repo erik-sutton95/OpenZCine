@@ -508,9 +508,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     // before Android has camera-property writes.
     public val recordConfirmationEnabled: Toggle =
         Toggle("controls.recordConfirmation", default = true)
-    /** Opt-in foreground media-button shutter; it never intercepts phone volume keys. */
+    /** Foreground hardware shutter, including volume keys while the live monitor is armed. */
     public val mediaRemoteShutterEnabled: Toggle =
-        Toggle("controls.mediaRemoteShutter.v1", default = false)
+        Toggle("controls.mediaRemoteShutter.v1", default = true)
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
 

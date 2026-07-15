@@ -2049,7 +2049,7 @@ private fun ControlsRows(
     SettingsGroupCard(
         title = "Media Remote Shutter",
         caption =
-            "Monitor-only; Android cannot reliably identify Bluetooth sources. Phone volume keys remain unchanged.",
+            "Monitor-only; Android cannot reliably distinguish Bluetooth from phone hardware keys.",
     ) {
         SettingsSwitchRow(
             "Enable Media Remote",
@@ -2057,7 +2057,7 @@ private fun ControlsRows(
             showTopDivider = false,
         ) { onToggle(settings.mediaRemoteShutterEnabled) }
         Text(
-            "Play/Pause, headset, and Record keys control recording; confirmation is skipped.",
+            "Volume Up/Down and Play/Pause toggle recording; Record/Play start and Pause/Stop stop. Confirmation is skipped.",
             style = chromeStyle(10.5f, FontWeight.Normal),
             color = LiveDesign.muted,
         )
