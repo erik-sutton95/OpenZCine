@@ -3,12 +3,12 @@ What's changed
 - System settings now links to support, bug reports, feature requests, source, privacy, and terms.
 - You can create and review a privacy-safe troubleshooting report from System settings.
 - The first live preview now opens with a short guide to camera, View Assist, and system controls.
-- Imported Custom and downloaded RED LUTs can now be deleted by pressing and holding them.
-- Waveform and RGB parade brightness now use a more practical 0–200% scale.
+- Imported Custom and downloaded RED LUTs can now be deleted by pressing and holding them, and waveform/RGB parade brightness now uses a more practical 0–200% scale.
+- Live-view controls now stay clear of the wider notch on iPhone 11-era displays.
 
 Please test
 
-- Open a live preview and complete or skip the three guide cards.
+- On a classic-notch iPhone, open a live preview, complete or skip the three guide cards, and confirm the status bar and battery indicators do not overlap the notch or lock control.
 - In Operator Setup > System, open the support links and create a troubleshooting report.
 - Choose Show Again and confirm the live-view guide returns.
 - Delete a Custom or RED LUT with a press and hold, confirm built-ins stay protected, then compare waveform and RGB parade at 100% with roughly 25% in the previous build.
