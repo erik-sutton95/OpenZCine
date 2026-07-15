@@ -422,20 +422,22 @@ internal fun ScopePanels(
     thermalTier: AndroidThermalTier,
     source: com.opencapture.openzcine.core.LiveFrameSource,
     isPortrait: Boolean,
+    portraitFloating: Boolean = false,
     feed: ZoneFrame,
     infoBar: ZoneFrame,
     scopeZone: ZoneFrame?,
     viewport: ZoneFrame,
 ) {
     val displayed =
-        if (isPortrait) {
-            portraitScopes.filter(selectedScopes::contains)
-        } else {
-            ScopeKind.canonical.filter(selectedScopes::contains)
-        }
+        displayedScopeKinds(
+            selectedScopes = selectedScopes,
+            portraitScopes = portraitScopes,
+            isPortrait = isPortrait,
+            portraitFloating = portraitFloating,
+        )
     // This guard also stops all collection when no displayed panel exists.
     if (displayed.isEmpty()) return
-    if (isPortrait && scopeZone == null) return
+    if (isPortrait && !portraitFloating && scopeZone == null) return
     // A scope cannot honor camera-dependent display mapping without the Swift
     // facade, so fail closed rather than locally selecting a fallback curve.
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return
@@ -470,7 +472,7 @@ internal fun ScopePanels(
             if (needsAnchors) ScopeAnchors.parse(SwiftCore.scopeAnchors(mapping.curveOrdinal)) else null
         }
 
-    if (isPortrait) {
+    if (isPortrait && !portraitFloating) {
         val zone = requireNotNull(scopeZone)
         PortraitScopePanels(
             displayed,
@@ -481,11 +483,11 @@ internal fun ScopePanels(
             configuration,
         )
     } else {
-        LandscapeScopePanels(
+        FloatingScopePanels(
             displayed,
             feed,
             infoBar,
-            viewport,
+            if (portraitFloating) feed else viewport,
             anchors,
             snapshot,
             histogramTrafficLightsEnabled,
@@ -494,6 +496,19 @@ internal fun ScopePanels(
         )
     }
 }
+
+/** Resolves stacked portrait-fit scopes versus uncapped floating fill/landscape scopes. */
+internal fun displayedScopeKinds(
+    selectedScopes: Set<ScopeKind>,
+    portraitScopes: List<ScopeKind>,
+    isPortrait: Boolean,
+    portraitFloating: Boolean,
+): List<ScopeKind> =
+    if (isPortrait && !portraitFloating) {
+        portraitScopes.filter(selectedScopes::contains)
+    } else {
+        ScopeKind.canonical.filter(selectedScopes::contains)
+    }
 
 /** Renders the portrait subset into the shared stack zone from the core layout map. */
 @Composable
@@ -534,7 +549,7 @@ private fun PortraitScopePanels(
 
 /** Renders draggable, normalized-persisted landscape panels at distinct iOS-informed defaults. */
 @Composable
-private fun LandscapeScopePanels(
+private fun FloatingScopePanels(
     displayed: List<ScopeKind>,
     feed: ZoneFrame,
     infoBar: ZoneFrame,

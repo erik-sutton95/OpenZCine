@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -88,29 +88,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Fake monitor readouts behind the state seam — mirrors the iOS demo state
- * (`CameraDisplayState.preview`) so side-by-side screenshots match. Real
- * values arrive with the session facade later.
+ * Monitor values that still await OPE-63's timecode/platform battery seam.
+ * Camera settings and storage no longer fall back to this demo state.
  */
 internal object DemoMonitorState {
-    const val RESOLUTION = "6K·25p"
-    const val CODEC = "R3D NE"
-    const val MEDIA = "521 GB·47%"
-    const val FPS = "25.00"
     const val FRAME_RATE = 25
-    const val SIGNAL_BARS = 4
     const val CAMERA_BATTERY = 80
     const val PHONE_BATTERY = 84
-
-    /** label / current value / widest value (fixes the cell width, iOS `widestValue`). */
-    val VALUES =
-        listOf(
-            Triple("ISO", "800", "25600"),
-            Triple("SHUTTER", "180°", "1/16000"),
-            Triple("IRIS", "f/2.8", "f/2.8"),
-            Triple("WB", "5600K", "5600K"),
-            Triple("FOCUS", "AF-C", "Wide-L"),
-        )
 }
 
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
@@ -184,9 +168,10 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * Scope: feed, top info deck (landscape pill / portrait bar), lock/battery
  * band, capture strip, assist toolbar (wired to the feed-effects engine and
  * the scope panels), record / DISP / media / settings controls, DISP 1→2→3
- * cycling incl. the command dashboard, and the portrait fit layout. Safe
- * command-dashboard controls use the typed Swift property snapshot; general
- * monitor pickers and the portrait fill aspect remain deferred.
+ * cycling incl. the command dashboard, persisted portrait fit/fill geometry,
+ * and camera-backed in-monitor pickers. Every writable selection reuses the
+ * typed CameraSession/Swift command seam; descriptor-dependent controls stay
+ * read-only rather than receiving guessed options.
  *
  * Chrome glass runs the tiered GPU treatment (GlassChrome.kt) at this
  * device's [resolveTier] ceiling; [glassTierOverride] (`zc.glass.tier`
@@ -309,6 +294,7 @@ fun MonitorScreen(
         mutableStateOf(commandTileOrderStore.load())
     }
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
+    var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
     var pendingCommandControl by remember { mutableStateOf<CameraControl?>(null) }
     var commandControlFeedback by remember { mutableStateOf<CommandControlFeedback?>(null) }
     val commandPresentation =
@@ -327,11 +313,21 @@ fun MonitorScreen(
                 recording = recording,
             )
         }
+    val captureSettings = remember(commandPresentation) { monitorCaptureSettings(commandPresentation) }
+    val activeMonitorPicker =
+        captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
     val commandControlsEnabled =
         sessionState is CameraSessionState.Connected &&
             !locked &&
             (propertyRefreshStatus as? CameraPropertyRefreshStatus.Degraded)?.failure !=
                 CameraPropertyRefreshFailure.MEDIA_BUSY
+    LaunchedEffect(sessionState, activeMonitorPickerKind, activeMonitorPicker) {
+        if (sessionState !is CameraSessionState.Connected ||
+            (activeMonitorPickerKind != null && activeMonitorPicker == null)
+        ) {
+            activeMonitorPickerKind = null
+        }
+    }
     val moveCommandTileLater: (CommandTileKind) -> Unit = { kind ->
         val current = commandTileOrder
         val index = current.indexOf(kind)
@@ -340,9 +336,8 @@ fun MonitorScreen(
         commandTileOrder = next
         commandTileOrderStore.save(next)
     }
-    val applyCommandControl: (String) -> Unit = applyCommandControl@{ label ->
-        val request = activeCommandControl ?: return@applyCommandControl
-        if (!commandControlsEnabled || pendingCommandControl != null) return@applyCommandControl
+    val applyCameraControl: (CommandControlRequest, String) -> Unit = applyCameraControl@{ request, label ->
+        if (!commandControlsEnabled || pendingCommandControl != null) return@applyCameraControl
         pendingCommandControl = request.control
         commandControlFeedback = null
         recordScope.launch {
@@ -350,7 +345,9 @@ fun MonitorScreen(
                 session.applyControl(request.control, label)
                 session.refreshProperties()
                 if (cameraPropertyConfirmsSelection(session.cameraProperties.value, request.control, label)) {
-                    activeCommandControl = request.copy(currentValue = label)
+                    if (activeCommandControl?.control == request.control) {
+                        activeCommandControl = request.copy(currentValue = label)
+                    }
                     commandControlFeedback =
                         CommandControlFeedback("${request.title} set to $label.", isError = false)
                 } else {
@@ -576,6 +573,12 @@ fun MonitorScreen(
         )
         val viewportWidth = maxWidth.value - navLane
         val viewportHeight = maxHeight.value
+        val isClean = dispIndex == 1
+        val isCommand = dispIndex == 2
+        // Command always uses the fit zone, matching iOS. The persisted fill
+        // choice returns unchanged when the operator cycles back to Live.
+        val portraitAspect = operatorSettings.portraitFeedAspect
+        val isPortraitFill = isPortrait && !isCommand && portraitAspect.fillsViewport
 
         val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
         val cameraValuesVisible = operatorSettings.cameraValuesVisible.value
@@ -595,12 +598,16 @@ fun MonitorScreen(
         // not every remembered landscape scope. The selection mirrors iOS:
         // two newest activations, then canonical presentation order.
         val portraitScopes =
-            if (isPortrait && dispIndex == 0) assist.displayedPortraitScopes else emptyList()
+            if (isPortrait && !isPortraitFill && dispIndex == 0) {
+                assist.displayedPortraitScopes
+            } else {
+                emptyList()
+            }
         val scopeCount = portraitScopes.size
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
-                isPortrait, dispIndex, scopeCount, bottomBarHeight,
+                isPortrait, dispIndex, isPortraitFill, scopeCount, bottomBarHeight,
             ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
@@ -612,15 +619,13 @@ fun MonitorScreen(
                         safeTrailing = safeTrailing,
                         mode = dispIndex,
                         isPortrait = isPortrait,
-                        aspectFill = false,
+                        aspectFill = isPortraitFill,
                         scopeCount = scopeCount,
                         mirrored = false,
                         bottomBarHeight = bottomBarHeight,
                     ),
                 )
             }
-        val isClean = dispIndex == 1
-        val isCommand = dispIndex == 2
         // Local framing is deliberately read from the operator store rather
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
@@ -742,12 +747,13 @@ fun MonitorScreen(
                         (zones.feed.x + zones.feed.width).dp.toPx(),
                         (zones.feed.y + zones.feed.height).dp.toPx(),
                     ),
+                aspectFill = isPortraitFill,
             )
         }
 
-        // Feed at the zone map's feed frame; LiveFeedView aspect-fits within
-        // it. Command (DISP 3) unmounts the feed behind the dashboard, iOS
-        // semantics.
+        // Feed at the shared zone-map frame. Fit keeps the whole frame;
+        // portrait fill centre-crops the image and every feed-aligned overlay
+        // through the same content-rect resolver. Command unmounts the feed.
         if (!isCommand) {
             Box(
                 Modifier.zone(zones.feed)
@@ -758,6 +764,30 @@ fun MonitorScreen(
                     .semantics {
                         contentDescription =
                             if (monitorFrameSource == null) "Live view unavailable" else "Live view active"
+                    }
+                    .pointerInput(isPortrait, portraitAspect) {
+                        if (!isPortrait) return@pointerInput
+                        awaitEachGesture {
+                            awaitFirstDown(
+                                requireUnconsumed = false,
+                                pass = PointerEventPass.Initial,
+                            )
+                            var zoom = 1f
+                            var sawTwoPointers = false
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                if (event.changes.count { it.pressed } >= 2) {
+                                    zoom *= event.calculateZoom()
+                                    sawTwoPointers = true
+                                }
+                                if (event.changes.none { it.pressed }) break
+                            }
+                            if (sawTwoPointers) {
+                                portraitAspectAfterPinch(zoom, portraitAspect)?.let { next ->
+                                    operatorSettings.portraitFeedAspect = next
+                                }
+                            }
+                        }
                     },
                 contentAlignment = Alignment.Center,
             ) {
@@ -775,6 +805,7 @@ fun MonitorScreen(
                         cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
                         effectsPresentationState = liveFeedEffectsPresentation,
+                        aspectFill = isPortraitFill,
                     )
                 } else {
                     Text(
@@ -792,12 +823,14 @@ fun MonitorScreen(
                     configuration = localFraming,
                     cleanMode = isClean,
                     presentationState = liveFeedPresentation,
+                    aspectFill = isPortraitFill,
                 )
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,
                     configuration = localFraming,
                     cleanMode = isClean,
                     isPortrait = isPortrait,
+                    aspectFill = isPortraitFill,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                 )
             }
@@ -808,22 +841,47 @@ fun MonitorScreen(
                     zones = zones,
                     viewportHeight = viewportHeight,
                     isCommand = isCommand,
+                    isFill = isPortraitFill,
                     locked = locked,
                     recording = recording,
                     frameCount = frameCount,
                     assist = assist,
                     operatorSettings = operatorSettings,
                     commandPresentation = commandPresentation,
+                    captureSettings = captureSettings,
+                    activeMonitorPicker = activeMonitorPickerKind,
                     commandControlsEnabled = commandControlsEnabled,
                     pendingCommandControl = pendingCommandControl,
                     dispIndex = dispIndex,
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
                     onRecord = requestRecordToggle,
-                    onDisp = { dispIndex = (dispIndex + 1) % 3 },
-                    onOpenMedia = onOpenMedia,
-                    onOpenSettings = onOpenSettings,
+                    onDisp = {
+                        activeMonitorPickerKind = null
+                        commandControlFeedback = null
+                        dispIndex = nextMonitorDispIndex(dispIndex)
+                    },
+                    onOpenMedia = {
+                        activeMonitorPickerKind = null
+                        onOpenMedia()
+                    },
+                    onOpenSettings = {
+                        activeMonitorPickerKind = null
+                        onOpenSettings()
+                    },
+                    onOpenMonitorPicker = { kind ->
+                        activeCommandControl = null
+                        activeMonitorPickerKind =
+                            nextMonitorPicker(
+                                current = activeMonitorPickerKind,
+                                requested = kind,
+                                controlsEnabled =
+                                    commandControlsEnabled && pendingCommandControl == null,
+                            )
+                        commandControlFeedback = null
+                    },
                     onOpenCommandControl = {
+                        activeMonitorPickerKind = null
                         activeCommandControl = it
                         commandControlFeedback = null
                     },
@@ -844,6 +902,7 @@ fun MonitorScreen(
                         controlsEnabled = commandControlsEnabled,
                         pendingControl = pendingCommandControl,
                         onOpenControl = {
+                            activeMonitorPickerKind = null
                             activeCommandControl = it
                             commandControlFeedback = null
                         },
@@ -876,6 +935,18 @@ fun MonitorScreen(
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
                                     fpsReadoutVisible = operatorSettings.fpsReadoutVisible.value,
                                     signalBars = actualLinkHealth.presentation.signalBars,
+                                    resolution =
+                                        commandPresentation.tiles
+                                            .firstOrNull {
+                                                it.kind == CommandTileKind.RESOLUTION_FRAMERATE
+                                            }
+                                            ?.value ?: "—",
+                                    codec =
+                                        commandPresentation.tiles
+                                            .firstOrNull { it.kind == CommandTileKind.CODEC }
+                                            ?.value ?: "—",
+                                    media = commandPresentation.storage,
+                                    fps = commandPresentation.frameRate,
                                 )
                             }
                         }
@@ -905,7 +976,26 @@ fun MonitorScreen(
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     contentAlignment = Alignment.CenterEnd,
                                 ) {
-                                    FitScale(strip.width.dp) { CaptureStrip() }
+                                    FitScale(strip.width.dp) {
+                                        MonitorCaptureStrip(
+                                            settings = captureSettings,
+                                            activePicker = activeMonitorPickerKind,
+                                            controlsEnabled = commandControlsEnabled,
+                                            pendingControl = pendingCommandControl,
+                                            onOpenPicker = { kind ->
+                                                activeCommandControl = null
+                                                activeMonitorPickerKind =
+                                                    nextMonitorPicker(
+                                                        current = activeMonitorPickerKind,
+                                                        requested = kind,
+                                                        controlsEnabled =
+                                                            commandControlsEnabled &&
+                                                                pendingCommandControl == null,
+                                                    )
+                                                commandControlFeedback = null
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -931,13 +1021,19 @@ fun MonitorScreen(
                 }
                 AuxCircleButton(
                     Modifier.zone(zones.settings),
-                    onClick = onOpenSettings,
+                    onClick = {
+                        activeMonitorPickerKind = null
+                        onOpenSettings()
+                    },
                 ) { glyphModifier, tint ->
                     GearGlyph(tint, glyphModifier)
                 }
                 AuxCircleButton(
                     Modifier.zone(zones.media),
-                    onClick = onOpenMedia,
+                    onClick = {
+                        activeMonitorPickerKind = null
+                        onOpenMedia()
+                    },
                 ) { glyphModifier, tint ->
                     MediaStackGlyph(tint, glyphModifier)
                 }
@@ -952,13 +1048,15 @@ fun MonitorScreen(
                     modeCount = 3, // Live / Clean / Command, matching iOS.
                     modifier = Modifier.zone(zones.disp),
                 ) {
-                    dispIndex = (dispIndex + 1) % 3
+                    activeMonitorPickerKind = null
+                    commandControlFeedback = null
+                    dispIndex = nextMonitorDispIndex(dispIndex)
                 }
             }
         }
-        // One monitor-owned sampler serves every toolbar-selected scope. In
-        // landscape all selected panels float independently; portrait mounts
-        // only its recency-selected ≤2 panels in the shared zone-map frame.
+        // One monitor-owned sampler serves every toolbar-selected scope.
+        // Landscape and portrait fill float every selection; portrait fit
+        // mounts only its recency-selected ≤2 stack in the shared zone.
         if (!isCommand && assist.selectedScopes.isNotEmpty() && monitorFrameSource != null) {
             ScopePanels(
                 selectedScopes = assist.selectedScopes,
@@ -976,29 +1074,68 @@ fun MonitorScreen(
                 thermalTier = thermalTier,
                 source = monitorFrameSource,
                 isPortrait = isPortrait,
+                portraitFloating = isPortraitFill,
                 feed = zones.feed,
                 infoBar = zones.infoBar,
                 scopeZone = zones.scopes,
                 viewport = physicalViewport,
             )
         }
-        if (!isCommand && !isPortrait && audioMetersEnabled) {
+        if (!isCommand && (!isPortrait || isPortraitFill) && audioMetersEnabled) {
+            val audioBounds = if (isPortraitFill) zones.feed else physicalViewport
             AudioMetersOverlay(
                 levels = liveAudioLevels,
                 sensitivity = cameraProperties.microphoneSensitivity,
                 feed = zones.feed,
-                viewport = physicalViewport,
+                viewport = audioBounds,
             )
         }
         // Match iOS z-order: the false-colour key is mounted after floating
         // scopes and audio so nothing can obscure or intercept its drag target.
-        if (!isCommand && !isPortrait) {
+        if (!isCommand && (!isPortrait || isPortraitFill)) {
+            val falseColorBounds = if (isPortraitFill) zones.feed else physicalViewport
             CompositionLocalProvider(LocalMonitorGlass provides glass) {
                 FalseColorReferenceOverlay(
                     effectsState = liveFeedEffectsPresentation,
                     feed = zones.feed,
-                    viewport = physicalViewport,
+                    viewport = falseColorBounds,
                 )
+            }
+        }
+
+        if (!isCommand && !isClean) {
+            activeMonitorPicker?.let { picker ->
+                val anchor =
+                    if (zones.captureStrip != null) {
+                        MonitorPickerAnchor.CAPTURE_STRIP
+                    } else {
+                        MonitorPickerAnchor.CONTROLS_GRID
+                    }
+                val pickerFrame =
+                    monitorPickerFrame(
+                        viewport = physicalViewport,
+                        zones = zones,
+                        isPortrait = isPortrait,
+                        anchor = anchor,
+                    )
+                if (pickerFrame.width > 0f && pickerFrame.height >= 120f) {
+                    CompositionLocalProvider(LocalMonitorGlass provides glass) {
+                        MonitorControlPickerPanel(
+                            picker = picker,
+                            frame = pickerFrame,
+                            controlsEnabled = commandControlsEnabled,
+                            pendingControl = pendingCommandControl,
+                            feedback = commandControlFeedback,
+                            onSelect = applyCameraControl,
+                            onDismiss = {
+                                if (pendingCommandControl == null) {
+                                    activeMonitorPickerKind = null
+                                    commandControlFeedback = null
+                                }
+                            },
+                        )
+                    }
+                }
             }
         }
 
@@ -1046,7 +1183,7 @@ fun MonitorScreen(
             controlsEnabled = commandControlsEnabled,
             pendingControl = pendingCommandControl,
             feedback = commandControlFeedback,
-            onSelect = applyCommandControl,
+            onSelect = { label -> applyCameraControl(request, label) },
             onDismiss = { activeCommandControl = null },
         )
     }
@@ -1063,6 +1200,10 @@ private fun InfoPill(
     mediaReadoutVisible: Boolean,
     fpsReadoutVisible: Boolean,
     signalBars: Int,
+    resolution: String,
+    codec: String,
+    media: String,
+    fps: String,
 ) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -1076,16 +1217,16 @@ private fun InfoPill(
             maxLines = 1,
         )
         if (!compact) {
-            ReadoutPill(DemoMonitorState.RESOLUTION) { VideoGlyph(LiveDesign.muted) }
+            ReadoutPill(resolution) { VideoGlyph(LiveDesign.muted) }
             if (codecReadoutVisible) {
-                ReadoutPill(DemoMonitorState.CODEC) { FilmGlyph(LiveDesign.muted) }
+                ReadoutPill(codec) { FilmGlyph(LiveDesign.muted) }
             }
             if (mediaReadoutVisible) {
-                ReadoutPill(DemoMonitorState.MEDIA) { SdCardGlyph(LiveDesign.muted) }
+                ReadoutPill(media) { SdCardGlyph(LiveDesign.muted) }
             }
         }
         if (fpsReadoutVisible) {
-            FpsChip(signalBars, DemoMonitorState.FPS)
+            FpsChip(signalBars, fps)
         }
     }
 }
@@ -1094,20 +1235,23 @@ private fun InfoPill(
  * The portrait chrome tree, every region at its zone-map frame (iOS
  * `portraitShell`): full-width top bar, fit-mode assist toolbar + tile grid
  * (or the command timecode band + grid), stacked scopes (mounted by the
- * caller), and the bottom system band. The fill aspect (capture strip over
- * the feed + vertical assist rail) is deferred with the aspect toggle.
+ * caller), the fill capture strip + vertical assist rail, and the bottom
+ * system band.
  */
 @Composable
 private fun PortraitChrome(
     zones: MonitorZones,
     viewportHeight: Float,
     isCommand: Boolean,
+    isFill: Boolean,
     locked: Boolean,
     recording: Boolean,
     frameCount: Long,
     assist: AssistState,
     operatorSettings: OperatorSettings,
     commandPresentation: CommandDashboardPresentation,
+    captureSettings: List<MonitorCaptureSettingPresentation>,
+    activeMonitorPicker: MonitorPickerKind?,
     commandControlsEnabled: Boolean,
     pendingCommandControl: CameraControl?,
     dispIndex: Int,
@@ -1117,12 +1261,21 @@ private fun PortraitChrome(
     onDisp: () -> Unit,
     onOpenMedia: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenMonitorPicker: (MonitorPickerKind) -> Unit,
     onOpenCommandControl: (CommandControlRequest) -> Unit,
     onMoveCommandTileLater: (CommandTileKind) -> Unit,
 ) {
     val context = LocalContext.current
+    var railExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(isFill, isCommand) {
+        if (!isFill || isCommand) railExpanded = false
+    }
     if (operatorSettings.statusBarVisible.value) {
-        PortraitInfoBar(frameCount, Modifier.zone(zones.infoBar))
+        PortraitInfoBar(
+            frameCount = frameCount,
+            media = commandPresentation.storage,
+            modifier = Modifier.zone(zones.infoBar),
+        )
     }
 
     // Fit-mode horizontal assist toolbar between the scopes zone and the tile
@@ -1144,7 +1297,7 @@ private fun PortraitChrome(
                 onScopeLimitReached = {
                     Toast.makeText(
                         context,
-                        "2 scopes max in fit view. Close one or rotate to landscape.",
+                        "2 scopes max in fit view. Close one or pinch to fill.",
                         Toast.LENGTH_SHORT,
                     ).show()
                 },
@@ -1171,7 +1324,11 @@ private fun PortraitChrome(
                 tiles = commandPresentation.tiles,
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
-                onOpenControl = onOpenCommandControl,
+                onOpenControl = { request ->
+                    monitorPickerKindForRequest(captureSettings, request)
+                        ?.let(onOpenMonitorPicker)
+                        ?: onOpenCommandControl(request)
+                },
                 onMoveTileLater = onMoveCommandTileLater,
                 modifier =
                     Modifier.zone(
@@ -1186,6 +1343,47 @@ private fun PortraitChrome(
                         .alpha(if (locked) 0.4f else 1f),
             )
         }
+    }
+
+    if (!isCommand && isFill && operatorSettings.cameraValuesVisible.value) {
+        zones.captureStrip?.let { strip ->
+            Box(
+                Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                FitScale(strip.width.dp) {
+                    MonitorCaptureStrip(
+                        settings = captureSettings,
+                        activePicker = activeMonitorPicker,
+                        controlsEnabled = commandControlsEnabled,
+                        pendingControl = pendingCommandControl,
+                        onOpenPicker = onOpenMonitorPicker,
+                    )
+                }
+            }
+        }
+    }
+
+    if (!isCommand && isFill && operatorSettings.assistToolbarVisible.value) {
+        val railFrame =
+            portraitFillAssistRailFrame(
+                feed = zones.feed,
+                captureStrip = zones.captureStrip.takeIf {
+                    operatorSettings.cameraValuesVisible.value
+                },
+                expanded = railExpanded,
+            )
+        PortraitFillAssistRail(
+            state = assist,
+            expanded = railExpanded,
+            onExpandedChange = { railExpanded = it },
+            modifier = Modifier.zone(railFrame).alpha(if (locked) 0.4f else 1f),
+            visibleTools = operatorSettings.visibleAssistToolbarTools,
+            framingConfiguration = operatorSettings.localFramingAssistConfiguration,
+            onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
+            hapticsEnabled = operatorSettings.hapticsEnabled.value,
+            enabled = !locked,
+        )
     }
 
     // Opaque band behind the system controls through the physical bottom
@@ -1241,10 +1439,14 @@ private fun PortraitChrome(
  * inline trailing, on the plain glass band.
  */
 @Composable
-private fun PortraitInfoBar(frameCount: Long, modifier: Modifier = Modifier) {
+private fun PortraitInfoBar(
+    frameCount: Long,
+    media: String,
+    modifier: Modifier = Modifier,
+) {
     Box(modifier.background(LiveDesign.glass).padding(horizontal = 16.dp)) {
         Text(
-            DemoMonitorState.MEDIA,
+            media,
             style = chromeStyle(13f, FontWeight.Medium),
             color = LiveDesign.muted,
             maxLines = 1,
@@ -1273,23 +1475,6 @@ private fun PortraitInfoBar(frameCount: Long, modifier: Modifier = Modifier) {
                 )
                 CameraGlyph(LiveDesign.muted, Modifier.size(15.dp, 12.dp))
             }
-        }
-    }
-}
-
-/** The ISO/SHUTTER/IRIS/WB/FOCUS readout bar (iOS `MonitorCaptureStrip`, landscape). */
-@Composable
-private fun CaptureStrip() {
-    Row(
-        modifier =
-            Modifier.height(LiveDesign.CONTROL_HEIGHT_DP.dp)
-                .glass(ChromeShape)
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        DemoMonitorState.VALUES.forEach { (label, value, widest) ->
-            CaptureSettingCell(label, value, widest)
         }
     }
 }

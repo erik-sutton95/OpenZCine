@@ -46,6 +46,7 @@ import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.lut.AndroidLutLibrary
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -57,7 +58,7 @@ private const val FALSE_COLOR_REFERENCE_HEIGHT = 52f
 private const val FALSE_COLOR_REFERENCE_GAP = 10f
 private const val FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE = 14f + LiveDesign.CONTROL_HEIGHT_DP
 
-/** The exact integer destination rectangle used by the aspect-fit feed Canvas. */
+/** The exact integer destination rectangle used by the feed Canvas. */
 internal data class LiveFeedContentRect(
     val left: Int,
     val top: Int,
@@ -66,20 +67,26 @@ internal data class LiveFeedContentRect(
 )
 
 /**
- * Resolves the same pixel-rounded aspect-fit rectangle the feed renderer
+ * Resolves the same pixel-rounded fit or fill rectangle the feed renderer
  * draws. Feed overlays call this instead of estimating against the monitor
- * zone, which can contain black letterbox space.
+ * zone, which can contain letterbox space or a centre-cropped image.
  */
 internal fun liveFeedContentRect(
     containerWidth: Float,
     containerHeight: Float,
     sourceWidth: Int,
     sourceHeight: Int,
+    aspectFill: Boolean = false,
 ): LiveFeedContentRect? {
     if (containerWidth <= 0f || containerHeight <= 0f || sourceWidth <= 0 || sourceHeight <= 0) {
         return null
     }
-    val scale = min(containerWidth / sourceWidth, containerHeight / sourceHeight)
+    val scale =
+        if (aspectFill) {
+            max(containerWidth / sourceWidth, containerHeight / sourceHeight)
+        } else {
+            min(containerWidth / sourceWidth, containerHeight / sourceHeight)
+        }
     val width = (sourceWidth * scale).roundToInt()
     val height = (sourceHeight * scale).roundToInt()
     if (width <= 0 || height <= 0) return null
@@ -218,7 +225,8 @@ class JpegFrameDecoder {
 /**
  * Renders a [LiveFrameSource] as the monitor feed: decodes off the main
  * thread with latest-wins conflation ([pumpFrames]) and draws the newest
- * frame aspect-fit (black letterbox) into the full modifier bounds.
+ * frame into the full modifier bounds. [aspectFill] selects the portrait
+ * centre-crop path; the default keeps the whole frame visible.
  *
  * The frame state is read inside the [Canvas] draw lambda only, so a new
  * frame costs one draw invalidation — no recomposition, no layout.
@@ -248,6 +256,7 @@ fun LiveFeedView(
     cameraInput: ExposureAssistCameraInput = ExposureAssistCameraInput(),
     lutLibrary: AndroidLutLibrary? = null,
     effectsPresentationState: LiveFeedEffectsPresentationState? = null,
+    aspectFill: Boolean = false,
 ) {
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
     // Stored selections are prepared off the UI thread. Until the shared Swift parser has produced
@@ -327,6 +336,7 @@ fun LiveFeedView(
                 containerHeight = size.height,
                 sourceWidth = image.width,
                 sourceHeight = image.height,
+                aspectFill = aspectFill,
             ) ?: return@Canvas
         val dstSize = IntSize(content.width, content.height)
         val dstOffset = IntOffset(content.left, content.top)

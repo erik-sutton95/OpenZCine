@@ -53,11 +53,11 @@ internal fun audioMeterPanelSize(isDebugFixture: Boolean): Pair<Float, Float> =
         AUDIO_METER_PANEL_HEIGHT
 
 /**
- * Floating camera-audio panel for the landscape monitor.
+ * Floating camera-audio panel for landscape and portrait-fill monitors.
  *
  * This mirrors the iOS audio meter's bottom-trailing default and normalized
- * drag persistence. Portrait intentionally follows iOS's current behavior:
- * floating overlay panels are suppressed there in favour of the fit layout.
+ * drag persistence. Portrait fit suppresses floating panels; portrait fill
+ * clamps them to the shared visible feed zone.
  */
 @Composable
 internal fun AudioMetersOverlay(

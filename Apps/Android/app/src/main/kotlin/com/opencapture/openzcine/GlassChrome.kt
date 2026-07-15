@@ -46,7 +46,7 @@ import kotlin.math.roundToInt
 // samplers:
 //
 //  1. [GlassBackdrop] turns each decoded feed frame into a single tiny
-//     blurred texture covering the whole viewport (feed + black letterbox),
+//     blurred texture covering the whole viewport (visible feed + black surround),
 //     produced ONCE per feed frame on the decode thread — no per-node
 //     capture anywhere.
 //  2. Every glass pill samples that shared texture at screen-mapped UVs:
@@ -151,8 +151,8 @@ class FrameBudgetWindow(
 /**
  * Shared blurred backdrop texture, rebuilt once per feed frame: the decoded
  * frame is downsampled hard (two bilinear steps, ≤4× each, to avoid
- * shimmer), composited over black at its aspect-fit screen rect (so the
- * letterbox is IN the texture — pills over pure black sample the same map),
+ * shimmer), composited over black at the feed renderer's exact fit/fill
+ * screen rect (so letterbox and crop are IN the texture),
  * then box-blurred at the tiny resolution. Total cost is a fraction of a
  * millisecond on the decode thread; the render side only ever samples.
  *
@@ -175,6 +175,7 @@ class GlassBackdrop {
     private var rootWidth = 0f
     private var rootHeight = 0f
     private var feedRect = RectF()
+    private var aspectFill = false
 
     /**
      * The shared texture. Each glass pill wraps it in its own [BitmapShader]
@@ -206,9 +207,15 @@ class GlassBackdrop {
             bottom > feedRect.top
 
     /** (Re)configures viewport + feed-zone geometry, in root px. Idempotent per layout. */
-    fun setLayout(rootWidthPx: Float, rootHeightPx: Float, feedRectPx: RectF) {
+    fun setLayout(
+        rootWidthPx: Float,
+        rootHeightPx: Float,
+        feedRectPx: RectF,
+        aspectFill: Boolean = false,
+    ) {
         synchronized(this) {
             feedRect = feedRectPx
+            this.aspectFill = aspectFill
             if (rootWidth == rootWidthPx && rootHeight == rootHeightPx && texture != null) return
             rootWidth = rootWidthPx
             rootHeight = rootHeightPx
@@ -228,19 +235,24 @@ class GlassBackdrop {
         synchronized(this) {
             val target = texture ?: return
             val canvas = this.canvas ?: return
-            // Aspect-fit rect of the frame inside the feed zone (same math as
-            // LiveFeedView), in root px.
-            val scale = min(feedRect.width() / bitmap.width, feedRect.height() / bitmap.height)
-            val fitW = bitmap.width * scale
-            val fitH = bitmap.height * scale
-            val fitLeft = feedRect.left + (feedRect.width() - fitW) / 2f
-            val fitTop = feedRect.top + (feedRect.height() - fitH) / 2f
+            val content =
+                glassBackdropContentRect(
+                    feedWidth = feedRect.width(),
+                    feedHeight = feedRect.height(),
+                    sourceWidth = bitmap.width,
+                    sourceHeight = bitmap.height,
+                    aspectFill = aspectFill,
+                ) ?: return
+            val contentW = content.width.toFloat()
+            val contentH = content.height.toFloat()
+            val contentLeft = feedRect.left + content.left
+            val contentTop = feedRect.top + content.top
 
             // Two-step downsample: frame → ~4× the final region → backdrop.
             val sx = uvScaleX()
             val sy = uvScaleY()
-            val midW = max(1, (fitW * sx * 4f).roundToInt())
-            val midH = max(1, (fitH * sy * 4f).roundToInt())
+            val midW = max(1, (contentW * sx * 4f).roundToInt())
+            val midH = max(1, (contentH * sy * 4f).roundToInt())
             val mid =
                 intermediate?.takeIf { it.width == midW && it.height == midH }
                     ?: Bitmap.createBitmap(midW, midH, Bitmap.Config.ARGB_8888)
@@ -248,12 +260,25 @@ class GlassBackdrop {
             Canvas(mid).drawBitmap(bitmap, null, RectF(0f, 0f, midW.toFloat(), midH.toFloat()), bilinear)
 
             canvas.drawColor(android.graphics.Color.BLACK)
+            val saveCount = canvas.save()
+            canvas.clipRect(
+                feedRect.left * sx,
+                feedRect.top * sy,
+                feedRect.right * sx,
+                feedRect.bottom * sy,
+            )
             canvas.drawBitmap(
                 mid,
                 null,
-                RectF(fitLeft * sx, fitTop * sy, (fitLeft + fitW) * sx, (fitTop + fitH) * sy),
+                RectF(
+                    contentLeft * sx,
+                    contentTop * sy,
+                    (contentLeft + contentW) * sx,
+                    (contentTop + contentH) * sy,
+                ),
                 bilinear,
             )
+            canvas.restoreToCount(saveCount)
             blur(target)
             frame++
         }
@@ -301,6 +326,22 @@ class GlassBackdrop {
         }
     }
 }
+
+/** Uses the feed renderer's exact pixel-rounded transform for glass sampling. */
+internal fun glassBackdropContentRect(
+    feedWidth: Float,
+    feedHeight: Float,
+    sourceWidth: Int,
+    sourceHeight: Int,
+    aspectFill: Boolean,
+): LiveFeedContentRect? =
+    liveFeedContentRect(
+        containerWidth = feedWidth,
+        containerHeight = feedHeight,
+        sourceWidth = sourceWidth,
+        sourceHeight = sourceHeight,
+        aspectFill = aspectFill,
+    )
 
 /**
  * Per-screen glass state: the active [tier] plus the shared [backdrop].

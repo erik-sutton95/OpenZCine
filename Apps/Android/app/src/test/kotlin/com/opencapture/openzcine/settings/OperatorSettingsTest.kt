@@ -52,6 +52,7 @@ class OperatorSettingsTest {
         assertEquals(LocalDesqueezeOrientation.HORIZONTAL, settings.desqueezeOrientation)
         assertEquals(LiveViewStreamPreset.FAST, settings.streamPreset)
         assertEquals(LiveViewQualityBias.LATENCY, settings.qualityBias)
+        assertEquals(PortraitFeedAspect.FIT_16_9, settings.portraitFeedAspect)
     }
 
     @Test
@@ -75,6 +76,17 @@ class OperatorSettingsTest {
         assertEquals(LiveViewQualityBias.DETAIL, restored.qualityBias)
         assertEquals("QUALITY", store.getString("link.streamPreset.v1", null))
         assertEquals("DETAIL", store.getString("link.qualityBias.v1", null))
+    }
+
+    @Test
+    fun `portrait feed aspect defaults to fit and persists fill`() {
+        val settings = OperatorSettings(store)
+        assertEquals(PortraitFeedAspect.FIT_16_9, settings.portraitFeedAspect)
+
+        settings.portraitFeedAspect = PortraitFeedAspect.FILL
+
+        assertEquals(PortraitFeedAspect.FILL, OperatorSettings(store).portraitFeedAspect)
+        assertEquals("FILL", store.getString("display.portraitFeedAspect.v1", null))
     }
 
     @Test

@@ -18,6 +18,7 @@ import com.opencapture.openzcine.pairing.PairingFlowState
 import com.opencapture.openzcine.pairing.PairingPath
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
+import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -56,6 +57,7 @@ import kotlinx.coroutines.flow.flow
  * --es zc.assist lut,falsecolor,peaking,zebra   which effects are on
  * --es zc.lut log3g10|nlog|mono                 built-in look (default log3g10)
  * --es zc.fc.scale stops|ire                    false-colour scale (default stops)
+ * --es zc.portraitAspect fit|fill               persisted portrait feed presentation
  * ```
  *
  * Or drive the real shell session (Swift-core PTP-IP connect + live view)
@@ -104,6 +106,17 @@ object DemoHarness {
 
     /** String intent extra selecting scopes: `wave,parade,histo,vector,lights`. */
     const val EXTRA_SCOPES = "zc.scopes"
+
+    /** String intent extra selecting the persisted portrait monitor aspect. */
+    const val EXTRA_PORTRAIT_ASPECT = "zc.portraitAspect"
+
+    /** Debug-only fit/fill override used for deterministic portrait screenshots. */
+    fun portraitFeedAspect(intent: Intent): PortraitFeedAspect? =
+        when (intent.getStringExtra(EXTRA_PORTRAIT_ASPECT)) {
+            "fit" -> PortraitFeedAspect.FIT_16_9
+            "fill" -> PortraitFeedAspect.FILL
+            else -> null
+        }
 
     /**
      * Explicit debug image-assist override, distinct from mutable runtime

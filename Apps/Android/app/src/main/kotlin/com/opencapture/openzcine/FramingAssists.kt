@@ -202,6 +202,7 @@ internal fun LocalFramingAssistOverlay(
     cleanMode: Boolean,
     presentationState: LiveFeedPresentationState? = null,
     feedRect: FramingAssistRect? = null,
+    aspectFill: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(
@@ -224,6 +225,7 @@ internal fun LocalFramingAssistOverlay(
                         containerHeight = maxHeight.toPx(),
                         sourceWidth = sourceWidth,
                         sourceHeight = sourceHeight,
+                        aspectFill = aspectFill,
                     )?.toFramingAssistRect()
                 }
             }
@@ -232,6 +234,7 @@ internal fun LocalFramingAssistOverlay(
                 configuration,
                 cleanMode,
                 feedRect,
+                aspectFill,
                 presentationState,
                 sourceWidth,
                 sourceHeight,
@@ -285,7 +288,7 @@ internal fun LocalFramingAssistOverlay(
     }
 }
 
-/** Converts OPE-58's exact integer aspect-fit rectangle into framing layout coordinates. */
+/** Converts the feed renderer's exact integer fit/fill rectangle into framing coordinates. */
 private fun LiveFeedContentRect.toFramingAssistRect(): FramingAssistRect =
     FramingAssistRect(left.toFloat(), top.toFloat(), width.toFloat(), height.toFloat())
 
