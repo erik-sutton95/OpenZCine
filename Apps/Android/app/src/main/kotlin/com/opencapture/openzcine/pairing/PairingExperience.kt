@@ -229,6 +229,22 @@ internal object PairingCopy {
             PairingPath.USB_C -> "Requires a data-capable cable"
         }
 
+    /** Short landscape-card copy that keeps every connection choice readable. */
+    fun compactPathPro(path: PairingPath): String =
+        when (path) {
+            PairingPath.CAMERA_ACCESS_POINT -> "Light battery · no setup"
+            PairingPath.PHONE_HOTSPOT -> "High-quality wireless"
+            PairingPath.USB_C -> "Direct cable · no Wi‑Fi"
+        }
+
+    /** Short landscape-card tradeoff paired with [compactPathPro]. */
+    fun compactPathCon(path: PairingPath): String =
+        when (path) {
+            PairingPath.CAMERA_ACCESS_POINT -> "Softer link"
+            PairingPath.PHONE_HOTSPOT -> "Uses more battery"
+            PairingPath.USB_C -> "Data cable needed"
+        }
+
     // [VERIFY-ON-HW] Confirm the ZR's exact menu wording for each path on hardware.
     fun prepareSteps(path: PairingPath): List<String> =
         when (path) {
@@ -593,12 +609,27 @@ public fun PairingExperience(
             BoxWithConstraints(Modifier.weight(1f)) {
                 val viewportWidth = maxWidth
                 val twoColumn = viewportWidth >= 640.dp
-                val introWidth = maxOf(236.dp, viewportWidth * 0.28f)
+                // Three connection choices need enough horizontal room in the
+                // shallow landscape panel to keep every card's title and
+                // tradeoffs visible. Give the active choice step a little of
+                // the intro column's unused width rather than clipping its
+                // scrollable card body behind the navigation edge.
+                val introWidth =
+                    if (flow.step == PairingStep.CHOOSE_PATH) {
+                        168.dp
+                    } else {
+                        maxOf(236.dp, viewportWidth * 0.28f)
+                    }
                 if (twoColumn) {
-                    val compactStep = viewportWidth - introWidth - 16.dp < 400.dp
+                    val compactThreshold =
+                        if (flow.step == PairingStep.CHOOSE_PATH) 500.dp else 400.dp
+                    val compactStep = viewportWidth - introWidth - 16.dp < compactThreshold
+                    val condensedChoiceCards =
+                        flow.step == PairingStep.CHOOSE_PATH && !compactStep
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         IntroCard(
                             flow = flow,
+                            condensed = condensedChoiceCards,
                             modifier = Modifier.width(introWidth).fillMaxSize(),
                         )
                         StepCard(
@@ -630,6 +661,7 @@ public fun PairingExperience(
                             onConnectUsbCamera = ::connectUsb,
                             onCancel = ::cancelWork,
                             compact = compactStep,
+                            condensedChoiceCards = condensedChoiceCards,
                             modifier = Modifier.weight(1f).fillMaxSize(),
                         )
                     }
@@ -668,6 +700,7 @@ public fun PairingExperience(
                             onConnectUsbCamera = ::connectUsb,
                             onCancel = ::cancelWork,
                             compact = viewportWidth < 480.dp,
+                            condensedChoiceCards = false,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
                     }
@@ -694,10 +727,19 @@ public fun PairingExperience(
 // MARK: - Left column
 
 @Composable
-private fun IntroCard(flow: PairingFlowState, modifier: Modifier = Modifier) {
+private fun IntroCard(
+    flow: PairingFlowState,
+    condensed: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
     // Vertical budget is tight in the ~360dp-tall landscape band — sizes are
     // trimmed from the iOS 32pt title so the footer never clips the card edge.
-    Column(modifier.startupCard().padding(horizontal = 20.dp, vertical = 16.dp)) {
+    Column(
+        modifier.startupCard().padding(
+            horizontal = if (condensed) 16.dp else 20.dp,
+            vertical = if (condensed) 14.dp else 16.dp,
+        ),
+    ) {
         Text(
             "FIRST RUN",
             color = StartupColors.muted,
@@ -705,29 +747,34 @@ private fun IntroCard(flow: PairingFlowState, modifier: Modifier = Modifier) {
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 1.4.sp,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
         Text(
             "Pair your camera.",
             color = StartupColors.ink,
-            fontSize = 24.sp,
+            fontSize = if (condensed) 21.sp else 24.sp,
             fontWeight = FontWeight.Bold,
-            lineHeight = 27.sp,
+            lineHeight = if (condensed) 24.sp else 27.sp,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
         Text(
-            "We'll walk you through it — your camera is connected in about a minute.",
+            if (condensed) {
+                "Choose the connection path that fits the shoot."
+            } else {
+                "We'll walk you through it — your camera is connected in about a minute."
+            },
             color = StartupColors.muted,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
+            fontSize = if (condensed) 11.sp else 12.sp,
+            lineHeight = if (condensed) 15.sp else 16.sp,
         )
         Spacer(Modifier.weight(1f))
         StartupWizardProgress(currentStep = flow.displayStepNumber, totalSteps = flow.stepCount)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
         Text(
-            PairingCopy.introFooter(flow.step),
+            if (condensed) "You can change this path later in Settings."
+            else PairingCopy.introFooter(flow.step),
             color = StartupColors.dim,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
+            fontSize = if (condensed) 10.sp else 11.sp,
+            lineHeight = if (condensed) 13.sp else 15.sp,
         )
     }
 }
@@ -758,6 +805,7 @@ private fun StepCard(
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
     onCancel: () -> Unit,
     compact: Boolean,
+    condensedChoiceCards: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.startupCard().padding(20.dp)) {
@@ -785,7 +833,12 @@ private fun StepCard(
                 when (flow.step) {
                     PairingStep.PERMISSIONS ->
                         PermissionsBody(permissionGranted, permissionDenied, onRequestPermission)
-                    PairingStep.CHOOSE_PATH -> ChoosePathBody(onChoose, compact)
+                    PairingStep.CHOOSE_PATH ->
+                        ChoosePathBody(
+                            onChoose = onChoose,
+                            compact = compact,
+                            condensed = condensedChoiceCards,
+                        )
                     PairingStep.PREPARE -> NumberedCards(PairingCopy.prepareSteps(flow.path))
                     PairingStep.NETWORK ->
                         NetworkBody(
@@ -964,20 +1017,24 @@ private fun StatusPill(text: String, color: androidx.compose.ui.graphics.Color) 
 }
 
 @Composable
-private fun ChoosePathBody(onChoose: (PairingPath) -> Unit, compact: Boolean) {
-    // Tight vertical budget: both cards must clear the card fold without
+private fun ChoosePathBody(
+    onChoose: (PairingPath) -> Unit,
+    compact: Boolean,
+    condensed: Boolean,
+) {
+    // Tight vertical budget: all three cards must clear the card fold without
     // scrolling on the ~180dp step body of a 720px-tall landscape panel. On a
     // narrow portrait viewport they stack inside the body's existing scroll.
     if (compact) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             for (path in PairingPath.entries) {
-                PathChoiceCard(path, onChoose, Modifier.fillMaxWidth())
+                PathChoiceCard(path, onChoose, Modifier.fillMaxWidth(), condensed = false)
             }
         }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             for (path in PairingPath.entries) {
-                PathChoiceCard(path, onChoose, Modifier.weight(1f))
+                PathChoiceCard(path, onChoose, Modifier.weight(1f), condensed = condensed)
             }
         }
     }
@@ -988,45 +1045,69 @@ private fun PathChoiceCard(
     path: PairingPath,
     onChoose: (PairingPath) -> Unit,
     modifier: Modifier,
+    condensed: Boolean,
 ) {
     Column(
         modifier
             .startupTile()
             .clickable { onChoose(path) }
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .padding(horizontal = 12.dp, vertical = if (condensed) 8.dp else 10.dp)
     ) {
         Text(
             PairingCopy.pathTitle(path),
             color = StartupColors.ink,
-            fontSize = 15.sp,
+            fontSize = if (condensed) 14.sp else 15.sp,
             fontWeight = FontWeight.Bold,
+            lineHeight = if (condensed) 17.sp else 18.sp,
         )
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(if (condensed) 5.dp else 6.dp))
         Text(
             PairingCopy.pathBadge(path),
             color = StartupColors.accent,
-            fontSize = 12.sp,
+            fontSize = if (condensed) 11.sp else 12.sp,
             fontWeight = FontWeight.SemiBold,
             modifier =
                 Modifier.clip(CircleShape)
                     .background(StartupColors.accent.copy(alpha = 0.15f))
-                    .padding(horizontal = 9.dp, vertical = 3.dp),
+                    .padding(horizontal = if (condensed) 8.dp else 9.dp, vertical = if (condensed) 2.dp else 3.dp),
         )
-        Spacer(Modifier.height(7.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            for (pro in PairingCopy.pathPros(path)) {
-                TradeoffRow("+", StartupColors.ready, pro)
+        Spacer(Modifier.height(if (condensed) 5.dp else 7.dp))
+        if (condensed) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                TradeoffRow("+", StartupColors.ready, PairingCopy.compactPathPro(path), compact = true)
+                TradeoffRow("−", StartupColors.dim, PairingCopy.compactPathCon(path), compact = true)
             }
-            TradeoffRow("−", StartupColors.dim, PairingCopy.pathCon(path))
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                for (pro in PairingCopy.pathPros(path)) {
+                    TradeoffRow("+", StartupColors.ready, pro)
+                }
+                TradeoffRow("−", StartupColors.dim, PairingCopy.pathCon(path))
+            }
         }
     }
 }
 
 @Composable
-private fun TradeoffRow(symbol: String, color: androidx.compose.ui.graphics.Color, text: String) {
+private fun TradeoffRow(
+    symbol: String,
+    color: androidx.compose.ui.graphics.Color,
+    text: String,
+    compact: Boolean = false,
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text(symbol, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Text(text, color = StartupColors.muted, fontSize = 12.sp, lineHeight = 16.sp)
+        Text(
+            symbol,
+            color = color,
+            fontSize = if (compact) 11.sp else 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text,
+            color = StartupColors.muted,
+            fontSize = if (compact) 11.sp else 12.sp,
+            lineHeight = if (compact) 14.sp else 16.sp,
+        )
     }
 }
 
