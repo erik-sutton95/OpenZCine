@@ -328,10 +328,38 @@ public data class ScopeAssistConfiguration(
         public const val MAX_BRIGHTNESS: Int = 200
         public const val DEFAULT_BRIGHTNESS: Int = 100
 
+        /**
+         * Calibrated waveform/parade trace gain. `100%` preserves the former
+         * `25%` appearance and `200%` reaches the former `50%`; vectorscope
+         * continues to use its native-core unity-based brightness contract.
+         */
+        public fun waveformParadeBrightnessMultiplier(percent: Int): Float =
+            clampBrightness(percent) / 400f
+
+        /**
+         * Decodes the versioned waveform/parade brightness without Int overflow.
+         * Missing or invalidly typed values arrive as null and recover to the
+         * calibrated default; pre-calibration values are expanded fourfold.
+         */
+        internal fun decodedWaveformParadeBrightness(
+            storedValue: Int?,
+            calibrationVersion: Int?,
+        ): Int {
+            if (storedValue == null) return DEFAULT_BRIGHTNESS
+            if ((calibrationVersion ?: 0) >= WAVEFORM_PARADE_BRIGHTNESS_CALIBRATION_VERSION) {
+                return clampBrightness(storedValue)
+            }
+            return (storedValue.toLong() * 4L)
+                .coerceIn(MIN_BRIGHTNESS.toLong(), MAX_BRIGHTNESS.toLong())
+                .toInt()
+        }
+
         public fun clampScale(value: Float): Float =
             value.takeIf(Float::isFinite)?.coerceIn(MIN_SCALE, MAX_SCALE) ?: DEFAULT_SCALE
 
         public fun clampBrightness(value: Int): Int = value.coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
+
+        internal const val WAVEFORM_PARADE_BRIGHTNESS_CALIBRATION_VERSION: Int = 2
     }
 }
 
@@ -707,6 +735,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 localGridVisible.toggle()
             }
             AssistTool.CROSS -> centerCrosshairEnabled.toggle()
+            AssistTool.LEVEL -> levelAssistEnabled.toggle()
             AssistTool.DESQ -> desqueezeEnabled.toggle()
             else -> Unit
         }
@@ -718,6 +747,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.GUIDES -> guidesVisible.value
             AssistTool.GRID -> localGridVisible.value
             AssistTool.CROSS -> centerCrosshairEnabled.value
+            AssistTool.LEVEL -> levelAssistEnabled.value
             AssistTool.DESQ -> desqueezeEnabled.value
             else -> false
         }
@@ -903,6 +933,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
+            .putBoolean(LEVEL_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -933,6 +964,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
+            .putBoolean(LEVEL_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -1004,13 +1036,18 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     }
 
     private fun loadAssistToolbarOrder(): List<AssistTool> {
+        val raw = preferences.getString(ASSIST_TOOLBAR_ORDER_KEY, null)
         val stored =
-            preferences.getString(ASSIST_TOOLBAR_ORDER_KEY, null)
-                ?.split(',')
+            raw?.split(',')
                 ?.mapNotNull(AssistTool::fromStoredName)
                 .orEmpty()
         val deduplicated = stored.distinct()
-        return deduplicated + AssistTool.entries.filterNot(deduplicated::contains)
+        val reconciled = deduplicated + AssistTool.entries.filterNot(deduplicated::contains)
+        val encoded = reconciled.joinToString(separator = ",") { it.name }
+        if (raw != null && raw != encoded) {
+            preferences.edit().putString(ASSIST_TOOLBAR_ORDER_KEY, encoded).apply()
+        }
+        return reconciled
     }
 
     private fun loadVisibleAssistTools(): Set<AssistTool> {
@@ -1044,6 +1081,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             // later operator hide/show decision.
             migrated += AssistTool.framingTools
             editor.putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
+            changed = true
+        }
+        if (!preferences.getBoolean(LEVEL_VISIBILITY_MIGRATED_KEY, false)) {
+            // LEVEL joined the existing framing group after its original
+            // migration marker shipped. Add it exactly once so an existing
+            // custom toolbar sees the new control, then retain manual hides.
+            migrated += AssistTool.LEVEL
+            editor.putBoolean(LEVEL_VISIBILITY_MIGRATED_KEY, true)
             changed = true
         }
         if (changed) {
@@ -1193,17 +1238,42 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 crush = preferences.getBoolean("$prefix.crush", true),
                 middle = preferences.getBoolean("$prefix.middle", true),
             )
+        val calibrationVersion = storedInt(SCOPE_WAVEFORM_PARADE_BRIGHTNESS_VERSION_KEY)
+        val storedWaveformBrightness = storedInt(SCOPE_WAVEFORM_BRIGHTNESS_KEY)
+        val storedParadeBrightness = storedInt(SCOPE_PARADE_BRIGHTNESS_KEY)
+        val waveformBrightness =
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(
+                storedWaveformBrightness,
+                calibrationVersion,
+            )
+        val paradeBrightness =
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(
+                storedParadeBrightness,
+                calibrationVersion,
+            )
+        if (calibrationVersion == null ||
+            calibrationVersion < ScopeAssistConfiguration.WAVEFORM_PARADE_BRIGHTNESS_CALIBRATION_VERSION ||
+            storedWaveformBrightness != waveformBrightness ||
+            storedParadeBrightness != paradeBrightness
+        ) {
+            preferences.edit()
+                .putInt(SCOPE_WAVEFORM_BRIGHTNESS_KEY, waveformBrightness)
+                .putInt(SCOPE_PARADE_BRIGHTNESS_KEY, paradeBrightness)
+                .putInt(
+                    SCOPE_WAVEFORM_PARADE_BRIGHTNESS_VERSION_KEY,
+                    ScopeAssistConfiguration.WAVEFORM_PARADE_BRIGHTNESS_CALIBRATION_VERSION,
+                )
+                .apply()
+        }
         return ScopeAssistConfiguration(
             waveformScale = preferences.getFloat(SCOPE_WAVEFORM_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
             waveformMode = waveformMode(),
             waveformGuides = guides(SCOPE_WAVEFORM_GUIDES_PREFIX),
-            waveformBrightness =
-                preferences.getInt(SCOPE_WAVEFORM_BRIGHTNESS_KEY, ScopeAssistConfiguration.DEFAULT_BRIGHTNESS),
+            waveformBrightness = waveformBrightness,
             paradeScale = preferences.getFloat(SCOPE_PARADE_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
             paradeMode = paradeMode(),
             paradeGuides = guides(SCOPE_PARADE_GUIDES_PREFIX),
-            paradeBrightness =
-                preferences.getInt(SCOPE_PARADE_BRIGHTNESS_KEY, ScopeAssistConfiguration.DEFAULT_BRIGHTNESS),
+            paradeBrightness = paradeBrightness,
             vectorscopeScale = preferences.getFloat(SCOPE_VECTOR_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
             vectorscopeZoom = vectorZoom(),
             vectorscopeBrightness =
@@ -1229,6 +1299,10 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .putString(SCOPE_PARADE_MODE_KEY, configuration.paradeMode.name)
             .putGuides(SCOPE_PARADE_GUIDES_PREFIX, configuration.paradeGuides)
             .putInt(SCOPE_PARADE_BRIGHTNESS_KEY, configuration.paradeBrightness)
+            .putInt(
+                SCOPE_WAVEFORM_PARADE_BRIGHTNESS_VERSION_KEY,
+                ScopeAssistConfiguration.WAVEFORM_PARADE_BRIGHTNESS_CALIBRATION_VERSION,
+            )
             .putFloat(SCOPE_VECTOR_SCALE_KEY, configuration.vectorscopeScale)
             .putString(SCOPE_VECTOR_ZOOM_KEY, configuration.vectorscopeZoom.name)
             .putInt(SCOPE_VECTOR_BRIGHTNESS_KEY, configuration.vectorscopeBrightness)
@@ -1236,6 +1310,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .putFloat(SCOPE_TRAFFIC_LIGHTS_SCALE_KEY, configuration.trafficLightsScale)
             .apply()
     }
+
+    /** Reads only a real integer, treating wrong-typed preference corruption as an absent value. */
+    private fun storedInt(key: String): Int? = preferences.all[key] as? Int
 
     private fun loadStreamPreset(): LiveViewStreamPreset =
         LiveViewStreamPreset.fromStoredName(preferences.getString(STREAM_PRESET_KEY, null))
@@ -1263,6 +1340,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val LEVEL_STYLE_KEY = "assist.local.levelStyle.v1"
         const val FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY =
             "display.assistToolbar.framing.visibility.migrated.v1"
+        const val LEVEL_VISIBILITY_MIGRATED_KEY =
+            "display.assistToolbar.level.visibility.migrated.v1"
         const val GUIDES_VISIBLE_KEY = "assist.local.guides.visible.v2"
         const val GUIDE_FAMILY_KEY = "assist.local.guides.family.v2"
         const val GUIDE_RATIOS_KEY = "assist.local.guides.ratios.v2"
@@ -1293,6 +1372,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val SCOPE_PARADE_MODE_KEY = "assist.scopes.parade.mode.v1"
         const val SCOPE_PARADE_GUIDES_PREFIX = "assist.scopes.parade.guides.v1"
         const val SCOPE_PARADE_BRIGHTNESS_KEY = "assist.scopes.parade.brightness.v1"
+        const val SCOPE_WAVEFORM_PARADE_BRIGHTNESS_VERSION_KEY =
+            "assist.scopes.waveformParade.brightnessCalibrationVersion.v1"
         const val SCOPE_VECTOR_SCALE_KEY = "assist.scopes.vector.scale.v1"
         const val SCOPE_VECTOR_ZOOM_KEY = "assist.scopes.vector." + "zoom.v1"
         const val SCOPE_VECTOR_BRIGHTNESS_KEY = "assist.scopes.vector.brightness.v1"

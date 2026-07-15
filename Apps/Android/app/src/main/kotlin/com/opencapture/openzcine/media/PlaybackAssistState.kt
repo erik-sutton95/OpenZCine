@@ -108,6 +108,7 @@ class PlaybackAssistState internal constructor(
             guidesVisible = AssistTool.GUIDES in framingTools,
             gridVisible = AssistTool.GRID in framingTools,
             centerCrosshairEnabled = AssistTool.CROSS in framingTools,
+            levelEnabled = AssistTool.LEVEL in framingTools,
             desqueezeEnabled = AssistTool.DESQ in framingTools,
         )
 

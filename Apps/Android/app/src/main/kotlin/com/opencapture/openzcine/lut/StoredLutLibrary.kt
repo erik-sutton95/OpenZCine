@@ -6,6 +6,8 @@ import android.database.Cursor
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.Stable
+import com.opencapture.openzcine.FeedLut
+import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.bridge.SwiftCore
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -86,6 +88,34 @@ data class StoredLutEntry(
     val cubeSize: Int? = null,
     val canonicalCacheKey: String? = null,
 )
+
+/**
+ * Same-category replacement order after deleting an active stored LUT. The
+ * library's entry order is already deterministic and built-in looks cannot
+ * enter this typed candidate set.
+ */
+internal fun storedLutReplacementCandidates(
+    entries: List<StoredLutEntry>,
+    deleted: StoredLutSelection,
+): List<StoredLutEntry> =
+    entries.filter { entry ->
+        entry.selection != deleted && entry.selection.category == deleted.category
+    }
+
+/**
+ * Reconciles only the deleted active stored selection. Inactive selections,
+ * including protected built-ins, are returned unchanged; a validated
+ * same-category replacement wins before the built-in fallback.
+ */
+internal fun reconciledLutSelectionAfterDeletion(
+    current: FeedLutSelection,
+    deleted: StoredLutSelection,
+    preparedReplacement: StoredLutSelection?,
+): FeedLutSelection {
+    if (current != FeedLutSelection.Stored(deleted)) return current
+    return preparedReplacement?.let(FeedLutSelection::Stored)
+        ?: FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709)
+}
 
 /** A Swift-packed cube ready for the existing Android feed-effects renderer. */
 data class PackedStoredLut(
@@ -360,6 +390,14 @@ internal class StoredLutLibrary(
         removed
     }
 
+    /** Returns the first same-category replacement that still validates and prepares successfully. */
+    suspend fun firstPreparedReplacement(deleted: StoredLutSelection): StoredLutSelection? {
+        for (entry in storedLutReplacementCandidates(entries.value, deleted)) {
+            if (prepare(entry.selection)) return entry.selection
+        }
+        return null
+    }
+
     private fun recordFailure(selection: StoredLutSelection, failure: StoredLutFailure): Boolean {
         synchronized(lock) {
             packed.remove(selection)
@@ -501,6 +539,10 @@ class AndroidLutLibrary private constructor(
     suspend fun prepare(selection: StoredLutSelection): Boolean = store.prepare(selection)
 
     suspend fun delete(selection: StoredLutSelection): Boolean = store.delete(selection)
+
+    /** Finds a validated same-category successor after an active stored selection is deleted. */
+    suspend fun firstPreparedReplacement(deleted: StoredLutSelection): StoredLutSelection? =
+        store.firstPreparedReplacement(deleted)
 
     private fun readSelectedDocument(uri: Uri): ByteArray {
         val resolver = context.contentResolver

@@ -124,6 +124,7 @@ import com.opencapture.openzcine.lut.RedLutDownloadGate
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutEntry
 import com.opencapture.openzcine.lut.StoredLutFailure
+import com.opencapture.openzcine.lut.reconciledLutSelectionAfterDeletion
 import com.opencapture.openzcine.rememberAndroidThermalTier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -1618,8 +1619,20 @@ private fun StoredLutLibraryRows(
                         pendingDeletion = null
                         scope.launch {
                             if (library.delete(entry.selection)) {
-                                if (assistState.selectedLut == FeedLutSelection.Stored(entry.selection)) {
-                                    assistState.selectLut(FeedLut.LOG3G10_709)
+                                val selectionBeforeDeletion = assistState.selectedLut
+                                if (selectionBeforeDeletion == FeedLutSelection.Stored(entry.selection)) {
+                                    val replacement = library.firstPreparedReplacement(entry.selection)
+                                    when (
+                                        val reconciled =
+                                            reconciledLutSelectionAfterDeletion(
+                                                selectionBeforeDeletion,
+                                                entry.selection,
+                                                replacement,
+                                            )
+                                    ) {
+                                        is FeedLutSelection.BuiltIn -> assistState.selectLut(reconciled.value)
+                                        is FeedLutSelection.Stored -> assistState.selectStoredLut(reconciled.value)
+                                    }
                                 }
                                 feedback = "${entry.displayName} removed."
                                 onInteraction()
