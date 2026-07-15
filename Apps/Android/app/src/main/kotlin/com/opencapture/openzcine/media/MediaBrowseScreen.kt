@@ -642,6 +642,7 @@ internal fun MediaBrowseScreen(
                 favoriteIDs = favorites,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
                 playbackAssistState = playbackAssistState,
+                sharedAssistState = liveAssistState,
                 exposureAssistCameraInput = exposureAssistCameraInput,
                 operatorSettings = operatorSettings,
                 lutLibrary = lutLibrary,

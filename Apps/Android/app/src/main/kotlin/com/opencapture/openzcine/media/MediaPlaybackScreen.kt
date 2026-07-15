@@ -55,9 +55,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -87,6 +90,7 @@ import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.opencapture.openzcine.AssistTool
+import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistToolbar
 import com.opencapture.openzcine.AudioMetersOverlay
 import com.opencapture.openzcine.ExposureAssistCameraInput
@@ -156,6 +160,7 @@ fun MediaPlaybackScreen(
     favoriteIDs: Set<String>,
     framingConfiguration: LocalFramingAssistConfiguration,
     playbackAssistState: PlaybackAssistState,
+    sharedAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
@@ -179,6 +184,7 @@ fun MediaPlaybackScreen(
             next = next,
             framingConfiguration = framingConfiguration,
             playbackAssistState = playbackAssistState,
+            sharedAssistState = sharedAssistState,
             exposureAssistCameraInput = exposureAssistCameraInput,
             operatorSettings = operatorSettings,
             lutLibrary = lutLibrary,
@@ -198,6 +204,7 @@ private fun PlaybackClipSession(
     next: MediaClipRecord?,
     framingConfiguration: LocalFramingAssistConfiguration,
     playbackAssistState: PlaybackAssistState,
+    sharedAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
@@ -369,6 +376,7 @@ private fun PlaybackClipSession(
                     entry = current.entry,
                     framingConfiguration = framingConfiguration,
                     playbackAssistState = playbackAssistState,
+                    sharedAssistState = sharedAssistState,
                     exposureAssistCameraInput = exposureAssistCameraInput,
                     operatorSettings = operatorSettings,
                     lutLibrary = lutLibrary,
@@ -479,6 +487,7 @@ private fun ProgressivePlayer(
     entry: MediaCacheEntry,
     framingConfiguration: LocalFramingAssistConfiguration,
     playbackAssistState: PlaybackAssistState,
+    sharedAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
@@ -558,6 +567,8 @@ private fun ProgressivePlayer(
     var viewport by remember(entry) { mutableStateOf(IntSize.Zero) }
     var videoSize by remember(entry) { mutableStateOf(VideoSize.UNKNOWN) }
     var assistMode by remember(entry) { mutableStateOf(false) }
+    var assistOptionsTool by remember(entry) { mutableStateOf<AssistTool?>(null) }
+    var assistToolbarBounds by remember(entry) { mutableStateOf<Rect?>(null) }
     var frameScrubbing by remember(entry) { mutableStateOf(false) }
     var frameScrubOrigin by remember(entry) { mutableLongStateOf(0L) }
     var frameScrubHorizontal by remember(entry) { mutableFloatStateOf(0f) }
@@ -566,6 +577,11 @@ private fun ProgressivePlayer(
         playbackAssistState.framingConfiguration(framingConfiguration)
     val framingAssistsVisible = playbackFramingConfiguration.hasPlaybackFramingOverlay
     val hapticView = LocalView.current
+
+    BackHandler(enabled = assistOptionsTool != null) { assistOptionsTool = null }
+    LaunchedEffect(chromeVisible, assistMode) {
+        if (!chromeVisible || !assistMode) assistOptionsTool = null
+    }
 
     fun clampScrub(value: Float): Long =
         PlaybackTimeline.clampPosition(value.toLong(), duration).also { scrubPosition = it.toFloat() }
@@ -1027,7 +1043,10 @@ private fun ProgressivePlayer(
                     ) {
                         AssistToolbar(
                             state = playbackAssistState.assists,
-                            modifier = Modifier.weight(1f).height(58.dp),
+                            modifier =
+                                Modifier.weight(1f)
+                                    .height(58.dp)
+                                    .onGloballyPositioned { assistToolbarBounds = it.boundsInRoot() },
                             visibleTools = operatorSettings.visibleAssistToolbarTools,
                             framingConfiguration = playbackFramingConfiguration,
                             onToggleFramingTool = { tool ->
@@ -1044,12 +1063,14 @@ private fun ProgressivePlayer(
                                     )
                             },
                             hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                            onLongPressTool = { tool -> assistOptionsTool = tool },
                         )
                         PlaybackButton(
                             "VIEW",
                             "Hide playback assist toolbar",
                             highlighted = true,
                         ) {
+                            assistOptionsTool = null
                             assistMode = false
                         }
                     }
@@ -1136,6 +1157,18 @@ private fun ProgressivePlayer(
                     }
                 }
             }
+        }
+        assistOptionsTool?.let { tool ->
+            PlaybackAssistOptionsOverlay(
+                tool = tool,
+                toolbarBounds = assistToolbarBounds,
+                playbackState = playbackAssistState,
+                sharedAssistState = sharedAssistState,
+                settings = operatorSettings,
+                cameraInput = cameraInput,
+                lutLibrary = lutLibrary,
+                onDismiss = { assistOptionsTool = null },
+            )
         }
     }
 }

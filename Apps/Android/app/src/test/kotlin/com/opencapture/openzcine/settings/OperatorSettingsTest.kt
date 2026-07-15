@@ -389,6 +389,18 @@ class OperatorSettingsTest {
     }
 
     @Test
+    fun `playback guide configuration does not change live visibility`() {
+        val settings = OperatorSettings(store)
+
+        val selected =
+            settings.toggleGuideRatioConfiguration(LocalFramingAspectRatio.RATIO_239)
+
+        assertEquals(setOf(LocalFramingAspectRatio.RATIO_239), selected)
+        assertFalse(settings.guidesVisible.value)
+        assertEquals(selected, OperatorSettings(store).selectedGuideRatios)
+    }
+
+    @Test
     fun `malformed local framing selections safely fall back to inactive defaults`() {
         store.edit()
             .putStringSet("assist.local.guides.ratios.v2", linkedSetOf("NOT_A_GUIDE"))

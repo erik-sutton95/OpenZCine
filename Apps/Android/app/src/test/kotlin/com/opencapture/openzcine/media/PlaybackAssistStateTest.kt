@@ -86,6 +86,38 @@ class PlaybackAssistStateTest {
         assertEquals(FeedFalseColorScale.STOPS.id, preferences.getString("fcScale", null))
     }
 
+    @Test
+    fun `playback option tools match iOS long press contract`() {
+        val configurable = AssistTool.entries.filter(::hasPlaybackAssistOptions).toSet()
+
+        assertEquals(AssistTool.entries.toSet() - AssistTool.AUDIO, configurable)
+        assertFalse(hasPlaybackAssistOptions(AssistTool.AUDIO))
+        assertTrue(hasPlaybackAssistOptions(AssistTool.CROSS))
+    }
+
+    @Test
+    fun `playback selections persist once in shared configuration and keep visibility separate`() {
+        val sharedPreferences = TestSharedPreferences()
+        val playbackPreferences = TestSharedPreferences()
+        val shared = AssistState.restore(sharedPreferences, null, null)
+        val playback = PlaybackAssistState.restore(playbackPreferences, shared)
+
+        playback.setVisible(AssistTool.LUT, true)
+        playback.selectSharedLut(shared, FeedLut.MONO)
+        playback.selectSharedFalseColorScale(shared, FeedFalseColorScale.LIMITS)
+
+        assertTrue(playback.isOn(AssistTool.LUT))
+        assertFalse(shared.isOn(AssistTool.LUT))
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), playback.assists.effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), shared.selectedLut)
+        assertEquals(FeedFalseColorScale.LIMITS, playback.assists.selectedFalseColorScale)
+        assertEquals(FeedFalseColorScale.LIMITS, shared.selectedFalseColorScale)
+        assertEquals(FeedLut.MONO.id, sharedPreferences.getString("lut", null))
+        assertEquals(FeedFalseColorScale.LIMITS.id, sharedPreferences.getString("fcScale", null))
+        assertFalse(playbackPreferences.contains("lut"))
+        assertFalse(playbackPreferences.contains("fcScale"))
+    }
+
     private fun configuredFraming(): LocalFramingAssistConfiguration =
         LocalFramingAssistConfiguration(
             guidesVisible = true,

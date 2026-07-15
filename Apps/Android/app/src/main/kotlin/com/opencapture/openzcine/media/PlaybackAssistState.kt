@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 import com.opencapture.openzcine.AssistState
 import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.FeedEffectsState
+import com.opencapture.openzcine.FeedFalseColorScale
+import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 
@@ -49,6 +51,49 @@ class PlaybackAssistState internal constructor(
         framingTools = AssistTool.entries.filter(next::contains).toSet()
         persistFramingTools(framingTools)
         return true
+    }
+
+    /** Sets playback visibility without copying the live-view visibility set. */
+    fun setVisible(tool: AssistTool, visible: Boolean) {
+        if (isOn(tool) != visible) toggle(tool)
+    }
+
+    /**
+     * Selects one built-in LUT in the shared live configuration, then refreshes playback's local
+     * effect instance. Only the shared configuration persists the selection; playback persists
+     * visibility separately.
+     */
+    fun selectSharedLut(sharedConfiguration: AssistState, lut: FeedLut) {
+        sharedConfiguration.selectLut(lut)
+        syncSharedSelections(sharedConfiguration)
+    }
+
+    /** Stored-LUT counterpart of [selectSharedLut]. */
+    fun selectSharedStoredLut(sharedConfiguration: AssistState, lut: StoredLutSelection) {
+        sharedConfiguration.selectStoredLut(lut)
+        syncSharedSelections(sharedConfiguration)
+    }
+
+    /** Selects the shared false-colour scale without changing either context's visibility. */
+    fun selectSharedFalseColorScale(
+        sharedConfiguration: AssistState,
+        scale: FeedFalseColorScale,
+    ) {
+        sharedConfiguration.selectFalseColorScale(scale)
+        syncSharedSelections(sharedConfiguration)
+    }
+
+    /** Restores the shared false-colour scale without changing either context's visibility. */
+    fun resetSharedFalseColorScale(sharedConfiguration: AssistState) {
+        sharedConfiguration.resetFalseColorSelection()
+        syncSharedSelections(sharedConfiguration)
+    }
+
+    private fun syncSharedSelections(sharedConfiguration: AssistState) {
+        assists.applySharedSelections(
+            sharedConfiguration.selectedLut,
+            sharedConfiguration.selectedFalseColorScale,
+        )
     }
 
     /**
@@ -96,6 +141,7 @@ class PlaybackAssistState internal constructor(
                     intentScope = null,
                     availableStoredLut = availableStoredLut,
                     mirrorFeedEffectsState = false,
+                    persistConfigurationSelections = false,
                 )
             sharedConfiguration?.let { configuration ->
                 effects.applySharedSelections(
