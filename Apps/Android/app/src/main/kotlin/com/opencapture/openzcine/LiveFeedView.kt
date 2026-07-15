@@ -119,6 +119,11 @@ private data class LiveFeedPresentation(
 @Stable
 public class LiveFeedPresentationState {
     private var presentation: LiveFeedPresentation? by mutableStateOf(null)
+    private var textureSourceGeometry: FeedTextureSourceGeometry? by mutableStateOf(null)
+
+    /** Resolution-only state observed by the cached presentation texture. */
+    internal val feedTextureSourceGeometry: FeedTextureSourceGeometry?
+        get() = textureSourceGeometry
 
     /** The exact image whose metadata the other accessors describe. */
     internal val image: ImageBitmap?
@@ -149,10 +154,20 @@ public class LiveFeedPresentationState {
                 focus = frame.focus,
                 level = frame.level,
             )
+        val nextTextureGeometry =
+            retainedFeedTextureSourceGeometry(
+                current = textureSourceGeometry,
+                width = bitmap.width,
+                height = bitmap.height,
+            )
+        if (nextTextureGeometry !== textureSourceGeometry) {
+            textureSourceGeometry = nextTextureGeometry
+        }
     }
 
     internal fun clear() {
         presentation = null
+        textureSourceGeometry = null
     }
 }
 

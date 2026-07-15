@@ -878,6 +878,14 @@ fun MonitorScreen(
                         effectsPresentationState = liveFeedEffectsPresentation,
                         aspectFill = isPortraitFill,
                     )
+                    // Presentation-only texture: after the camera frame/effect renderer, before
+                    // every geometry-bearing assist. Scopes continue sampling monitorFrameSource.
+                    FeedTextureOverlay(
+                        presentationState = liveFeedPresentation,
+                        aspectFill = isPortraitFill,
+                        horizontalPresentationScale = localFraming.horizontalPresentationScale,
+                        verticalPresentationScale = localFraming.verticalPresentationScale,
+                    )
                 } else {
                     Text(
                         text =
