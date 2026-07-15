@@ -41,6 +41,10 @@ committed to this repo**.
 - Open a pull request into `main`. CI must pass and the PR template must be filled in.
 - When native iOS changes merge to `main`, CI uploads a TestFlight build automatically (maintainers
   only — see [`docs/testflight-ci.md`](docs/testflight-ci.md)).
+- Any PR that can trigger a TestFlight build must replace
+  [`ios/TestFlight/WhatToTest.en-US.txt`](ios/TestFlight/WhatToTest.en-US.txt) with concise copy for
+  non-developer camera operators. Describe visible outcomes, exclude implementation details, and
+  give concrete steps under **Please test**. CI rejects stale or developer-centric notes.
 
 ## Code standards
 

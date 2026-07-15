@@ -1,0 +1,9 @@
+What's changed
+
+- Find and pair no longer gets stuck on "Looking for cameras" when using your iPhone's Personal Hotspot.
+
+Please test
+
+- Connect your Nikon camera to your iPhone's Personal Hotspot, then open Find and pair.
+- Confirm the camera appears and completes pairing.
+- Report any camera that does not appear, disconnects, or repeatedly asks to pair.

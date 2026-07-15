@@ -24,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Repository hygiene
@@ -31,6 +32,24 @@ jobs:
 
       - name: Landing-page assets
         run: ./scripts/check-site.sh
+
+      - name: TestFlight notes
+        run: |
+          ./scripts/ios-release-notes-check.sh
+          ./scripts/ios-release-notes-test.sh
+
+      - name: Require reviewed notes for TestFlight-triggering pull requests
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          if grep -Eq '^(Sources/|Tests/|ios/|Package\.swift$|scripts/|justfile$)' <<< "$changed_files"; then
+            if ! grep -Fxq 'ios/TestFlight/WhatToTest.en-US.txt' <<< "$changed_files"; then
+              echo "Update ios/TestFlight/WhatToTest.en-US.txt with plain-language changes and test steps." >&2
+              exit 1
+            fi
+          fi
 
       - name: Spell check
         uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0

@@ -20,6 +20,11 @@ All notable changes to this project are documented here. The format is based on
 - Repository foundation: governance docs, tooling (`just`, meta-checks), native CI, and agent
   configuration.
 
+### Changed
+
+- TestFlight notes are now reviewed, tester-written copy with concrete test steps. CI rejects stale
+  notes, commit titles, and common implementation jargon before an iOS build can ship.
+
 ### Security
 
 - All GitHub Actions in CI are pinned to full commit SHAs, and Docker-based actions to image

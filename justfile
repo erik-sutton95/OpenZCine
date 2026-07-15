@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check typos lint-md check-links check-editorconfig lint-actions secrets check-demo-isolation swift-lint swift-test
+check: hygiene site-check testflight-notes-check typos lint-md check-links check-editorconfig lint-actions secrets check-demo-isolation swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -24,6 +24,11 @@ hygiene:
 # Validate the deploy-ready landing-page tree and all local asset references.
 site-check:
     ./scripts/check-site.sh
+
+# Validate the reviewed TestFlight copy and its regression guardrails.
+testflight-notes-check:
+    ./scripts/ios-release-notes-check.sh
+    ./scripts/ios-release-notes-test.sh
 
 # Spell-check the repository.
 typos:
