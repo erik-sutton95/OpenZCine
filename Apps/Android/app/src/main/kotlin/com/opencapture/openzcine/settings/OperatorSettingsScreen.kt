@@ -769,6 +769,22 @@ private fun ControlsRows(
             onToggle(settings.keepScreenAwake)
         }
     }
+    SettingsGroupCard(
+        title = "Media Remote Shutter",
+        caption =
+            "Monitor-only; Android cannot reliably identify Bluetooth sources. Phone volume keys remain unchanged.",
+    ) {
+        SettingsSwitchRow(
+            "Enable Media Remote",
+            isOn = settings.mediaRemoteShutterEnabled.value,
+            showTopDivider = false,
+        ) { onToggle(settings.mediaRemoteShutterEnabled) }
+        Text(
+            "Play/Pause, headset, and Record keys control recording; confirmation is skipped.",
+            style = chromeStyle(10.5f, FontWeight.Normal),
+            color = LiveDesign.muted,
+        )
+    }
 }
 
 /**

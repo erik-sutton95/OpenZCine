@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -71,6 +72,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
+import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
+import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
+import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -191,10 +196,13 @@ fun MonitorScreen(
     operatorSettings: OperatorSettings,
     liveViewEnabled: Boolean = true,
     glassTierOverride: String? = null,
+    mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
+    isMonitorFront: Boolean = true,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val sessionState by session.state.collectAsState()
     val monitorAccessibilityState =
         when (sessionState) {
@@ -322,10 +330,48 @@ fun MonitorScreen(
             val target = !recording
             if (operatorSettings.recordConfirmationEnabled.value) {
                 pendingRecordTarget = target
+                mediaRemoteShutter?.disarm()
             } else {
                 sendRecordCommand(target)
             }
         }
+    }
+    val mediaRemoteShutterShouldArm =
+        shouldArmMediaRemoteShutter(
+            enabled = operatorSettings.mediaRemoteShutterEnabled.value,
+            monitorIsFront = isMonitorFront,
+            cameraConnected = sessionState is CameraSessionState.Connected,
+            recordCommandPending = recordCommandPending,
+            applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+            recordConfirmationPending = pendingRecordTarget != null,
+            cameraControlPending = pendingCommandControl != null,
+        )
+    val latestRemoteShutterAction =
+        rememberUpdatedState<(MediaRemoteShutterCommand) -> Unit>(
+            newValue = remoteShutterAction@{ command ->
+                if (!mediaRemoteShutterShouldArm) return@remoteShutterAction
+                recordScope.launch {
+                    try {
+                        routeMediaRemoteShutterCommand(
+                            session = session,
+                            command = command,
+                            isRecording = recording,
+                            recordControlEnabled = recordControlEnabled,
+                        )
+                    } catch (error: CameraRecordingException) {
+                        Toast.makeText(appContext, error.message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+        )
+    DisposableEffect(mediaRemoteShutter, mediaRemoteShutterShouldArm) {
+        val shutter = mediaRemoteShutter
+        if (shutter != null && mediaRemoteShutterShouldArm) {
+            shutter.arm { command -> latestRemoteShutterAction.value(command) }
+        } else {
+            shutter?.disarm()
+        }
+        onDispose { shutter?.disarm() }
     }
     var frameCount by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) {
@@ -528,7 +574,6 @@ fun MonitorScreen(
         // session streams its own live view. Media ownership gates collection,
         // and backgrounding drops below STARTED so the camera receives
         // EndLiveView instead of continuing sensor readout for no consumer.
-        val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
         val activeFrameSource =
             if (!liveViewEnabled) {
                 null

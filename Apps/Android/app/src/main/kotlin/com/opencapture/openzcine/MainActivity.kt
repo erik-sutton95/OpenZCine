@@ -4,6 +4,7 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.net.nsd.NsdManager
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.SystemBarStyle
 import androidx.core.view.WindowCompat
@@ -42,6 +43,7 @@ import com.opencapture.openzcine.pairing.SavedCameraRecords
 import com.opencapture.openzcine.pairing.SavedCamerasExperience
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
+import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.OperatorSettingsTab
@@ -69,8 +71,11 @@ private enum class StartupSurface {
  * feed, NSD transport probe) bypass startup straight to the monitor.
  */
 class MainActivity : ComponentActivity() {
+    private lateinit var mediaRemoteShutter: AndroidMediaRemoteShutter
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
         if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
         // Camera-monitor chrome owns the whole panel, like the iOS shell:
         // sticky-immersive system bars (hidden; a swipe reveals them
@@ -266,8 +271,16 @@ class MainActivity : ComponentActivity() {
                                 operatorSettings = operatorSettings,
                                 liveViewEnabled = overlay != MonitorOverlay.MEDIA,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
-                                onOpenSettings = { overlay = MonitorOverlay.SETTINGS },
-                                onOpenMedia = { overlay = MonitorOverlay.MEDIA },
+                                mediaRemoteShutter = mediaRemoteShutter,
+                                isMonitorFront = overlay == MonitorOverlay.NONE,
+                                onOpenSettings = {
+                                    mediaRemoteShutter.disarm()
+                                    overlay = MonitorOverlay.SETTINGS
+                                },
+                                onOpenMedia = {
+                                    mediaRemoteShutter.disarm()
+                                    overlay = MonitorOverlay.MEDIA
+                                },
                             )
                             when (overlay) {
                                 MonitorOverlay.NONE -> Unit
@@ -299,6 +312,30 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        if (::mediaRemoteShutter.isInitialized && mediaRemoteShutter.dispatchKeyEvent(event)) {
+            true
+        } else {
+            super.onKeyDown(keyCode, event)
+        }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        if (::mediaRemoteShutter.isInitialized && mediaRemoteShutter.dispatchKeyEvent(event)) {
+            true
+        } else {
+            super.onKeyUp(keyCode, event)
+        }
+
+    override fun onPause() {
+        if (::mediaRemoteShutter.isInitialized) mediaRemoteShutter.disarm()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        if (::mediaRemoteShutter.isInitialized) mediaRemoteShutter.close()
+        super.onDestroy()
     }
 
     /** Hides (monitor) or shows (pairing) the system bars; styling stays transparent-dark. */

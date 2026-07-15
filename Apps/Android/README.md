@@ -136,6 +136,19 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   zone; clean output retains delivery framing and de-squeeze presentation while hiding the busier
   grid and crosshair. These controls are explicitly local — they never write Nikon's camera-owned
   `GridDisplay` property.
+- **Bluetooth / hardware media remote shutter:** Operator Setup → Controls has an **off by
+  default** monitor-only media-remote switch. While a connected live monitor is frontmost and the
+  activity is resumed, an Android `MediaSession` active only in that state maps Play/Pause or
+  headset keys to a record toggle, Record/Play to start, and Pause/Stop to stop through the existing
+  `CameraSession.setRecording` seam; it disarms for Settings, Media, backgrounding, a pending
+  record confirmation or command, an in-flight camera control, and teardown. Android does not
+  consistently identify the physical source of a media key, so this deliberately does not claim
+  to distinguish Bluetooth from other hardware
+  media controls. Phone volume keys are neither consumed nor changed, and a remote trigger skips
+  the phone-side Record Confirmation dialog. Unit coverage verifies allowlisting, arm/disarm,
+  duplicate-event debounce, and command routing. Hardware validation still needs a paired remote
+  (both Play/Pause and headset forms), a repeated press, Settings/Media/background disarm, and a
+  check that the phone's own volume keys behave normally.
 - **Real-session diagnostics:** connect phases use the `SwiftCoreCameraSession` logcat tag and
   frame pacing uses `ZCLiveFeed`. For a
   fake-ZR server on the development Mac (scripted twin, incl. a synthesized live-view stream:

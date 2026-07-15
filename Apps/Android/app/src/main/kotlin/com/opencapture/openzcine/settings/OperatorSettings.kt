@@ -179,10 +179,13 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val mediaReadoutVisible: Toggle = Toggle("display.mediaReadout", default = true)
     public val fpsReadoutVisible: Toggle = Toggle("display.fpsReadout", default = true)
 
-    // Controls — all three are app-local behavior and therefore safe to expose
+    // Controls — all four are app-local behavior and therefore safe to expose
     // before Android has camera-property writes.
     public val recordConfirmationEnabled: Toggle =
         Toggle("controls.recordConfirmation", default = true)
+    /** Opt-in foreground media-button shutter; it never intercepts phone volume keys. */
+    public val mediaRemoteShutterEnabled: Toggle =
+        Toggle("controls.mediaRemoteShutter.v1", default = false)
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
 
@@ -322,6 +325,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             mediaReadoutVisible,
             fpsReadoutVisible,
             recordConfirmationEnabled,
+            mediaRemoteShutterEnabled,
             hapticsEnabled,
             keepScreenAwake,
             ruleOfThirdsEnabled,
