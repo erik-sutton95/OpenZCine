@@ -22,7 +22,10 @@ public enum class SavedCameraTransport(
     CAMERA_ACCESS_POINT("camera-access-point", "Camera access point"),
 
     /** The camera connects to the phone's Wi-Fi hotspot. */
-    PHONE_HOTSPOT("phone-hotspot", "Phone hotspot");
+    PHONE_HOTSPOT("phone-hotspot", "Phone hotspot"),
+
+    /** A physically attached and permissioned USB PTP camera. */
+    USB_C("usb-c", "USB-C");
 
     internal companion object {
         fun fromPersistedValue(value: String?): SavedCameraTransport =
@@ -34,11 +37,12 @@ public enum class SavedCameraTransport(
  * A durable, non-secret camera profile for Android startup and reconnect.
  *
  * Wi-Fi keys deliberately stay in [CameraWifiCredentialStore], which is
- * Keystore-encrypted. This record only stores the address and presentation
+ * Keystore-encrypted. USB records store a privacy-safe digest rather than a
+ * raw hardware serial. This record only stores the route key and presentation
  * metadata needed to offer a reconnect action after the app relaunches.
  */
 public data class SavedCameraRecord(
-    /** Last reachable PTP-IP host, normalized to a stable lower-case key. */
+    /** PTP-IP host or privacy-safe USB host digest, normalized to a stable lower-case key. */
     val host: String,
     /** Camera-reported name used when no operator nickname exists. */
     val cameraName: String,
@@ -75,7 +79,10 @@ public object SavedCameraRecords {
             val existingIndex =
                 output.indexOfFirst { existing ->
                     existing.host == normalized.host ||
-                        cameraNamesMatch(existing.cameraName, normalized.cameraName)
+                        (
+                            existing.transport == normalized.transport &&
+                                cameraNamesMatch(existing.cameraName, normalized.cameraName)
+                        )
                 }
             if (existingIndex < 0) {
                 output += normalized

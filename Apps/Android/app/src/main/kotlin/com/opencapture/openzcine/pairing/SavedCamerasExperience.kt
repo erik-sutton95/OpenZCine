@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.transport.DiscoveredCamera
+import com.opencapture.openzcine.transport.UsbPtpCamera
+import com.opencapture.openzcine.transport.UsbPtpCameraAccess
+import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -80,12 +83,22 @@ public fun SavedCamerasExperience(
     val handedOff = remember { mutableStateOf(false) }
     var phase by remember { mutableStateOf<SavedCameraPhase>(SavedCameraPhase.Idle) }
     var discoveredCameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
+    var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
+    var attemptedUsbReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
     var removalTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
     var renameTarget by remember { mutableStateOf<SavedCameraRecord?>(null) }
     var renameDraft by remember { mutableStateOf("") }
 
     LaunchedEffect(environment) {
         environment.hotspotCameras.collect { discoveredCameras = it }
+    }
+    LaunchedEffect(environment) {
+        val source = environment.usbCameraSource
+        if (source == null) {
+            usbCameras = emptyList()
+        } else {
+            source.cameras.collect { usbCameras = it }
+        }
     }
     DisposableEffect(environment) {
         onDispose {
@@ -96,6 +109,7 @@ public fun SavedCamerasExperience(
 
     fun resolvedHost(record: SavedCameraRecord): String {
         if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) return record.host
+        if (record.transport == SavedCameraTransport.USB_C) return record.host
         return discoveredCameras.firstOrNull { camera ->
             camera.host == record.host ||
                 SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
@@ -105,13 +119,54 @@ public fun SavedCamerasExperience(
     fun reconnect(record: SavedCameraRecord) {
         if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
         handedOff.value = false
-        val host = resolvedHost(record)
         work.value =
             scope.launch {
                 var session: com.opencapture.openzcine.core.CameraSession? = null
                 var handoffSucceeded = false
+                var host = resolvedHost(record)
                 try {
-                    if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+                    if (record.transport == SavedCameraTransport.USB_C) {
+                        val source = environment.usbCameraSource
+                        if (source == null) {
+                            phase =
+                                SavedCameraPhase.Error(
+                                    "USB-C camera support is unavailable on this device.",
+                                )
+                            return@launch
+                        }
+                        val camera =
+                            usbCameras.firstOrNull {
+                                it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                            }
+                        if (camera == null) {
+                            phase =
+                                SavedCameraPhase.Error(
+                                    "Connect your saved USB-C camera and approve Android access before reconnecting.",
+                                )
+                            return@launch
+                        }
+                        when (val opened = source.open(camera)) {
+                            is UsbPtpOpenResult.Opened -> {
+                                host = opened.hostKey
+                                session =
+                                    try {
+                                        environment.createUsbSession(opened)
+                                    } catch (error: Exception) {
+                                        // The source has already claimed its
+                                        // physical interface. Release it if
+                                        // the session wrapper cannot take
+                                        // ownership, before propagating the
+                                        // normal reconnect failure.
+                                        opened.transport.close()
+                                        throw error
+                                    }
+                            }
+                            is UsbPtpOpenResult.Rejected -> {
+                                phase = SavedCameraPhase.Error(opened.message)
+                                return@launch
+                            }
+                        }
+                    } else if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
                         val ssid = record.wifiSsid
                         if (ssid == null) {
                             phase =
@@ -139,9 +194,10 @@ public fun SavedCamerasExperience(
                     }
 
                     phase = SavedCameraPhase.Connecting(record.displayTitle)
-                    session = environment.createSession(host)
-                    session.connect()
-                    val connected = session.state.value as? CameraSessionState.Connected
+                    val activeSession = session ?: environment.createSession(host)
+                    session = activeSession
+                    activeSession.connect()
+                    val connected = activeSession.state.value as? CameraSessionState.Connected
                     if (connected == null) {
                         phase =
                             SavedCameraPhase.Error(
@@ -153,7 +209,7 @@ public fun SavedCamerasExperience(
                     handedOff.value = true
                     onPaired(
                         PairedCamera(
-                            session = session,
+                            session = activeSession,
                             savedCamera =
                                 record.copy(
                                     host = host,
@@ -192,6 +248,28 @@ public fun SavedCamerasExperience(
         phase = SavedCameraPhase.Idle
     }
 
+    // Match the iOS saved-camera behavior: reconnect one time for each real
+    // USB attachment. The key drops out of this set on detach, re-arming the
+    // next plug-in without spinning retries against a body that rejected a
+    // session or was unplugged mid-connect.
+    LaunchedEffect(cameras, usbCameras, phase) {
+        val attachedHosts =
+            usbCameras
+                .filter { it.access == UsbPtpCameraAccess.READY }
+                .mapNotNull(UsbPtpCamera::hostKey)
+                .toSet()
+        attemptedUsbReconnectHosts = attemptedUsbReconnectHosts.intersect(attachedHosts)
+        if (phase != SavedCameraPhase.Idle) return@LaunchedEffect
+        val match =
+            cameras.firstOrNull { record ->
+                record.transport == SavedCameraTransport.USB_C &&
+                    record.host in attachedHosts &&
+                    record.host !in attemptedUsbReconnectHosts
+            } ?: return@LaunchedEffect
+        attemptedUsbReconnectHosts += match.host
+        reconnect(match)
+    }
+
     val busy = phase is SavedCameraPhase.Joining || phase is SavedCameraPhase.Connecting
     val statusTitle =
         when (phase) {
@@ -228,6 +306,7 @@ public fun SavedCamerasExperience(
                         SavedCameraList(
                             cameras = cameras,
                             discoveredCameras = discoveredCameras,
+                            usbCameras = usbCameras,
                             phase = phase,
                             onConnect = ::reconnect,
                             onRename = { record ->
@@ -258,6 +337,7 @@ public fun SavedCamerasExperience(
                             SavedCameraList(
                                 cameras = cameras,
                                 discoveredCameras = discoveredCameras,
+                                usbCameras = usbCameras,
                                 phase = phase,
                                 onConnect = ::reconnect,
                                 onRename = { record ->
@@ -381,6 +461,7 @@ private fun SavedCameraOverview(
 private fun SavedCameraList(
     cameras: List<SavedCameraRecord>,
     discoveredCameras: List<DiscoveredCamera>,
+    usbCameras: List<UsbPtpCamera>,
     phase: SavedCameraPhase,
     onConnect: (SavedCameraRecord) -> Unit,
     onRename: (SavedCameraRecord) -> Unit,
@@ -434,16 +515,23 @@ private fun SavedCameraList(
                 )
             } else {
                 cameras.forEach { record ->
-                    SavedCameraRow(
-                        record = record,
-                        isDiscovered =
+                    val isDiscovered =
+                        if (record.transport == SavedCameraTransport.USB_C) {
+                            usbCameras.any {
+                                it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                            }
+                        } else {
                             discoveredCameras.any { camera ->
                                 camera.host == record.host ||
                                     SavedCameraRecords.cameraNamesMatch(
                                         camera.name,
                                         record.cameraName,
                                     )
-                            },
+                            }
+                        }
+                    SavedCameraRow(
+                        record = record,
+                        isDiscovered = isDiscovered,
                         enabled = !busy,
                         onConnect = { onConnect(record) },
                         onRename = { onRename(record) },
@@ -520,7 +608,12 @@ private fun SavedCameraRow(
             )
         }
         Text(
-            "${record.transport.displayName} · ${record.host}",
+            if (record.transport == SavedCameraTransport.USB_C) {
+                "${record.transport.displayName} · " +
+                    if (isDiscovered) "attached and authorized" else "connect and authorize"
+            } else {
+                "${record.transport.displayName} · ${record.host}"
+            },
             color = StartupColors.muted,
             fontSize = 11.sp,
             maxLines = 1,

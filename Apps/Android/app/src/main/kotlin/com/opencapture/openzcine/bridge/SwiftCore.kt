@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.transport.UsbPtpTransport
 
 /**
  * JNI binding to `libOpenZCineAndroid.so` — the shared Swift core
@@ -252,8 +253,26 @@ object SwiftCore {
      * handshake on both channels, then the Nikon open/pair/identify sequence,
      * all inside the Swift core's session layer. Returns immediately; progress
      * and the terminal result arrive on [listener] from a background thread.
+     * [connectionOwner] is an opaque, per-attempt token used only to ensure a
+     * stale cancellation cannot tear down a newer session.
      */
-    external fun sessionConnect(host: String, listener: SessionListener)
+    external fun sessionConnect(host: String, connectionOwner: Long, listener: SessionListener)
+
+    /**
+     * Connects over a claimed Android USB PTP interface. Kotlin supplies only
+     * raw bulk/interrupt bytes through [transport]; Swift owns PTP container
+     * framing, session open/pair/identify strategy, and all camera operations.
+     * Progress and the terminal result arrive on [listener] from a background
+     * thread, just like [sessionConnect]. [connectionOwner] scopes later
+     * teardown to this exact connection attempt.
+     */
+    external fun sessionConnectUsb(
+        transport: UsbPtpTransport,
+        host: String,
+        cameraNameHint: String,
+        connectionOwner: Long,
+        listener: SessionListener,
+    )
 
     /**
      * Starts draining the connected camera's dedicated PTP-IP event channel.
@@ -320,10 +339,11 @@ object SwiftCore {
      * Gracefully tears down the active session: best-effort `CloseSession` so
      * the camera frees its connection slot, then both sockets. Blocking
      * (bounded ~2 s) — call from a background dispatcher. A running live-view
-     * pump is stopped first (`EndLiveView` before `CloseSession`). Safe when
-     * idle.
+     * pump is stopped first (`EndLiveView` before `CloseSession`). The opaque
+     * [connectionOwner] means an old cancelled attempt cannot disconnect a
+     * newer retry. Safe when idle or when the owner is no longer active.
      */
-    external fun sessionDisconnect()
+    external fun sessionDisconnect(connectionOwner: Long)
 
     /** Receives live-view frames pushed from Swift (the facade's pump thread). */
     interface LiveFrameListener {

@@ -98,6 +98,24 @@
         return array
     }
 
+    /// Closes a Kotlin-owned raw USB transport before a Swift handle exists.
+    ///
+    /// `sessionConnectUsb` receives an already-claimed Android interface. If
+    /// constructing its global JNI handle fails, no Swift session will reach
+    /// the normal disconnect path, so release that platform resource directly
+    /// instead of leaving the camera interface claimed until process exit.
+    private func closeKotlinUSBTransport(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ transport: jobject?
+    ) {
+        guard let transport else { return }
+        let fns = table(env)
+        guard let type = fns.GetObjectClass!(env, transport) else { return }
+        defer { fns.DeleteLocalRef!(env, type) }
+        guard let close = fns.GetMethodID!(env, type, "close", "()V") else { return }
+        var arguments = jvalue()
+        fns.CallVoidMethodA!(env, transport, close, &arguments)
+    }
+
     // MARK: - Info
 
     /// `SwiftCore.coreVersion(): String` — proves the Swift core is alive in-process.
@@ -350,36 +368,125 @@
     }
 
     /// Process-wide active session slot behind the coarse JNI facade: one
-    /// camera at a time, matching the app's single-camera model.
+    /// camera at a time, matching the app's single-camera model. Every native
+    /// connect attempt carries a Kotlin-generated owner token, so a delayed
+    /// cancellation can release only its own pending/active resources.
     private final class ActiveSessionSlot: @unchecked Sendable {
+        private struct ActiveConnection {
+            let owner: Int64
+            let session: PTPIPClientSession
+        }
+
+        private struct PendingUSBConnection {
+            let owner: Int64
+            let transport: AndroidUSBPTPTransport
+        }
+
         static let shared = ActiveSessionSlot()
         private let lock = NSLock()
-        private var session: PTPIPClientSession?
+        private var active: ActiveConnection?
+        /// The newest request allowed to publish a session. A stale Wi-Fi
+        /// connect can finish its socket handshake, but it cannot displace a
+        /// newer request after this owner changes or is cancelled.
+        private var pendingOwner: Int64?
+        /// A claimed USB interface while its Swift connection thread is still
+        /// handshaking. It is owned by [pendingOwner], not by a process-global
+        /// cancellation call.
+        private var pendingUSB: PendingUSBConnection?
 
-        /// Stores `new` and returns the displaced session (for teardown).
-        func replace(with new: PTPIPClientSession?) -> PTPIPClientSession? {
+        /// Begins a connection attempt and returns only a superseded pending
+        /// USB transport. The current active session remains usable until a
+        /// newer attempt succeeds, matching the prior reconnect behavior.
+        func beginConnection(
+            owner: Int64,
+            usbTransport: AndroidUSBPTPTransport? = nil
+        ) -> AndroidUSBPTPTransport? {
             lock.lock()
             defer { lock.unlock() }
-            let old = session
-            session = new
-            return old
+            let supersededUSB = pendingUSB?.transport
+            pendingOwner = owner
+            pendingUSB = usbTransport.map { PendingUSBConnection(owner: owner, transport: $0) }
+            return supersededUSB
         }
 
         func current() -> PTPIPClientSession? {
             lock.lock()
             defer { lock.unlock() }
-            return session
+            return active?.session
+        }
+
+        /// Promotes exactly the still-current connection request into the
+        /// active slot. A rejected completion must disconnect its local session
+        /// without publishing a late Kotlin success callback.
+        func completeConnection(
+            owner: Int64,
+            session new: PTPIPClientSession
+        ) -> (accepted: Bool, displacedSession: PTPIPClientSession?) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard pendingOwner == owner else { return (false, nil) }
+            pendingOwner = nil
+            if pendingUSB?.owner == owner {
+                pendingUSB = nil
+            }
+            let displaced = active?.session
+            active = ActiveConnection(owner: owner, session: new)
+            return (true, displaced)
+        }
+
+        /// Clears one failed/cancelled pending request and returns its claimed
+        /// USB interface, if any, for teardown outside the slot lock.
+        func clearPendingConnection(owner: Int64) -> AndroidUSBPTPTransport? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard pendingOwner == owner else { return nil }
+            pendingOwner = nil
+            guard pendingUSB?.owner == owner else { return nil }
+            let transport = pendingUSB?.transport
+            pendingUSB = nil
+            return transport
+        }
+
+        /// Atomically takes only [owner]'s resources. This is the key boundary
+        /// that prevents cleanup for a cancelled attempt A from closing retry
+        /// B when Kotlin exposes an immediate retry affordance.
+        func takeOwnedConnection(owner: Int64) -> (
+            session: PTPIPClientSession?, pendingUSBTransport: AndroidUSBPTPTransport?
+        ) {
+            lock.lock()
+            defer { lock.unlock() }
+            let removedSession: PTPIPClientSession?
+            if active?.owner == owner {
+                removedSession = active?.session
+                active = nil
+            } else {
+                removedSession = nil
+            }
+            let removedUSB: AndroidUSBPTPTransport?
+            if pendingOwner == owner {
+                pendingOwner = nil
+                if pendingUSB?.owner == owner {
+                    removedUSB = pendingUSB?.transport
+                    pendingUSB = nil
+                } else {
+                    removedUSB = nil
+                }
+            } else {
+                removedUSB = nil
+            }
+            return (removedSession, removedUSB)
         }
     }
 
-    /// `SwiftCore.sessionConnect(host, listener)` — async connect: PTP-IP Init
+    /// `SwiftCore.sessionConnect(host, connectionOwner, listener)` — async connect: PTP-IP Init
     /// handshake + Nikon open/pair/identify on a Swift background thread, with
     /// phases pushed to the listener (`onPhase`), ending in `onConnected` or
     /// `onFailed`. The established session parks in the process-wide slot for
     /// `sessionReadProperty` / `sessionDisconnect`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConnect")
     public func swiftCoreSessionConnect(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, host: jstring?, listener: jobject?
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, host: jstring?, owner: jlong,
+        listener: jobject?
     ) {
         let fns = table(env)
         var vm: UnsafeMutablePointer<JavaVM?>?
@@ -400,18 +507,92 @@
             vm: vm, listener: global, onPhase: onPhase, onConnected: onConnected,
             onFailed: onFailed)
         let hostString = swiftString(env, host) ?? ""
-        Thread.detachNewThread { runSessionConnect(handle, host: hostString) }
+        let connectionOwner = Int64(owner)
+        ActiveSessionSlot.shared.beginConnection(owner: connectionOwner)?.close()
+        Thread.detachNewThread {
+            runSessionConnect(handle, host: hostString, owner: connectionOwner)
+        }
+    }
+
+    /// `SwiftCore.sessionConnectUsb(transport, host, cameraNameHint, connectionOwner, listener)`
+    /// — async USB PTP connect. Kotlin retains Android USB ownership and
+    /// provides raw endpoint I/O only; the Swift facade frames generic PTP
+    /// containers, performs the same open/pair/identify sequence as Wi-Fi,
+    /// and retains the raw transport for the active session lifetime.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConnectUsb")
+    public func swiftCoreSessionConnectUsb(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, transport: jobject?,
+        host: jstring?, cameraNameHint: jstring?, owner: jlong, listener: jobject?
+    ) {
+        let fns = table(env)
+        var vm: UnsafeMutablePointer<JavaVM?>?
+        guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else {
+            closeKotlinUSBTransport(env, transport)
+            return
+        }
+        guard let listener, let global = fns.NewGlobalRef!(env, listener) else {
+            closeKotlinUSBTransport(env, transport)
+            return
+        }
+        guard let cls = fns.GetObjectClass!(env, global),
+            let onPhase = fns.GetMethodID!(
+                env, cls, "onPhase", "(Ljava/lang/String;Ljava/lang/String;)V"),
+            let onConnected = fns.GetMethodID!(
+                env, cls, "onConnected",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+            let onFailed = fns.GetMethodID!(env, cls, "onFailed", "(Ljava/lang/String;)V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            closeKotlinUSBTransport(env, transport)
+            return
+        }
+        let listenerHandle = SessionListenerHandle(
+            vm: vm, listener: global, onPhase: onPhase, onConnected: onConnected,
+            onFailed: onFailed)
+        guard let transportHandle = JNIUSBPTPTransportHandle(env: env, transport: transport) else {
+            closeKotlinUSBTransport(env, transport)
+            let message = javaString(env, "Android could not initialize the USB camera transport.")
+            var arguments = [jvalue(l: message)]
+            fns.CallVoidMethodA!(env, global, onFailed, &arguments)
+            if let message { fns.DeleteLocalRef!(env, message) }
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        let hostString = swiftString(env, host) ?? ""
+        let cameraName = swiftString(env, cameraNameHint) ?? ""
+        let facadeTransport = AndroidUSBPTPTransport(rawIO: transportHandle)
+        let connectionOwner = Int64(owner)
+        ActiveSessionSlot.shared.beginConnection(
+            owner: connectionOwner,
+            usbTransport: facadeTransport
+        )?.close()
+        Thread.detachNewThread {
+            runUSBSessionConnect(
+                listenerHandle,
+                transport: facadeTransport,
+                host: hostString,
+                cameraNameHint: cameraName,
+                owner: connectionOwner
+            )
+        }
     }
 
     /// Connect-thread body: attaches to the JVM, drives the blocking session
     /// establishment, and pushes phases/terminal callbacks to the listener.
-    private func runSessionConnect(_ handle: SessionListenerHandle, host: String) {
+    private func runSessionConnect(
+        _ handle: SessionListenerHandle,
+        host: String,
+        owner: Int64
+    ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
         var envOut: UnsafeMutablePointer<JNIEnv?>?
         guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
             let env = envOut
-        else { return }
+        else {
+            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            return
+        }
         defer { _ = invoke.DetachCurrentThread!(handle.vm) }
         let fns = table(env)
         defer { fns.DeleteGlobalRef!(env, handle.listener) }
@@ -429,9 +610,17 @@
             let session = try PTPIPClientSession.connect(host: host) { phase, detail in
                 callStrings(handle.onPhase, [String(describing: phase), detail])
             }
-            // A replaced session (reconnect without disconnect) is torn down
-            // gracefully so the camera's slot is released.
-            ActiveSessionSlot.shared.replace(with: session)?.disconnect()
+            let completion = ActiveSessionSlot.shared.completeConnection(
+                owner: owner,
+                session: session
+            )
+            guard completion.accepted else {
+                // A cancellation or newer request won the race. Release this
+                // local session without publishing a stale Kotlin success.
+                session.disconnect()
+                return
+            }
+            completion.displacedSession?.disconnect()
             callStrings(
                 handle.onConnected,
                 [
@@ -439,6 +628,73 @@
                     session.identity.serialNumber,
                 ])
         } catch {
+            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            callStrings(handle.onFailed, [error.localizedDescription])
+        }
+    }
+
+    /// Connect-thread body for a platform-claimed USB interface. This mirrors
+    /// `runSessionConnect` exactly so JNI listener ownership and terminal
+    /// cleanup remain identical across Wi-Fi and USB sessions.
+    private func runUSBSessionConnect(
+        _ handle: SessionListenerHandle,
+        transport: AndroidUSBPTPTransport,
+        host: String,
+        cameraNameHint: String,
+        owner: Int64
+    ) {
+        // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
+        let invoke = handle.vm.pointee!.pointee
+        var envOut: UnsafeMutablePointer<JNIEnv?>?
+        guard invoke.AttachCurrentThread!(handle.vm, &envOut, nil) == JNI_OK,
+            let env = envOut
+        else {
+            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            transport.close()
+            return
+        }
+        defer { _ = invoke.DetachCurrentThread!(handle.vm) }
+        let fns = table(env)
+        defer { fns.DeleteGlobalRef!(env, handle.listener) }
+
+        func callStrings(_ method: jmethodID, _ values: [String]) {
+            let jValues = values.map { javaString(env, $0) }
+            var args = jValues.map { jvalue(l: $0) }
+            fns.CallVoidMethodA!(env, handle.listener, method, &args)
+            for value in jValues where value != nil {
+                fns.DeleteLocalRef!(env, value)
+            }
+        }
+
+        do {
+            let session = try PTPIPClientSession.connectUSB(
+                transport: transport,
+                host: host,
+                cameraNameHint: cameraNameHint,
+                onPhase: { phase, detail in
+                    callStrings(handle.onPhase, [String(describing: phase), detail])
+                }
+            )
+            let completion = ActiveSessionSlot.shared.completeConnection(
+                owner: owner,
+                session: session
+            )
+            guard completion.accepted else {
+                // `sessionDisconnect` or a newer USB request won the race.
+                // Do not publish a late success into Kotlin.
+                session.disconnect()
+                return
+            }
+            completion.displacedSession?.disconnect()
+            callStrings(
+                handle.onConnected,
+                [
+                    session.identity.displayName, session.identity.model,
+                    session.identity.serialNumber,
+                ])
+        } catch {
+            ActiveSessionSlot.shared.clearPendingConnection(owner: owner)?.close()
+            transport.close()
             callStrings(handle.onFailed, [error.localizedDescription])
         }
     }
@@ -690,14 +946,17 @@
         }
     }
 
-    /// `SwiftCore.sessionDisconnect()` — graceful teardown of the active
-    /// session: best-effort `CloseSession` then both sockets (the iOS
-    /// reconnect-wedge fix semantics). No-op when nothing is connected.
+    /// `SwiftCore.sessionDisconnect(connectionOwner)` — graceful teardown of
+    /// only that attempt's active or pending session: best-effort
+    /// `CloseSession` then the owned transport. A stale cancellation is a
+    /// no-op when a newer owner is active.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionDisconnect")
     public func swiftCoreSessionDisconnect(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, owner: jlong
     ) {
-        ActiveSessionSlot.shared.replace(with: nil)?.disconnect()
+        let removed = ActiveSessionSlot.shared.takeOwnedConnection(owner: Int64(owner))
+        removed.pendingUSBTransport?.close()
+        removed.session?.disconnect()
     }
 
     // MARK: - Live view

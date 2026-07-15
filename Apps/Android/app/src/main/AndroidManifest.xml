@@ -24,6 +24,11 @@
     <!-- The scanner is optional: pairing and all other app surfaces remain
       usable on devices without a camera. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- USB-C tethering is optional hardware: Android's per-device consent is
+      requested only after a compatible PTP interface is physically attached. -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
 
     <application
         android:icon="@mipmap/ic_launcher"
