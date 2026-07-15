@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -45,6 +46,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -86,6 +89,9 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     companion object {
         /** Local framing tools rendered from [OperatorSettings], never camera state. */
         val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, DESQ)
+
+        /** Independently selectable scope panels subject to the portrait fit-mode cap. */
+        val scopeTools: Set<AssistTool> = setOf(WAVE, PARADE, HISTO, VECTOR, LIGHTS)
 
         /** Decodes a persisted enum name while safely ignoring retired or malformed values. */
         internal fun fromStoredName(value: String): AssistTool? =
@@ -506,6 +512,7 @@ fun AssistToolbar(
     maximumActiveScopes: Int? = null,
     onScopeLimitReached: () -> Unit = {},
     onLongPressTool: ((AssistTool) -> Unit)? = null,
+    onLongPressToolAnchored: ((AssistTool, Rect) -> Unit)? = null,
 ) {
     val supportedTools =
         if (imageEffectsAvailable) {
@@ -572,13 +579,26 @@ fun AssistToolbar(
                     isOn = isOn,
                     enabled = enabled,
                     onLongClick =
-                        onLongPressTool?.takeIf { tool.hasConfiguration }?.let { callback ->
-                            {
-                                if (hapticsEnabled) {
-                                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        if (tool.hasConfiguration &&
+                            (onLongPressTool != null || onLongPressToolAnchored != null)
+                        ) {
+                            { anchor ->
+                                if (tool in AssistTool.scopeTools &&
+                                    !isOn &&
+                                    maximumActiveScopes != null &&
+                                    state.selectedScopes.size >= maximumActiveScopes
+                                ) {
+                                    onScopeLimitReached()
+                                } else {
+                                    if (hapticsEnabled) {
+                                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                    }
+                                    onLongPressToolAnchored?.invoke(tool, anchor)
+                                        ?: onLongPressTool?.invoke(tool)
                                 }
-                                callback(tool)
                             }
+                        } else {
+                            null
                         },
                 ) {
                     var changed = true
@@ -621,6 +641,8 @@ internal fun PortraitFillAssistRail(
     onToggleFramingTool: (AssistTool) -> Unit = {},
     hapticsEnabled: Boolean = true,
     enabled: Boolean = true,
+    onLongPressTool: ((AssistTool) -> Unit)? = null,
+    onLongPressToolAnchored: ((AssistTool, Rect) -> Unit)? = null,
 ) {
     if (!expanded) {
         Box(
@@ -684,7 +706,25 @@ internal fun PortraitFillAssistRail(
                 } else {
                     state.isOn(tool)
                 }
-            AssistToolCell(tool, isOn, enabled, onLongClick = null) {
+            AssistToolCell(
+                tool = tool,
+                isOn = isOn,
+                enabled = enabled,
+                onLongClick =
+                    if (tool.hasConfiguration &&
+                        (onLongPressTool != null || onLongPressToolAnchored != null)
+                    ) {
+                        { anchor ->
+                            if (hapticsEnabled) {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            }
+                            onLongPressToolAnchored?.invoke(tool, anchor)
+                                ?: onLongPressTool?.invoke(tool)
+                        }
+                    } else {
+                        null
+                    },
+            ) {
                 if (isFramingTool) {
                     onToggleFramingTool(tool)
                 } else {
@@ -750,18 +790,20 @@ private fun AssistToolCell(
     tool: AssistTool,
     isOn: Boolean,
     enabled: Boolean,
-    onLongClick: (() -> Unit)?,
+    onLongClick: ((Rect) -> Unit)?,
     onClick: () -> Unit,
 ) {
     val tint = if (isOn) LiveDesign.accent else LiveDesign.muted
+    var bounds by remember(tool) { mutableStateOf(Rect.Zero) }
     Column(
         modifier =
             Modifier
                 .background(if (isOn) LiveDesign.accentDim else Color.Transparent, ChromeShape)
+                .onGloballyPositioned { bounds = it.boundsInRoot() }
                 .assistToolClickable(
                     enabled = enabled,
                     title = tool.settingsTitle,
-                    onLongClick = onLongClick,
+                    onLongClick = onLongClick?.let { callback -> { callback(bounds) } },
                     onClick = onClick,
                 )
                 .semantics {

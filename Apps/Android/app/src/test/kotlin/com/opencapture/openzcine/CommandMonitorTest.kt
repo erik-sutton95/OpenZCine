@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import androidx.compose.ui.geometry.Offset
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
@@ -372,6 +373,42 @@ class CommandMonitorTest {
     }
 
     @Test
+    fun `command drag resolves every edge to a valid direct destination`() {
+        assertEquals(
+            0,
+            commandGridSlot(Offset(-50f, -20f), 100f, 60f, 9f, columns = 3, itemCount = 8),
+        )
+        assertEquals(
+            4,
+            commandGridSlot(Offset(115f, 72f), 100f, 60f, 9f, columns = 3, itemCount = 8),
+        )
+        assertEquals(
+            7,
+            commandGridSlot(Offset(900f, 900f), 100f, 60f, 9f, columns = 3, itemCount = 8),
+        )
+    }
+
+    @Test
+    fun `command drag can start only inside a real tile`() {
+        assertEquals(
+            4,
+            commandGridHitSlot(Offset(115f, 72f), 100f, 60f, 9f, columns = 3, itemCount = 8),
+        )
+        assertEquals(
+            null,
+            commandGridHitSlot(Offset(105f, 20f), 100f, 60f, 9f, columns = 3, itemCount = 8),
+        )
+        assertEquals(
+            null,
+            commandGridHitSlot(Offset(20f, 65f), 100f, 60f, 9f, columns = 3, itemCount = 8),
+        )
+        assertEquals(
+            null,
+            commandGridHitSlot(Offset(230f, 150f), 100f, 60f, 9f, columns = 3, itemCount = 8),
+        )
+    }
+
+    @Test
     fun `tile order normalizes, moves, and survives a reload`() {
         val preferences = TestSharedPreferences()
         val store = CommandTileOrderStore(preferences)
@@ -392,5 +429,8 @@ class CommandMonitorTest {
         assertEquals(CommandTileKind.CODEC, moved[3])
         assertFalse(moved == restored)
         assertTrue(moved.containsAll(CommandTileKind.entries))
+
+        store.save(moved)
+        assertEquals(moved, CommandTileOrderStore(preferences).load())
     }
 }

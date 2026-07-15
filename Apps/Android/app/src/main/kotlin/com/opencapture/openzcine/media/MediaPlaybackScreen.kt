@@ -1204,7 +1204,10 @@ private fun ProgressivePlayer(
                                     )
                             },
                             hapticsEnabled = operatorSettings.hapticsEnabled.value,
-                            onLongPressTool = { tool -> assistOptionsTool = tool },
+                            onLongPressToolAnchored = { tool, bounds ->
+                                assistToolbarBounds = bounds
+                                assistOptionsTool = tool
+                            },
                         )
                         PlaybackButton(
                             "VIEW",

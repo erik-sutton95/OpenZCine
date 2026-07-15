@@ -2,10 +2,12 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,24 +18,41 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
@@ -42,6 +61,8 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 /** The stable, persisted tile identifiers used by the DISP 3 primary grid. */
 internal enum class CommandTileKind {
@@ -172,6 +193,7 @@ internal data class CommandDashboardPresentation(
 
 private const val COMMAND_GRID_COLUMNS = 3
 private const val COMMAND_GRID_SPACING_DP = 9
+private const val COMMAND_REORDER_CLICK_SUPPRESSION_MS = 150L
 private const val COMMAND_PORTRAIT_GRID_ROW_HEIGHT_DP = 76
 private val COMMAND_COMPACT_SIDE_TILE_HEIGHT = 36.dp
 private val COMMAND_PORTRAIT_SIDE_TILE_HEIGHT = 44.dp
@@ -183,6 +205,48 @@ internal fun commandPrimaryGridRows(
 ): Int {
     require(columns > 0) { "Command dashboard grid needs at least one column." }
     return (tileCount.coerceAtLeast(1) + columns - 1) / columns
+}
+
+/** Resolves one drag position to a clamped row-major command-grid slot. */
+internal fun commandGridSlot(
+    position: Offset,
+    tileWidth: Float,
+    rowHeight: Float,
+    spacing: Float,
+    columns: Int,
+    itemCount: Int,
+): Int {
+    require(tileWidth > 0f && rowHeight > 0f) { "command grid cells must be positive" }
+    require(spacing >= 0f && columns > 0 && itemCount > 0) {
+        "command grid geometry must contain at least one item"
+    }
+    val column = floor(position.x / (tileWidth + spacing)).toInt().coerceIn(0, columns - 1)
+    val row = floor(position.y / (rowHeight + spacing)).toInt().coerceAtLeast(0)
+    return (row * columns + column).coerceIn(0, itemCount - 1)
+}
+
+/** Returns a tile only when a press lands inside its painted cell, never in a gutter. */
+internal fun commandGridHitSlot(
+    position: Offset,
+    tileWidth: Float,
+    rowHeight: Float,
+    spacing: Float,
+    columns: Int,
+    itemCount: Int,
+): Int? {
+    require(tileWidth > 0f && rowHeight > 0f) { "command grid cells must be positive" }
+    require(spacing >= 0f && columns > 0 && itemCount > 0) {
+        "command grid geometry must contain at least one item"
+    }
+    if (position.x < 0f || position.y < 0f) return null
+    val columnStride = tileWidth + spacing
+    val rowStride = rowHeight + spacing
+    val column = floor(position.x / columnStride).toInt()
+    val row = floor(position.y / rowStride).toInt()
+    if (column !in 0 until columns) return null
+    if (position.x - column * columnStride >= tileWidth) return null
+    if (position.y - row * rowStride >= rowHeight) return null
+    return (row * columns + column).takeIf { it in 0 until itemCount }
 }
 
 /**
@@ -624,7 +688,8 @@ internal fun CommandDashboard(
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveTileLater: (CommandTileKind) -> Unit,
+    onMoveTile: (CommandTileKind, Int) -> Unit,
+    onReorderStarted: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -648,7 +713,8 @@ internal fun CommandDashboard(
                 controlsEnabled = controlsEnabled,
                 pendingControl = pendingControl,
                 onOpenControl = onOpenControl,
-                onMoveTileLater = onMoveTileLater,
+                onMoveTile = onMoveTile,
+                onReorderStarted = onReorderStarted,
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
         }
@@ -673,7 +739,8 @@ internal fun PortraitCommandDashboard(
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveTileLater: (CommandTileKind) -> Unit,
+    onMoveTile: (CommandTileKind, Int) -> Unit,
+    onReorderStarted: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     CommandDashboardScrollContainer(
@@ -703,7 +770,8 @@ internal fun PortraitCommandDashboard(
                 controlsEnabled = controlsEnabled,
                 pendingControl = pendingControl,
                 onOpenControl = onOpenControl,
-                onMoveTileLater = onMoveTileLater,
+                onMoveTile = onMoveTile,
+                onReorderStarted = onReorderStarted,
                 modifier =
                     Modifier
                         .fillMaxWidth()
@@ -781,45 +849,159 @@ internal fun CommandGrid(
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveTileLater: (CommandTileKind) -> Unit,
+    onMoveTile: (CommandTileKind, Int) -> Unit,
+    onReorderStarted: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val columns = COMMAND_GRID_COLUMNS
     val spacing = COMMAND_GRID_SPACING_DP.dp
     val rows = commandPrimaryGridRows(tiles.size, columns)
-    BoxWithConstraints(modifier) {
+    val latestTiles by rememberUpdatedState(tiles)
+    val latestMoveTile by rememberUpdatedState(onMoveTile)
+    val latestReorderStarted by rememberUpdatedState(onReorderStarted)
+    val latestOpenControl by rememberUpdatedState(onOpenControl)
+    var draggingKind by remember { mutableStateOf<CommandTileKind?>(null) }
+    var dragPosition by remember { mutableStateOf(Offset.Zero) }
+    var suppressCameraClicksUntil by remember { mutableLongStateOf(0L) }
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier.clipToBounds()) {
         val rowHeight = maxOf(66.dp, (maxHeight - spacing * (rows - 1)) / rows)
-        Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
-            tiles.chunked(columns).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                    row.forEach { tile ->
-                        CommandTile(
-                            tile = tile,
-                            controlsEnabled = controlsEnabled,
-                            pendingControl = pendingControl,
-                            onOpenControl = onOpenControl,
-                            onMoveLater = {
-                                tile.kind?.let(onMoveTileLater)
-                            },
-                            modifier = Modifier.weight(1f).height(rowHeight),
-                        )
-                    }
-                    repeat(columns - row.size) { Box(Modifier.weight(1f)) }
+        val spacingPx = with(density) { spacing.toPx() }
+        val tileWidth = (maxWidth - spacing * (columns - 1)) / columns
+        val tileWidthPx = with(density) { tileWidth.toPx() }
+        val rowHeightPx = with(density) { rowHeight.toPx() }
+        val viewportWidthPx = constraints.maxWidth.toFloat()
+        val viewportHeightPx = constraints.maxHeight.toFloat()
+        Box(
+            Modifier.fillMaxSize()
+                .pointerInput(tileWidthPx, rowHeightPx, spacingPx, columns) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { start ->
+                            val current = latestTiles
+                            if (current.isNotEmpty()) {
+                                val index =
+                                    commandGridHitSlot(
+                                        start,
+                                        tileWidthPx,
+                                        rowHeightPx,
+                                        spacingPx,
+                                        columns,
+                                        current.size,
+                                    )
+                                index?.let(current::getOrNull)?.kind?.let { kind ->
+                                    suppressCameraClicksUntil = Long.MAX_VALUE
+                                    draggingKind = kind
+                                    dragPosition = start
+                                    latestReorderStarted()
+                                }
+                            }
+                        },
+                        onDrag = { change, _ ->
+                            val kind = draggingKind
+                            if (kind != null) {
+                                change.consume()
+                                dragPosition = change.position
+                                val current = latestTiles
+                                if (current.isNotEmpty()) {
+                                    val target =
+                                        commandGridSlot(
+                                            change.position,
+                                            tileWidthPx,
+                                            rowHeightPx,
+                                            spacingPx,
+                                            columns,
+                                            current.size,
+                                        )
+                                    if (current.indexOfFirst { it.kind == kind } != target) {
+                                        latestMoveTile(kind, target)
+                                    }
+                                }
+                            }
+                        },
+                        onDragEnd = {
+                            if (draggingKind != null) {
+                                suppressCameraClicksUntil =
+                                    SystemClock.uptimeMillis() +
+                                    COMMAND_REORDER_CLICK_SUPPRESSION_MS
+                            }
+                            draggingKind = null
+                        },
+                        onDragCancel = {
+                            if (draggingKind != null) {
+                                suppressCameraClicksUntil =
+                                    SystemClock.uptimeMillis() +
+                                    COMMAND_REORDER_CLICK_SUPPRESSION_MS
+                            }
+                            draggingKind = null
+                        },
+                    )
+                },
+        ) {
+            tiles.forEachIndexed { index, tile ->
+                val kind = tile.kind
+                key(kind ?: "${tile.title}-$index") {
+                    val dragging = kind != null && kind == draggingKind
+                    val slotX = (index % columns) * (tileWidthPx + spacingPx)
+                    val slotY = (index / columns) * (rowHeightPx + spacingPx)
+                    val offset =
+                        if (dragging) {
+                            IntOffset(
+                                (dragPosition.x - tileWidthPx / 2f)
+                                    .coerceIn(0f, (viewportWidthPx - tileWidthPx).coerceAtLeast(0f))
+                                    .roundToInt(),
+                                (dragPosition.y - rowHeightPx / 2f)
+                                    .coerceIn(0f, (viewportHeightPx - rowHeightPx).coerceAtLeast(0f))
+                                    .roundToInt(),
+                            )
+                        } else {
+                            IntOffset(slotX.roundToInt(), slotY.roundToInt())
+                        }
+                    CommandTile(
+                        tile = tile,
+                        index = index,
+                        tileCount = tiles.size,
+                        controlsEnabled = controlsEnabled,
+                        pendingControl = pendingControl,
+                        onOpenControl = { request ->
+                            if (SystemClock.uptimeMillis() >= suppressCameraClicksUntil) {
+                                latestOpenControl(request)
+                            }
+                        },
+                        onMoveTo = { target ->
+                            kind?.let {
+                                latestMoveTile(it, target)
+                                latestReorderStarted()
+                            }
+                        },
+                        modifier =
+                            Modifier.offset { offset }
+                                .width(tileWidth)
+                                .height(rowHeight)
+                                .graphicsLayer {
+                                    scaleX = if (dragging) 1.04f else 1f
+                                    scaleY = if (dragging) 1.04f else 1f
+                                    shadowElevation = if (dragging) 14.dp.toPx() else 0f
+                                    shape = ChromeShape
+                                }
+                                .zIndex(if (dragging) 1f else 0f),
+                    )
                 }
             }
         }
     }
 }
 
-/** One camera value tile. Long-press moves any primary tile one slot later. */
+/** One camera value tile with direct drag and accessibility reorder actions. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CommandTile(
     tile: CommandTilePresentation,
+    index: Int,
+    tileCount: Int,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveLater: () -> Unit,
+    onMoveTo: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val request = tile.request
@@ -830,6 +1012,25 @@ private fun CommandTile(
     // reorderable without implying that their Nikon property can be changed.
     val canMove = tile.kind != null
     val interactive = controlEnabled || canMove
+    val reorderActions =
+        buildList {
+            if (canMove && index > 0) {
+                add(
+                    CustomAccessibilityAction("Move ${tile.title} earlier") {
+                        onMoveTo(index - 1)
+                        true
+                    },
+                )
+            }
+            if (canMove && index < tileCount - 1) {
+                add(
+                    CustomAccessibilityAction("Move ${tile.title} later") {
+                        onMoveTo(index + 1)
+                        true
+                    },
+                )
+            }
+        }
     val description =
         buildString {
             append(tile.title)
@@ -838,9 +1039,9 @@ private fun CommandTile(
             when {
                 applyingThisControl -> append(". Applying change.")
                 pending -> append(". Another control is being applied.")
-                request == null -> append(". ${tile.unavailableReason ?: "Read-only."} Long press to move later in the dashboard.")
-                !controlsEnabled -> append(". Controls are locked. Long press to move later in the dashboard.")
-                else -> append(". Double tap to change; long press to move later in the dashboard.")
+                request == null -> append(". ${tile.unavailableReason ?: "Read-only."} Long press and drag to reorder.")
+                !controlsEnabled -> append(". Controls are locked. Long press and drag to reorder.")
+                else -> append(". Double tap to change; long press and drag to reorder.")
             }
         }
     Column(
@@ -849,13 +1050,12 @@ private fun CommandTile(
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .semantics(mergeDescendants = true) {
                 contentDescription = description
+                customActions = reorderActions
                 if (!interactive) disabled()
             }
             .combinedClickable(
                 enabled = interactive,
                 onClickLabel = if (controlEnabled) "Change ${tile.title}" else null,
-                onLongClickLabel = "Move ${tile.title} later in dashboard",
-                onLongClick = if (canMove) onMoveLater else null,
                 onClick = { request?.takeIf { controlEnabled }?.let(onOpenControl) },
             )
             .padding(horizontal = 12.dp, vertical = 8.dp),

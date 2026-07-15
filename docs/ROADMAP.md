@@ -153,6 +153,14 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   existing ownership. **[VERIFY-ON-HW]** Confirm timecode on/off and frame progression, property and
   battery readback (including external power), card-space formatting, live link bars, connected-idle
   DISP 3 behavior, and every chrome edge against a supported Nikon body on the Android hardware floor.
+- **Android direct-manipulation monitor parity** (OPE-65, in review): toolbar taps retain their
+  existing local assist behavior while long-press opens the real, persisted configuration panel at
+  the measured tool anchor without click-through. Command-dashboard tiles and the supported View
+  Assist Toolbar order use direct long-press drag, persist their exact destination, expose equivalent
+  accessibility move actions, respect the haptic preference, and leave locked or pending camera
+  writes on the typed `CameraSession`/Swift seam. **[VERIFY-ON-HW]** Exercise every configurable
+  assist plus dashboard/settings drags against a supported Nikon camera in Samsung portrait and
+  landscape, then inspect all four panel and dragged-row edges.
 - **Android monitor feed texture parity** (OPE-72, in review): the Android monitor now mirrors
   iOS's feed-local vignette and deterministic static grain after the camera frame/effect pipeline.
   Resolution-only state and cached draw resources keep same-resolution frames from rebuilding its
