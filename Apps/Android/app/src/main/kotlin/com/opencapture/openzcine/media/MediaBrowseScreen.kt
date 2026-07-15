@@ -80,6 +80,7 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.LinkOption
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -125,6 +126,7 @@ private data class BatchShareResult(
 fun MediaBrowseScreen(
     cameraID: String,
     cameraConnected: Boolean,
+    operatorSettings: OperatorSettings,
     autoPlayFirstProxy: Boolean = false,
     onClose: () -> Unit,
 ) {
@@ -509,8 +511,12 @@ fun MediaBrowseScreen(
 
         playingClip?.let { clip ->
             MediaPlaybackScreen(
-                clip = clip,
+                initialClip = clip,
+                filteredClips = displayedClips,
                 cameraID = cameraID,
+                favoriteIDs = favorites,
+                framingConfiguration = operatorSettings.localFramingAssistConfiguration,
+                onToggleFavorite = ::toggleFavorite,
                 onClose = {
                     playingClip = null
                     reloadKey += 1
