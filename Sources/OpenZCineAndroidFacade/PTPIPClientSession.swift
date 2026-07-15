@@ -199,6 +199,38 @@ private enum AndroidNikonZRControlFallback {
     ]
 }
 
+/// Nikon ZR RAW image area is selected by the camera's frame-size mode, not a separate writable
+/// crop property. These labels make that camera-provided meaning visible only for documented,
+/// exact ZR RAW modes; every other advertised mode keeps its generic resolution/rate label.
+private enum AndroidNikonZRRawCropPresentation {
+    static func label(
+        for mode: PTPCameraScreenSizeMode,
+        currentCodec: String?,
+        usesNikonZRFallbacks: Bool
+    ) -> String {
+        guard usesNikonZRFallbacks,
+            let currentCodec,
+            ["N-RAW", "R3D NE"].contains(currentCodec),
+            let imageArea = imageArea(for: mode.raw)
+        else {
+            return mode.label
+        }
+        return "[\(imageArea)] \(mode.label)"
+    }
+
+    private static func imageArea(for rawScreenSize: UInt64) -> String? {
+        let size = PTPCameraPropertyDecoders.screenSize(rawScreenSize)
+        switch (size.width, size.height) {
+        case (6_048, 3_402), (4_032, 2_268):
+            return "FX"
+        case (3_984, 2_240):
+            return "DX"
+        default:
+            return nil
+        }
+    }
+}
+
 /// Exact camera-advertised values retained inside the Swift session.
 private struct AndroidRawControlCatalog: Sendable {
     var isComplete = false
@@ -228,11 +260,46 @@ private struct AndroidRawControlCatalog: Sendable {
     func capabilities(
         properties: PTPCameraPropertySnapshot,
         whiteBalanceTint: String?,
+        isScreenSizeReadbackCurrent: Bool,
         usesNikonZRFallbacks: Bool
     ) -> AndroidCameraControlCapabilities {
         guard isComplete else { return .empty }
         let currentCodec = recognizedCurrentCodec(properties.fileType)
         let showsDualBaseCircuits = currentCodec.map(ISOPickerPolicy.showsDualBaseCircuits) ?? false
+        let currentScreenSizeLabel: String?
+        if isScreenSizeReadbackCurrent,
+            let rawScreenSize = properties.rawScreenSize,
+            let mode = screenSizes.first(where: { $0.raw == rawScreenSize })
+        {
+            currentScreenSizeLabel = screenSizeLabel(
+                for: mode,
+                currentCodec: currentCodec,
+                usesNikonZRFallbacks: usesNikonZRFallbacks)
+        } else {
+            currentScreenSizeLabel = nil
+        }
+        let resolutionFrameRate: String?
+        if !isScreenSizeReadbackCurrent {
+            // The codec has changed but its D0A0 value has not been read back yet. Do not present
+            // the previous codec's resolution as the active selection while the picker uses the
+            // new descriptor domain.
+            resolutionFrameRate = nil
+        } else if let currentScreenSizeLabel {
+            resolutionFrameRate = currentScreenSizeLabel
+        } else if screenSizes.isEmpty {
+            // Some bodies expose a current D0A0 value without a writable enum descriptor. Keep the
+            // established read-only monitor presentation for that case.
+            resolutionFrameRate =
+                MonitorTextFormat.resolutionLabel(
+                    fromProperty: properties.resolution,
+                    frameRate: properties.fps ?? 0,
+                    fallback: ""
+                ).nilIfEmpty
+        } else {
+            // A fresh value that does not belong to the refreshed descriptor domain is not a safe
+            // selection to display or write.
+            resolutionFrameRate = nil
+        }
         let activeShutterValues: [String] =
             switch properties.shutterMode {
             case .angle: shutterAngles.map(\.label)
@@ -264,11 +331,7 @@ private struct AndroidRawControlCatalog: Sendable {
                 ? whiteBalanceKelvin.map(\.label) : [])
             + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
         return AndroidCameraControlCapabilities(
-            resolutionFrameRate: MonitorTextFormat.resolutionLabel(
-                fromProperty: properties.resolution,
-                frameRate: properties.fps ?? 0,
-                fallback: ""
-            ).nilIfEmpty,
+            resolutionFrameRate: resolutionFrameRate,
             codec: properties.fileType.map(MonitorTextFormat.codecShortLabel),
             whiteBalanceTint: whiteBalanceTint,
             isoValues: isoValues,
@@ -287,7 +350,12 @@ private struct AndroidRawControlCatalog: Sendable {
             shutterModes: shutterModes.map(\.label),
             shutterLocks: shutterLocks.map(\.label),
             whiteBalanceTints: whiteBalanceTints.map(\.label),
-            resolutionFrameRates: screenSizes.map(\.label),
+            resolutionFrameRates: screenSizes.map {
+                screenSizeLabel(
+                    for: $0,
+                    currentCodec: currentCodec,
+                    usesNikonZRFallbacks: usesNikonZRFallbacks)
+            },
             codecs: fileTypes.map(\.label),
             vibrationReduction: vibrationReduction.map(\.label),
             electronicVR:
@@ -300,6 +368,31 @@ private struct AndroidRawControlCatalog: Sendable {
         guard let codec else { return nil }
         let label = MonitorTextFormat.codecShortLabel(codec)
         return fileTypes.contains(where: { $0.label == label }) ? label : nil
+    }
+
+    func screenSizeMode(
+        for label: String,
+        properties: PTPCameraPropertySnapshot,
+        usesNikonZRFallbacks: Bool
+    ) -> PTPCameraScreenSizeMode? {
+        let currentCodec = recognizedCurrentCodec(properties.fileType)
+        return screenSizes.first {
+            screenSizeLabel(
+                for: $0,
+                currentCodec: currentCodec,
+                usesNikonZRFallbacks: usesNikonZRFallbacks) == label
+        }
+    }
+
+    private func screenSizeLabel(
+        for mode: PTPCameraScreenSizeMode,
+        currentCodec: String?,
+        usesNikonZRFallbacks: Bool
+    ) -> String {
+        AndroidNikonZRRawCropPresentation.label(
+            for: mode,
+            currentCodec: currentCodec,
+            usesNikonZRFallbacks: usesNikonZRFallbacks)
     }
 
     private func uniqueLabels(_ values: [String]) -> [String] {
@@ -345,6 +438,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// `commandLifecycleLock` is held so a refresh cannot race control writes,
     /// media ownership, or teardown.
     private var androidPropertySnapshot = PTPCameraPropertySnapshot()
+    /// `false` from a codec transition until `MovScreenSize` (`D0A0`) is read back again. This
+    /// prevents a previous codec's active resolution from being rendered as current while its
+    /// camera-advertised picker domain is already refreshed.
+    private var androidScreenSizeReadbackIsCurrent = false
     private var androidStorageInfo: PTPStorageInfo?
     private var androidStorageSlots: [AndroidCameraStorageSlot] = []
     private var androidControlCatalog = AndroidRawControlCatalog()
@@ -797,11 +894,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ///
     /// The bootstrap is deliberately bounded to the high-value header and
     /// safety fields. Subsequent calls read one property in the shared core's
-    /// conservative round-robin order, so polling does not monopolize the
-    /// command channel or starve live-view frame fetches. A `DevicePropChanged`
-    /// request is accepted only for a property already supported by that core
-    /// order. Any unsupported body/mode read preserves accumulated values and
-    /// returns a non-terminal result; it never disconnects the session.
+    /// conservative round-robin order, except `MovFileType` is placed directly
+    /// before its Android-specific `MovScreenSize` dependency. Polling never
+    /// monopolizes the command channel or starves live-view frame fetches. A
+    /// `DevicePropChanged` request is accepted only for a property already
+    /// supported by that core order. Any unsupported body/mode read preserves
+    /// accumulated values and returns a non-terminal result; it never
+    /// disconnects the session.
     public func refreshAndroidPropertySnapshot(
         _ request: AndroidCameraPropertyRefreshRequest
     ) -> AndroidCameraPropertyReadback {
@@ -828,13 +927,23 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
             return androidPropertyReadback(result: result)
         case .next(let isRecording):
-            let pollOrder = PTPPropertyCode.monitorPollOrder(isRecording: isRecording)
+            let pollOrder = Self.androidMonitorPollOrder(isRecording: isRecording)
             guard !pollOrder.isEmpty else {
                 return androidPropertyReadback(result: .accepted)
             }
             let property = pollOrder[androidPropertyPollIndex % pollOrder.count]
             androidPropertyPollIndex = (androidPropertyPollIndex + 1) % pollOrder.count
+            let previousFileType = androidPropertySnapshot.fileType
             var result = refreshAndroidProperty(property)
+            if property == .movieFileType,
+                result == .accepted,
+                androidPropertySnapshot.fileType != previousFileType
+            {
+                result = mergedAndroidPropertyRefreshResult(
+                    result,
+                    refreshAndroidScreenSizeAfterCodecChange()
+                )
+            }
             if result != .transportFailed,
                 CameraMonitorPollPolicy.isDue(
                     lastRefreshAt: androidLastStorageRefreshAt,
@@ -862,7 +971,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 // model knows how to decode one.
                 return androidPropertyReadback(result: .accepted)
             }
-            return androidPropertyReadback(result: refreshAndroidProperty(property))
+            let result = refreshAndroidProperty(property)
+            guard property == .movieFileType, result == .accepted else {
+                return androidPropertyReadback(result: result)
+            }
+            return androidPropertyReadback(
+                result: mergedAndroidPropertyRefreshResult(
+                    result,
+                    refreshAndroidScreenSizeAfterCodecChange()
+                )
+            )
         }
     }
 
@@ -873,8 +991,24 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) -> AndroidCameraPropertyRefreshResult {
         do {
             let data = try readProperty(property)
+            guard property != .movieRecordScreenSize || data.count >= 8 else {
+                androidScreenSizeReadbackIsCurrent = false
+                return .transportFailed
+            }
+            guard property != .movieFileType || data.count >= 4 else {
+                return .transportFailed
+            }
+            let previousFileType = androidPropertySnapshot.fileType
             androidPropertySnapshot = androidPropertySnapshot.applying(
                 property: property, data: data)
+            if property == .movieRecordScreenSize {
+                androidScreenSizeReadbackIsCurrent = true
+            } else if property == .movieFileType,
+                previousFileType != nil,
+                androidPropertySnapshot.fileType != previousFileType
+            {
+                androidScreenSizeReadbackIsCurrent = false
+            }
             return .accepted
         } catch let error as PTPIPClientSessionError {
             switch error {
@@ -1390,6 +1524,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             controls: androidControlCatalog.capabilities(
                 properties: androidPropertySnapshot,
                 whiteBalanceTint: androidWhiteBalanceTint,
+                isScreenSizeReadbackCurrent: androidScreenSizeReadbackIsCurrent,
                 usesNikonZRFallbacks: usesNikonZRFallbacks)
         )
     }
@@ -1423,6 +1558,25 @@ public final class PTPIPClientSession: @unchecked Sendable {
         .batteryLevel,
         .warningStatus,
     ]
+
+    /// Android keeps codec immediately before its codec-dependent frame-size value so a missed
+    /// property event cannot publish a new D0A0 value with the prior codec's picker domain.
+    static func androidMonitorPollOrder(isRecording: Bool) -> [PTPPropertyCode] {
+        isRecording ? PTPPropertyCode.recordingMonitorPollOrder : androidLiveMonitorPollOrder
+    }
+
+    private static let androidLiveMonitorPollOrder: [PTPPropertyCode] = {
+        var pollOrder = PTPPropertyCode.liveMonitorPollOrder
+        guard
+            let screenSizeIndex = pollOrder.firstIndex(of: .movieRecordScreenSize),
+            let fileTypeIndex = pollOrder.firstIndex(of: .movieFileType)
+        else {
+            return pollOrder
+        }
+        let fileType = pollOrder.remove(at: fileTypeIndex)
+        pollOrder.insert(fileType, at: screenSizeIndex)
+        return pollOrder
+    }()
 
     // MARK: - Recording
 
@@ -1544,7 +1698,29 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // The selected preset chooses a different tune property. Rebuild
             // that capability now or fail closed until the next descriptor pass.
             try? refreshAndroidWhiteBalanceTintDescriptor()
+        } else if control == .codec {
+            _ = refreshAndroidScreenSizeAfterCodecChange()
         }
+    }
+
+    /// Rebuilds the codec-dependent `MovScreenSize` domain immediately after a confirmed codec
+    /// write, a camera-originated property event, or a newly observed normal-poll transition.
+    /// Retaining the previous descriptor would let Android show and write combinations the newly
+    /// selected codec does not advertise. A failed refresh clears this one domain and withholds
+    /// the active selection until a valid D0A0 readback arrives, so the UI fails closed rather
+    /// than reusing stale modes.
+    private func refreshAndroidScreenSizeAfterCodecChange() -> AndroidCameraPropertyRefreshResult {
+        androidScreenSizeReadbackIsCurrent = false
+        do {
+            try refreshAndroidScreenSizeDescriptor()
+        } catch let error as PTPIPClientSessionError {
+            return androidDescriptorResult(for: error)
+        } catch {
+            return .transportFailed
+        }
+        // A codec transition can make the camera choose a compatible screen size itself. Refresh
+        // the active raw value too, so the current label and picker selection stay in sync.
+        return refreshAndroidProperty(.movieRecordScreenSize)
     }
 
     private func androidControlWrites(
@@ -1635,8 +1811,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
         case .whiteBalanceTint:
             return whiteBalanceTintWrite(label: label).map { [$0] } ?? []
         case .resolutionFrameRate:
-            return androidControlCatalog.screenSizes.first(where: { $0.label == label })
-                .map { [PTPCameraPropertyWrite.screenSize(raw: $0.raw)] } ?? []
+            return androidControlCatalog.screenSizeMode(
+                for: label,
+                properties: androidPropertySnapshot,
+                usesNikonZRFallbacks: usesNikonZRFallbacks
+            )
+            .map { [PTPCameraPropertyWrite.screenSize(raw: $0.raw)] } ?? []
         case .codec:
             return androidControlCatalog.fileTypes.first(where: { $0.label == label })
                 .map { [PTPCameraPropertyWrite.fileType(raw: $0.raw)] } ?? []
@@ -1663,6 +1843,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let capabilities = androidControlCatalog.capabilities(
             properties: androidPropertySnapshot,
             whiteBalanceTint: androidWhiteBalanceTint,
+            isScreenSizeReadbackCurrent: androidScreenSizeReadbackIsCurrent,
             usesNikonZRFallbacks: usesNikonZRFallbacks)
         return switch control {
         case .iso: capabilities.isoValues

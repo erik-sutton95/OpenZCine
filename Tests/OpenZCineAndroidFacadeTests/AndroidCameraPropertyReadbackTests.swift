@@ -47,7 +47,8 @@ struct AndroidCameraPropertyReadbackTests {
 
         // One complete low-rate pass fills the fields intentionally omitted
         // from the bounded bootstrap (lens, focus, audio, VR, and grid).
-        for _ in PTPPropertyCode.liveMonitorPollOrder {
+        let androidPollOrder = PTPIPClientSession.androidMonitorPollOrder(isRecording: false)
+        for _ in androidPollOrder {
             _ = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
         }
         let complete = session.refreshAndroidPropertySnapshot(.propertyChanged(0xDEAD))
@@ -92,9 +93,9 @@ struct AndroidCameraPropertyReadbackTests {
                 == PTPPropertyCode.movieWbTuneColorTemp.rawValue)
         let roundRobinReads = Array(
             propertyReads.dropFirst(expectedBootstrap.count + 1)
-                .prefix(PTPPropertyCode.liveMonitorPollOrder.count)
+                .prefix(androidPollOrder.count)
                 .compactMap(\.parameters.first))
-        #expect(roundRobinReads == PTPPropertyCode.liveMonitorPollOrder.map(\.rawValue))
+        #expect(roundRobinReads == androidPollOrder.map(\.rawValue))
 
         let wire = AndroidCameraPropertyReadbackWire.encode(complete)
         let fields = wireFields(wire)
