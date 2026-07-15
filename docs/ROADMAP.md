@@ -126,7 +126,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   progressive preview; explicit thumbnail fallback for unsupported HEIF/RAW decoders).
 - **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
-- **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow.
+- **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
+  preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and
+  confirmed credentials enter encrypted storage only after a successful join.
 
 ## Milestone Success Criteria
 

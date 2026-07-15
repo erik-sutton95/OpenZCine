@@ -129,6 +129,20 @@
         return javaString(env, ssid)
     }
 
+    /// `SwiftCore.parseCameraWifiScreen(transcript): String?` — sends one
+    /// ephemeral ML Kit transcript through the shared camera-screen policy.
+    /// Kotlin receives only a validated `SSID<US>key` wire value, never a local
+    /// reimplementation of the Nikon OCR correction rules.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_parseCameraWifiScreen")
+    public func swiftCoreParseCameraWifiScreen(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, transcript: jstring?
+    ) -> jstring? {
+        guard let transcript = swiftString(env, transcript), !transcript.isEmpty,
+            let parsed = AndroidCameraWiFiScreenParserWire.parse(transcript)
+        else { return nil }
+        return javaString(env, parsed)
+    }
+
     /// `SwiftCore.resolveDisplayName(rawName): String` — operator-facing device
     /// title from the raw PTP name (`ZR_6001234` → `Nikon ZR`).
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_resolveDisplayName")

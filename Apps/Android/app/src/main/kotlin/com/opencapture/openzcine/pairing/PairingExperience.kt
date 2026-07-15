@@ -49,6 +49,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -303,11 +305,22 @@ public fun PairingExperience(
             environment.credentials.lastSsid?.let(environment.credentials::passphrase) ?: ""
         )
     }
+    // This remains process-memory-only. `joinCameraAp` is the sole point that
+    // writes a confirmed key into the encrypted credential store.
+    var keyCameFromScanner by remember { mutableStateOf(false) }
+    var cameraWifiScannerPresented by remember { mutableStateOf(false) }
     val keyWasRemembered = remember { keyField.isNotEmpty() }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
     val handedOff = remember { mutableStateOf(false) }
+
+    fun clearScannedCameraWifiDraft() {
+        if (!keyCameFromScanner) return
+        keyField = ""
+        keyCameFromScanner = false
+        ssidField = environment.credentials.lastSsid ?: CameraDiscovery.NIKON_ZR_SSID_PREFIX
+    }
 
     DisposableEffect(environment) {
         onDispose {
@@ -368,13 +381,18 @@ public fun PairingExperience(
     fun joinCameraAp() {
         val ssid = ssidField.trim()
         if (ssid.isEmpty()) return
+        val passphrase = keyField.ifEmpty { null }
         phase = PairingPhase.Joining
         work.value =
             scope.launch {
-                val joined = environment.joinCameraAp(ssid, keyField.ifEmpty { null })
+                val joined = environment.joinCameraAp(ssid, passphrase)
                 if (joined) {
-                    if (keyField.isNotEmpty()) environment.credentials.save(ssid, keyField)
+                    if (passphrase != null) environment.credentials.save(ssid, passphrase)
                     environment.credentials.lastSsid = ssid
+                    // The encrypted store now owns a successful scanned key;
+                    // release the plaintext draft before the PTP connect begins.
+                    keyField = ""
+                    keyCameFromScanner = false
                     // Camera-AP mode: the ZR always answers on the fixed AP host.
                     connect(CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST)
                 } else {
@@ -390,7 +408,14 @@ public fun PairingExperience(
         work.value?.cancel()
         work.value = null
         if (flow.path == PairingPath.CAMERA_ACCESS_POINT) environment.releaseCameraAp()
+        clearScannedCameraWifiDraft()
         phase = PairingPhase.Idle
+    }
+
+    fun retreat() {
+        if (flow.step == PairingStep.NETWORK) clearScannedCameraWifiDraft()
+        phase = PairingPhase.Idle
+        flow = flow.retreat()
     }
 
     // Permission launcher + re-check on return from Settings.
@@ -473,18 +498,23 @@ public fun PairingExperience(
                             permissionGranted = permissionGranted,
                             permissionDenied = permissionDenied,
                             ssidField = ssidField,
-                            onSsidChange = { ssidField = it },
+                            onSsidChange = {
+                                ssidField = it
+                                keyCameFromScanner = false
+                            },
                             keyField = keyField,
-                            onKeyChange = { keyField = it },
+                            onKeyChange = {
+                                keyField = it
+                                keyCameFromScanner = false
+                            },
+                            keyCameFromScanner = keyCameFromScanner,
                             keyWasRemembered = keyWasRemembered,
                             cameras = cameras,
                             onRequestPermission = ::requestPairingPermission,
+                            onScanCameraWifi = { cameraWifiScannerPresented = true },
                             onChoose = { flow = flow.choose(it) },
                             onAdvance = { flow = flow.advance() },
-                            onRetreat = {
-                                phase = PairingPhase.Idle
-                                flow = flow.retreat()
-                            },
+                            onRetreat = ::retreat,
                             onJoin = ::joinCameraAp,
                             onConnectCamera = { connect(it.host) },
                             onCancel = ::cancelWork,
@@ -504,18 +534,23 @@ public fun PairingExperience(
                             permissionGranted = permissionGranted,
                             permissionDenied = permissionDenied,
                             ssidField = ssidField,
-                            onSsidChange = { ssidField = it },
+                            onSsidChange = {
+                                ssidField = it
+                                keyCameFromScanner = false
+                            },
                             keyField = keyField,
-                            onKeyChange = { keyField = it },
+                            onKeyChange = {
+                                keyField = it
+                                keyCameFromScanner = false
+                            },
+                            keyCameFromScanner = keyCameFromScanner,
                             keyWasRemembered = keyWasRemembered,
                             cameras = cameras,
                             onRequestPermission = ::requestPairingPermission,
+                            onScanCameraWifi = { cameraWifiScannerPresented = true },
                             onChoose = { flow = flow.choose(it) },
                             onAdvance = { flow = flow.advance() },
-                            onRetreat = {
-                                phase = PairingPhase.Idle
-                                flow = flow.retreat()
-                            },
+                            onRetreat = ::retreat,
                             onJoin = ::joinCameraAp,
                             onConnectCamera = { connect(it.host) },
                             onCancel = ::cancelWork,
@@ -525,6 +560,20 @@ public fun PairingExperience(
                     }
                 }
             }
+        }
+        if (cameraWifiScannerPresented) {
+            CameraWifiScannerOverlay(
+                onConfirmed = { candidate ->
+                    // The scanner has already been reviewed by the operator;
+                    // this stages the exact fields for the normal Join action.
+                    // No credential is persisted until a successful join.
+                    ssidField = candidate.ssid
+                    keyField = candidate.key
+                    keyCameFromScanner = true
+                    cameraWifiScannerPresented = false
+                },
+                onDismiss = { cameraWifiScannerPresented = false },
+            )
         }
     }
 }
@@ -582,9 +631,11 @@ private fun StepCard(
     onSsidChange: (String) -> Unit,
     keyField: String,
     onKeyChange: (String) -> Unit,
+    keyCameFromScanner: Boolean,
     keyWasRemembered: Boolean,
     cameras: List<DiscoveredCamera>,
     onRequestPermission: () -> Unit,
+    onScanCameraWifi: () -> Unit,
     onChoose: (PairingPath) -> Unit,
     onAdvance: () -> Unit,
     onRetreat: () -> Unit,
@@ -628,7 +679,9 @@ private fun StepCard(
                             onSsidChange = onSsidChange,
                             keyField = keyField,
                             onKeyChange = onKeyChange,
+                            keyCameFromScanner = keyCameFromScanner,
                             keyWasRemembered = keyWasRemembered,
+                            onScanCameraWifi = onScanCameraWifi,
                         )
                     PairingStep.DISCOVER -> DiscoverBody(cameras, onConnectCamera)
                 }
@@ -905,7 +958,9 @@ private fun NetworkBody(
     onSsidChange: (String) -> Unit,
     keyField: String,
     onKeyChange: (String) -> Unit,
+    keyCameFromScanner: Boolean,
     keyWasRemembered: Boolean,
+    onScanCameraWifi: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -937,20 +992,85 @@ private fun NetworkBody(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 )
-                StartupTextField(
-                    value = ssidField,
-                    onValueChange = onSsidChange,
-                    placeholder = "Network SSID (${CameraDiscovery.NIKON_ZR_SSID_PREFIX}…)",
-                )
-                StartupTextField(
-                    value = keyField,
-                    onValueChange = onKeyChange,
-                    placeholder = "Network key",
-                    password = true,
-                )
+                if (keyCameFromScanner) {
+                    ScannedCameraWifiCredentials(
+                        ssid = ssidField,
+                        key = keyField,
+                        onRescan = onScanCameraWifi,
+                    )
+                } else {
+                    StartupTextField(
+                        value = ssidField,
+                        onValueChange = onSsidChange,
+                        placeholder = "Network SSID (${CameraDiscovery.NIKON_ZR_SSID_PREFIX}…)",
+                    )
+                    StartupTextField(
+                        value = keyField,
+                        onValueChange = onKeyChange,
+                        placeholder = "Network key",
+                        password = true,
+                    )
+                    StartupOutlineButton(
+                        text = "Scan SSID & key",
+                        onClick = onScanCameraWifi,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "Uses this phone's rear camera and on-device text recognition only.",
+                        color = StartupColors.dim,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                    )
+                }
             }
         }
     }
+}
+
+/** Reviewed scanner result, held only until the operator explicitly joins the camera AP. */
+@Composable
+private fun ScannedCameraWifiCredentials(
+    ssid: String,
+    key: String,
+    onRescan: () -> Unit,
+) {
+    Text(
+        "SCANNED FROM CAMERA — CHECK BEFORE JOINING",
+        color = StartupColors.ready,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.1.sp,
+    )
+    Text(
+        ssid,
+        color = StartupColors.ink,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier =
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(StartupColors.control)
+                .padding(horizontal = 13.dp, vertical = 10.dp),
+    )
+    Text(
+        key,
+        color = StartupColors.ink,
+        fontSize = 14.sp,
+        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+        modifier =
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(StartupColors.control)
+                .padding(horizontal = 13.dp, vertical = 10.dp)
+                .clearAndSetSemantics {
+                    contentDescription = "Scanned network key. Check the camera screen before joining."
+                },
+    )
+    StartupOutlineButton(
+        text = "Rescan SSID & key",
+        onClick = onRescan,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /** Device-labelled numbered instruction card (iOS `StartupWizardDeviceInstructionCard`). */

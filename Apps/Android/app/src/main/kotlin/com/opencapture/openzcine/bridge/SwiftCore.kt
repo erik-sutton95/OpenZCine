@@ -40,6 +40,15 @@ object SwiftCore {
      */
     external fun deriveAccessPointSSID(cameraName: String): String?
 
+    /**
+     * Sends one ephemeral on-device OCR transcript through Swift's shared
+     * `CameraWiFiScreenParser` policy. Returns `SSID<unit-separator>key` only
+     * when both Nikon Connection-wizard fields validate; this bridge never
+     * stores or logs recognized text. Kotlin only decodes the two-field wire
+     * result and must not recreate the camera-specific correction policy.
+     */
+    external fun parseCameraWifiScreen(transcript: String): String?
+
     /** Operator-facing device title for a raw PTP name (`ZR_6001234` → `Nikon ZR`). */
     external fun resolveDisplayName(rawName: String): String
 
