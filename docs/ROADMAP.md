@@ -119,6 +119,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
+- **Android custom and RED LUT library parity** (to do) — operator-authorized `.cube` import,
+  app-private stored selections, and a RED IPP2 terms/download flow with internet and camera-AP
+  safeguards; non-redistributable LUT assets are never bundled or committed.
 - **Bluetooth shutter remote** — record start/stop from a BT remote.
 - **Media browser & playback** — on-camera and validated-local clip browsing with categories,
   sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;
