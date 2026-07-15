@@ -25,6 +25,22 @@ import Testing
     #expect(PTPIPInitiator.friendlyName == "WTU-iPhone")
 }
 
+@Test func initiatorIdentityPreservesAValidPersistedGUID() {
+    let legacyGUID = Data([
+        0x5A, 0x43, 0x69, 0x6E, 0x65, 0x43, 0x74, 0x72,
+        0x6C, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+    ])
+
+    #expect(PTPIPInitiator.resolvedAppGUID(persistedGUID: legacyGUID) == legacyGUID)
+}
+
+@Test func initiatorIdentitySeedsFreshOrInvalidStores() {
+    #expect(PTPIPInitiator.resolvedAppGUID(persistedGUID: nil) == PTPIPInitiator.appGUID)
+    #expect(
+        PTPIPInitiator.resolvedAppGUID(persistedGUID: Data(repeating: 0, count: 8))
+            == PTPIPInitiator.appGUID)
+}
+
 @Test func pairingChallengeExtractsAsciiPinAndRawHex() {
     let challenge = PTPIPPairingChallenge(
         data: Data([0x5A, 0x52, 0x20, 0x31, 0x32, 0x33, 0x34]),

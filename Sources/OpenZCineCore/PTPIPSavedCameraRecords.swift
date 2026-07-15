@@ -351,16 +351,26 @@ public enum CameraStartupPolicy {
         PTPIPSavedCameraRecords.canonicalized(savedCameras).isEmpty ? .addCamera : .savedCameras
     }
 
+    /// Returns cameras that have not already been saved by this app.
+    ///
+    /// When `allowSavedCameraRecovery` is true and discovery found no new cameras, the discovered
+    /// saved cameras are returned as a repair fallback. This lets an explicit pairing flow recover
+    /// a stale camera-side profile without allowing known cameras to crowd out a genuinely new one.
     public static func pairingDiscoveryCandidates(
         discoveredCameras: [DiscoveredCamera],
-        savedCameras: [PTPIPSavedCameraRecord]
+        savedCameras: [PTPIPSavedCameraRecord],
+        allowSavedCameraRecovery: Bool = false
     ) -> [DiscoveredCamera] {
         let savedCameras = PTPIPSavedCameraRecords.canonicalized(savedCameras)
-        return discoveredCameras.filter { discoveredCamera in
+        let newCameras = discoveredCameras.filter { discoveredCamera in
             !savedCameras.contains { savedCamera in
                 discoveryCamera(discoveredCamera, matchesSavedCamera: savedCamera)
             }
         }
+        if allowSavedCameraRecovery, newCameras.isEmpty {
+            return discoveredCameras
+        }
+        return newCameras
     }
 
     /// Resolves the connection strategy. A camera with a local saved profile is trusted and

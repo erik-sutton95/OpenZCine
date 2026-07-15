@@ -195,3 +195,56 @@ import Testing
 
     #expect(candidates.isEmpty)
 }
+
+@Test func startupPolicySurfacesSavedHotspotCameraForExplicitRepair() {
+    let saved = [
+        PTPIPSavedCameraRecord(
+            host: "172.20.10.8",
+            displayName: "ZR_6001234",
+            transport: "iPhone hotspot",
+            lastSeenAt: nil
+        )
+    ]
+    let rediscovered = DiscoveredCamera(
+        ip: "172.20.10.15",
+        name: "ZR_6001234",
+        source: .bonjour
+    )
+
+    let candidates = CameraStartupPolicy.pairingDiscoveryCandidates(
+        discoveredCameras: [rediscovered],
+        savedCameras: saved,
+        allowSavedCameraRecovery: true
+    )
+
+    #expect(candidates == [rediscovered])
+}
+
+@Test func startupPolicyKeepsNewCamerasAheadOfSavedRepairFallback() {
+    let saved = [
+        PTPIPSavedCameraRecord(
+            host: "172.20.10.8",
+            displayName: "ZR_6001234",
+            transport: "iPhone hotspot",
+            lastSeenAt: nil
+        )
+    ]
+    let rediscoveredSavedCamera = DiscoveredCamera(
+        ip: "172.20.10.15",
+        name: "ZR_6001234",
+        source: .bonjour
+    )
+    let newCamera = DiscoveredCamera(
+        ip: "172.20.10.16",
+        name: "ZR_7000000",
+        source: .bonjour
+    )
+
+    let candidates = CameraStartupPolicy.pairingDiscoveryCandidates(
+        discoveredCameras: [rediscoveredSavedCamera, newCamera],
+        savedCameras: saved,
+        allowSavedCameraRecovery: true
+    )
+
+    #expect(candidates == [newCamera])
+}
