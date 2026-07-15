@@ -13,6 +13,7 @@ import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFocusResult
 import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.core.LiveFrameTimecode
 import java.io.ByteArrayOutputStream
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -58,6 +59,8 @@ class DemoFrameSource(
                         audioLevels = debugAudioLevels(frameIndex),
                         focus = debugFocusInfo(frameIndex),
                         level = debugCameraLevel(frameIndex).takeIf { includeDebugCameraLevel },
+                        timecode = debugTimecode(frameIndex),
+                        measuredFramesPerSecond = framesPerSecond.toDouble(),
                     ),
                 )
                 frameIndex++
@@ -104,6 +107,18 @@ class DemoFrameSource(
         paint.color = Color.BLACK
         canvas.drawRect(0f, height * 0.60f, width.toFloat(), height * 0.70f, paint)
         canvas.drawText("DEMO  $timecode", 24f, height * 0.68f, textPaint)
+    }
+
+    /** Synthetic timecode exists only in this explicit debug source set. */
+    private fun debugTimecode(frameIndex: Long): LiveFrameTimecode {
+        val seconds = frameIndex / framesPerSecond
+        return LiveFrameTimecode(
+            on = true,
+            hour = (seconds / 3_600 % 24).toInt(),
+            minute = (seconds / 60 % 60).toInt(),
+            second = (seconds % 60).toInt(),
+            frame = (frameIndex % framesPerSecond).toInt(),
+        )
     }
 
     /**

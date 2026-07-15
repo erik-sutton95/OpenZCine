@@ -41,6 +41,7 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.openzcine.core.LiveFrameTimecode
 
 /** The stable, persisted tile identifiers used by the DISP 3 primary grid. */
 internal enum class CommandTileKind {
@@ -166,7 +167,6 @@ internal data class CommandDashboardPresentation(
     val camera: String,
     val lens: String,
     val frameRate: String,
-    val frameRateValue: Int?,
     val refreshSummary: String,
 )
 
@@ -199,7 +199,7 @@ internal fun portraitCommandGridHeightDp(tileCount: Int): Int {
  *
  * This is deliberately pure: it makes the UI's unavailable state, allowed
  * controls, and persisted ordering independently JVM-testable. It never falls
- * back to [DemoMonitorState] while a [CameraSessionState] is supplied.
+ * back to a demo value while a [CameraSessionState] is supplied.
  */
 internal fun commandDashboardPresentation(
     snapshot: CameraPropertySnapshot,
@@ -470,11 +470,10 @@ internal fun commandDashboardPresentation(
                 CommandSideSectionPresentation("Audio", audioCells),
             ),
         temperature = commandTemperature(snapshot.temperatureStatus),
-        storage = commandStorage(snapshot),
+        storage = monitorStorageLabel(snapshot.storage),
         camera = camera,
         lens = snapshot.lens ?: "—",
         frameRate = snapshot.frameRate?.let { "${it}.00" } ?: "—",
-        frameRateValue = snapshot.frameRate,
         refreshSummary = commandRefreshSummary(refreshStatus),
     )
 }
@@ -516,14 +515,6 @@ private fun commandTemperature(status: CameraTemperatureStatus?): String =
         CameraTemperatureStatus.HOT -> "HOT"
         null -> "—"
     }
-
-private fun commandStorage(snapshot: CameraPropertySnapshot): String {
-    val storage = snapshot.storage ?: return "—"
-    if (storage.totalCapacityBytes <= 0L || storage.freeSpaceBytes < 0L) return "—"
-    val percent = (storage.freeSpaceBytes * 100L / storage.totalCapacityBytes).coerceIn(0L, 100L)
-    val freeGb = storage.freeSpaceBytes / 1_000_000_000L
-    return "${freeGb} GB · ${percent}%"
-}
 
 /** True only when a completed property refresh reflects the accepted control write. */
 internal fun cameraPropertyConfirmsSelection(
@@ -610,7 +601,7 @@ private val ON_OFF_OPTIONS = listOf("OFF", "ON")
 @Composable
 internal fun CommandDashboard(
     recording: Boolean,
-    frameCount: Long?,
+    timecode: LiveFrameTimecode?,
     presentation: CommandDashboardPresentation,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
@@ -631,7 +622,7 @@ internal fun CommandDashboard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RecordChip(recording)
-                CommandTimecode(frameCount, presentation.frameRateValue, sizeSp = 44f)
+                CommandTimecode(timecode, sizeSp = 44f)
             }
             CommandHealthStrip(presentation)
             CommandGrid(
@@ -660,6 +651,7 @@ internal fun CommandDashboard(
 @Composable
 internal fun PortraitCommandDashboard(
     presentation: CommandDashboardPresentation,
+    timecode: LiveFrameTimecode?,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
@@ -682,9 +674,7 @@ internal fun PortraitCommandDashboard(
                 contentAlignment = Alignment.Center,
             ) {
                 CommandTimecode(
-                    // This dashboard does not yet own the per-frame timecode state.
-                    frameCount = null,
-                    frameRate = presentation.frameRateValue,
+                    timecode = timecode,
                     sizeSp = 52f,
                 )
             }
@@ -714,30 +704,11 @@ internal fun PortraitCommandDashboard(
 /** Hero timecode with the accent frame field (iOS `CommandTimecodeReadout`). */
 @Composable
 internal fun CommandTimecode(
-    frameCount: Long?,
-    frameRate: Int?,
+    timecode: LiveFrameTimecode?,
     sizeSp: Float,
     modifier: Modifier = Modifier,
 ) {
-    if (frameCount == null || frameRate == null || frameRate <= 0) {
-        Text(
-            "—:—:—:—",
-            style = chromeStyle(sizeSp, FontWeight.Normal, mono = true),
-            color = LiveDesign.muted,
-            maxLines = 1,
-            modifier = modifier.semantics { contentDescription = "Timecode unavailable" },
-        )
-    } else {
-        Text(
-            timecodeAnnotated(frameCount, frameRate),
-            style = chromeStyle(sizeSp, FontWeight.Normal, mono = true),
-            maxLines = 1,
-            modifier =
-                modifier.semantics {
-                    contentDescription = "Timecode at ${frameRate} frames per second"
-                },
-        )
-    }
+    CameraTimecodeReadout(timecode = timecode, sizeSp = sizeSp, modifier = modifier)
 }
 
 /** Camera-derived Temp / Storage / Camera / Lens / Frame-rate health blocks. */

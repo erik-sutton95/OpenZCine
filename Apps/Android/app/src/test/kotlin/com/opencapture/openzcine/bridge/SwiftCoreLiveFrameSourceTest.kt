@@ -205,6 +205,54 @@ class SwiftCoreLiveFrameSourceTest {
     }
 
     @Test
+    fun `full callback preserves the camera timecode off state`() = runTest {
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener = it },
+                stop = {},
+                configurePreview = { true },
+                sharingScope = backgroundScope,
+            )
+
+        val result = async { source.frames.first() }
+        runCurrent()
+        listener.onFrameWithFullMetadata(
+            jpeg = byteArrayOf(4),
+            timestampNanos = 1_000_000_000L,
+            isRecording = false,
+            leftLevelDb = -60.0,
+            leftPeakDb = -60.0,
+            rightLevelDb = -60.0,
+            rightPeakDb = -60.0,
+            hasAudioLevels = false,
+            hasFocus = false,
+            focusCoordinateWidth = 0,
+            focusCoordinateHeight = 0,
+            focusResult = 0,
+            subjectDetectionActive = false,
+            trackingAFActive = false,
+            selectedBoxIndex = -1,
+            focusBoxes = intArrayOf(),
+            hasLevel = false,
+            levelRollDegrees = 0.0,
+            levelPitchDegrees = 0.0,
+            levelYawDegrees = 0.0,
+            timecodeOn = false,
+            timecodeHour = 0,
+            timecodeMinute = 0,
+            timecodeSecond = 0,
+            timecodeFrame = 0,
+        )
+        runCurrent()
+
+        val timecode = result.await().timecode
+        assertEquals(false, timecode?.on)
+        assertEquals(0, timecode?.frame)
+    }
+
+    @Test
     fun `frame rate estimator reports measured monotonic cadence`() {
         val estimator = LiveFrameRateEstimator()
 
