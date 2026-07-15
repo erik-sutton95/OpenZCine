@@ -9,6 +9,9 @@ import android.util.Log
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
@@ -23,6 +26,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -46,7 +50,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.core.LiveCameraLevel
 import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFrame
@@ -110,6 +119,7 @@ private data class LiveFeedPresentation(
     val image: ImageBitmap,
     val sourceWidth: Int,
     val sourceHeight: Int,
+    val colorMode: LiveFeedColorMode,
     val focus: LiveFocusInfo?,
     val level: LiveCameraLevel?,
 )
@@ -124,6 +134,7 @@ private data class LiveFeedPresentation(
 public class LiveFeedPresentationState {
     private var presentation: LiveFeedPresentation? by mutableStateOf(null)
     private var textureSourceGeometry: FeedTextureSourceGeometry? by mutableStateOf(null)
+    private var presentedColorMode: LiveFeedColorMode by mutableStateOf(LiveFeedColorMode.UNKNOWN)
     private var focusGestureGeometrySignature: FocusGestureGeometrySignature? = null
 
     /** Changes only when source or camera focus-coordinate geometry changes. */
@@ -154,7 +165,15 @@ public class LiveFeedPresentationState {
     public val level: LiveCameraLevel?
         get() = presentation?.level
 
-    internal fun present(frame: LiveFrame, bitmap: Bitmap) {
+    /** Electrical color contract of the decoded frame currently on screen. */
+    internal val colorMode: LiveFeedColorMode
+        get() = presentedColorMode
+
+    internal fun present(
+        frame: LiveFrame,
+        bitmap: Bitmap,
+        colorMode: LiveFeedColorMode,
+    ) {
         val nextGestureGeometry =
             FocusGestureGeometrySignature(
                 sourceWidth = bitmap.width,
@@ -166,11 +185,13 @@ public class LiveFeedPresentationState {
             focusGestureGeometrySignature = nextGestureGeometry
             focusGestureGeometryGeneration += 1
         }
+        if (presentedColorMode != colorMode) presentedColorMode = colorMode
         presentation =
             LiveFeedPresentation(
                 image = bitmap.asImageBitmap(),
                 sourceWidth = bitmap.width,
                 sourceHeight = bitmap.height,
+                colorMode = colorMode,
                 focus = frame.focus,
                 level = frame.level,
             )
@@ -192,6 +213,7 @@ public class LiveFeedPresentationState {
         }
         presentation = null
         textureSourceGeometry = null
+        presentedColorMode = LiveFeedColorMode.UNKNOWN
     }
 }
 
@@ -250,7 +272,14 @@ public class LiveFeedEffectsPresentationState {
 class JpegFrameDecoder {
     private val pool = arrayOfNulls<Bitmap>(3)
     private var next = 0
-    private val options = BitmapFactory.Options().apply { inMutable = true }
+    private val options =
+        BitmapFactory.Options().apply {
+            inMutable = true
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            // Keep the JPEG's declared color space intact. Forcing sRGB here
+            // would erase wide-gamut/HDR evidence before the fail-closed gate
+            // can reject a source the monitor cubes do not yet support.
+        }
 
     /** Decodes [jpeg] into the next pooled bitmap; null if the data is invalid. */
     fun decode(jpeg: ByteArray): Bitmap? {
@@ -293,8 +322,10 @@ class JpegFrameDecoder {
  *
  * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra,
  * see [FeedEffectsRenderer]) into the drawn frame. The default preserves the
- * plain feed unless the debug harness switched effects on; devices below
- * API 33 (AGSL) or builds without the staged Swift core always render plain.
+ * plain feed unless the debug harness switched effects on. API 33+ uses AGSL;
+ * API 29-32 uses the same immutable plan through a GLES2 surface. Builds
+ * without the staged Swift core, and frames outside the supported original
+ * SDR working space, always render plain.
  * [configuration] is local operator choice only; [cameraInput] is forwarded
  * unchanged to Swift, which owns camera curve/clip policy for both the
  * renderer and the optional false-colour reference key.
@@ -313,8 +344,36 @@ fun LiveFeedView(
     effectsPresentationState: LiveFeedEffectsPresentationState? = null,
     aspectFill: Boolean = false,
 ) {
+    val applicationContext = LocalContext.current.applicationContext
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
+    val fallbackColorMode = remember(source) { mutableStateOf(LiveFeedColorMode.UNKNOWN) }
+    val legacySurfaceState = remember(source) { LegacyLiveFeedSurfaceState() }
+    val lifecycleOwner = LocalLifecycleOwner.current
     val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
+    DisposableEffect(legacySurfaceState) {
+        onDispose { legacySurfaceState.dispose() }
+    }
+    DisposableEffect(lifecycleOwner, legacySurfaceState) {
+        val lifecycle = lifecycleOwner.lifecycle
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> legacySurfaceState.resume()
+                    Lifecycle.Event.ON_PAUSE,
+                    Lifecycle.Event.ON_DESTROY,
+                    -> legacySurfaceState.pause()
+                    else -> Unit
+                }
+            }
+        lifecycle.addObserver(observer)
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            legacySurfaceState.resume()
+        }
+        onDispose {
+            lifecycle.removeObserver(observer)
+            legacySurfaceState.pause()
+        }
+    }
     // Stored selections are prepared off the UI thread. Until the shared Swift parser has produced
     // a packed payload, the renderer remains fail-closed (plain feed), then rebuilds on generation.
     val lutRenderGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value ?: 0L
@@ -322,28 +381,73 @@ fun LiveFeedView(
         val stored = (effects.lut as? FeedLutSelection.Stored)?.value
         if (stored != null) lutLibrary?.prepare(stored)
     }
+    val colorMode = presentationState?.colorMode ?: fallbackColorMode.value
+    var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     var renderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
-    LaunchedEffect(effects, configuration, cameraInput, lutLibrary, lutRenderGeneration) {
+    var legacyPreviewBaker by remember { mutableStateOf<LegacyFeedEffectsPreviewBaker?>(null) }
+    LaunchedEffect(
+        effects,
+        configuration,
+        cameraInput,
+        lutLibrary,
+        lutRenderGeneration,
+        colorMode,
+    ) {
         // Never retain a renderer for a superseded selection while its
         // replacement is prepared. Cube baking and bitmap upload are native/
         // CPU work, so keep the Compose thread responsive during configuration
         // changes such as repeated zebra threshold taps.
+        renderPlan = null
         renderer = null
+        legacyPreviewBaker = null
+        if (effects.isIdentity) return@LaunchedEffect
+        if (!liveFeedEffectsCanRender(Build.VERSION.SDK_INT, SwiftCore.isAvailable, colorMode)) {
+            if (colorMode != LiveFeedColorMode.UNKNOWN) {
+                Log.w(TAG, "feed effects unavailable for $colorMode live input; rendering the plain feed")
+            }
+            return@LaunchedEffect
+        }
+        val nextPlan =
+            withContext(Dispatchers.Default) {
+                FeedEffectsRenderPlanFactory.create(
+                    effects,
+                    configuration,
+                    cameraInput,
+                    lutLibrary,
+                )
+            }
+        renderPlan = nextPlan
         renderer =
-            when {
-                effects.isIdentity -> null
-                Build.VERSION.SDK_INT >= 33 ->
-                    withContext(Dispatchers.Default) {
-                        FeedEffectsRenderer.create(effects, configuration, cameraInput, lutLibrary)
-                    }
-                else -> {
-                    Log.w(TAG, "feed effects need Android 13+ (AGSL); rendering the plain feed")
-                    null
-                }
+            if (Build.VERSION.SDK_INT >= 33 && nextPlan != null) {
+                withContext(Dispatchers.Default) { FeedEffectsRenderer.create(nextPlan) }
+            } else {
+                null
+            }
+        legacyPreviewBaker =
+            if (Build.VERSION.SDK_INT in 29..32 && nextPlan != null) {
+                LegacyFeedEffectsPreviewBaker(applicationContext, nextPlan)
+            } else {
+                null
             }
     }
+    val legacyPlan = renderPlan.takeIf { Build.VERSION.SDK_INT in 29..32 }
+    SideEffect {
+        if (legacyPlan != null) legacySurfaceState.update(legacyPlan, aspectFill)
+    }
+    val legacySurfaceActive = legacyPlan != null && !legacySurfaceState.renderFailed
+    val legacyFramesRequested = legacySurfaceActive
+    val latestLegacyFramesRequested = rememberUpdatedState(legacyFramesRequested)
+    LaunchedEffect(legacyFramesRequested) {
+        if (!legacyFramesRequested) legacySurfaceState.clear()
+    }
+    val falseColorReady =
+        if (Build.VERSION.SDK_INT >= 33) {
+            renderer?.falseColorReady == true
+        } else {
+            legacySurfaceActive && renderPlan?.falseColorReady == true
+        }
     LaunchedEffect(
-        renderer,
+        falseColorReady,
         effects.falseColor,
         configuration.falseColorReferenceEnabled,
         cameraInput,
@@ -351,22 +455,28 @@ fun LiveFeedView(
     ) {
         effectsPresentationState?.clear()
         val scale = effects.falseColor?.takeIf { configuration.falseColorReferenceEnabled }
-        if (renderer?.falseColorReady == true && scale != null) {
+        if (falseColorReady && scale != null) {
             val reference = withContext(Dispatchers.Default) { resolveFalseColorReference(scale, cameraInput) }
             if (reference != null) effectsPresentationState?.present(scale, reference)
         }
     }
     val ownedRenderer = renderer
-    val latestPreviewBaker = rememberUpdatedState<LiveFramePreviewBaker?>(ownedRenderer)
-    DisposableEffect(ownedRenderer) {
+    val ownedLegacyPreviewBaker = legacyPreviewBaker
+    val activePreviewBaker: LiveFramePreviewBaker? =
+        ownedRenderer ?: ownedLegacyPreviewBaker.takeIf { legacySurfaceActive }
+    val latestPreviewBaker = rememberUpdatedState(activePreviewBaker)
+    DisposableEffect(ownedRenderer, ownedLegacyPreviewBaker) {
         onDispose {
             if (Build.VERSION.SDK_INT >= 33) ownedRenderer?.close()
+            ownedLegacyPreviewBaker?.close()
         }
     }
 
     LaunchedEffect(source, presentationState) {
         presentationState?.clear()
         fallbackFrame.value = null
+        fallbackColorMode.value = LiveFeedColorMode.UNKNOWN
+        legacySurfaceState.clear()
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "hardware MJPEG decoder available: ${hasMjpegDecoder()}")
         }
@@ -380,47 +490,107 @@ fun LiveFeedView(
                 stats = stats,
                 decode = decoder::decode,
                 present = { sourceFrame, bitmap ->
+                    val frameColorMode = decodedLiveFeedColorMode(bitmap)
                     if (presentationState != null) {
-                        presentationState.present(sourceFrame, bitmap)
+                        presentationState.present(sourceFrame, bitmap, frameColorMode)
                     } else {
                         fallbackFrame.value = bitmap.asImageBitmap()
+                        fallbackColorMode.value = frameColorMode
+                    }
+                    if (latestLegacyFramesRequested.value &&
+                        frameColorMode == LiveFeedColorMode.SDR
+                    ) {
+                        legacySurfaceState.submit(bitmap)
+                    } else {
+                        // Fail closed on the decode thread too. This prevents
+                        // a newly arrived HDR/unsupported frame from reaching
+                        // the previous SDR plan before Compose recomposes.
+                        legacySurfaceState.clear()
                     }
                     onFrame?.invoke(bitmap)
                     latestPresentedFrame.value?.invoke(
                         sourceFrame,
                         bitmap,
-                        latestPreviewBaker.value,
+                        latestPreviewBaker.value.takeIf {
+                            frameColorMode == LiveFeedColorMode.SDR
+                        },
                     )
                 },
             )
         }
     }
 
-    Canvas(modifier) {
-        val image = presentationState?.image ?: fallbackFrame.value ?: return@Canvas
-        val content =
-            liveFeedContentRect(
-                containerWidth = size.width,
-                containerHeight = size.height,
-                sourceWidth = image.width,
-                sourceHeight = image.height,
-                aspectFill = aspectFill,
-            ) ?: return@Canvas
-        val dstSize = IntSize(content.width, content.height)
-        val dstOffset = IntOffset(content.left, content.top)
-        val activeRenderer = renderer
-        if (Build.VERSION.SDK_INT >= 33 && activeRenderer != null) {
-            activeRenderer.draw(
-                canvas = drawContext.canvas.nativeCanvas,
-                frame = image.asAndroidBitmap(),
-                dstLeft = dstOffset.x.toFloat(),
-                dstTop = dstOffset.y.toFloat(),
-                dstWidth = dstSize.width.toFloat(),
-                dstHeight = dstSize.height.toFloat(),
-            )
-        } else {
-            drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
+    if (legacySurfaceActive) {
+        AndroidView(
+            factory = { context ->
+                LegacyLiveFeedGlSurface(context).also(legacySurfaceState::attach)
+            },
+            modifier = modifier,
+            update = {
+                legacySurfaceState.update(requireNotNull(renderPlan), aspectFill)
+            },
+            onRelease = legacySurfaceState::detach,
+        )
+    } else {
+        Canvas(modifier) {
+            val image = presentationState?.image ?: fallbackFrame.value ?: return@Canvas
+            val content =
+                liveFeedContentRect(
+                    containerWidth = size.width,
+                    containerHeight = size.height,
+                    sourceWidth = image.width,
+                    sourceHeight = image.height,
+                    aspectFill = aspectFill,
+                ) ?: return@Canvas
+            val dstSize = IntSize(content.width, content.height)
+            val dstOffset = IntOffset(content.left, content.top)
+            val activeRenderer = renderer
+            val androidBitmap = image.asAndroidBitmap()
+            val frameIsOriginalSdr = decodedLiveFeedColorMode(androidBitmap) == LiveFeedColorMode.SDR
+            if (Build.VERSION.SDK_INT >= 33 && activeRenderer != null && frameIsOriginalSdr) {
+                activeRenderer.draw(
+                    canvas = drawContext.canvas.nativeCanvas,
+                    frame = androidBitmap,
+                    dstLeft = dstOffset.x.toFloat(),
+                    dstTop = dstOffset.y.toFloat(),
+                    dstWidth = dstSize.width.toFloat(),
+                    dstHeight = dstSize.height.toFloat(),
+                )
+            } else {
+                drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
+            }
         }
+    }
+}
+
+/** Visible fail-closed feedback when a future live source is not original SDR. */
+@Composable
+internal fun LiveFeedColorModeNotice(
+    colorMode: LiveFeedColorMode,
+    effectsActive: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (!effectsActive) return
+    val copy =
+        when (colorMode) {
+            LiveFeedColorMode.HDR -> "HDR LIVE VIEW · IMAGE ASSISTS OFF"
+            LiveFeedColorMode.UNSUPPORTED -> "LIVE COLOR FORMAT · IMAGE ASSISTS OFF"
+            LiveFeedColorMode.UNKNOWN,
+            LiveFeedColorMode.SDR,
+            -> return
+        }
+    Box(
+        modifier
+            .glass(ChromeShape)
+            .semantics { contentDescription = copy.lowercase() }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = copy,
+            style = chromeStyle(9f, androidx.compose.ui.text.font.FontWeight.Bold, mono = true),
+            color = LiveDesign.accent,
+        )
     }
 }
 

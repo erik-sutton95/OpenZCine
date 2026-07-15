@@ -507,7 +507,8 @@ fun AssistToolbar(
     state: AssistState,
     modifier: Modifier = Modifier,
     visibleTools: List<AssistTool> = AssistTool.entries.toList(),
-    imageEffectsAvailable: Boolean = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable,
+    imageEffectsAvailable: Boolean =
+        liveFeedEffectsPlatformAvailable(Build.VERSION.SDK_INT, SwiftCore.isAvailable),
     framingConfiguration: LocalFramingAssistConfiguration? = null,
     onToggleFramingTool: (AssistTool) -> Unit = {},
     hapticsEnabled: Boolean = true,
@@ -640,6 +641,8 @@ internal fun PortraitFillAssistRail(
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     visibleTools: List<AssistTool> = AssistTool.entries.toList(),
+    imageEffectsAvailable: Boolean =
+        liveFeedEffectsPlatformAvailable(Build.VERSION.SDK_INT, SwiftCore.isAvailable),
     framingConfiguration: LocalFramingAssistConfiguration? = null,
     onToggleFramingTool: (AssistTool) -> Unit = {},
     hapticsEnabled: Boolean = true,
@@ -668,7 +671,7 @@ internal fun PortraitFillAssistRail(
     }
 
     val supportedTools =
-        if (Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable) {
+        if (imageEffectsAvailable) {
             visibleTools
         } else {
             visibleTools.filterNot { it in imageEffectTools }
@@ -741,7 +744,7 @@ internal fun PortraitFillAssistRail(
     }
 }
 
-/** Feed effects need Android 13 AGSL plus the staged Swift renderer policy. */
+/** Feed effects need the API 29 floor plus the staged Swift renderer policy. */
 private val imageEffectTools: Set<AssistTool> =
     setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
 
