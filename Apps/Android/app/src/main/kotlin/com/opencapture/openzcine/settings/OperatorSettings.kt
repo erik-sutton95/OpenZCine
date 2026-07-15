@@ -13,6 +13,40 @@ import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
 
 /**
+ * Top-level monitor layout selected by the operator's DISP button.
+ *
+ * [wireIndex] is the shared Swift zone-map mode value. Persisted order and
+ * enablement use the stable enum names instead, so a reordered list never
+ * changes the core protocol boundary.
+ */
+public enum class MonitorDisplayMode(
+    /** Operator-facing settings label. */
+    public val label: String,
+    /** Stable shared-zone-map value (live = 0, clean = 1, command = 2). */
+    public val wireIndex: Int,
+) {
+    /** Camera feed with operator overlays and controls. */
+    LIVE("Live", 0),
+
+    /** Camera feed with the live tool chrome removed. */
+    CLEAN("Clean", 1),
+
+    /** Camera-backed command dashboard with the live-view consumer released. */
+    COMMAND("Command", 2),
+    ;
+
+    internal companion object {
+        fun fromStoredName(value: String): MonitorDisplayMode? {
+            val normalized = value.trim()
+            return entries.firstOrNull {
+                it.name.equals(normalized, ignoreCase = true) ||
+                    it.label.equals(normalized, ignoreCase = true)
+            }
+        }
+    }
+}
+
+/**
  * Operator-selected presentation of the live feed in the portrait monitor.
  *
  * The stable names mirror the shared core's `PortraitFeedAspect` cases. This
@@ -427,11 +461,12 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         }
     }
 
-    // Display chrome — maps to the local, supported subset of iOS
-    // `DisplayChromeVisibility`. `sideRailsVisible` remains intentionally out
-    // of this Android surface: hiding the only Settings entry would strand an
-    // operator without an equivalent recovery affordance.
+    // Display chrome — maps to iOS `DisplayChromeVisibility`. Android keeps a
+    // settings-only recovery control in the shared settings slot whenever the
+    // landscape side rails are hidden, so this preference cannot strand the
+    // operator outside Operator Setup.
     public val statusBarVisible: Toggle = Toggle("display.statusBar", default = true)
+    public val sideRailsVisible: Toggle = Toggle("display.sideRails", default = true)
     public val assistToolbarVisible: Toggle = Toggle("display.assistToolbar", default = true)
     public val cameraValuesVisible: Toggle = Toggle("display.cameraValues", default = true)
 
@@ -482,6 +517,81 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     private val streamPresetState = mutableStateOf(loadStreamPreset())
     private val qualityBiasState = mutableStateOf(loadQualityBias())
     private val portraitFeedAspectState = mutableStateOf(loadPortraitFeedAspect())
+    private val displayModeOrderState = mutableStateOf(loadDisplayModeOrder())
+    private val enabledDisplayModesState = mutableStateOf(loadEnabledDisplayModes())
+
+    /** Current persisted DISP order, including disabled modes. */
+    public val displayModeOrder: List<MonitorDisplayMode>
+        get() = displayModeOrderState.value
+
+    /** Modes currently included in the DISP cycle. At least one is always enabled. */
+    public val enabledDisplayModes: Set<MonitorDisplayMode>
+        get() = enabledDisplayModesState.value
+
+    /** Enabled modes in the operator's persisted order. */
+    public val enabledDisplayModeOrder: List<MonitorDisplayMode>
+        get() = displayModeOrder.filter(enabledDisplayModes::contains)
+
+    /**
+     * Returns the next enabled mode after [current], wrapping at the end.
+     * A stale/disabled current mode recovers to the first enabled mode.
+     */
+    public fun nextDisplayMode(current: MonitorDisplayMode): MonitorDisplayMode {
+        val order = enabledDisplayModeOrder
+        val currentIndex = order.indexOf(current)
+        return if (currentIndex < 0) order.first() else order[(currentIndex + 1) % order.size]
+    }
+
+    /** Recovers [current] when settings disabled it while the monitor stayed mounted. */
+    public fun reconciledDisplayMode(current: MonitorDisplayMode): MonitorDisplayMode =
+        current.takeIf(enabledDisplayModes::contains) ?: enabledDisplayModeOrder.first()
+
+    /**
+     * Resolves an explicit gesture/navigation request without bypassing operator enablement.
+     * Callers leave their current mode unchanged when this returns null.
+     */
+    public fun displayModeForExplicitRequest(
+        requested: MonitorDisplayMode,
+    ): MonitorDisplayMode? = requested.takeIf(enabledDisplayModes::contains)
+
+    /**
+     * Toggles one mode's participation in DISP cycling.
+     *
+     * Returns false without changing persistence when [mode] is the last
+     * enabled safe mode.
+     */
+    public fun toggleDisplayMode(mode: MonitorDisplayMode): Boolean {
+        val current = enabledDisplayModesState.value
+        if (mode in current && current.size == 1) return false
+        val next = current.toMutableSet()
+        if (!next.add(mode)) next.remove(mode)
+        enabledDisplayModesState.value = next
+        persistEnabledDisplayModes(next)
+        return true
+    }
+
+    /** Moves [mode] directly to [targetIndex] and persists the reconciled order. */
+    public fun moveDisplayMode(mode: MonitorDisplayMode, targetIndex: Int) {
+        val current = displayModeOrderState.value
+        val sourceIndex = current.indexOf(mode)
+        if (sourceIndex < 0) return
+        val next = current.toMutableList()
+        next.removeAt(sourceIndex)
+        next.add(targetIndex.coerceIn(0, next.size), mode)
+        if (next == current) return
+        displayModeOrderState.value = next
+        persistDisplayModeOrder(next)
+    }
+
+    /** Restores the iOS DISP order and enables all supported modes. */
+    public fun resetDisplayModePreferences() {
+        val order = MonitorDisplayMode.entries.toList()
+        val enabled = order.toSet()
+        displayModeOrderState.value = order
+        enabledDisplayModesState.value = enabled
+        persistDisplayModeOrder(order)
+        persistEnabledDisplayModes(enabled)
+    }
 
     /** Requested preview-size profile, resolved by Swift before live view starts. */
     public var streamPreset: LiveViewStreamPreset
@@ -834,6 +944,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val all: List<Toggle> =
         listOf(
             statusBarVisible,
+            sideRailsVisible,
             assistToolbarVisible,
             cameraValuesVisible,
             recReadoutVisible,
@@ -854,6 +965,43 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             levelAssistEnabled,
             desqueezeEnabled,
         )
+
+    private fun loadDisplayModeOrder(): List<MonitorDisplayMode> {
+        val raw = preferences.getString(DISPLAY_MODE_ORDER_KEY, null)
+        val stored =
+            raw?.split(',')
+                ?.mapNotNull(MonitorDisplayMode::fromStoredName)
+                .orEmpty()
+        val deduplicated = stored.distinct()
+        val reconciled = deduplicated + MonitorDisplayMode.entries.filterNot(deduplicated::contains)
+        if (raw != null && raw != encodedDisplayModeOrder(reconciled)) {
+            persistDisplayModeOrder(reconciled)
+        }
+        return reconciled
+    }
+
+    private fun loadEnabledDisplayModes(): Set<MonitorDisplayMode> {
+        if (!preferences.contains(ENABLED_DISPLAY_MODES_KEY)) return MonitorDisplayMode.entries.toSet()
+        val raw = preferences.getStringSet(ENABLED_DISPLAY_MODES_KEY, emptySet()).orEmpty()
+        val decoded = raw.mapNotNull(MonitorDisplayMode::fromStoredName).toSet()
+        val reconciled = decoded.ifEmpty { MonitorDisplayMode.entries.toSet() }
+        val canonical = reconciled.mapTo(linkedSetOf()) { it.name }
+        if (raw != canonical) persistEnabledDisplayModes(reconciled)
+        return reconciled
+    }
+
+    private fun persistDisplayModeOrder(order: List<MonitorDisplayMode>) {
+        preferences.edit().putString(DISPLAY_MODE_ORDER_KEY, encodedDisplayModeOrder(order)).apply()
+    }
+
+    private fun encodedDisplayModeOrder(order: List<MonitorDisplayMode>): String =
+        order.joinToString(separator = ",") { it.name }
+
+    private fun persistEnabledDisplayModes(modes: Set<MonitorDisplayMode>) {
+        preferences.edit()
+            .putStringSet(ENABLED_DISPLAY_MODES_KEY, modes.mapTo(linkedSetOf()) { it.name })
+            .apply()
+    }
 
     private fun loadAssistToolbarOrder(): List<AssistTool> {
         val stored =
@@ -1104,6 +1252,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     private companion object {
         const val STORE_NAME = "openzcine.operator-settings"
+        const val DISPLAY_MODE_ORDER_KEY = "display.disp.order.v1"
+        const val ENABLED_DISPLAY_MODES_KEY = "display.disp.enabled.v1"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
         const val VISIBLE_ASSIST_TOOLS_KEY = "display.assistToolbar.visible.v1"
         const val TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY =

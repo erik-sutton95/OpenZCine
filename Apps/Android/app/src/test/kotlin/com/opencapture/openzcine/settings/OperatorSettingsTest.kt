@@ -19,6 +19,7 @@ class OperatorSettingsTest {
     fun `readouts default visible`() {
         val settings = OperatorSettings(store)
         assertTrue(settings.statusBarVisible.value)
+        assertTrue(settings.sideRailsVisible.value)
         assertTrue(settings.assistToolbarVisible.value)
         assertTrue(settings.cameraValuesVisible.value)
         assertTrue(settings.recReadoutVisible.value)
@@ -53,15 +54,109 @@ class OperatorSettingsTest {
         assertEquals(LiveViewStreamPreset.FAST, settings.streamPreset)
         assertEquals(LiveViewQualityBias.LATENCY, settings.qualityBias)
         assertEquals(PortraitFeedAspect.FIT_16_9, settings.portraitFeedAspect)
+        assertEquals(MonitorDisplayMode.entries.toList(), settings.displayModeOrder)
+        assertEquals(MonitorDisplayMode.entries.toSet(), settings.enabledDisplayModes)
     }
 
     @Test
     fun `toggle writes through and survives a reload`() {
         OperatorSettings(store).apply {
             fpsReadoutVisible.toggle()
+            sideRailsVisible.toggle()
         }
         val reloaded = OperatorSettings(store)
         assertEquals(false, reloaded.fpsReadoutVisible.value)
+        assertEquals(false, reloaded.sideRailsVisible.value)
+    }
+
+    @Test
+    fun `DISP order enablement and cycling persist`() {
+        val settings = OperatorSettings(store)
+        settings.moveDisplayMode(MonitorDisplayMode.COMMAND, targetIndex = 0)
+        assertTrue(settings.toggleDisplayMode(MonitorDisplayMode.CLEAN))
+
+        val restored = OperatorSettings(store)
+        assertEquals(
+            listOf(
+                MonitorDisplayMode.COMMAND,
+                MonitorDisplayMode.LIVE,
+                MonitorDisplayMode.CLEAN,
+            ),
+            restored.displayModeOrder,
+        )
+        assertEquals(
+            setOf(MonitorDisplayMode.LIVE, MonitorDisplayMode.COMMAND),
+            restored.enabledDisplayModes,
+        )
+        assertEquals(
+            MonitorDisplayMode.COMMAND,
+            restored.nextDisplayMode(MonitorDisplayMode.LIVE),
+        )
+        assertEquals(
+            MonitorDisplayMode.LIVE,
+            restored.nextDisplayMode(MonitorDisplayMode.COMMAND),
+        )
+        assertEquals(
+            MonitorDisplayMode.COMMAND,
+            restored.nextDisplayMode(MonitorDisplayMode.CLEAN),
+        )
+        assertEquals(
+            MonitorDisplayMode.LIVE,
+            restored.displayModeForExplicitRequest(MonitorDisplayMode.LIVE),
+        )
+        assertEquals(
+            null,
+            restored.displayModeForExplicitRequest(MonitorDisplayMode.CLEAN),
+        )
+    }
+
+    @Test
+    fun `DISP persistence reconciles unknown duplicate and missing values deterministically`() {
+        store.edit()
+            .putString("display.disp.order.v1", "command,UNKNOWN,command,live")
+            .putStringSet("display.disp.enabled.v1", linkedSetOf("UNKNOWN", "clean"))
+            .apply()
+
+        val settings = OperatorSettings(store)
+
+        assertEquals(
+            listOf(
+                MonitorDisplayMode.COMMAND,
+                MonitorDisplayMode.LIVE,
+                MonitorDisplayMode.CLEAN,
+            ),
+            settings.displayModeOrder,
+        )
+        assertEquals(setOf(MonitorDisplayMode.CLEAN), settings.enabledDisplayModes)
+        assertEquals(
+            "COMMAND,LIVE,CLEAN",
+            store.getString("display.disp.order.v1", null),
+        )
+        assertEquals(
+            mutableSetOf("CLEAN"),
+            store.getStringSet("display.disp.enabled.v1", mutableSetOf()),
+        )
+        assertEquals(
+            MonitorDisplayMode.CLEAN,
+            settings.reconciledDisplayMode(MonitorDisplayMode.LIVE),
+        )
+        assertFalse(settings.toggleDisplayMode(MonitorDisplayMode.CLEAN))
+        assertEquals(setOf(MonitorDisplayMode.CLEAN), settings.enabledDisplayModes)
+    }
+
+    @Test
+    fun `corrupt empty enabled DISP set recovers all safe defaults`() {
+        store.edit()
+            .putStringSet("display.disp.enabled.v1", linkedSetOf("UNKNOWN"))
+            .apply()
+
+        val settings = OperatorSettings(store)
+
+        assertEquals(MonitorDisplayMode.entries.toSet(), settings.enabledDisplayModes)
+        assertEquals(
+            MonitorDisplayMode.entries.mapTo(linkedSetOf<String>()) { it.name },
+            store.getStringSet("display.disp.enabled.v1", mutableSetOf()),
+        )
     }
 
     @Test
@@ -99,6 +194,7 @@ class OperatorSettingsTest {
     fun `local monitor controls persist and drive the screen awake policy`() {
         OperatorSettings(store).apply {
             statusBarVisible.toggle()
+            sideRailsVisible.toggle()
             assistToolbarVisible.toggle()
             cameraValuesVisible.toggle()
             recordConfirmationEnabled.toggle()
@@ -108,6 +204,7 @@ class OperatorSettingsTest {
 
         val restored = OperatorSettings(store)
         assertFalse(restored.statusBarVisible.value)
+        assertFalse(restored.sideRailsVisible.value)
         assertFalse(restored.assistToolbarVisible.value)
         assertFalse(restored.cameraValuesVisible.value)
         assertFalse(restored.recordConfirmationEnabled.value)
@@ -176,6 +273,18 @@ class OperatorSettingsTest {
         assertEquals(0, settingsReorderIndex(pointerY = -40f, rowHeight = 50f, itemCount = 14))
         assertEquals(6, settingsReorderIndex(pointerY = 349f, rowHeight = 50f, itemCount = 14))
         assertEquals(13, settingsReorderIndex(pointerY = 900f, rowHeight = 50f, itemCount = 14))
+    }
+
+    @Test
+    fun `display toggle grids wrap in a narrow landscape content pane`() {
+        assertEquals(
+            2,
+            displayToggleGridColumnCount(compact = false, availableWidthDp = 366f),
+            "A 600dp shell leaves roughly 366dp after the tab rail and card padding",
+        )
+        assertEquals(2, displayToggleGridColumnCount(compact = false, availableWidthDp = 479.9f))
+        assertEquals(4, displayToggleGridColumnCount(compact = false, availableWidthDp = 480f))
+        assertEquals(2, displayToggleGridColumnCount(compact = true, availableWidthDp = 600f))
     }
 
     @Test

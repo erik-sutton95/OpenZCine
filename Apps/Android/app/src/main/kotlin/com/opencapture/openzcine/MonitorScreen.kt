@@ -31,7 +31,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -88,6 +87,7 @@ import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
 import com.opencapture.openzcine.wear.WearRecordCommandSafety
@@ -109,6 +109,57 @@ private data class LiveAssistOptionsRequest(
 @Composable
 internal fun LiveAssistOptionsBackHandler(visible: Boolean, onDismiss: () -> Unit) {
     BackHandler(enabled = visible, onBack = onDismiss)
+}
+
+/** Which landscape rail controls remain mounted for one chrome/recording state. */
+internal data class LandscapeSideRailPlan(
+    val fullRailsVisible: Boolean,
+    val settingsRecoveryVisible: Boolean,
+    val recordingSafetyVisible: Boolean,
+)
+
+/**
+ * Hiding side rails never removes the Settings recovery path. An active or
+ * pending recording also retains its record control until the camera settles.
+ */
+internal fun landscapeSideRailPlan(
+    sideRailsVisible: Boolean,
+    recording: Boolean,
+    recordCommandPending: Boolean,
+    recordConfirmationPending: Boolean,
+): LandscapeSideRailPlan =
+    LandscapeSideRailPlan(
+        fullRailsVisible = sideRailsVisible,
+        settingsRecoveryVisible = !sideRailsVisible,
+        recordingSafetyVisible =
+            !sideRailsVisible &&
+                (recording || recordCommandPending || recordConfirmationPending),
+    )
+
+/**
+ * A live capture picker stays mounted while its real camera command is in
+ * flight, then closes when its mode or chrome region is no longer available.
+ */
+internal fun retainMonitorPickerForChrome(
+    mode: MonitorDisplayMode,
+    cameraValuesVisible: Boolean,
+    cameraCommandPending: Boolean,
+): Boolean = cameraCommandPending || (mode == MonitorDisplayMode.LIVE && cameraValuesVisible)
+
+/** Settings-only affordance used when the landscape side rails are hidden. */
+@Composable
+internal fun LandscapeSettingsRecoveryButton(
+    modifier: Modifier = Modifier,
+    onOpenSettings: () -> Unit,
+) {
+    AuxCircleButton(
+        modifier.semantics {
+            contentDescription = "Open Settings, restore hidden monitor controls"
+        },
+        onClick = onOpenSettings,
+    ) { glyphModifier, tint ->
+        GearGlyph(tint, glyphModifier)
+    }
 }
 
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
@@ -267,11 +318,13 @@ fun MonitorScreen(
         }
     }
 
-    // Shell state, iOS-model-equivalent: DISP index (0 live, 1 clean,
-    // 2 command) and the interface lock.
+    // Shell state, iOS-model-equivalent: a typed DISP mode and the interface
+    // lock. Order/enablement live in OperatorSettings and remain observable
+    // while the full-screen settings overlay keeps this monitor mounted.
     // Recording is owned by the CameraSession; the shell only renders its
     // state and asks it to send a Nikon command.
-    var dispIndex by remember { mutableIntStateOf(0) }
+    var displayMode by remember { mutableStateOf(MonitorDisplayMode.LIVE) }
+    val effectiveDisplayMode = operatorSettings.reconciledDisplayMode(displayMode)
     var locked by remember { mutableStateOf(false) }
     val recordingState by session.recordingState.collectAsState()
     val recording =
@@ -320,6 +373,9 @@ fun MonitorScreen(
     }
     var pendingCommandControl by remember { mutableStateOf<CameraControl?>(null) }
     var commandControlFeedback by remember { mutableStateOf<CommandControlFeedback?>(null) }
+    LaunchedEffect(effectiveDisplayMode) {
+        if (displayMode != effectiveDisplayMode) displayMode = effectiveDisplayMode
+    }
     val commandPresentation =
         remember(
             cameraProperties,
@@ -625,8 +681,8 @@ fun MonitorScreen(
         )
         val viewportWidth = maxWidth.value - navLane
         val viewportHeight = maxHeight.value
-        val isClean = dispIndex == 1
-        val isCommand = dispIndex == 2
+        val isClean = effectiveDisplayMode == MonitorDisplayMode.CLEAN
+        val isCommand = effectiveDisplayMode == MonitorDisplayMode.COMMAND
         // Command always uses the fit zone, matching iOS. The persisted fill
         // choice returns unchanged when the operator cycles back to Live.
         val portraitAspect = operatorSettings.portraitFeedAspect
@@ -634,6 +690,7 @@ fun MonitorScreen(
 
         val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
         val cameraValuesVisible = operatorSettings.cameraValuesVisible.value
+        val sideRailsVisible = operatorSettings.sideRailsVisible.value
         val visibleAssistTools = operatorSettings.visibleAssistToolbarTools
         val openAssistOptions: (AssistTool, Rect) -> Unit = { tool, anchor ->
             if (!locked) {
@@ -665,6 +722,22 @@ fun MonitorScreen(
                     )
             if (!retained) activeAssistOptions = null
         }
+        LaunchedEffect(
+            effectiveDisplayMode,
+            cameraValuesVisible,
+            pendingCommandControl,
+        ) {
+            if (activeMonitorPickerKind != null &&
+                !retainMonitorPickerForChrome(
+                    mode = effectiveDisplayMode,
+                    cameraValuesVisible = cameraValuesVisible,
+                    cameraCommandPending = pendingCommandControl != null,
+                )
+            ) {
+                activeMonitorPickerKind = null
+                commandControlFeedback = null
+            }
+        }
         val bottomBarHeight =
             when {
                 isPortrait && assistToolbarVisible -> LiveDesign.CONTROL_HEIGHT_DP
@@ -681,7 +754,7 @@ fun MonitorScreen(
         // not every remembered landscape scope. The selection mirrors iOS:
         // two newest activations, then canonical presentation order.
         val portraitScopes =
-            if (isPortrait && !isPortraitFill && dispIndex == 0) {
+            if (isPortrait && !isPortraitFill && effectiveDisplayMode == MonitorDisplayMode.LIVE) {
                 assist.displayedPortraitScopes
             } else {
                 emptyList()
@@ -690,7 +763,7 @@ fun MonitorScreen(
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
-                isPortrait, dispIndex, isPortraitFill, scopeCount, bottomBarHeight,
+                isPortrait, effectiveDisplayMode, isPortraitFill, scopeCount, bottomBarHeight,
             ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
@@ -700,7 +773,7 @@ fun MonitorScreen(
                         safeLeading = safeLeading,
                         safeBottom = safeBottom,
                         safeTrailing = safeTrailing,
-                        mode = dispIndex,
+                        mode = effectiveDisplayMode.wireIndex,
                         isPortrait = isPortrait,
                         aspectFill = isPortraitFill,
                         scopeCount = scopeCount,
@@ -985,24 +1058,23 @@ fun MonitorScreen(
                     activeMonitorPicker = activeMonitorPickerKind,
                     commandControlsEnabled = commandControlsEnabled,
                     pendingCommandControl = pendingCommandControl,
-                    dispIndex = dispIndex,
+                    displayMode = effectiveDisplayMode,
+                    enabledDisplayModeOrder = operatorSettings.enabledDisplayModeOrder,
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
                     onRecord = requestRecordToggle,
                     onDisp = {
                         activeAssistOptions = null
-                        activeMonitorPickerKind = null
-                        commandControlFeedback = null
-                        dispIndex = nextMonitorDispIndex(dispIndex)
+                        displayMode = operatorSettings.nextDisplayMode(effectiveDisplayMode)
                     },
                     onOpenMedia = {
                         activeAssistOptions = null
-                        activeMonitorPickerKind = null
+                        if (pendingCommandControl == null) activeMonitorPickerKind = null
                         onOpenMedia()
                     },
                     onOpenSettings = {
                         activeAssistOptions = null
-                        activeMonitorPickerKind = null
+                        if (pendingCommandControl == null) activeMonitorPickerKind = null
                         onOpenSettings()
                     },
                     onOpenMonitorPicker = { kind ->
@@ -1143,57 +1215,84 @@ fun MonitorScreen(
                     }
                 }
 
-                // Side rails: lock + battery indicators + record / DISP /
-                // media / settings — mounted in every mode, like iOS.
-                LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
-                zones.batteryPhone?.let {
-                    BatteryIndicatorColumn(
-                        percent = phoneBatteryReadout.percent,
-                        isCamera = false,
-                        modifier = Modifier.zone(it),
-                        externalPower = phoneBatteryReadout.externalPower,
+                val railPlan =
+                    landscapeSideRailPlan(
+                        sideRailsVisible = sideRailsVisible,
+                        recording = recording,
+                        recordCommandPending = recordCommandPending,
+                        recordConfirmationPending = pendingRecordTarget != null,
                     )
-                }
-                zones.batteryCamera?.let {
-                    BatteryIndicatorColumn(
-                        percent = cameraReadouts.batteryPercent,
-                        isCamera = true,
-                        modifier = Modifier.zone(it),
-                        externalPower = cameraReadouts.externalPower,
+                if (railPlan.fullRailsVisible) {
+                    // Persistent side rails: lock + authoritative batteries +
+                    // record / configured DISP / media / settings.
+                    LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
+                    zones.batteryPhone?.let {
+                        BatteryIndicatorColumn(
+                            percent = phoneBatteryReadout.percent,
+                            isCamera = false,
+                            modifier = Modifier.zone(it),
+                            externalPower = phoneBatteryReadout.externalPower,
+                        )
+                    }
+                    zones.batteryCamera?.let {
+                        BatteryIndicatorColumn(
+                            percent = cameraReadouts.batteryPercent,
+                            isCamera = true,
+                            modifier = Modifier.zone(it),
+                            externalPower = cameraReadouts.externalPower,
+                        )
+                    }
+                    AuxCircleButton(
+                        Modifier.zone(zones.settings),
+                        onClick = {
+                            if (pendingCommandControl == null) activeMonitorPickerKind = null
+                            onOpenSettings()
+                        },
+                    ) { glyphModifier, tint ->
+                        GearGlyph(tint, glyphModifier)
+                    }
+                    AuxCircleButton(
+                        Modifier.zone(zones.media),
+                        onClick = {
+                            if (pendingCommandControl == null) activeMonitorPickerKind = null
+                            onOpenMedia()
+                        },
+                    ) { glyphModifier, tint ->
+                        MediaStackGlyph(tint, glyphModifier)
+                    }
+                    RecordButton(
+                        recording = recording,
+                        modifier = Modifier.zone(zones.record),
+                        enabled = recordControlEnabled,
+                        onClick = requestRecordToggle,
                     )
-                }
-                AuxCircleButton(
-                    Modifier.zone(zones.settings),
-                    onClick = {
-                        activeMonitorPickerKind = null
-                        onOpenSettings()
-                    },
-                ) { glyphModifier, tint ->
-                    GearGlyph(tint, glyphModifier)
-                }
-                AuxCircleButton(
-                    Modifier.zone(zones.media),
-                    onClick = {
-                        activeMonitorPickerKind = null
-                        onOpenMedia()
-                    },
-                ) { glyphModifier, tint ->
-                    MediaStackGlyph(tint, glyphModifier)
-                }
-                RecordButton(
-                    recording = recording,
-                    modifier = Modifier.zone(zones.record),
-                    enabled = recordControlEnabled,
-                    onClick = requestRecordToggle,
-                )
-                DispButton(
-                    activeIndex = dispIndex,
-                    modeCount = 3, // Live / Clean / Command, matching iOS.
-                    modifier = Modifier.zone(zones.disp),
-                ) {
-                    activeMonitorPickerKind = null
-                    commandControlFeedback = null
-                    dispIndex = nextMonitorDispIndex(dispIndex)
+                    val enabledOrder = operatorSettings.enabledDisplayModeOrder
+                    DispButton(
+                        activeIndex = enabledOrder.indexOf(effectiveDisplayMode),
+                        modeCount = enabledOrder.size,
+                        isLiveActive = effectiveDisplayMode == MonitorDisplayMode.LIVE,
+                        modifier = Modifier.zone(zones.disp),
+                    ) {
+                        activeAssistOptions = null
+                        displayMode = operatorSettings.nextDisplayMode(effectiveDisplayMode)
+                    }
+                } else {
+                    if (railPlan.recordingSafetyVisible) {
+                        RecordButton(
+                            recording = recording,
+                            modifier = Modifier.zone(zones.record),
+                            enabled = recordControlEnabled,
+                            onClick = requestRecordToggle,
+                        )
+                    }
+                    LandscapeSettingsRecoveryButton(
+                        modifier = Modifier.zone(zones.settings),
+                        onOpenSettings = {
+                            activeAssistOptions = null
+                            if (pendingCommandControl == null) activeMonitorPickerKind = null
+                            onOpenSettings()
+                        },
+                    )
                 }
             }
         }
@@ -1412,7 +1511,8 @@ private fun PortraitChrome(
     activeMonitorPicker: MonitorPickerKind?,
     commandControlsEnabled: Boolean,
     pendingCommandControl: CameraControl?,
-    dispIndex: Int,
+    displayMode: MonitorDisplayMode,
+    enabledDisplayModeOrder: List<MonitorDisplayMode>,
     onLock: () -> Unit,
     recordEnabled: Boolean,
     onRecord: () -> Unit,
@@ -1576,8 +1676,9 @@ private fun PortraitChrome(
         LockButton(locked, Modifier.size(40.dp), onClick = onLock)
         Spacer(Modifier.weight(1f))
         DispButton(
-            activeIndex = dispIndex,
-            modeCount = 3,
+            activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
+            modeCount = enabledDisplayModeOrder.size,
+            isLiveActive = displayMode == MonitorDisplayMode.LIVE,
             modifier = Modifier.size(width = 74.dp, height = 44.dp),
             onClick = onDisp,
         )

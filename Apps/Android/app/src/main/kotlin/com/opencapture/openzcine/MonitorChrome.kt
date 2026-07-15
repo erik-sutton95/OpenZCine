@@ -278,11 +278,13 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
 fun DispButton(
     activeIndex: Int,
     modeCount: Int,
+    isLiveActive: Boolean = activeIndex == 0,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    // iOS tints the whole control info-blue while the LIVE mode (index 0) is active.
-    val labelColor = if (activeIndex == 0) LiveDesign.info else LiveDesign.text
+    // The operator can reorder modes, so live tint follows typed mode state
+    // rather than assuming indicator position zero is always Live.
+    val labelColor = if (isLiveActive) LiveDesign.info else LiveDesign.text
     Column(
         modifier = modifier.glass(ChromeShape).chromeClickable(onClick),
         horizontalAlignment = Alignment.CenterHorizontally,

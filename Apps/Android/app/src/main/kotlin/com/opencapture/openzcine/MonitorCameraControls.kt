@@ -192,9 +192,6 @@ internal fun monitorPickerKindForRequest(
         setting.picker?.modes?.any { it.request.control == request.control } == true
     }?.kind
 
-/** DISP always cycles live, clean, command and clears any live-view picker. */
-internal fun nextMonitorDispIndex(current: Int): Int = (current + 1).mod(3)
-
 /** Resolves iOS's pinch thresholds without changing state for a small gesture. */
 internal fun portraitAspectAfterPinch(
     zoom: Float,
