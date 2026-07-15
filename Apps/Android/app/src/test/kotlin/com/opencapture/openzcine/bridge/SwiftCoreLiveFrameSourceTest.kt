@@ -5,6 +5,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -13,6 +16,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
@@ -48,6 +52,7 @@ class SwiftCoreLiveFrameSourceTest {
                 available = { true },
                 start = { listener = it },
                 stop = {},
+                configurePreview = { true },
                 sharingScope = backgroundScope,
                 onRecordingState = { recordingState = it },
             )
@@ -86,6 +91,7 @@ class SwiftCoreLiveFrameSourceTest {
                 available = { true },
                 start = { listener = it },
                 stop = {},
+                configurePreview = { true },
                 sharingScope = backgroundScope,
             )
 
@@ -105,6 +111,7 @@ class SwiftCoreLiveFrameSourceTest {
                 available = { true },
                 start = { listener = it },
                 stop = {},
+                configurePreview = { true },
                 sharingScope = backgroundScope,
             )
 
@@ -155,6 +162,7 @@ class SwiftCoreLiveFrameSourceTest {
                     listener = it
                 },
                 stop = { stops++ },
+                configurePreview = { true },
                 sharingScope = backgroundScope,
             )
 
@@ -168,7 +176,7 @@ class SwiftCoreLiveFrameSourceTest {
         runCurrent()
         feed.await()
         scope.await()
-        runCurrent()
+        advanceUntilIdle()
 
         assertEquals(1, starts)
         assertEquals(1, stops)
@@ -187,6 +195,7 @@ class SwiftCoreLiveFrameSourceTest {
                     listener = it
                 },
                 stop = { stops++ },
+                configurePreview = { true },
                 sharingScope = backgroundScope,
                 restartDelayMillis = 0L,
             )
@@ -218,6 +227,7 @@ class SwiftCoreLiveFrameSourceTest {
                 available = { true },
                 start = { listener -> listener.onFrame(byteArrayOf(1), 1L, false) },
                 stop = { stopped.set(true) },
+                configurePreview = { true },
                 sharingScope = backgroundScope,
             )
 
@@ -227,5 +237,130 @@ class SwiftCoreLiveFrameSourceTest {
         runCurrent()
 
         assertTrue(stopped.get())
+    }
+
+    @Test
+    fun `rejected initial preview never starts a native pump`() = runTest {
+        var starts = 0
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { starts++ },
+                stop = {},
+                configurePreview = { false },
+                sharingScope = backgroundScope,
+            )
+
+        val collector = launch { source.frames.collect() }
+        runCurrent()
+
+        assertEquals(0, starts)
+        assertNull(source.appliedPreviewRequest)
+        val rejected = assertIs<SwiftLiveViewPreviewState.Rejected>(source.previewState.value)
+        assertEquals(SwiftLiveViewRequest.DEFAULT, rejected.requested)
+        assertNull(rejected.retainedRequest)
+
+        collector.cancelAndJoin()
+    }
+
+    @Test
+    fun `rejected changed preview restores the prior confirmed request before restarting`() = runTest {
+        val rejectedRequest = SwiftLiveViewRequest(1, 3, 49_500_000L)
+        val configured = mutableListOf<SwiftLiveViewRequest>()
+        var starts = 0
+        var stops = 0
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = {
+                    starts++
+                    listener = it
+                },
+                stop = {
+                    stops++
+                    listener.onEnded()
+                },
+                configurePreview = { request ->
+                    configured += request
+                    request != rejectedRequest
+                },
+                sharingScope = backgroundScope,
+                restartDelayMillis = 0L,
+            )
+        val collector = launch { source.frames.collect() }
+        runCurrent()
+
+        source.updatePreviewRequest(rejectedRequest)
+        runCurrent()
+
+        assertEquals(
+            listOf(SwiftLiveViewRequest.DEFAULT, rejectedRequest, SwiftLiveViewRequest.DEFAULT),
+            configured,
+        )
+        assertEquals(2, starts)
+        assertEquals(1, stops)
+        assertEquals(SwiftLiveViewRequest.DEFAULT, source.appliedPreviewRequest)
+        val rejected = assertIs<SwiftLiveViewPreviewState.Rejected>(source.previewState.value)
+        assertEquals(rejectedRequest, rejected.requested)
+        assertEquals(SwiftLiveViewRequest.DEFAULT, rejected.retainedRequest)
+
+        collector.cancelAndJoin()
+    }
+
+    @Test
+    fun `configuration cancellation does not become a rejected preview state`() = runTest {
+        var starts = 0
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { starts++ },
+                stop = {},
+                configurePreview = { throw kotlinx.coroutines.CancellationException("test cancellation") },
+                sharingScope = backgroundScope,
+            )
+
+        val collector = launch { source.frames.collect() }
+        runCurrent()
+
+        assertEquals(0, starts)
+        assertFalse(source.previewState.value is SwiftLiveViewPreviewState.Rejected)
+
+        collector.cancelAndJoin()
+    }
+
+    @Test
+    fun `health stream rejects stale replay before a resumed pump delivers a frame`() = runTest {
+        var starts = 0
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = {
+                    starts++
+                    listener = it
+                },
+                stop = {},
+                configurePreview = { true },
+                sharingScope = backgroundScope,
+                restartDelayMillis = 0L,
+            )
+
+        val visual = launch { source.frames.collect() }
+        runCurrent()
+        listener.onFrame(byteArrayOf(1), 1L, false)
+        runCurrent()
+        listener.onEnded()
+        runCurrent()
+        assertEquals(2, starts)
+
+        val health = async { source.currentStreamFrames.first() }
+        runCurrent()
+        assertFalse(health.isCompleted)
+
+        listener.onFrame(byteArrayOf(2), 2L, false)
+        runCurrent()
+        assertContentEquals(byteArrayOf(2), health.await().jpegData)
+        visual.cancelAndJoin()
     }
 }

@@ -5,6 +5,8 @@ import com.opencapture.openzcine.core.LiveAudioMeterChannel
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFrameSource
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,14 +14,44 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.withContext
 
 private class LiveViewEndedException : IllegalStateException("The native live-view pump ended.")
+
+private data class StreamFrame(
+    val generation: Long,
+    val frame: LiveFrame,
+)
+
+/** The outcome of applying Android's Swift-owned preview request to the active camera. */
+internal sealed interface SwiftLiveViewPreviewState {
+    /** No live-view consumer has asked the source to configure a stream yet. */
+    data object Idle : SwiftLiveViewPreviewState
+
+    /** A request is waiting for the native facade to confirm it. */
+    data class Pending(val requested: SwiftLiveViewRequest) : SwiftLiveViewPreviewState
+
+    /** The native facade accepted the request used by the current or last stream. */
+    data class Applied(val request: SwiftLiveViewRequest) : SwiftLiveViewPreviewState
+
+    /**
+     * The requested configuration was rejected. A non-null [retainedRequest]
+     * means the previous confirmed configuration was restored before streaming.
+     */
+    data class Rejected(
+        val requested: SwiftLiveViewRequest,
+        val retainedRequest: SwiftLiveViewRequest?,
+    ) : SwiftLiveViewPreviewState
+}
 
 /**
  * [LiveFrameSource] over the Swift core's live-view pump. The first [frames]
@@ -58,7 +90,28 @@ class SwiftCoreLiveFrameSource(
         require(restartDelayMillis >= 0L) { "restartDelayMillis must not be negative." }
     }
 
-    private val upstream: Flow<LiveFrame> =
+    private val previewRequestLock = Any()
+    private var requestedPreview = SwiftLiveViewRequest.DEFAULT
+    private var appliedPreview: SwiftLiveViewRequest? = null
+    private val previewUpdates = Channel<Unit>(Channel.CONFLATED)
+    private val _previewState = MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle)
+    private val liveViewPumpActive = AtomicBoolean(false)
+    private val nextStreamGeneration = AtomicLong(0L)
+    private val activeStreamGeneration = AtomicLong(0L)
+
+    /** Current requested preview policy, retained for the next stream start. */
+    internal val previewRequest: SwiftLiveViewRequest
+        get() = synchronized(previewRequestLock) { requestedPreview }
+
+    /** Last preview request that the native facade explicitly accepted. */
+    internal val appliedPreviewRequest: SwiftLiveViewRequest?
+        get() = synchronized(previewRequestLock) { appliedPreview }
+
+    /** Preview application state for the Link surface. */
+    internal val previewState: StateFlow<SwiftLiveViewPreviewState>
+        get() = _previewState
+
+    private val upstream: Flow<StreamFrame> =
         callbackFlow {
                 // No native library (APK built without `just android-core`):
                 // complete immediately instead of crashing on the external fun.
@@ -66,12 +119,13 @@ class SwiftCoreLiveFrameSource(
                     close()
                     return@callbackFlow
                 }
-                // Resolve/write the latest request on the same source start
-                // that follows it. If a body rejects a verify-on-HW preview
-                // enum, keep iOS's best-effort behavior: attempt the monitor
-                // stream rather than touching any recording property.
-                val previewRequest = synchronized(previewRequestLock) { requestedPreview }
-                runCatching { configurePreview(previewRequest) }
+                // Configure a camera-confirmed request before a pump can run.
+                // If a body rejects a new verify-on-HW enum, restore only a
+                // previously confirmed request; otherwise leave live view
+                // paused and make the rejection visible to the Link surface.
+                awaitConfiguredPreviewRequest()
+                val generation = nextStreamGeneration.incrementAndGet()
+                activeStreamGeneration.set(generation)
                 liveViewPumpActive.set(true)
                 try {
                     start(
@@ -173,13 +227,17 @@ class SwiftCoreLiveFrameSource(
                                     null
                                 }
                             trySend(
-                                LiveFrame(
-                                    timestampNanos = timestampNanos,
-                                    jpegData = jpeg,
-                                    isRecording = isRecording,
-                                    audioLevels = audioLevels,
-                                    focus = focus,
-                                    level = level,
+                                StreamFrame(
+                                    generation = generation,
+                                    frame =
+                                        LiveFrame(
+                                            timestampNanos = timestampNanos,
+                                            jpegData = jpeg,
+                                            isRecording = isRecording,
+                                            audioLevels = audioLevels,
+                                            focus = focus,
+                                            level = level,
+                                        ),
                                 ),
                             )
                         }
@@ -190,10 +248,12 @@ class SwiftCoreLiveFrameSource(
                         },
                     )
                 } catch (error: Throwable) {
+                    activeStreamGeneration.compareAndSet(generation, 0L)
                     liveViewPumpActive.set(false)
                     throw error
                 }
                 awaitClose {
+                    activeStreamGeneration.compareAndSet(generation, 0L)
                     if (liveViewPumpActive.getAndSet(false)) stop()
                 }
             }
@@ -204,13 +264,80 @@ class SwiftCoreLiveFrameSource(
                 true
             }
 
-    private val previewRequestLock = Any()
-    private var requestedPreview = SwiftLiveViewRequest.DEFAULT
-    private val liveViewPumpActive = AtomicBoolean(false)
+    private val sharedFrames =
+        upstream.shareIn(
+            scope = sharingScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 0),
+            replay = 1,
+        )
 
-    /** Current Swift-approved preview request, retained for the next stream start. */
-    internal val previewRequest: SwiftLiveViewRequest
-        get() = synchronized(previewRequestLock) { requestedPreview }
+    /**
+     * Visual consumers retain the last JPEG across a temporary source restart.
+     * Health consumers must use [currentStreamFrames], which rejects replay
+     * emitted by a former native pump generation.
+     */
+    override val frames: Flow<LiveFrame> = sharedFrames.map { it.frame }
+
+    /** Frames proven to come from the currently requested native stream generation. */
+    internal val currentStreamFrames: Flow<LiveFrame> =
+        sharedFrames.transform { streamFrame ->
+            if (activeStreamGeneration.get() == streamFrame.generation) {
+                emit(streamFrame.frame)
+            }
+        }
+
+    private suspend fun awaitConfiguredPreviewRequest(): SwiftLiveViewRequest {
+        while (true) {
+            val requested = previewRequest
+            _previewState.value = SwiftLiveViewPreviewState.Pending(requested)
+            if (configurePreviewSafely(requested)) {
+                if (!isCurrentPreviewRequest(requested)) continue
+                synchronized(previewRequestLock) { appliedPreview = requested }
+                _previewState.value = SwiftLiveViewPreviewState.Applied(requested)
+                return requested
+            }
+
+            if (!isCurrentPreviewRequest(requested)) continue
+            val retained = appliedPreviewRequest
+            if (
+                retained != null &&
+                    retained != requested &&
+                    configurePreviewSafely(retained)
+            ) {
+                if (!isCurrentPreviewRequest(requested)) continue
+                _previewState.value =
+                    SwiftLiveViewPreviewState.Rejected(
+                        requested = requested,
+                        retainedRequest = retained,
+                    )
+                return retained
+            }
+
+            if (!isCurrentPreviewRequest(requested)) continue
+            if (retained != null) {
+                synchronized(previewRequestLock) {
+                    if (appliedPreview == retained) appliedPreview = null
+                }
+            }
+            _previewState.value =
+                SwiftLiveViewPreviewState.Rejected(
+                    requested = requested,
+                    retainedRequest = null,
+                )
+            previewUpdates.receive()
+        }
+    }
+
+    private fun isCurrentPreviewRequest(request: SwiftLiveViewRequest): Boolean =
+        synchronized(previewRequestLock) { requestedPreview == request }
+
+    private fun configurePreviewSafely(request: SwiftLiveViewRequest): Boolean =
+        try {
+            configurePreview(request)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            false
+        }
 
     /**
      * Updates the next Swift-owned preview request and restarts only an active
@@ -228,16 +355,17 @@ class SwiftCoreLiveFrameSource(
                     true
                 }
             }
-        if (changed && liveViewPumpActive.compareAndSet(true, false)) {
+        val retryingRejectedRequest = !changed && _previewState.value is SwiftLiveViewPreviewState.Rejected
+        if (!changed && !retryingRejectedRequest) return false
+
+        _previewState.value = SwiftLiveViewPreviewState.Pending(request)
+        previewUpdates.trySend(Unit)
+        if (liveViewPumpActive.compareAndSet(true, false)) {
+            // The requested generation has changed. Do not let a late frame
+            // or replay from the stopping pump count as fresh link health.
+            activeStreamGeneration.set(0L)
             withContext(Dispatchers.IO) { stop() }
         }
         return changed
     }
-
-    override val frames: Flow<LiveFrame> =
-        upstream.shareIn(
-            scope = sharingScope,
-            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 0),
-            replay = 1,
-        )
 }

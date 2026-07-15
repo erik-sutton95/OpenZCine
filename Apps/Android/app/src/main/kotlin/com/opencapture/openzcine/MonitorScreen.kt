@@ -61,6 +61,7 @@ import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
+import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
@@ -83,6 +84,7 @@ import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -229,6 +231,10 @@ fun MonitorScreen(
         remember(swiftLiveFrameSource) {
             swiftLiveFrameSource?.let(::AndroidLiveViewController)
         }
+    val noPreviewApplication =
+        remember { MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle) }
+    val previewApplication by
+        (swiftLiveFrameSource?.previewState ?: noPreviewApplication).collectAsState()
     LaunchedEffect(session) { session.connect() }
 
     // Shared glass state: the active tier plus the one blurred backdrop
@@ -259,6 +265,7 @@ fun MonitorScreen(
     val recording =
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.RECORDING
+    val previewPolicyRecording = previewPolicyRecordingActive(recordingState)
     // The Android shell stores operator intent only. Swift resolves that
     // intent against the portable stream/thermal policy, then the active
     // source restarts just its preview pump when the approved request moves.
@@ -270,7 +277,7 @@ fun MonitorScreen(
         operatorSettings.streamPreset,
         operatorSettings.qualityBias,
         thermalTier,
-        recording,
+        previewPolicyRecording,
         cameraProperties.temperatureStatus,
     ) {
         liveViewController?.apply(
@@ -278,7 +285,7 @@ fun MonitorScreen(
                 streamPreset = operatorSettings.streamPreset.wireValue,
                 qualityBias = operatorSettings.qualityBias.wireValue,
                 thermalTier = thermalTier.wireValue,
-                isRecording = recording,
+                isRecording = previewPolicyRecording,
                 cameraOverheating = cameraProperties.temperatureStatus == CameraTemperatureStatus.HOT,
             ),
         )
@@ -644,14 +651,24 @@ fun MonitorScreen(
                                 lifecycleState.isAtLeast(Lifecycle.State.STARTED)
                         }
             }
+        // Every preview consumer takes this monitor-only path. In DISP 3 it
+        // becomes null before feed, audio, scope, or health effects can hold
+        // the shared Swift source open, so its final collector ends live view.
+        val monitorFrameSource = monitorPreviewFrameSource(activeFrameSource, isCommand)
         // Health collection deliberately owns no demo or command-dashboard
         // subscription: only the real Swift live source is evidence of a
         // camera stream, and DISP 3 must still send EndLiveView when it loses
         // the final preview consumer.
         val healthFrameSource =
-            activeFrameSource?.takeIf { !isCommand && it === swiftLiveFrameSource }
+            monitorFrameSource?.takeIf { it === swiftLiveFrameSource }
+        val appliedPreviewRequest =
+            if (previewApplication is SwiftLiveViewPreviewState.Idle) {
+                null
+            } else {
+                swiftLiveFrameSource?.appliedPreviewRequest
+            }
         val healthTargetFramesPerSecond =
-            liveViewController?.request?.targetFramesPerSecond ?: 30.0
+            appliedPreviewRequest?.targetFramesPerSecond ?: 30.0
         LaunchedEffect(
             actualLinkHealth,
             sessionState,
@@ -670,7 +687,9 @@ fun MonitorScreen(
             )
         }
         LaunchedEffect(actualLinkHealth, healthFrameSource) {
-            healthFrameSource?.frames?.collect(actualLinkHealth::recordFrame)
+            (healthFrameSource as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource)
+                ?.currentStreamFrames
+                ?.collect(actualLinkHealth::recordFrame)
         }
         LaunchedEffect(actualLinkHealth, propertyRefreshStatus) {
             actualLinkHealth.reportPropertyRefresh(propertyRefreshStatus)
@@ -682,16 +701,16 @@ fun MonitorScreen(
             }
         }
         val liveFeedPresentation =
-            remember(activeFrameSource) { LiveFeedPresentationState() }
+            remember(monitorFrameSource) { LiveFeedPresentationState() }
         val audioMetersEnabled = assist.audioMetersEnabled
         var liveAudioLevels by
-            remember(activeFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
-        LaunchedEffect(activeFrameSource, audioMetersEnabled) {
-            if (!audioMetersEnabled || activeFrameSource == null) {
+            remember(monitorFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
+        LaunchedEffect(monitorFrameSource, audioMetersEnabled) {
+            if (!audioMetersEnabled || monitorFrameSource == null) {
                 liveAudioLevels = null
                 return@LaunchedEffect
             }
-            activeFrameSource.frames.collect { frame ->
+            monitorFrameSource.frames.collect { frame ->
                 liveAudioLevels = frame.audioLevels
             }
         }
@@ -728,13 +747,13 @@ fun MonitorScreen(
                     // stable, descriptive region for TalkBack and UI tests.
                     .semantics {
                         contentDescription =
-                            if (activeFrameSource == null) "Live view unavailable" else "Live view active"
+                            if (monitorFrameSource == null) "Live view unavailable" else "Live view active"
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                if (activeFrameSource != null) {
+                if (monitorFrameSource != null) {
                     LiveFeedView(
-                        activeFrameSource,
+                        monitorFrameSource,
                         Modifier.fillMaxSize().graphicsLayer {
                             scaleX = localFraming.desqueezePresentation.horizontalPresentationScale
                         },
@@ -922,13 +941,13 @@ fun MonitorScreen(
         // One monitor-owned sampler serves every toolbar-selected scope. In
         // landscape all selected panels float independently; portrait mounts
         // only its recency-selected ≤2 panels in the shared zone-map frame.
-        if (!isCommand && assist.selectedScopes.isNotEmpty() && activeFrameSource != null) {
+        if (!isCommand && assist.selectedScopes.isNotEmpty() && monitorFrameSource != null) {
             ScopePanels(
                 selectedScopes = assist.selectedScopes,
                 portraitScopes = portraitScopes,
                 crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
                 histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
-                source = activeFrameSource,
+                source = monitorFrameSource,
                 isPortrait = isPortrait,
                 feed = zones.feed,
                 infoBar = zones.infoBar,

@@ -37,6 +37,8 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
+import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
+import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
@@ -51,6 +53,7 @@ import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SavedCamerasExperience
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
+import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
@@ -118,6 +121,7 @@ class MainActivity : ComponentActivity() {
                 // guessing a topology or constructing a second session.
                 var activeSavedCamera by remember { mutableStateOf<SavedCameraRecord?>(null) }
                 var requestedReconnectID by rememberSaveable { mutableStateOf<String?>(null) }
+                var suppressedUsbAutoReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
                 val connectionScope = rememberCoroutineScope()
                 val savedCameraStore =
                     remember { SharedPreferencesSavedCameraStore(applicationContext) }
@@ -231,6 +235,11 @@ class MainActivity : ComponentActivity() {
                                     onOpenSettings = { standaloneSettingsPresented = true },
                                     requestedReconnectID = requestedReconnectID,
                                     onReconnectRequestConsumed = { requestedReconnectID = null },
+                                    suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts,
+                                    onUsbAutoReconnectSuppressionCleared = { host ->
+                                        suppressedUsbAutoReconnectHosts =
+                                            suppressedUsbAutoReconnectHosts - host
+                                    },
                                     onRecordsChanged = { updated ->
                                         savedCameras = updated
                                         savedCameraStore.replace(updated)
@@ -310,6 +319,12 @@ class MainActivity : ComponentActivity() {
                         val disconnectToSavedCameraHome: (Boolean) -> Unit = { reconnect ->
                             val exitingSession = active
                             val reconnectID = activeSavedCamera?.id
+                            suppressedUsbAutoReconnectHosts =
+                                usbAutoReconnectSuppressionAfterUserAction(
+                                    suppressedHosts = suppressedUsbAutoReconnectHosts,
+                                    record = activeSavedCamera,
+                                    reconnect = reconnect,
+                                )
                             connectionScope.launch {
                                 // Finish this exact profile's slot and AP
                                 // lease before SavedCamerasExperience gets a
@@ -371,6 +386,9 @@ class MainActivity : ComponentActivity() {
                                         frameioController = frameioController,
                                         lutLibrary = lutLibrary,
                                         linkHealth = monitorLinkHealth,
+                                        liveViewSource =
+                                            (active as? SwiftCoreCameraSession)
+                                                ?.liveFrames as? SwiftCoreLiveFrameSource,
                                         activeTransportLabel = activeSavedCamera?.transport?.displayName,
                                         onDisconnect =
                                             activeSavedCamera?.let {

@@ -68,6 +68,8 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
+import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
@@ -135,6 +137,7 @@ internal fun OperatorSettingsScreen(
     frameioController: FrameioDeliveryController? = null,
     lutLibrary: AndroidLutLibrary? = null,
     linkHealth: AndroidLinkHealthMonitor? = null,
+    liveViewSource: SwiftCoreLiveFrameSource? = null,
     activeTransportLabel: String? = null,
     onDisconnect: (() -> Unit)? = null,
     onReconnect: (() -> Unit)? = null,
@@ -195,6 +198,7 @@ internal fun OperatorSettingsScreen(
                     frameioController,
                     lutLibrary,
                     linkHealth,
+                    liveViewSource,
                     activeTransportLabel,
                     onDisconnect,
                     onReconnect,
@@ -219,6 +223,7 @@ internal fun OperatorSettingsScreen(
                         frameioController,
                         lutLibrary,
                         linkHealth,
+                        liveViewSource,
                         activeTransportLabel,
                         onDisconnect,
                         onReconnect,
@@ -457,6 +462,7 @@ private fun SettingsContentPane(
     frameioController: FrameioDeliveryController?,
     lutLibrary: AndroidLutLibrary?,
     linkHealth: AndroidLinkHealthMonitor?,
+    liveViewSource: SwiftCoreLiveFrameSource?,
     activeTransportLabel: String?,
     onDisconnect: (() -> Unit)?,
     onReconnect: (() -> Unit)?,
@@ -523,6 +529,7 @@ private fun SettingsContentPane(
                                 session = session,
                                 settings = settings,
                                 linkHealth = linkHealth,
+                                liveViewSource = liveViewSource,
                                 activeTransportLabel = activeTransportLabel,
                                 onDisconnect = onDisconnect,
                                 onReconnect = onReconnect,
@@ -555,6 +562,7 @@ private fun LinkRows(
     session: CameraSession?,
     settings: OperatorSettings,
     linkHealth: AndroidLinkHealthMonitor?,
+    liveViewSource: SwiftCoreLiveFrameSource?,
     activeTransportLabel: String?,
     onDisconnect: (() -> Unit)?,
     onReconnect: (() -> Unit)?,
@@ -562,6 +570,10 @@ private fun LinkRows(
 ) {
     val disconnectedProperties = remember { MutableStateFlow(CameraPropertySnapshot()) }
     val cameraProperties by (session?.cameraProperties ?: disconnectedProperties).collectAsState()
+    val noPreviewApplication =
+        remember { MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle) }
+    val previewApplication by
+        (liveViewSource?.previewState ?: noPreviewApplication).collectAsState()
     val health = linkHealth?.presentation ?: LinkHealthPresentation()
     val thermalTier = rememberAndroidThermalTier()
     val warningLabel =
@@ -577,6 +589,18 @@ private fun LinkRows(
             AndroidThermalTier.FAIR -> "Fair · full preview request"
             AndroidThermalTier.SERIOUS -> "Serious · preview reduced"
             AndroidThermalTier.CRITICAL -> "Critical · preview minimized"
+        }
+    val previewApplicationLabel =
+        when (val state = previewApplication) {
+            SwiftLiveViewPreviewState.Idle -> "Waiting for live view"
+            is SwiftLiveViewPreviewState.Pending -> "Applying preview request"
+            is SwiftLiveViewPreviewState.Applied -> "Applied"
+            is SwiftLiveViewPreviewState.Rejected ->
+                if (state.retainedRequest != null) {
+                    "Rejected · keeping prior stream"
+                } else {
+                    "Rejected · live view paused"
+                }
         }
 
     SettingsGroupCard(
@@ -644,6 +668,11 @@ private fun LinkRows(
         }
         SettingsInlineRow(title = "Thermal Preview", showTopDivider = false) {
             SettingsValueText(thermalPreviewLabel)
+        }
+        SettingsInlineRow(title = "Preview Apply") {
+            SettingsValueText(
+                if (liveViewSource == null) "Native source unavailable" else previewApplicationLabel,
+            )
         }
         SettingsInlineRow(title = "Camera Warning") { SettingsValueText(warningLabel) }
     }

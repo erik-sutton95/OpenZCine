@@ -78,12 +78,13 @@ internal class AndroidLiveViewController(
     private val source: SwiftCoreLiveFrameSource,
     private val policy: SwiftLiveViewPolicyBridge = ProductionSwiftLiveViewPolicyBridge,
 ) {
+    /** Desired Swift policy request; it becomes applied only after native confirmation. */
     var request: SwiftLiveViewRequest? by mutableStateOf(null)
         private set
 
     suspend fun apply(input: SwiftLiveViewPolicyInput) {
         val resolved = policy.resolve(input) ?: return
-        if (request != resolved) {
+        if (request != resolved || source.previewState.value is SwiftLiveViewPreviewState.Rejected) {
             source.updatePreviewRequest(resolved)
             request = resolved
         }
