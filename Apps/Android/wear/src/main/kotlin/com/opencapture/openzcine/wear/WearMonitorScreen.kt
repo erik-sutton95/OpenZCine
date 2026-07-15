@@ -1,11 +1,17 @@
 package com.opencapture.openzcine.wear
 
+import android.graphics.Bitmap
+import android.os.Build
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +25,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -29,7 +40,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -42,82 +57,183 @@ import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import com.opencapture.openzcine.wearrelay.WatchConnectionState
+import com.opencapture.openzcine.wearrelay.WatchRelayState
+import com.opencapture.openzcine.wearrelay.WatchTimecode
+
+/** Immutable UI input, separated from Data Layer ownership for UI testing. */
+internal data class WearMonitorPresentation(
+    val phoneReachable: Boolean,
+    val state: WatchRelayState?,
+    val frame: Bitmap?,
+    val frameTimecode: WatchTimecode?,
+    val isSendingCommand: Boolean,
+    val commandMessage: String?,
+) {
+    val isRecording: Boolean
+        get() = state?.isRecording == true
+
+    val canRecord: Boolean
+        get() =
+            phoneReachable &&
+                state?.connection == WatchConnectionState.CONNECTED &&
+                !isSendingCommand
+}
+
+/** Geometry decisions that keep the fixed-height monitor legible on round and square watches. */
+internal data class WearScreenLayout(
+    val timecodeHorizontalPaddingDp: Float,
+    val bottomHorizontalPaddingDp: Float,
+    val timecodeFontSizeSp: Float,
+)
+
+internal fun wearScreenLayout(isRound: Boolean, widthDp: Float): WearScreenLayout {
+    val timecodePadding = if (isRound) 16f else 6f
+    val bottomPadding = if (isRound) 18f else 10f
+    val availableTimecodeWidth = (widthDp - timecodePadding * 2f).coerceAtLeast(1f)
+    return WearScreenLayout(
+        timecodeHorizontalPaddingDp = timecodePadding,
+        bottomHorizontalPaddingDp = bottomPadding,
+        timecodeFontSizeSp = (availableTimecodeWidth / 6.8f).coerceIn(14f, 24f),
+    )
+}
+
+internal fun fittedSingleLineFontSize(
+    text: String,
+    availableWidthDp: Float,
+    maximumSizeSp: Float = 11f,
+): Float {
+    if (text.isEmpty()) return maximumSizeSp
+    val estimated = availableWidthDp / (text.length * 0.57f)
+    return estimated.coerceIn(8f, maximumSizeSp)
+}
 
 /** The 16:9 wrist monitor, rendered only from the phone relay's truthful state. */
 @Composable
 internal fun WearMonitorScreen(controller: WearRelayController) {
-    val state = controller.state
-    val isRecording = state?.isRecording == true
-    val canRecord =
-        controller.phoneReachable &&
-            state != null &&
-            state.connection == WatchConnectionState.CONNECTED &&
-            state.feedLive &&
-            !controller.isSendingCommand
+    WearMonitorContent(
+        presentation =
+            WearMonitorPresentation(
+                phoneReachable = controller.phoneReachable,
+                state = controller.state,
+                frame = controller.frame,
+                frameTimecode = controller.frameTimecode,
+                isSendingCommand = controller.isSendingCommand,
+                commandMessage = controller.commandMessage,
+            ),
+        onToggleRecord = controller::sendToggleRecord,
+    )
+}
+
+/** Render-only Wear monitor surface used by both the Activity and Compose UI tests. */
+@Composable
+internal fun WearMonitorContent(
+    presentation: WearMonitorPresentation,
+    onToggleRecord: () -> Unit,
+) {
+    val view = LocalView.current
+    var previousRecording by remember { mutableStateOf<Boolean?>(null) }
+    var previousCommandMessage by remember { mutableStateOf(presentation.commandMessage) }
+    LaunchedEffect(presentation.isRecording) {
+        if (previousRecording != null && previousRecording != presentation.isRecording) {
+            val feedback =
+                if (Build.VERSION.SDK_INT >= 30) {
+                    if (presentation.isRecording) {
+                        HapticFeedbackConstants.CONFIRM
+                    } else {
+                        HapticFeedbackConstants.REJECT
+                    }
+                } else {
+                    HapticFeedbackConstants.LONG_PRESS
+                }
+            view.performHapticFeedback(feedback)
+        }
+        previousRecording = presentation.isRecording
+    }
+    LaunchedEffect(presentation.commandMessage) {
+        val message = presentation.commandMessage
+        if (message != null && message != previousCommandMessage) {
+            val feedback =
+                if (Build.VERSION.SDK_INT >= 30) {
+                    HapticFeedbackConstants.REJECT
+                } else {
+                    HapticFeedbackConstants.LONG_PRESS
+                }
+            view.performHapticFeedback(feedback)
+        }
+        previousCommandMessage = message
+    }
     MaterialTheme {
-        Column(
+        BoxWithConstraints(
             modifier =
                 Modifier.fillMaxSize()
-                    .background(Color.Black),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+                    .background(Color.Black)
+                    .semantics { contentDescription = "Wear camera monitor" },
         ) {
-            Text(
-                text = timecodeLabel(controller),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
-                color = if (isRecording) Color(0xFFE24040) else Color.White,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 24.sp,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-            )
-            WearFeed(
-                controller = controller,
-                modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
-            )
-            Row(
+            val layout = wearScreenLayout(LocalConfiguration.current.isScreenRound, maxWidth.value)
+            val sideSlotWidth =
+                ((maxWidth.value - layout.bottomHorizontalPaddingDp * 2f - 50f) / 2f)
+                    .coerceAtLeast(1f)
+            val storage = storageLabel(presentation)
+            val batteryPercent =
+                presentation.state?.let { state ->
+                    state.cameraBatteryPercent.takeIf {
+                        state.connection == WatchConnectionState.CONNECTED && it in 0..100
+                    }
+                }
+            Column(
                 modifier =
-                    Modifier.fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 0.dp)
-                        .padding(bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = storageLabel(controller),
-                    modifier = Modifier.weight(1f),
-                    color = Color(0xFFC3C5C8),
-                    fontSize = 11.sp,
+                    text = timecodeLabel(presentation),
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .padding(horizontal = layout.timecodeHorizontalPaddingDp.dp),
+                    color = if (presentation.isRecording) Color(0xFFE24040) else Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = layout.timecodeFontSizeSp.sp,
+                    textAlign = TextAlign.Center,
                     maxLines = 1,
                 )
-                WearRecordButton(
-                    isRecording = isRecording,
-                    enabled = canRecord,
-                    onClick = controller::sendToggleRecord,
+                WearFeed(
+                    presentation = presentation,
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
                 )
-                Spacer(Modifier.width(6.dp))
-                WearBatteryReadout(
-                    percent = controller.state?.cameraBatteryPercent?.takeIf { it in 1..100 },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            controller.commandMessage?.let { message ->
-                Text(
-                    text = message,
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color(0xFFE5B567),
-                    fontSize = 9.sp,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                )
+                Row(
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .padding(horizontal = layout.bottomHorizontalPaddingDp.dp)
+                            .padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = storage,
+                        modifier = Modifier.weight(1f),
+                        color = Color(0xFFC3C5C8),
+                        fontSize = fittedSingleLineFontSize(storage, sideSlotWidth).sp,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    WearRecordButton(
+                        isRecording = presentation.isRecording,
+                        enabled = presentation.canRecord,
+                        onClick = onToggleRecord,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    WearBatteryReadout(
+                        percent = batteryPercent,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun WearFeed(controller: WearRelayController, modifier: Modifier = Modifier) {
-    val state = controller.state
-    val recording = state?.isRecording == true
+private fun WearFeed(presentation: WearMonitorPresentation, modifier: Modifier = Modifier) {
     Box(
         modifier =
             modifier
@@ -125,7 +241,7 @@ private fun WearFeed(controller: WearRelayController, modifier: Modifier = Modif
                 .background(Color(0xFF101114))
                 .clipToBounds()
                 .then(
-                    if (recording) {
+                    if (presentation.isRecording) {
                         Modifier.border(3.dp, Color(0xFFE24040))
                     } else {
                         Modifier
@@ -133,7 +249,7 @@ private fun WearFeed(controller: WearRelayController, modifier: Modifier = Modif
                 ),
         contentAlignment = Alignment.Center,
     ) {
-        controller.frame?.let { preview ->
+        presentation.frame?.let { preview ->
             Image(
                 bitmap = preview.asImageBitmap(),
                 contentDescription = "Live camera preview from phone",
@@ -141,7 +257,7 @@ private fun WearFeed(controller: WearRelayController, modifier: Modifier = Modif
                 contentScale = ContentScale.Crop,
             )
         }
-        val placeholder = placeholderLabel(controller)
+        val placeholder = placeholderLabel(presentation)
         if (placeholder != null) {
             Text(
                 text = placeholder,
@@ -155,28 +271,42 @@ private fun WearFeed(controller: WearRelayController, modifier: Modifier = Modif
                 maxLines = 2,
             )
         }
+        presentation.commandMessage?.let { message ->
+            Text(
+                text = message,
+                modifier =
+                    Modifier.align(Alignment.BottomCenter)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                color = Color(0xFFE5B567),
+                fontSize = 8.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
+        }
     }
 }
 
-private fun placeholderLabel(controller: WearRelayController): String? =
+private fun placeholderLabel(presentation: WearMonitorPresentation): String? =
     when {
-        !controller.phoneReachable -> "Open OpenZCine on phone"
-        controller.state == null -> "Waiting for phone monitor"
-        controller.state?.connection == WatchConnectionState.DISCONNECTED -> "Phone monitor unavailable"
-        controller.state?.connection == WatchConnectionState.NO_CAMERA -> "No camera connected"
-        controller.state?.feedLive == false -> "Feed paused on phone"
-        controller.frame == null -> "Waiting for camera preview"
+        !presentation.phoneReachable -> "Open OpenZCine on phone"
+        presentation.state == null -> "Waiting for phone monitor"
+        presentation.state.connection == WatchConnectionState.DISCONNECTED -> "Phone monitor unavailable"
+        presentation.state.connection == WatchConnectionState.NO_CAMERA -> "No camera connected"
+        !presentation.state.feedLive -> "Feed paused (Command mode)"
+        presentation.frame == null -> "Waiting for camera preview"
         else -> null
     }
 
-private fun timecodeLabel(controller: WearRelayController): String {
-    val timecode = controller.frameTimecode ?: controller.state?.timecode
+private fun timecodeLabel(presentation: WearMonitorPresentation): String {
+    val timecode = presentation.frameTimecode ?: presentation.state?.timecode
     return if (timecode?.on == true) timecode.label() else "--:--:--:--"
 }
 
-private fun storageLabel(controller: WearRelayController): String =
-    controller.state?.mediaStatus?.capacityLabel()
-        ?: controller.state?.media?.takeIf { it.isNotBlank() }
+private fun storageLabel(presentation: WearMonitorPresentation): String =
+    presentation.state?.mediaStatus?.capacityLabel()
+        ?: presentation.state?.media?.takeIf { it.isNotBlank() }
         ?: "—"
 
 /** iOS-parity record glyph: circle + rounded red start/stop tally, not a text control. */
@@ -186,9 +316,16 @@ private fun WearRecordButton(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    val controlColor = if (isRecording) Color(0xFFE24040) else Color.White.copy(alpha = 0.6f)
-    val innerSize = if (isRecording) 14.dp else 22.dp
-    val innerShape = RoundedCornerShape(if (isRecording) 3.dp else 11.dp)
+    val hapticFeedback = LocalHapticFeedback.current
+    val controlColor by
+        animateColorAsState(
+            if (isRecording) Color(0xFFE24040) else Color.White.copy(alpha = 0.6f),
+            label = "record ring",
+        )
+    val innerSize by
+        animateDpAsState(if (isRecording) 14.dp else 22.dp, label = "record glyph size")
+    val innerCorner by
+        animateDpAsState(if (isRecording) 3.dp else 11.dp, label = "record glyph corner")
     Box(
         modifier =
             Modifier.size(44.dp)
@@ -198,7 +335,10 @@ private fun WearRecordButton(
                         if (isRecording) "Stop camera recording" else "Start camera recording"
                     role = Role.Button
                 }
-                .clickable(enabled = enabled, onClick = onClick),
+                .clickable(enabled = enabled) {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onClick()
+                },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -209,7 +349,7 @@ private fun WearRecordButton(
         Box(
             modifier =
                 Modifier.size(innerSize)
-                    .background(Color(0xFFE24040), innerShape),
+                    .background(Color(0xFFE24040), RoundedCornerShape(innerCorner)),
         )
     }
 }

@@ -1,9 +1,10 @@
 package com.opencapture.openzcine.bridge
 
-import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveAudioMeterChannel
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
+import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.core.LiveFrameTimecode
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -37,6 +38,45 @@ private data class PreviewRequestPlan(
     val request: SwiftLiveViewRequest,
     val version: Long,
 )
+
+/** Measures actual native-frame delivery cadence without inventing a camera setting. */
+internal class LiveFrameRateEstimator(
+    private val smoothingWeight: Double = 0.25,
+) {
+    init {
+        require(smoothingWeight in 0.0..1.0) { "smoothingWeight must be in 0...1." }
+    }
+
+    private var previousTimestampNanos: Long? = null
+    private var smoothedIntervalNanos: Double? = null
+
+    /** Adds one monotonic timestamp and returns measured FPS once two valid frames exist. */
+    fun record(timestampNanos: Long): Double? {
+        val previous = previousTimestampNanos
+        previousTimestampNanos = timestampNanos
+        if (previous == null) return null
+        val interval = timestampNanos - previous
+        if (interval !in MIN_INTERVAL_NANOS..MAX_INTERVAL_NANOS) {
+            smoothedIntervalNanos = null
+            return null
+        }
+        val prior = smoothedIntervalNanos
+        val smoothed =
+            if (prior == null) {
+                interval.toDouble()
+            } else {
+                prior * (1.0 - smoothingWeight) + interval * smoothingWeight
+            }
+        smoothedIntervalNanos = smoothed
+        return NANOS_PER_SECOND / smoothed
+    }
+
+    private companion object {
+        const val NANOS_PER_SECOND = 1_000_000_000.0
+        const val MIN_INTERVAL_NANOS = 500_000L
+        const val MAX_INTERVAL_NANOS = 5_000_000_000L
+    }
+}
 
 /**
  * Ownership of the native pump. Every transition is protected by
@@ -165,6 +205,8 @@ class SwiftCoreLiveFrameSource(
                 try {
                     start(
                         object : SwiftCore.LiveFrameListener {
+                        private val frameRateEstimator = LiveFrameRateEstimator()
+
                         override fun onFrame(
                             jpeg: ByteArray,
                             timestampNanos: Long,
@@ -239,6 +281,71 @@ class SwiftCoreLiveFrameSource(
                             )
                         }
 
+                        override fun onFrameWithFullMetadata(
+                            jpeg: ByteArray,
+                            timestampNanos: Long,
+                            isRecording: Boolean,
+                            leftLevelDb: Double,
+                            leftPeakDb: Double,
+                            rightLevelDb: Double,
+                            rightPeakDb: Double,
+                            hasAudioLevels: Boolean,
+                            hasFocus: Boolean,
+                            focusCoordinateWidth: Int,
+                            focusCoordinateHeight: Int,
+                            focusResult: Int,
+                            subjectDetectionActive: Boolean,
+                            trackingAFActive: Boolean,
+                            selectedBoxIndex: Int,
+                            focusBoxes: IntArray,
+                            hasLevel: Boolean,
+                            levelRollDegrees: Double,
+                            levelPitchDegrees: Double,
+                            levelYawDegrees: Double,
+                            timecodeOn: Boolean,
+                            timecodeHour: Int,
+                            timecodeMinute: Int,
+                            timecodeSecond: Int,
+                            timecodeFrame: Int,
+                        ) {
+                            emitFrame(
+                                jpeg = jpeg,
+                                timestampNanos = timestampNanos,
+                                isRecording = isRecording,
+                                leftLevelDb = leftLevelDb,
+                                leftPeakDb = leftPeakDb,
+                                rightLevelDb = rightLevelDb,
+                                rightPeakDb = rightPeakDb,
+                                hasAudioLevels = hasAudioLevels,
+                                focus =
+                                    liveFocusInfoFromWire(
+                                        hasFocus = hasFocus,
+                                        coordinateWidth = focusCoordinateWidth,
+                                        coordinateHeight = focusCoordinateHeight,
+                                        focusResult = focusResult,
+                                        subjectDetectionActive = subjectDetectionActive,
+                                        trackingAFActive = trackingAFActive,
+                                        selectedBoxIndex = selectedBoxIndex,
+                                        flattenedBoxes = focusBoxes,
+                                    ),
+                                level =
+                                    liveCameraLevelFromWire(
+                                        hasLevel = hasLevel,
+                                        rollDegrees = levelRollDegrees,
+                                        pitchDegrees = levelPitchDegrees,
+                                        yawDegrees = levelYawDegrees,
+                                    ),
+                                timecode =
+                                    LiveFrameTimecode(
+                                        on = timecodeOn,
+                                        hour = timecodeHour,
+                                        minute = timecodeMinute,
+                                        second = timecodeSecond,
+                                        frame = timecodeFrame,
+                                    ),
+                            )
+                        }
+
                         private fun emitFrame(
                             jpeg: ByteArray,
                             timestampNanos: Long,
@@ -250,6 +357,7 @@ class SwiftCoreLiveFrameSource(
                             hasAudioLevels: Boolean,
                             focus: com.opencapture.openzcine.core.LiveFocusInfo? = null,
                             level: com.opencapture.openzcine.core.LiveCameraLevel? = null,
+                            timecode: LiveFrameTimecode? = null,
                         ) {
                             onRecordingState(isRecording)
                             val audioLevels =
@@ -272,6 +380,9 @@ class SwiftCoreLiveFrameSource(
                                             audioLevels = audioLevels,
                                             focus = focus,
                                             level = level,
+                                            timecode = timecode,
+                                            measuredFramesPerSecond =
+                                                frameRateEstimator.record(timestampNanos),
                                         ),
                                 ),
                             )

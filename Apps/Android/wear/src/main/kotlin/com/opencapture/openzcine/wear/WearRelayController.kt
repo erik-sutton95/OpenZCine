@@ -64,6 +64,7 @@ internal class WearRelayController(context: Context) :
     private var preferredPhoneNodeID: String? = null
     private var pendingCommand: PendingWearCommand? = null
     private var commandToken = 0L
+    private val frameSequence = LatestWearFrameSequence()
 
     /** Begins foreground-only listeners and requires a fresh phone state. */
     fun start() {
@@ -117,7 +118,6 @@ internal class WearRelayController(context: Context) :
                 !stateFreshness.isFresh(SystemClock.elapsedRealtime()) ||
                 snapshot == null ||
                 snapshot.connection != WatchConnectionState.CONNECTED ||
-                !snapshot.feedLive ||
                 isSendingCommand ||
                 nodeID == null
         ) {
@@ -145,6 +145,11 @@ internal class WearRelayController(context: Context) :
 
     override fun onMessageReceived(messageEvent: MessageEvent) {
         if (!active) return
+        val frameRequestID = WearRelayTransport.frameRequestID(messageEvent.path)
+        if (frameRequestID != null) {
+            receivePreview(messageEvent, frameRequestID)
+            return
+        }
         when (messageEvent.path) {
             WearRelayTransport.STATE_PATH -> {
                 if (messageEvent.sourceNodeId !in reachablePhoneNodes) return
@@ -152,28 +157,38 @@ internal class WearRelayController(context: Context) :
                 preferredPhoneNodeID = messageEvent.sourceNodeId
                 updateState(snapshot)
             }
-            WearRelayTransport.FRAME_PATH -> {
-                if (messageEvent.sourceNodeId != preferredPhoneNodeID) return
-                val relayFrame = decode<WatchRelayFrame>(messageEvent.data) ?: return
-                // State arrives as a heartbeat first. Ignore an unordered or
-                // late frame rather than making a stale camera look live.
-                if (
-                    !stateFreshness.isFresh(SystemClock.elapsedRealtime()) ||
-                        state?.connection != WatchConnectionState.CONNECTED ||
-                        state?.feedLive != true
-                ) {
-                    return
-                }
-                val image = BitmapFactory.decodeByteArray(relayFrame.jpeg, 0, relayFrame.jpeg.size) ?: return
-                frame = image
-                frameTimecode = relayFrame.timecode
-            }
             else -> {
                 val requestID = WearRelayTransport.resultRequestID(messageEvent.path) ?: return
                 val result = decode<WatchCommandResult>(messageEvent.data) ?: return
                 acceptCommandResult(messageEvent.sourceNodeId, requestID, result)
             }
         }
+    }
+
+    private fun receivePreview(messageEvent: MessageEvent, requestID: Long) {
+        if (messageEvent.sourceNodeId != preferredPhoneNodeID) return
+        val relayFrame = decode<WatchRelayFrame>(messageEvent.data) ?: return
+        // State arrives as a heartbeat first. Ignore an unordered or late
+        // frame rather than making a stale camera look live.
+        if (
+            !stateFreshness.isFresh(SystemClock.elapsedRealtime()) ||
+                state?.connection != WatchConnectionState.CONNECTED ||
+                state?.feedLive != true
+        ) {
+            return
+        }
+        // Match watchOS reply pacing: acknowledge receipt immediately, then
+        // decode the sub-500 px JPEG. The three-slot pipeline already bounds
+        // work, while this keeps UI scheduling out of the measured link RTT.
+        messageClient.sendMessage(
+            messageEvent.sourceNodeId,
+            WearRelayTransport.frameAckPath(requestID),
+            byteArrayOf(),
+        )
+        if (!frameSequence.accept(requestID)) return
+        val image = BitmapFactory.decodeByteArray(relayFrame.jpeg, 0, relayFrame.jpeg.size) ?: return
+        frame = image
+        frameTimecode = relayFrame.timecode
     }
 
     private fun refreshReachablePhones() {
@@ -195,11 +210,21 @@ internal class WearRelayController(context: Context) :
     }
 
     private fun updateState(snapshot: WatchRelayState) {
+        val priorState = state
         state = snapshot
         stateFreshness.accept(SystemClock.elapsedRealtime())
         if (snapshot.connection != WatchConnectionState.CONNECTED || !snapshot.feedLive) {
             frame = null
             frameTimecode = null
+            frameSequence.clear()
+        } else if (
+            priorState == null ||
+                priorState.connection != WatchConnectionState.CONNECTED ||
+                !priorState.feedLive
+        ) {
+            // A newly live relay starts a new presentation generation. This
+            // also accepts low request IDs after the phone relay restarts.
+            frameSequence.clear()
         }
         handler.removeCallbacks(stateExpiry)
         scheduleStateExpiry()
@@ -232,6 +257,7 @@ internal class WearRelayController(context: Context) :
         state = null
         frame = null
         frameTimecode = null
+        frameSequence.clear()
         stateFreshness.clear()
     }
 

@@ -1227,24 +1227,29 @@
     /// The raw pointers are a JNI global reference, process-wide `jmethodID`s,
     /// and the process-wide `JavaVM*` — all valid across threads per the JNI
     /// spec, hence `@unchecked Sendable`.
+    private enum LiveFrameCallback: Sendable {
+        case legacy
+        case metadata
+        case fullMetadata
+    }
+
     private struct LiveFrameListenerHandle: @unchecked Sendable {
         let vm: UnsafeMutablePointer<JavaVM?>
         let listener: jobject
         let onFrame: jmethodID
-        /// True when [onFrame] accepts focus and virtual-horizon metadata.
-        /// Older Kotlin listeners retain the audio-only descriptor.
-        let supportsMetadata: Bool
+        /// Additive callback level resolved from the Kotlin listener.
+        let callback: LiveFrameCallback
         let onEnded: jmethodID
     }
 
     /// `SwiftCore.sessionStartLiveView(listener)` — starts live view on the
     /// active session (blocking `StartLiveView` + readiness poll on the caller
     /// thread) and pumps JPEG frames to
-    /// `listener.onFrameWithMetadata(jpeg, timestampNanos, isRecording,
-    /// audio, focus, level...)` from the facade's pump thread. The older
-    /// audio-only `onFrame` descriptor remains a fallback for a listener that
-    /// has not adopted the additive callback. `onEnded` fires exactly once
-    /// when the stream ends — stop, disconnect, a transport error, or
+    /// `listener.onFrameWithFullMetadata(jpeg, timestampNanos, isRecording,
+    /// audio, focus, level, timecode...)` from the facade's pump thread. The
+    /// focus/level and audio-only descriptors remain fallbacks for listeners
+    /// that have not adopted the newest additive callback. `onEnded` fires
+    /// exactly once when the stream ends — stop, disconnect, a transport error, or
     /// (immediately, on the calling thread) when there is no active session or
     /// the start fails.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartLiveView")
@@ -1264,10 +1269,13 @@
         // Keep the established `onFrame([BJZDDDDZ)V` ABI alive. A newer
         // listener receives one richer callback per frame; an older one keeps
         // receiving its exact legacy payload rather than failing start-up.
+        let fullMetadataFrame = optionalInstanceMethod(
+            env, cls, "onFrameWithFullMetadata", "([BJZDDDDZZIIIZZI[IZDDDZIIII)V")
         let metadataFrame = optionalInstanceMethod(
             env, cls, "onFrameWithMetadata", "([BJZDDDDZZIIIZZI[IZDDD)V")
         guard
-            let onFrame = metadataFrame
+            let onFrame = fullMetadataFrame
+                ?? metadataFrame
                 ?? optionalInstanceMethod(
                     env, cls, "onFrame", "([BJZDDDDZ)V")
         else {
@@ -1278,7 +1286,8 @@
             vm: vm,
             listener: global,
             onFrame: onFrame,
-            supportsMetadata: metadataFrame != nil,
+            callback: fullMetadataFrame != nil
+                ? .fullMetadata : (metadataFrame != nil ? .metadata : .legacy),
             onEnded: onEnded)
 
         /// Terminal path on the CALLING (JVM-owned) thread: report the end and
@@ -1304,7 +1313,8 @@
                     let level = LiveViewLevelWire(level: frame.level)
                     pushLiveFrame(
                         handle, jpeg: frame.jpeg, timestampNanos: timestampNanos,
-                        isRecording: frame.isRecording, audio: audio, focus: focus, level: level)
+                        isRecording: frame.isRecording, audio: audio, focus: focus, level: level,
+                        timecode: frame.timecode)
                 },
                 onEnded: { finishLiveFrameStream(handle) })
         } catch {
@@ -1327,7 +1337,7 @@
     private func pushLiveFrame(
         _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64,
         isRecording: Bool, audio: LiveAudioMeterWire, focus: LiveViewFocusWire,
-        level: LiveViewLevelWire
+        level: LiveViewLevelWire, timecode: Timecode
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -1352,29 +1362,43 @@
             jvalue(d: audio.rightLevelDB), jvalue(d: audio.rightPeakDB),
             jvalue(z: audio.hasLevels ? 1 : 0),
         ]
-        guard handle.supportsMetadata else {
-            fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &legacyArgs)
+        guard case .legacy = handle.callback else {
+            guard let boxes = javaIntArray(env, focus.boxes) else {
+                fns.DeleteLocalRef!(env, array)
+                return
+            }
+            let metadataArgs =
+                legacyArgs + [
+                    jvalue(z: focus.hasFocus ? 1 : 0),
+                    jvalue(i: focus.coordinateWidth), jvalue(i: focus.coordinateHeight),
+                    jvalue(i: focus.result),
+                    jvalue(z: focus.subjectDetectionActive ? 1 : 0),
+                    jvalue(z: focus.trackingAFActive ? 1 : 0),
+                    jvalue(i: focus.selectedBoxIndex), jvalue(l: boxes),
+                    jvalue(z: level.hasLevel ? 1 : 0),
+                    jvalue(d: level.rollDegrees), jvalue(d: level.pitchDegrees),
+                    jvalue(d: level.yawDegrees),
+                ]
+            switch handle.callback {
+            case .legacy:
+                break
+            case .metadata:
+                var arguments = metadataArgs
+                fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
+            case .fullMetadata:
+                var arguments =
+                    metadataArgs + [
+                        jvalue(z: timecode.on ? 1 : 0),
+                        jvalue(i: jint(timecode.hour)), jvalue(i: jint(timecode.minute)),
+                        jvalue(i: jint(timecode.second)), jvalue(i: jint(timecode.frame)),
+                    ]
+                fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &arguments)
+            }
+            fns.DeleteLocalRef!(env, boxes)
             fns.DeleteLocalRef!(env, array)
             return
         }
-        guard let boxes = javaIntArray(env, focus.boxes) else {
-            fns.DeleteLocalRef!(env, array)
-            return
-        }
-        var metadataArgs =
-            legacyArgs + [
-                jvalue(z: focus.hasFocus ? 1 : 0),
-                jvalue(i: focus.coordinateWidth), jvalue(i: focus.coordinateHeight),
-                jvalue(i: focus.result),
-                jvalue(z: focus.subjectDetectionActive ? 1 : 0),
-                jvalue(z: focus.trackingAFActive ? 1 : 0),
-                jvalue(i: focus.selectedBoxIndex), jvalue(l: boxes),
-                jvalue(z: level.hasLevel ? 1 : 0),
-                jvalue(d: level.rollDegrees), jvalue(d: level.pitchDegrees),
-                jvalue(d: level.yawDegrees),
-            ]
-        fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &metadataArgs)
-        fns.DeleteLocalRef!(env, boxes)
+        fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &legacyArgs)
         fns.DeleteLocalRef!(env, array)
     }
 

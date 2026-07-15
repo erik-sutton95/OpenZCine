@@ -86,8 +86,7 @@ import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
 import com.opencapture.openzcine.wear.WearRecordCommandSafety
 import com.opencapture.openzcine.wear.androidWatchRelayState
-import com.opencapture.openzcine.wear.rejectedWearRecordResult
-import com.opencapture.openzcine.wear.wearRecordCommandRejection
+import com.opencapture.openzcine.wear.executeWearRecordCommand
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -400,35 +399,16 @@ fun MonitorScreen(
     val latestWearRecordCommand =
         rememberUpdatedState<suspend () -> WatchCommandResult>(
             newValue = {
-                val liveFeedCanRun =
-                    liveViewEnabled &&
-                        dispIndex != 2 &&
-                        (frameSource != null || session is SwiftCoreCameraSession)
                 val safety =
                     WearRecordCommandSafety(
                         monitorFront = isMonitorFront,
                         applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                         cameraConnected = sessionState is CameraSessionState.Connected,
-                        liveFeedActive = liveFeedCanRun,
                         recordCommandPending = recordCommandPending,
                         recordConfirmationPending = pendingRecordTarget != null,
                         cameraControlPending = pendingCommandControl != null,
                     )
-                if (wearRecordCommandRejection(safety) != null) {
-                    rejectedWearRecordResult(safety, recording)
-                } else {
-                    val target = !recording
-                    try {
-                        session.setRecording(target)
-                        WatchCommandResult(accepted = true, isRecording = target, error = null)
-                    } catch (error: CameraRecordingException) {
-                        WatchCommandResult(
-                            accepted = false,
-                            isRecording = recording,
-                            error = error.message ?: "unavailable",
-                        )
-                    }
-                }
+                executeWearRecordCommand(safety, recording, session::setRecording)
             },
         )
     DisposableEffect(wearRelay) {
@@ -914,8 +894,8 @@ fun MonitorScreen(
                     val top = maxOf(14f, safeTop)
                     CommandDashboard(
                         recording = recording,
-                        // Android has no authoritative live-view timecode bridge yet.
-                        // Keep the command dashboard neutral rather than show the shell clock.
+                        // The dashboard does not yet own the per-frame timecode state.
+                        // Keep it neutral rather than showing the shell clock.
                         frameCount = null,
                         presentation = commandPresentation,
                         controlsEnabled = commandControlsEnabled,

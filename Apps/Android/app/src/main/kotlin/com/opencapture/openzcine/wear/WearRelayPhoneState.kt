@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.wear
 
 import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
@@ -21,7 +22,6 @@ internal data class WearRecordCommandSafety(
     val monitorFront: Boolean,
     val applicationResumed: Boolean,
     val cameraConnected: Boolean,
-    val liveFeedActive: Boolean,
     val recordCommandPending: Boolean,
     val recordConfirmationPending: Boolean,
     val cameraControlPending: Boolean,
@@ -32,7 +32,6 @@ internal fun wearRecordCommandRejection(safety: WearRecordCommandSafety): String
     when {
         !safety.applicationResumed || !safety.monitorFront -> "Open the live monitor on the phone."
         !safety.cameraConnected -> "Connect a camera on the phone."
-        !safety.liveFeedActive -> "Start live view before recording."
         safety.recordCommandPending -> "A recording command is already pending."
         safety.recordConfirmationPending -> "Finish the pending record confirmation on the phone."
         safety.cameraControlPending -> "Wait for the active camera control."
@@ -51,12 +50,63 @@ internal fun rejectedWearRecordResult(
     )
 
 /**
+ * Routes the watch toggle through the same typed camera recording seam as the
+ * phone, after the foreground/session/pending-work policy accepts it. Live
+ * preview is deliberately not required: watchOS can record while its feed is
+ * paused or the command dashboard is selected.
+ */
+internal suspend fun executeWearRecordCommand(
+    safety: WearRecordCommandSafety,
+    isRecording: Boolean,
+    setRecording: suspend (Boolean) -> Unit,
+): WatchCommandResult {
+    if (wearRecordCommandRejection(safety) != null) {
+        return rejectedWearRecordResult(safety, isRecording)
+    }
+    val target = !isRecording
+    return try {
+        setRecording(target)
+        WatchCommandResult(accepted = true, isRecording = target, error = null)
+    } catch (error: CameraRecordingException) {
+        WatchCommandResult(
+            accepted = false,
+            isRecording = isRecording,
+            error = error.message ?: "unavailable",
+        )
+    }
+}
+
+/** Retains the latest real frame readouts when the connected phone pauses preview. */
+internal fun retainWatchFrameMetadata(
+    state: WatchRelayState,
+    previous: WatchRelayState?,
+): WatchRelayState {
+    if (state.connection != WatchConnectionState.CONNECTED || previous == null) return state
+    val previousTimecode = previous.timecode
+    val hasPreviousTimecode =
+        previousTimecode.on ||
+            previousTimecode.hour != 0 ||
+            previousTimecode.minute != 0 ||
+            previousTimecode.second != 0 ||
+            previousTimecode.frame != 0
+    return state.copy(
+        timecode =
+            if (!state.timecode.on && hasPreviousTimecode) previousTimecode else state.timecode,
+        liveFPS =
+            if (state.liveFPS == "—" && previous.liveFPS != "—") {
+                previous.liveFPS
+            } else {
+                state.liveFPS
+            },
+    )
+}
+
+/**
  * Creates the honest Android phone snapshot consumed by the Wear OS relay.
  *
- * Android has not yet bridged camera timecode or measured live FPS (OPE-63),
- * so this intentionally sends explicit unavailable placeholders instead of
- * deriving a shell clock or copying the debug monitor values. Storage and
- * battery enter only from the real Swift-core property snapshot.
+ * Timecode/FPS begin unavailable and are replaced only by metadata from an
+ * actually presented native camera frame inside [AndroidWearPhoneRelay].
+ * Storage and battery enter only from the real Swift-core property snapshot.
  */
 internal fun androidWatchRelayState(
     sessionState: CameraSessionState,
@@ -80,9 +130,8 @@ internal fun androidWatchRelayState(
         timecode = WatchTimecode.unavailable(),
         mediaStatus = null,
         media = if (hasCamera) cameraProperties.storage?.let(::storageLabel) ?: "—" else "—",
-        // Zero is the canonical relay model's explicit unavailable/default
-        // value. The Wear UI presents it as an em dash until a camera snapshot
-        // supplies an in-range battery number, rather than inventing a charge.
+        // The canonical Swift relay model is a non-optional 0...100 value.
+        // Match watchOS by preserving a real zero-percent camera readout.
         cameraBatteryPercent =
             if (hasCamera) cameraProperties.batteryPercent?.takeIf { it in 0..100 } ?: 0 else 0,
         cameraName = if (hasCamera) connectedIdentity?.name.orEmpty() else "",

@@ -48,3 +48,20 @@ internal data class PendingWearCommand(
     fun matches(nodeID: String, requestID: Long): Boolean =
         this.nodeID == nodeID && this.requestID == requestID
 }
+
+/** Drops an older in-flight preview that arrives after a newer relay token. */
+internal class LatestWearFrameSequence {
+    private var latestRequestID = 0L
+
+    /** True only when [requestID] advances the current foreground sequence. */
+    fun accept(requestID: Long): Boolean {
+        if (requestID <= latestRequestID) return false
+        latestRequestID = requestID
+        return true
+    }
+
+    /** Starts a new foreground presentation with no retained ordering state. */
+    fun clear() {
+        latestRequestID = 0L
+    }
+}

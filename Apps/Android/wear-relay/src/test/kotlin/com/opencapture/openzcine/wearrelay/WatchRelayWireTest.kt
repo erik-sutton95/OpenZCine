@@ -89,8 +89,11 @@ class WatchRelayWireTest {
         val commandPath = WearRelayTransport.commandPath(42)
         assertEquals(42, WearRelayTransport.commandRequestID(commandPath))
         assertEquals(42, WearRelayTransport.resultRequestID(WearRelayTransport.resultPath(42)))
+        assertEquals(43, WearRelayTransport.frameRequestID(WearRelayTransport.framePath(43)))
+        assertEquals(43, WearRelayTransport.frameAckRequestID(WearRelayTransport.frameAckPath(43)))
         assertEquals(null, WearRelayTransport.commandRequestID("${WearRelayTransport.COMMAND_PATH}/0"))
         assertEquals(null, WearRelayTransport.resultRequestID("${WearRelayTransport.RESULT_PATH}/42/late"))
+        assertEquals(null, WearRelayTransport.frameAckRequestID(WearRelayTransport.FRAME_ACK_PATH))
     }
 
     @Test

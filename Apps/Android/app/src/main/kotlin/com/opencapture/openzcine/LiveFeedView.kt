@@ -7,6 +7,7 @@ import android.os.Build
 import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -183,10 +184,12 @@ class JpegFrameDecoder {
  * [onFrame] observes each presented frame on the decode thread — the glass
  * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
- * [onPresentedFrame] observes the exact source [LiveFrame] and decoded bitmap
- * accepted for display. The phone-mediated Wear relay uses this callback
- * rather than collecting [source] itself, so it cannot keep camera live view
- * running while the monitor is hidden or backgrounded.
+ * [onPresentedFrame] observes the exact source [LiveFrame], decoded bitmap,
+ * and optional [LiveFramePreviewBaker] accepted for display. The
+ * phone-mediated Wear relay uses this callback rather than collecting [source]
+ * itself, so it cannot keep camera live view running while the monitor is
+ * hidden or backgrounded. When image assists are visible, the baker reuses the
+ * exact phone shader so the wrist preview is display-baked too.
  * [presentationState], when supplied, retains the same frame's camera
  * metadata and image dimensions for feed-aligned overlays.
  *
@@ -200,7 +203,7 @@ fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
-    onPresentedFrame: ((LiveFrame, Bitmap) -> Unit)? = null,
+    onPresentedFrame: ((LiveFrame, Bitmap, LiveFramePreviewBaker?) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects = FeedEffectsState.current,
     lutLibrary: AndroidLutLibrary? = null,
@@ -225,6 +228,12 @@ fun LiveFeedView(
                 }
             }
         }
+    val latestPreviewBaker = rememberUpdatedState<LiveFramePreviewBaker?>(renderer)
+    DisposableEffect(renderer) {
+        onDispose {
+            if (Build.VERSION.SDK_INT >= 33) renderer?.close()
+        }
+    }
 
     LaunchedEffect(source, presentationState) {
         presentationState?.clear()
@@ -248,7 +257,11 @@ fun LiveFeedView(
                         fallbackFrame.value = bitmap.asImageBitmap()
                     }
                     onFrame?.invoke(bitmap)
-                    latestPresentedFrame.value?.invoke(sourceFrame, bitmap)
+                    latestPresentedFrame.value?.invoke(
+                        sourceFrame,
+                        bitmap,
+                        latestPreviewBaker.value,
+                    )
                 },
             )
         }

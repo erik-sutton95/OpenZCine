@@ -3,9 +3,26 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val resolvedVersionCode: Int =
+val handheldVersionCode: Int =
     (findProperty("versionCode") ?: property("openzcine.versionCode")).toString().toInt()
+val wearVersionCodeOffset = 1_000_000_000
+val resolvedVersionCode: Int =
+    findProperty("wearVersionCode")?.toString()?.toInt()
+        ?: (handheldVersionCode + wearVersionCodeOffset)
 val resolvedVersionName: String = property("openzcine.versionName").toString()
+val maximumPlayVersionCode = 2_100_000_000
+val keystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")
+val releaseApkDirectory = layout.buildDirectory.dir("outputs/apk/release")
+val releaseAabDirectory = layout.buildDirectory.dir("outputs/bundle/release")
+val repositoryRoot = rootProject.projectDir.parentFile.parentFile
+val verifyWearReleaseScript = repositoryRoot.resolve("scripts/verify-android-wear-release.sh")
+
+require(resolvedVersionCode in 1..maximumPlayVersionCode) {
+    "Wear versionCode $resolvedVersionCode is outside Google Play's supported range."
+}
+require(resolvedVersionCode != handheldVersionCode) {
+    "The phone and Wear artifacts must use different version codes."
+}
 
 android {
     namespace = "com.opencapture.openzcine.wear"
@@ -23,6 +40,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -31,6 +59,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Data Layer peers must be signed with the same certificate.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
@@ -49,6 +79,36 @@ android {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
     }
+}
+
+/**
+ * Verifies the release pair as one phone-mediated Wear product. The APKs must
+ * share package and signer identity while retaining form-factor-specific
+ * version codes and the non-standalone Wear capability declaration.
+ */
+val verifyWearReleaseArtifact = tasks.register<Exec>("verifyWearReleaseArtifact") {
+    group = "verification"
+    description = "Verify the phone/Wear release pair, Wear AAB, capabilities, and signing parity."
+    dependsOn(":app:assembleRelease", "assembleRelease", "bundleRelease")
+    workingDir = repositoryRoot
+    inputs.dir(project(":app").layout.buildDirectory.dir("outputs/apk/release"))
+    inputs.dir(releaseApkDirectory)
+    inputs.dir(releaseAabDirectory)
+    inputs.file(verifyWearReleaseScript)
+    commandLine(
+        "bash",
+        verifyWearReleaseScript.absolutePath,
+        "--phone-apk-dir",
+        project(":app").layout.buildDirectory.dir("outputs/apk/release").get().asFile.absolutePath,
+        "--wear-apk-dir",
+        releaseApkDirectory.get().asFile.absolutePath,
+        "--wear-aab-dir",
+        releaseAabDirectory.get().asFile.absolutePath,
+        "--phone-version-code",
+        handheldVersionCode.toString(),
+        "--wear-version-code",
+        resolvedVersionCode.toString(),
+    )
 }
 
 dependencies {

@@ -1,7 +1,8 @@
 name: Play Internal
 
-# Uploads a signed .aab to the Google Play internal testing track. Deliberate
-# releases only: manual dispatch or an `android-v*` tag — never plain merges.
+# Uploads the signed phone and Wear OS bundles to their Google Play internal
+# testing tracks. Deliberate releases only: manual dispatch or an `android-v*`
+# tag, never plain merges.
 # Prerequisites (Play console app, `play` environment secrets, and the first
 # MANUAL .aab upload Google requires) are in docs/android-distribution.md.
 on:
@@ -85,7 +86,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
-        run: ./gradlew verifyReleaseNativeLibraries "-PversionCode=$VERSION_CODE"
+        run: ./gradlew :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact "-PversionCode=$VERSION_CODE"
 
       # r0adkll/upload-google-play over alternatives: Google publishes no official
       # GitHub Action for Play uploads (its official paths are Gradle Play Publisher
@@ -101,11 +102,21 @@ jobs:
           track: internal
           status: completed
 
+      - name: Upload to Wear OS internal track
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.opencapture.openzcine
+          releaseFiles: Apps/Android/wear/build/outputs/bundle/release/wear-release.aab
+          track: wear:qa
+          status: completed
+
       - name: Summary
         run: |
           {
             echo "### Play internal upload"
             echo ""
-            echo "- **Version code:** ${{ steps.version.outputs.version_code }}"
+            echo "- **Phone version code:** ${{ steps.version.outputs.version_code }}"
+            echo "- **Wear version code:** $((1000000000 + ${{ steps.version.outputs.version_code }}))"
             echo "- **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

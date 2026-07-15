@@ -3,9 +3,15 @@ package com.opencapture.openzcine
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.ColorSpace
+import android.graphics.HardwareRenderer
 import android.graphics.Paint
+import android.graphics.PixelFormat
+import android.graphics.RenderNode
 import android.graphics.RuntimeShader
 import android.graphics.Shader
+import android.hardware.HardwareBuffer
+import android.media.ImageReader
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.getValue
@@ -16,6 +22,12 @@ import com.opencapture.openzcine.lut.AndroidLutLibrary
 import java.nio.ByteBuffer
 
 private const val TAG = "ZCFeedEffects"
+
+/** Produces a bounded copy of the exact image treatment shown on the phone. */
+public fun interface LiveFramePreviewBaker {
+    /** Returns an owned display-baked bitmap, or null when rendering failed. */
+    public fun bakePreview(frame: Bitmap, maximumWidth: Int): Bitmap?
+}
 
 /**
  * Effects [LiveFeedView] applies by default. Debug-intent driven (see
@@ -49,14 +61,153 @@ object FeedEffectsState {
  * [create] returns null otherwise and the feed renders plain.
  */
 @RequiresApi(33)
-class FeedEffectsRenderer private constructor(private val shader: RuntimeShader) {
+class FeedEffectsRenderer private constructor(private val shader: RuntimeShader) :
+    LiveFramePreviewBaker,
+    AutoCloseable {
     private val paint = Paint().apply { shader = this@FeedEffectsRenderer.shader }
+    private val renderLock = Any()
 
     /** One shader wrapper per ring bitmap; content updates are picked up via generation id. */
     private val feedShaders = HashMap<Bitmap, BitmapShader>()
+    private var previewTarget: HardwarePreviewTarget? = null
+    private var closed = false
 
     /** Draws [frame] with the effect chain into the letterboxed destination rect. */
     fun draw(
+        canvas: Canvas,
+        frame: Bitmap,
+        dstLeft: Float,
+        dstTop: Float,
+        dstWidth: Float,
+        dstHeight: Float,
+    ) {
+        synchronized(renderLock) {
+            if (closed) return
+            drawLocked(canvas, frame, dstLeft, dstTop, dstWidth, dstHeight)
+        }
+    }
+
+    /**
+     * Renders the same AGSL chain into a small relay-owned bitmap. This shares
+     * the exact shader, cube, and thresholds used by the visible phone feed;
+     * no second LUT/peaking/zebra implementation can drift from it.
+     */
+    override fun bakePreview(frame: Bitmap, maximumWidth: Int): Bitmap? =
+        synchronized(renderLock) {
+            if (closed) return@synchronized null
+            val width = minOf(frame.width, maximumWidth).coerceAtLeast(1)
+            val height = (frame.height * width.toFloat() / frame.width).toInt().coerceAtLeast(1)
+            val target =
+                previewTarget?.takeIf { it.width == width && it.height == height }
+                    ?: run {
+                        previewTarget?.close()
+                        previewTarget = null
+                        HardwarePreviewTarget.create(width, height)?.also { previewTarget = it }
+                    }
+                    ?: return@synchronized null
+            try {
+                target.render { canvas ->
+                    drawLocked(
+                        canvas = canvas,
+                        frame = frame,
+                        dstLeft = 0f,
+                        dstTop = 0f,
+                        dstWidth = width.toFloat(),
+                        dstHeight = height.toFloat(),
+                    )
+                }
+            } catch (_: RuntimeException) {
+                target.close()
+                previewTarget = null
+                null
+            } catch (_: OutOfMemoryError) {
+                null
+            }
+        }
+
+    /** Releases the offscreen hardware target created only when a watch requests effects. */
+    override fun close() {
+        synchronized(renderLock) {
+            if (closed) return
+            closed = true
+            previewTarget?.close()
+            previewTarget = null
+            feedShaders.clear()
+        }
+    }
+
+    /** Small persistent HWUI surface used because RuntimeShader cannot draw to a software Canvas. */
+    private class HardwarePreviewTarget private constructor(
+        val width: Int,
+        val height: Int,
+        private val imageReader: ImageReader,
+        private val renderNode: RenderNode,
+        private val renderer: HardwareRenderer,
+    ) : AutoCloseable {
+        fun render(draw: (Canvas) -> Unit): Bitmap? {
+            while (true) {
+                val stale = imageReader.acquireLatestImage() ?: break
+                stale.close()
+            }
+            val canvas = renderNode.beginRecording(width, height)
+            try {
+                draw(canvas)
+            } finally {
+                renderNode.endRecording()
+            }
+            renderer.createRenderRequest().setWaitForPresent(true).syncAndDraw()
+            val image = imageReader.acquireLatestImage() ?: return null
+            return image.use {
+                val hardwareBuffer = image.hardwareBuffer ?: return@use null
+                val hardwareBitmap =
+                    Bitmap.wrapHardwareBuffer(
+                        hardwareBuffer,
+                        ColorSpace.get(ColorSpace.Named.SRGB),
+                    ) ?: return@use null
+                try {
+                    hardwareBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                } finally {
+                    hardwareBitmap.recycle()
+                }
+            }
+        }
+
+        override fun close() {
+            renderer.destroy()
+            imageReader.close()
+        }
+
+        companion object {
+            fun create(width: Int, height: Int): HardwarePreviewTarget? {
+                var reader: ImageReader? = null
+                return try {
+                    val usage =
+                        HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
+                            HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
+                    reader =
+                        ImageReader.newInstance(
+                            width,
+                            height,
+                            PixelFormat.RGBA_8888,
+                            2,
+                            usage,
+                        )
+                    val node = RenderNode("OpenZCine Wear preview").apply { setPosition(0, 0, width, height) }
+                    val renderer =
+                        HardwareRenderer().apply {
+                            setSurface(requireNotNull(reader).surface)
+                            setContentRoot(node)
+                        }
+                    HardwarePreviewTarget(width, height, requireNotNull(reader), node, renderer)
+                } catch (_: RuntimeException) {
+                    reader?.close()
+                    null
+                }
+            }
+        }
+    }
+
+    private fun drawLocked(
         canvas: Canvas,
         frame: Bitmap,
         dstLeft: Float,

@@ -108,6 +108,20 @@ public data class LiveCameraLevel(
     public val isDebugFixture: Boolean = false,
 )
 
+/** Camera-owned timecode parsed from the same live-view header as [LiveFrame]. */
+public data class LiveFrameTimecode(
+    /** Whether the camera says the timecode readout is enabled. */
+    public val on: Boolean,
+    /** Hour component. */
+    public val hour: Int,
+    /** Minute component. */
+    public val minute: Int,
+    /** Second component. */
+    public val second: Int,
+    /** Frame component. */
+    public val frame: Int,
+)
+
 /**
  * One decoded-ready live-view frame from the camera.
  *
@@ -124,6 +138,9 @@ public data class LiveCameraLevel(
  *   when the live-view header did not contain valid focus metadata.
  * @property level Camera-derived virtual-horizon angles, or `null` when the
  *   camera did not report a reliable level.
+ * @property timecode Camera-derived timecode from this frame's header.
+ * @property measuredFramesPerSecond Measured delivery cadence calculated from
+ *   consecutive monotonic frame timestamps, or `null` before it is known.
  */
 public class LiveFrame(
     public val timestampNanos: Long,
@@ -132,6 +149,8 @@ public class LiveFrame(
     public val audioLevels: LiveAudioMeterLevels? = null,
     public val focus: LiveFocusInfo? = null,
     public val level: LiveCameraLevel? = null,
+    public val timecode: LiveFrameTimecode? = null,
+    public val measuredFramesPerSecond: Double? = null,
 )
 
 /**

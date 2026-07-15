@@ -33,6 +33,9 @@ public object WearRelayTransport {
     /** Phone-to-watch latest-wins preview path. */
     public const val FRAME_PATH: String = "/openzcine/wear/v1/frame"
 
+    /** Watch-to-phone acknowledgement for one received preview. */
+    public const val FRAME_ACK_PATH: String = "/openzcine/wear/v1/frame-ack"
+
     /** Watch-to-phone record command path. */
     public const val COMMAND_PATH: String = "/openzcine/wear/v1/command"
 
@@ -56,11 +59,29 @@ public object WearRelayTransport {
         return "$RESULT_PATH/$requestID"
     }
 
+    /** Correlates a preview with the acknowledgement sent at watch receipt. */
+    public fun framePath(requestID: Long): String {
+        require(requestID > 0L)
+        return "$FRAME_PATH/$requestID"
+    }
+
+    /** Routes one preview-receipt acknowledgement back to the phone. */
+    public fun frameAckPath(requestID: Long): String {
+        require(requestID > 0L)
+        return "$FRAME_ACK_PATH/$requestID"
+    }
+
     /** Reads a command request identifier from a v1 command path. */
     public fun commandRequestID(path: String): Long? = requestID(path, COMMAND_PATH)
 
     /** Reads a result request identifier from a v1 result path. */
     public fun resultRequestID(path: String): Long? = requestID(path, RESULT_PATH)
+
+    /** Reads a preview identifier from a v1 frame path. */
+    public fun frameRequestID(path: String): Long? = requestID(path, FRAME_PATH)
+
+    /** Reads a preview identifier from a v1 acknowledgement path. */
+    public fun frameAckRequestID(path: String): Long? = requestID(path, FRAME_ACK_PATH)
 
     private fun requestID(path: String, base: String): Long? {
         val prefix = "$base/"
@@ -140,7 +161,7 @@ public data class WatchTimecode(
     public fun label(): String =
         String.format(Locale.ROOT, "%02d:%02d:%02d:%02d", hour, minute, second, frame)
 
-    /** Explicit placeholder used until Android exposes camera timecode. */
+    /** Explicit placeholder used before an authoritative camera frame arrives. */
     public companion object {
         /** Returns the non-fabricated unavailable timecode. */
         public fun unavailable(): WatchTimecode = WatchTimecode(false, 0, 0, 0, 0)

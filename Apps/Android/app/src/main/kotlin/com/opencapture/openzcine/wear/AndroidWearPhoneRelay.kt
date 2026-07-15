@@ -12,6 +12,7 @@ import com.google.android.gms.wearable.CapabilityInfo
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
+import com.opencapture.openzcine.LiveFramePreviewBaker
 import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import com.opencapture.openzcine.wearrelay.WatchConnectionState
@@ -22,7 +23,7 @@ import com.opencapture.openzcine.wearrelay.WatchRelayState
 import com.opencapture.openzcine.wearrelay.WatchTimecode
 import com.opencapture.openzcine.wearrelay.WearRelayTransport
 import java.io.ByteArrayOutputStream
-import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -48,8 +49,10 @@ internal class AndroidWearPhoneRelay(context: Context) :
     private val lock = Any()
     private val handler = Handler(Looper.getMainLooper())
     private val relayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val previewPacing = AdaptiveWearPreviewPacing()
     private val framePump =
         LatestFrameBackpressure<PreviewSnapshot>(
+            maximumInFlight = MAX_PREVIEWS_IN_FLIGHT,
             dispatch = ::dispatchPreview,
             onDiscard = PreviewSnapshot::recycle,
         )
@@ -60,7 +63,7 @@ internal class AndroidWearPhoneRelay(context: Context) :
     private var latestState: WatchRelayState? = null
     private var lastSentState: WatchRelayState? = null
     private var commandHandler: (suspend () -> WatchCommandResult)? = null
-    private var lastPreviewAcceptedAtMillis = Long.MIN_VALUE
+    private val pendingPreviewAcks = mutableMapOf<Long, PendingPreviewAck>()
 
     /** Attaches the only camera command the relay can invoke. */
     fun setCommandHandler(handler: suspend () -> WatchCommandResult) {
@@ -105,7 +108,7 @@ internal class AndroidWearPhoneRelay(context: Context) :
             }
         if (!shouldUnregister) return
         handler.removeCallbacks(heartbeat)
-        framePump.invalidate()
+        invalidatePreviewPump(resetPacing = true)
         if (hasGooglePlayServices()) {
             messageClient.removeListener(this)
             capabilityClient.removeListener(this, WearRelayTransport.WEAR_CAPABILITY)
@@ -118,13 +121,19 @@ internal class AndroidWearPhoneRelay(context: Context) :
      * reject its old state and receive proof that the phone monitor is live.
      */
     fun publishState(state: WatchRelayState) {
-        synchronized(lock) { latestState = state }
-        if (state.connection == WatchConnectionState.DISCONNECTED || !state.feedLive) {
+        val enrichedState =
+            synchronized(lock) {
+                retainWatchFrameMetadata(state, latestState).also { latestState = it }
+            }
+        if (enrichedState.connection == WatchConnectionState.DISCONNECTED || !enrichedState.feedLive) {
             // No stale preview may outlive a hidden/paused/command monitor.
-            framePump.invalidate()
+            invalidatePreviewPump(resetPacing = false)
         }
-        sendState(state, force = state.connection == WatchConnectionState.DISCONNECTED)
-        updateHeartbeat(state)
+        sendState(
+            enrichedState,
+            force = enrichedState.connection == WatchConnectionState.DISCONNECTED,
+        )
+        updateHeartbeat(enrichedState)
     }
 
     /** Sends the explicit unavailable state before foreground relay teardown. */
@@ -141,30 +150,32 @@ internal class AndroidWearPhoneRelay(context: Context) :
 
     /**
      * Accepts a bitmap only from the existing on-screen frame presentation
-     * callback. The small snapshot is then sent through a one-active,
-     * one-replacement pump; slow links retain only the latest preview.
+     * callback. The small snapshot is then sent through the watchOS-parity
+     * three-active, one-replacement pump; slow links retain only the latest
+     * waiting preview.
      */
-    fun ingestPresentedFrame(frame: LiveFrame, bitmap: Bitmap) {
-        val acceptedAt = SystemClock.elapsedRealtime()
-        val shouldCapture =
-            synchronized(lock) {
-                if (!active || reachableWearNodes.isEmpty()) {
-                    false
-                } else if (acceptedAt - lastPreviewAcceptedAtMillis < PREVIEW_MIN_INTERVAL_MILLIS) {
-                    false
-                } else {
-                    lastPreviewAcceptedAtMillis = acceptedAt
-                    true
-                }
-            }
+    fun ingestPresentedFrame(
+        frame: LiveFrame,
+        bitmap: Bitmap,
+        previewBaker: LiveFramePreviewBaker?,
+    ) {
+        val profile = previewPacing.currentProfile()
+        val shouldCapture = synchronized(lock) { active && reachableWearNodes.isNotEmpty() }
         if (!shouldCapture) return
 
-        val preview = WearPreviewEncoder.snapshot(bitmap) ?: return
+        val preview =
+            if (previewBaker == null) {
+                WearPreviewEncoder.snapshot(bitmap, profile.maximumWidth)
+            } else {
+                previewBaker.bakePreview(bitmap, profile.maximumWidth)
+            } ?: return
+        updateLatestFrameMetadata(frame)
         val snapshot =
             PreviewSnapshot(
                 bitmap = preview,
-                timecode = WatchTimecode.unavailable(),
+                timecode = frame.timecode?.toWatchTimecode() ?: WatchTimecode.unavailable(),
                 isRecording = frame.isRecording,
+                profile = profile,
             )
         val stillEligible =
             synchronized(lock) {
@@ -193,7 +204,7 @@ internal class AndroidWearPhoneRelay(context: Context) :
             }
         if (!shouldClose) return
         handler.removeCallbacks(heartbeat)
-        framePump.invalidate()
+        invalidatePreviewPump(resetPacing = true)
         if (hasGooglePlayServices()) {
             messageClient.removeListener(this)
             capabilityClient.removeListener(this, WearRelayTransport.WEAR_CAPABILITY)
@@ -207,6 +218,11 @@ internal class AndroidWearPhoneRelay(context: Context) :
     }
 
     override fun onMessageReceived(messageEvent: MessageEvent) {
+        val frameRequestID = WearRelayTransport.frameAckRequestID(messageEvent.path)
+        if (frameRequestID != null) {
+            acceptPreviewAcknowledgement(messageEvent.sourceNodeId, frameRequestID)
+            return
+        }
         val requestID = WearRelayTransport.commandRequestID(messageEvent.path) ?: return
         val isReachableForegroundRelay =
             synchronized(lock) {
@@ -243,17 +259,20 @@ internal class AndroidWearPhoneRelay(context: Context) :
     }
 
     private fun updateReachableWearNodes(nodes: Set<String>) {
+        var linkChanged = false
         val state =
             synchronized(lock) {
                 if (!active) {
                     null
                 } else {
+                    linkChanged = reachableWearNodes != nodes
                     reachableWearNodes = nodes
                     // A just-reachable watch needs the state even when unchanged.
                     lastSentState = null
                     latestState
                 }
             }
+        if (linkChanged) invalidatePreviewPump(resetPacing = true)
         state?.let { sendState(it, force = true) }
     }
 
@@ -289,7 +308,7 @@ internal class AndroidWearPhoneRelay(context: Context) :
                     if (!isPreviewCurrent()) {
                         null
                     } else {
-                        WearPreviewEncoder.encode(snapshot.bitmap)?.let { jpeg ->
+                        WearPreviewEncoder.encode(snapshot.bitmap, snapshot.profile)?.let { jpeg ->
                             WatchRelayEnvelope.encode(
                                 WatchRelayFrame(
                                     jpeg = jpeg,
@@ -302,7 +321,7 @@ internal class AndroidWearPhoneRelay(context: Context) :
                 } finally {
                     snapshot.recycle()
                 }
-            if (data == null || !isPreviewCurrent()) {
+            if (data == null || !isPreviewCurrent() || !framePump.isActive(dispatch.token)) {
                 framePump.complete(dispatch.token)
                 return@launch
             }
@@ -314,20 +333,135 @@ internal class AndroidWearPhoneRelay(context: Context) :
                 framePump.complete(dispatch.token)
                 return@launch
             }
-            val remaining = AtomicInteger(destinations.size)
+            val sentAtMillis = SystemClock.elapsedRealtime()
+            val timeout = Runnable { expirePreviewAcknowledgement(dispatch.token) }
+            val registered =
+                synchronized(lock) {
+                    if (
+                        !active ||
+                            latestState?.feedLive != true ||
+                            !framePump.isActive(dispatch.token)
+                    ) {
+                        false
+                    } else {
+                        pendingPreviewAcks[dispatch.token] =
+                            PendingPreviewAck(
+                                sentAtMillis = sentAtMillis,
+                                remainingNodeIDs = destinations.toMutableSet(),
+                                timeout = timeout,
+                            )
+                        true
+                    }
+                }
+            if (!registered) {
+                framePump.complete(dispatch.token)
+                return@launch
+            }
+            handler.postDelayed(timeout, PREVIEW_ACK_TIMEOUT_MILLIS)
             destinations.forEach { nodeID ->
                 runCatching {
                     messageClient
-                        .sendMessage(nodeID, WearRelayTransport.FRAME_PATH, data)
-                        .addOnCompleteListener {
-                            if (remaining.decrementAndGet() == 0) {
-                                framePump.complete(dispatch.token)
-                            }
+                        .sendMessage(nodeID, WearRelayTransport.framePath(dispatch.token), data)
+                        .addOnFailureListener {
+                            rejectPreviewDestination(nodeID, dispatch.token)
                         }
                 }.onFailure {
-                    if (remaining.decrementAndGet() == 0) framePump.complete(dispatch.token)
+                    rejectPreviewDestination(nodeID, dispatch.token)
                 }
             }
+        }
+    }
+
+    private fun acceptPreviewAcknowledgement(nodeID: String, token: Long) {
+        val completion =
+            synchronized(lock) {
+                val pending = pendingPreviewAcks[token]
+                if (!active || pending == null || !pending.remainingNodeIDs.remove(nodeID)) {
+                    null
+                } else if (pending.remainingNodeIDs.isNotEmpty()) {
+                    null
+                } else {
+                    pendingPreviewAcks.remove(token)
+                    PreviewCompletion(
+                        token = token,
+                        timeout = pending.timeout,
+                        roundTripMillis =
+                            (SystemClock.elapsedRealtime() - pending.sentAtMillis).coerceAtLeast(1L),
+                        degraded = pending.failed,
+                    )
+                }
+            }
+        completion?.let(::finishPreview)
+    }
+
+    private fun rejectPreviewDestination(nodeID: String, token: Long) {
+        val completion =
+            synchronized(lock) {
+                val pending = pendingPreviewAcks[token]
+                if (pending == null || !pending.remainingNodeIDs.remove(nodeID)) {
+                    null
+                } else {
+                    pending.failed = true
+                    if (pending.remainingNodeIDs.isNotEmpty()) {
+                        null
+                    } else {
+                        pendingPreviewAcks.remove(token)
+                        PreviewCompletion(token, pending.timeout, null, degraded = true)
+                    }
+                }
+            }
+        completion?.let(::finishPreview)
+    }
+
+    private fun expirePreviewAcknowledgement(token: Long) {
+        val shouldComplete =
+            synchronized(lock) {
+                if (pendingPreviewAcks.remove(token) == null) {
+                    false
+                } else {
+                    true
+                }
+            }
+        if (!shouldComplete) return
+        previewPacing.timedOut()
+        framePump.complete(token)
+    }
+
+    private fun finishPreview(completion: PreviewCompletion) {
+        handler.removeCallbacks(completion.timeout)
+        if (completion.degraded) {
+            previewPacing.timedOut()
+        } else {
+            previewPacing.acknowledge(requireNotNull(completion.roundTripMillis))
+        }
+        framePump.complete(completion.token)
+    }
+
+    private fun invalidatePreviewPump(resetPacing: Boolean) {
+        val timeouts =
+            synchronized(lock) {
+                val pendingTimeouts = pendingPreviewAcks.values.map { it.timeout }
+                pendingPreviewAcks.clear()
+                pendingTimeouts
+            }
+        timeouts.forEach(handler::removeCallbacks)
+        if (resetPacing) previewPacing.reset()
+        framePump.invalidate()
+    }
+
+    private fun updateLatestFrameMetadata(frame: LiveFrame) {
+        synchronized(lock) {
+            val state = latestState ?: return
+            latestState =
+                state.copy(
+                    timecode = frame.timecode?.toWatchTimecode() ?: state.timecode,
+                    liveFPS =
+                        frame.measuredFramesPerSecond
+                            ?.takeIf { it.isFinite() && it > 0.0 }
+                            ?.roundToInt()
+                            ?.toString()
+                            ?: state.liveFPS,
+                )
         }
     }
 
@@ -366,19 +500,41 @@ private data class PreviewSnapshot(
     val bitmap: Bitmap,
     val timecode: WatchTimecode,
     val isRecording: Boolean,
+    val profile: WearPreviewProfile,
 ) {
     fun recycle() {
         if (!bitmap.isRecycled) bitmap.recycle()
     }
 }
 
+private data class PendingPreviewAck(
+    val sentAtMillis: Long,
+    val remainingNodeIDs: MutableSet<String>,
+    val timeout: Runnable,
+    var failed: Boolean = false,
+)
+
+private data class PreviewCompletion(
+    val token: Long,
+    val timeout: Runnable,
+    val roundTripMillis: Long?,
+    val degraded: Boolean,
+)
+
+private fun com.opencapture.openzcine.core.LiveFrameTimecode.toWatchTimecode(): WatchTimecode =
+    WatchTimecode(
+        on = on,
+        hour = hour,
+        minute = minute,
+        second = second,
+        frame = frame,
+    )
+
 /** Downscales and re-encodes a preview within the Data Layer-safe payload budget. */
 private object WearPreviewEncoder {
-    private const val MAX_WIDTH = 416
-
-    fun snapshot(source: Bitmap): Bitmap? =
+    fun snapshot(source: Bitmap, maximumWidth: Int): Bitmap? =
         try {
-            val scale = minOf(1f, MAX_WIDTH.toFloat() / source.width.toFloat())
+            val scale = minOf(1f, maximumWidth.toFloat() / source.width.toFloat())
             val width = (source.width * scale).toInt().coerceAtLeast(1)
             val height = (source.height * scale).toInt().coerceAtLeast(1)
             if (width == source.width && height == source.height) {
@@ -390,9 +546,12 @@ private object WearPreviewEncoder {
             null
         }
 
-    fun encode(source: Bitmap): ByteArray? {
-        val widths = intArrayOf(MAX_WIDTH, 336, 256)
-        val qualities = intArrayOf(32, 26, 20)
+    fun encode(source: Bitmap, profile: WearPreviewProfile): ByteArray? {
+        val widths =
+            intArrayOf(profile.maximumWidth, 336, 256)
+                .map { minOf(source.width, it) }
+                .distinct()
+        val qualities = intArrayOf(profile.jpegQuality, profile.jpegQuality - 6, 20).distinct()
         for (width in widths) {
             val candidate = scaledCopy(source, width) ?: continue
             try {
@@ -425,5 +584,6 @@ private object WearPreviewEncoder {
         }
 }
 
-private const val PREVIEW_MIN_INTERVAL_MILLIS: Long = 125L
+private const val PREVIEW_ACK_TIMEOUT_MILLIS: Long = 2_000L
+private const val MAX_PREVIEWS_IN_FLIGHT: Int = 3
 private const val STATE_HEARTBEAT_MILLIS: Long = 2_000L

@@ -156,4 +156,4 @@ jobs:
         working-directory: Apps/Android
         env:
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
-        run: ./gradlew assembleDebug :app:assembleDebugAndroidTest test lint verifyReleaseNativeLibraries
+        run: ./gradlew assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest test lint :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact

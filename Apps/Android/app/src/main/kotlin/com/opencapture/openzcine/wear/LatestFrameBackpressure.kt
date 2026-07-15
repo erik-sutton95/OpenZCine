@@ -1,16 +1,22 @@
 package com.opencapture.openzcine.wear
 
 /**
- * A one-in-flight latest-wins pump.
+ * A bounded in-flight latest-wins pump.
  *
- * It admits at most one dispatched item and one replacement item. The caller
- * must invoke [complete] exactly once after dispatch finishes; there is never
- * an unbounded frame queue behind a slow Wear Data Layer link.
+ * It admits at most [maximumInFlight] dispatched items and one replacement
+ * item. The caller must invoke [complete] exactly once after each dispatch
+ * finishes; there is never an unbounded frame queue behind a slow Wear Data
+ * Layer link.
  */
 internal class LatestFrameBackpressure<Value : Any>(
+    private val maximumInFlight: Int = 1,
     private val dispatch: (Dispatch<Value>) -> Unit,
     private val onDiscard: (Value) -> Unit = {},
 ) {
+    init {
+        require(maximumInFlight > 0) { "maximumInFlight must be positive." }
+    }
+
     /** One generation-scoped frame admission. */
     internal data class Dispatch<Value : Any>(
         val value: Value,
@@ -18,7 +24,7 @@ internal class LatestFrameBackpressure<Value : Any>(
     )
 
     private var nextToken = 0L
-    private var activeToken: Long? = null
+    private val activeTokens = mutableSetOf<Long>()
     private var latest: Value? = null
 
     /** Offers [value], replacing any waiting stale value. */
@@ -26,7 +32,7 @@ internal class LatestFrameBackpressure<Value : Any>(
         val toDispatch: Dispatch<Value>?
         val toDiscard: Value?
         synchronized(this) {
-            if (activeToken != null) {
+            if (activeTokens.size >= maximumInFlight) {
                 toDiscard = latest
                 latest = value
                 toDispatch = null
@@ -43,10 +49,9 @@ internal class LatestFrameBackpressure<Value : Any>(
     fun complete(token: Long) {
         val toDispatch: Dispatch<Value>?
         synchronized(this) {
-            if (activeToken != token) return
+            if (!activeTokens.remove(token)) return
             val pending = latest
             latest = null
-            activeToken = null
             toDispatch = pending?.let(::beginDispatch)
         }
         toDispatch?.let(dispatch)
@@ -62,17 +67,20 @@ internal class LatestFrameBackpressure<Value : Any>(
         synchronized(this) {
             toDiscard = latest
             latest = null
-            activeToken = null
+            activeTokens.clear()
         }
         toDiscard?.let(onDiscard)
     }
 
     /** Whether an active or replacement preview currently occupies the bounded pump. */
-    fun isBusy(): Boolean = synchronized(this) { activeToken != null || latest != null }
+    fun isBusy(): Boolean = synchronized(this) { activeTokens.isNotEmpty() || latest != null }
+
+    /** True only while [token] still owns the current foreground dispatch slot. */
+    fun isActive(token: Long): Boolean = synchronized(this) { token in activeTokens }
 
     private fun beginDispatch(value: Value): Dispatch<Value> {
         nextToken += 1
-        activeToken = nextToken
+        activeTokens += nextToken
         return Dispatch(value, nextToken)
     }
 }

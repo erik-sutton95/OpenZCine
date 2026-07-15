@@ -30,4 +30,16 @@ class WearRelayLifecyclePolicyTest {
         assertFalse(pending.matches(nodeID = "phone-b", requestID = 42L))
         assertFalse(pending.matches(nodeID = "phone-a", requestID = 43L))
     }
+
+    @Test
+    fun `three-slot preview cannot regress to an older arrival`() {
+        val sequence = LatestWearFrameSequence()
+
+        assertTrue(sequence.accept(40L))
+        assertTrue(sequence.accept(42L))
+        assertFalse(sequence.accept(41L))
+        assertFalse(sequence.accept(42L))
+        sequence.clear()
+        assertTrue(sequence.accept(1L))
+    }
 }
