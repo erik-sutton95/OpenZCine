@@ -37,7 +37,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -398,7 +400,7 @@ fun LiveFeedView(
  * de-squeeze graphics layer preserves its 264×52 iOS footprint and typography.
  */
 @Composable
-fun FalseColorReferenceOverlay(
+internal fun FalseColorReferenceOverlay(
     effectsState: LiveFeedEffectsPresentationState,
     feed: ZoneFrame,
     viewport: ZoneFrame,
@@ -406,23 +408,45 @@ fun FalseColorReferenceOverlay(
     placementStoreName: String = FalseColorReferencePlacementStore.STORE_NAME,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     defaultHorizontalFraction: Float = 0f,
+    panelLayout: MonitorAnalysisPanelLayout? = null,
+    placementStore: MonitorAnalysisPanelPlacementStore? = null,
+    placementRevision: Int = 0,
+    hapticsEnabled: Boolean = true,
 ) {
     val presentation = effectsState.falseColorReference ?: return
+    val resolvedLayout =
+        panelLayout ?: MonitorAnalysisPanelLayout(viewport = viewport, safeBounds = viewport)
     val default =
-        remember(feed, viewport, bottomChromeClearance, defaultHorizontalFraction) {
-            falseColorReferenceDefaultFrame(
-                feed,
-                viewport,
-                bottomChromeClearance,
-                defaultHorizontalFraction,
+        remember(feed, resolvedLayout, bottomChromeClearance, defaultHorizontalFraction) {
+            controlSafeFalseColorReferenceDefaultFrame(
+                feed = feed,
+                layout = resolvedLayout,
+                bottomChromeClearance = bottomChromeClearance,
+                horizontalFraction = defaultHorizontalFraction,
             )
         }
     val context = LocalContext.current.applicationContext
-    val store =
-        remember(context, placementStoreName) {
-            FalseColorReferencePlacementStore(context, placementStoreName)
+    val legacyStore =
+        remember(context, placementStoreName, placementStore) {
+            placementStore?.let { null }
+                ?: FalseColorReferencePlacementStore(context, placementStoreName)
         }
-    var frame by remember(default, viewport) { mutableStateOf(store.resolve(default, viewport)) }
+    val panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE
+    fun resolvedFrame(): ZoneFrame =
+        placementStore?.resolve(panelID, default, resolvedLayout)
+            ?: requireNotNull(legacyStore).resolve(default, resolvedLayout.safeBounds)
+
+    fun saveFrame(frame: ZoneFrame) {
+        if (placementStore != null) {
+            placementStore.save(panelID, frame, resolvedLayout)
+        } else {
+            requireNotNull(legacyStore).save(frame, resolvedLayout.safeBounds)
+        }
+    }
+    var frame by
+        remember(default, resolvedLayout, placementRevision) {
+            mutableStateOf(resolvedFrame())
+        }
     var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
     val density = LocalDensity.current
     val view = LocalView.current
@@ -430,13 +454,27 @@ fun FalseColorReferenceOverlay(
         modifier
             .zone(frame)
             .glass(ChromeShape)
-            .semantics { contentDescription = "False color reference, movable panel" }
-            .pointerInput(default, viewport) {
+            .semantics {
+                contentDescription = "False color reference, movable panel"
+                if (placementStore != null) {
+                    customActions =
+                        listOf(
+                            CustomAccessibilityAction("Recenter false color reference") {
+                                placementStore.recenter(panelID)
+                                frame = clampScopeFrame(default, resolvedLayout.safeBounds)
+                                true
+                            },
+                        )
+                }
+            }
+            .pointerInput(default, resolvedLayout, placementRevision, hapticsEnabled) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
-                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        if (hapticsEnabled) {
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        }
                     },
-                    onDragEnd = { store.save(frame, viewport) },
+                    onDragEnd = { saveFrame(frame) },
                 ) { change, dragAmount ->
                     change.consume()
                     val snapped =
@@ -447,14 +485,16 @@ fun FalseColorReferenceOverlay(
                                     y = frame.y + dragAmount.y / density.density,
                                 ),
                             ),
-                            viewport,
+                            resolvedLayout.safeBounds,
                         )
                     val cell =
                         ((snapped.x + snapped.width / 2f) / 22f).roundToInt() * 100_000 +
                             ((snapped.y + snapped.height / 2f) / 22f).roundToInt()
                     if (cell != hapticCell) {
                         hapticCell = cell
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        if (hapticsEnabled) {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        }
                     }
                     frame = snapped
                 }
@@ -463,6 +503,23 @@ fun FalseColorReferenceOverlay(
         drawFalseColorReference(presentation)
     }
 }
+
+/** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
+internal fun controlSafeFalseColorReferenceDefaultFrame(
+    feed: ZoneFrame,
+    layout: MonitorAnalysisPanelLayout,
+    bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
+    horizontalFraction: Float = 0f,
+): ZoneFrame =
+    clampScopeFrame(
+        falseColorReferenceDefaultFrame(
+            feed = feed,
+            viewport = layout.viewport,
+            bottomChromeClearance = bottomChromeClearance,
+            horizontalFraction = horizontalFraction,
+        ),
+        layout.safeBounds,
+    )
 
 /** iOS `feedOutsideCenter(.bottomLeading)` translated into the Android zone map. */
 internal fun falseColorReferenceDefaultFrame(

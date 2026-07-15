@@ -170,6 +170,14 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   landscape, reorder/disable persistence, active-mode recovery, two-mode DISP cycling, hidden-rail
   Settings recovery, and the tight 602dp noncompact grid. **[VERIFY-ON-HW]** Repeat command-mode
   stream release and recording safety against a supported Nikon body.
+- **Android movable monitor-analysis panel parity** (OPE-68, in review): landscape and portrait-fill
+  scopes plus the false-colour reference retain iOS-like direct drag while normalized app-local
+  positions reconcile across viewport, orientation, and chrome changes. The shared zone map keeps
+  every panel and exterior resize target clear of camera controls and system rails; live quick
+  settings and accessibility expose per-panel recenter actions. Portrait fit retains its fixed,
+  recency-selected two-scope stack, and feed-aligned overlays remain immovable. **[VERIFY-ON-HW]**
+  Drag, clamp, relaunch, rotate, remove/re-add, and recenter every supported panel in the tightest
+  Samsung landscape and portrait-fill states, then inspect all four edges.
 - **Android monitor feed texture parity** (OPE-72, in review): the Android monitor now mirrors
   iOS's feed-local vignette and deterministic static grain after the camera frame/effect pipeline.
   Resolution-only state and cached draw resources keep same-resolution frames from rebuilding its

@@ -368,6 +368,9 @@ fun MonitorScreen(
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
     var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
     var activeAssistOptions by remember { mutableStateOf<LiveAssistOptionsRequest?>(null) }
+    val analysisPanelPlacementStore =
+        remember(appContext) { MonitorAnalysisPanelPlacementStore(appContext) }
+    var analysisPanelPlacementRevision by remember { mutableIntStateOf(0) }
     LiveAssistOptionsBackHandler(visible = activeAssistOptions != null) {
         activeAssistOptions = null
     }
@@ -688,6 +691,7 @@ fun MonitorScreen(
         val portraitAspect = operatorSettings.portraitFeedAspect
         val isPortraitFill = isPortrait && !isCommand && portraitAspect.fillsViewport
 
+        val statusBarVisible = operatorSettings.statusBarVisible.value
         val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
         val cameraValuesVisible = operatorSettings.cameraValuesVisible.value
         val sideRailsVisible = operatorSettings.sideRailsVisible.value
@@ -916,6 +920,42 @@ fun MonitorScreen(
             }
         }
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
+        val analysisChromeMounts =
+            remember(
+                isPortrait,
+                isPortraitFill,
+                isClean,
+                isCommand,
+                assistToolbarVisible,
+                cameraValuesVisible,
+            ) {
+                monitorAnalysisChromeMounts(
+                    isPortrait = isPortrait,
+                    isPortraitFill = isPortraitFill,
+                    isClean = isClean,
+                    isCommand = isCommand,
+                    assistToolbarVisible = assistToolbarVisible,
+                    cameraValuesVisible = cameraValuesVisible,
+                )
+            }
+        val analysisPanelLayout =
+            remember(
+                zones,
+                physicalViewport,
+                isPortrait,
+                isPortraitFill,
+                statusBarVisible,
+                analysisChromeMounts,
+            ) {
+                monitorAnalysisPanelLayout(
+                    zones = zones,
+                    physicalViewport = physicalViewport,
+                    isPortrait = isPortrait,
+                    isPortraitFill = isPortraitFill,
+                    statusBarVisible = statusBarVisible,
+                    chromeMounts = analysisChromeMounts,
+                )
+            }
 
         // Backdrop geometry for the glass pipeline: the viewport and the feed
         // zone in root px. The blurred texture covers the whole viewport
@@ -1320,7 +1360,10 @@ fun MonitorScreen(
                 feed = zones.feed,
                 infoBar = zones.infoBar,
                 scopeZone = zones.scopes,
-                viewport = physicalViewport,
+                panelLayout = analysisPanelLayout,
+                placementStore = analysisPanelPlacementStore,
+                placementRevision = analysisPanelPlacementRevision,
+                hapticsEnabled = operatorSettings.hapticsEnabled.value,
             )
         }
         if (!isCommand && (!isPortrait || isPortraitFill) && audioMetersEnabled) {
@@ -1346,6 +1389,10 @@ fun MonitorScreen(
                     // trailing edge by default so VIEW remains visible and
                     // tappable before the operator customises placement.
                     defaultHorizontalFraction = if (isPortraitFill) 1f else 0f,
+                    panelLayout = analysisPanelLayout,
+                    placementStore = analysisPanelPlacementStore,
+                    placementRevision = analysisPanelPlacementRevision,
+                    hapticsEnabled = operatorSettings.hapticsEnabled.value,
                 )
             }
         }
@@ -1394,6 +1441,13 @@ fun MonitorScreen(
             )
         }
         activeAssistOptions?.let { request ->
+            val recenterPanel =
+                request.tool.monitorAnalysisPanelID()?.takeIf { analysisPanelLayout != null }?.let { id ->
+                    {
+                        analysisPanelPlacementStore.recenter(id)
+                        analysisPanelPlacementRevision += 1
+                    }
+                }
             CompositionLocalProvider(LocalMonitorGlass provides glass) {
                 LiveAssistOptionsOverlay(
                     tool = request.tool,
@@ -1402,6 +1456,7 @@ fun MonitorScreen(
                     settings = operatorSettings,
                     cameraInput = exposureAssistCameraInput,
                     lutLibrary = lutLibrary,
+                    onRecenterPanel = recenterPanel,
                     onDismiss = { activeAssistOptions = null },
                 )
             }
