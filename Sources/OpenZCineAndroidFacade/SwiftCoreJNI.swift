@@ -718,8 +718,8 @@
     /// `SwiftCore.sessionStartLiveView(listener)` — starts live view on the
     /// active session (blocking `StartLiveView` + readiness poll on the caller
     /// thread) and pumps JPEG frames to
-    /// `listener.onFrame(jpeg, timestampNanos, isRecording)` from the facade's
-    /// pump thread. `onEnded` fires exactly once when the
+    /// `listener.onFrame(jpeg, timestampNanos, isRecording, audio...)` from
+    /// the facade's pump thread. `onEnded` fires exactly once when the
     /// stream ends — stop, disconnect, a transport error, or (immediately, on
     /// the calling thread) when there is no active session or the start fails.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartLiveView")
@@ -731,7 +731,7 @@
         guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
         guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
         guard let cls = fns.GetObjectClass!(env, global),
-            let onFrame = fns.GetMethodID!(env, cls, "onFrame", "([BJZ)V"),
+            let onFrame = fns.GetMethodID!(env, cls, "onFrame", "([BJZDDDDZ)V"),
             let onEnded = fns.GetMethodID!(env, cls, "onEnded", "()V")
         else {
             fns.DeleteGlobalRef!(env, global)
@@ -758,9 +758,10 @@
             // detach-once-at-the-end pairing below sound.
             try session.startLiveView(
                 onFrame: { frame, timestampNanos in
+                    let audio = LiveAudioMeterWire(sound: frame.sound)
                     pushLiveFrame(
                         handle, jpeg: frame.jpeg, timestampNanos: timestampNanos,
-                        isRecording: frame.isRecording)
+                        isRecording: frame.isRecording, audio: audio)
                 },
                 onEnded: { finishLiveFrameStream(handle) })
         } catch {
@@ -782,7 +783,7 @@
     /// attached); the matching single detach happens in `finishLiveFrameStream`.
     private func pushLiveFrame(
         _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64,
-        isRecording: Bool
+        isRecording: Bool, audio: LiveAudioMeterWire
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -801,6 +802,9 @@
         var args = [
             jvalue(l: array), jvalue(j: timestampNanos),
             jvalue(z: isRecording ? 1 : 0),
+            jvalue(d: audio.leftLevelDB), jvalue(d: audio.leftPeakDB),
+            jvalue(d: audio.rightLevelDB), jvalue(d: audio.rightPeakDB),
+            jvalue(z: audio.hasLevels ? 1 : 0),
         ]
         fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &args)
         fns.DeleteLocalRef!(env, array)

@@ -390,11 +390,13 @@ above — the facade is the Android platform adapter, so a blocking POSIX twin o
   reconnect-wedge fix semantics);
 - `sessionStartLiveView(listener)` / `sessionStopLiveView()` — a Swift-side frame pump on the
   session's command socket (`StartLiveView` + `DeviceReady` readiness poll, then
-  `GetLiveViewImageEx` on an absolute-schedule ~30 fps poll ceiling), pushing JPEG bytes +
-  monotonic timestamps to the Kotlin listener from one background thread. Backpressure is
-  latest-wins by construction (frames are pulled, never queued); stop and disconnect both join the
-  pump so `EndLiveView` always precedes `CloseSession` — the iOS heat-audit lesson (a hidden feed
-  must end live view on the body) carried over.
+  `GetLiveViewImageEx` on an absolute-schedule ~30 fps poll ceiling), pushing JPEG bytes,
+  monotonic timestamps, camera recording state, and optional stereo dBFS/peak-hold values to the
+  Kotlin listener from one background thread. The Swift core alone maps Nikon's live-view
+  sound-indicator bytes to dBFS; Kotlin receives only the resolved typed presentation payload.
+  Backpressure is latest-wins by construction (frames are pulled, never queued); stop and
+  disconnect both join the pump so `EndLiveView` always precedes `CloseSession` — the iOS
+  heat-audit lesson (a hidden feed must end live view on the body) carried over.
 
 The layer compiles on Darwin too, so `Tests/OpenZCineAndroidFacadeTests` exercises the same wire
 behavior against a scripted fake ZR (`FakeZRServer`) in `swift test` — sequencing, the pairing

@@ -68,6 +68,22 @@ class AssistStateTest {
     }
 
     @Test
+    fun `audio meter toggle persists independently of image assists and scopes`() {
+        val preferences = TestSharedPreferences()
+        val state = AssistState.restore(preferences, FeedEffects.NONE, null)
+
+        assertFalse(state.isOn(AssistTool.AUDIO))
+        state.toggle(AssistTool.AUDIO)
+
+        assertTrue(state.isOn(AssistTool.AUDIO))
+        assertTrue(preferences.getBoolean("audioMeters", false))
+        assertTrue(AssistState.restore(preferences, FeedEffects.NONE, null).isOn(AssistTool.AUDIO))
+
+        state.toggle(AssistTool.AUDIO)
+        assertFalse(preferences.getBoolean("audioMeters", true))
+    }
+
+    @Test
     fun `every toggle persists, and the token grammar round-trips`() {
         var savedEffects: FeedEffects? = null
         var savedScope: ScopeKind? = null

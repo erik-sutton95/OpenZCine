@@ -5,10 +5,13 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
+import com.opencapture.openzcine.core.LiveAudioMeterChannel
+import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveFrameSource
 import java.io.ByteArrayOutputStream
 import kotlin.math.abs
+import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -42,7 +45,13 @@ class DemoFrameSource(
                 drawTestPattern(canvas, frameIndex)
                 stream.reset()
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
-                emit(LiveFrame(timestampNanos = System.nanoTime(), jpegData = stream.toByteArray()))
+                emit(
+                    LiveFrame(
+                        timestampNanos = System.nanoTime(),
+                        jpegData = stream.toByteArray(),
+                        audioLevels = debugAudioLevels(frameIndex),
+                    ),
+                )
                 frameIndex++
                 val dueNanos = startNanos + frameIndex * periodNanos
                 val waitMillis = (dueNanos - System.nanoTime()) / 1_000_000
@@ -86,5 +95,21 @@ class DemoFrameSource(
             "%02d:%02d:%02d:%02d"
                 .format(seconds / 3600, seconds / 60 % 60, seconds % 60, frameIndex % framesPerSecond)
         canvas.drawText("OPENZCINE DEMO  $timecode", 24f, height - 32f, textPaint)
+    }
+
+    /**
+     * Debug-only moving bars for visual verification. These values never pass
+     * through the camera bridge; [LiveAudioMeterLevels.isDebugFixture] keeps
+     * the monitor visibly labelled `DEBUG FIXTURE — NOT CAMERA AUDIO`.
+     */
+    private fun debugAudioLevels(frameIndex: Long): LiveAudioMeterLevels {
+        val seconds = frameIndex.toDouble() / framesPerSecond.toDouble()
+        val leftLevel = -34.0 + 25.0 * ((sin(seconds * 4.1) + 1.0) / 2.0)
+        val rightLevel = -42.0 + 28.0 * ((sin(seconds * 3.3 + 1.2) + 1.0) / 2.0)
+        return LiveAudioMeterLevels(
+            left = LiveAudioMeterChannel(leftLevel, (leftLevel + 6.0).coerceAtMost(0.0)),
+            right = LiveAudioMeterChannel(rightLevel, (rightLevel + 9.0).coerceAtMost(0.0)),
+            isDebugFixture = true,
+        )
     }
 }

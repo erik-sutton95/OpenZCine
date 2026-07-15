@@ -250,7 +250,15 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     /** Ordered set of tools the monitor should render in its assist toolbar. */
     public val visibleAssistToolbarTools: List<AssistTool>
-        get() = assistToolbarOrder.filter(::isAssistToolbarToolVisible)
+        get() {
+            // iOS keeps the tap-only audio meter in its own trailing toolbar
+            // section, independent of the regular tool grouping/order.
+            val regular =
+                assistToolbarOrder.filter {
+                    it != AssistTool.AUDIO && isAssistToolbarToolVisible(it)
+                }
+            return regular + listOfNotNull(AssistTool.AUDIO.takeIf(::isAssistToolbarToolVisible))
+        }
 
     /**
      * Toggles the toolbar visibility of [tool]. LUT is deliberately always
@@ -265,6 +273,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         preferences.edit()
             .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, next.mapTo(linkedSetOf()) { it.name })
             .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
+            .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -294,6 +303,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .putString(ASSIST_TOOLBAR_ORDER_KEY, defaultOrder.joinToString(separator = ",") { it.name })
             .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, defaultOrder.mapTo(linkedSetOf()) { it.name })
             .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
+            .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -335,16 +345,27 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             ?.mapNotNull(AssistTool::fromStoredName)
             ?.toSet()
             .orEmpty()
-        if (preferences.getBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, false)) return stored
-
-        // This key predates `AssistTool.LIGHTS`. Add it once for existing
-        // custom toolbar configurations, then mark the set so a later manual
-        // hide remains a durable operator choice.
-        val migrated = stored + AssistTool.LIGHTS
-        preferences.edit()
-            .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, migrated.mapTo(linkedSetOf()) { it.name })
-            .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
-            .apply()
+        var migrated = stored
+        val editor = preferences.edit()
+        var changed = false
+        if (!preferences.getBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, false)) {
+            // This key predates `AssistTool.LIGHTS`. Add it once for existing
+            // custom toolbar configurations, then mark the set so a later
+            // manual hide remains a durable operator choice.
+            migrated += AssistTool.LIGHTS
+            editor.putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
+            changed = true
+        }
+        if (!preferences.getBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, false)) {
+            // Audio meters land as a new tap-only tool. Existing custom
+            // layouts see it once; after that a deliberate hide stays hidden.
+            migrated += AssistTool.AUDIO
+            editor.putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
+            changed = true
+        }
+        if (changed) {
+            editor.putStringSet(VISIBLE_ASSIST_TOOLS_KEY, migrated.mapTo(linkedSetOf()) { it.name }).apply()
+        }
         return migrated
     }
 
@@ -383,6 +404,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val VISIBLE_ASSIST_TOOLS_KEY = "display.assistToolbar.visible.v1"
         const val TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY =
             "display.assistToolbar.trafficLights.visibility.migrated.v1"
+        const val AUDIO_METERS_VISIBILITY_MIGRATED_KEY =
+            "display.assistToolbar.audioMeters.visibility.migrated.v1"
         const val FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
         const val SCOPE_METER_PREFERENCE = "scope-meter-v1"

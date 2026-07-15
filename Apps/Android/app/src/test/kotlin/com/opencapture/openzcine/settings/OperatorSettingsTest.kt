@@ -75,18 +75,21 @@ class OperatorSettingsTest {
     }
 
     @Test
-    fun `legacy visible assist set adds traffic lights once without undoing a later hide`() {
+    fun `legacy visible assist set adds new tools once without undoing a later hide`() {
         store.edit()
             .putStringSet("display.assistToolbar.visible.v1", linkedSetOf("LUT", "PEAK"))
             .apply()
 
         val migrated = OperatorSettings(store)
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.LIGHTS))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.AUDIO))
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.PEAK))
         assertFalse(migrated.isAssistToolbarToolVisible(AssistTool.WAVE))
 
         migrated.toggleAssistToolbarToolVisibility(AssistTool.LIGHTS)
+        migrated.toggleAssistToolbarToolVisibility(AssistTool.AUDIO)
         assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.LIGHTS))
+        assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.AUDIO))
     }
 
     @Test
@@ -113,6 +116,17 @@ class OperatorSettingsTest {
 
         assertEquals(AssistTool.entries.toList(), settings.assistToolbarOrder)
         assertEquals(AssistTool.entries.toList(), settings.visibleAssistToolbarTools)
+    }
+
+    @Test
+    fun `audio remains in the trailing toolbar section when its stored order moves`() {
+        val settings = OperatorSettings(store)
+        while (settings.assistToolbarOrder.indexOf(AssistTool.AUDIO) > 0) {
+            settings.moveAssistToolbarTool(AssistTool.AUDIO, direction = -1)
+        }
+
+        assertEquals(AssistTool.AUDIO, settings.assistToolbarOrder.first())
+        assertEquals(AssistTool.AUDIO, settings.visibleAssistToolbarTools.last())
     }
 
     @Test

@@ -331,9 +331,20 @@ object SwiftCore {
          * One live-view JPEG, freshly pulled from the camera. [timestampNanos]
          * is `CLOCK_MONOTONIC` at delivery — the same clock as
          * `System.nanoTime()`. [isRecording] is the camera-authoritative
-         * record flag decoded from the same live-view header.
+         * record flag decoded from the same live-view header. The four dBFS
+         * values are resolved by the shared Swift core from that header's
+         * sound indicator; [hasAudioLevels] is false when the body omitted it.
          */
-        fun onFrame(jpeg: ByteArray, timestampNanos: Long, isRecording: Boolean)
+        fun onFrame(
+            jpeg: ByteArray,
+            timestampNanos: Long,
+            isRecording: Boolean,
+            leftLevelDb: Double = -60.0,
+            leftPeakDb: Double = -60.0,
+            rightLevelDb: Double = -60.0,
+            rightPeakDb: Double = -60.0,
+            hasAudioLevels: Boolean = false,
+        )
 
         /**
          * The stream ended — stop, disconnect, a transport error, or an
