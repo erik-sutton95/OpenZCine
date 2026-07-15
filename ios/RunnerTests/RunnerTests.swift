@@ -566,9 +566,9 @@ final class RunnerTests: XCTestCase {
         let encodedSource = CIImage(
             color: CIColor(red: encoded, green: encoded, blue: encoded, alpha: 1)
         ).cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
-        // The playback compositor accepts Core Image's linear working values and restores encoded
-        // signal values before applying the false-colour cube.
-        let source = encodedSource.applyingFilter("CISRGBToneCurveToLinear")
+        // The compositor's cube is indexed by the display-encoded signal values it receives from
+        // live view and playback. Keep this synthetic source encoded too, matching production.
+        let source = encodedSource
         var effects = LiveImageEffects()
         effects.falseColor = FalseColorSettings(scale: scale, curve: curve)
         let resolved = ImageEffectsCompositor.resolve(effects) { _ in nil }

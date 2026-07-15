@@ -2813,6 +2813,9 @@ struct OperatorSettingsPanel: View {
     @State private var frameioSignInError: String?
     @State private var showFrameioHopConfirm = false
     @State private var cacheSizeBytes: UInt64?
+    @State private var diagnosticsShareItem: DiagnosticsShareItem?
+    @State private var diagnosticsErrorMessage: String?
+    @State private var isPreparingDiagnostics = false
 
     private var selectedTab: OperatorSettingsTab {
         get { model.operatorSettingsTab }
@@ -2881,6 +2884,20 @@ struct OperatorSettingsPanel: View {
                 .padding(.top, max(CGFloat(safeArea.top) + 6, 22))
         }
         .ignoresSafeArea()
+        .sheet(item: $diagnosticsShareItem) { item in
+            DiagnosticsShareSheet(url: item.url)
+        }
+        .alert(
+            "Couldn’t Share Diagnostics",
+            isPresented: Binding(
+                get: { diagnosticsErrorMessage != nil },
+                set: { if !$0 { diagnosticsErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(diagnosticsErrorMessage ?? "Please try again.")
+        }
     }
 
     /// Extra leading inset the landscape header needs to clear the floating ``CloseButton``.
@@ -3213,7 +3230,74 @@ struct OperatorSettingsPanel: View {
     }
 
     @ViewBuilder private var systemRows: some View {
-        SettingsRowCard {
+        SettingsRowCard(title: "Help & Feedback") {
+            SettingsInlineRow(
+                title: "Support",
+                help: "Connection guides, camera controls, media workflows, and troubleshooting.",
+                showTopDivider: false
+            ) {
+                systemLinkButton("Open", url: SupportLinkCatalog.support, label: "Open Support")
+            }
+            SettingsInlineRow(
+                title: "Report a Problem",
+                help:
+                    "Open a structured GitHub report with this app version, device class, and iOS version filled in."
+            ) {
+                systemLinkButton(
+                    "Report", url: SupportLinkCatalog.bugReport(), label: "Report a Problem")
+            }
+            SettingsInlineRow(
+                title: "Request a Feature",
+                help: "Start an idea in the project’s feature-request discussion category."
+            ) {
+                systemLinkButton(
+                    "Request", url: SupportLinkCatalog.featureRequest, label: "Request a Feature")
+            }
+            SettingsInlineRow(
+                title: "Share Diagnostics",
+                help:
+                    "Create a local report with recent app events and Apple diagnostics. Review it before sharing."
+            ) {
+                SettingsActionPill(
+                    title: isPreparingDiagnostics ? "Preparing…" : "Share"
+                ) {
+                    prepareDiagnosticsReport()
+                }
+                .disabled(isPreparingDiagnostics)
+                .accessibilityLabel("Share Diagnostics")
+            }
+            SettingsInlineRow(
+                title: "Live View Guide",
+                help:
+                    "Show the short control guide now when live view is open, or again on the next live view."
+            ) {
+                SettingsActionPill(title: "Show Again") {
+                    model.replayLiveViewGuide()
+                }
+                .accessibilityLabel("Show Live View Guide Again")
+            }
+        }
+
+        SettingsRowCard(title: "Project & Legal") {
+            SettingsInlineRow(
+                title: "Source Code",
+                help: "View the OpenZCine project and contribute on GitHub.",
+                showTopDivider: false
+            ) {
+                systemLinkButton(
+                    "Open", url: SupportLinkCatalog.source, label: "Open Source Code")
+            }
+            SettingsInlineRow(title: "Privacy", help: "Read the OpenZCine privacy policy.") {
+                systemLinkButton(
+                    "Open", url: SupportLinkCatalog.privacy, label: "Open Privacy Policy")
+            }
+            SettingsInlineRow(title: "Terms", help: "Read the OpenZCine terms of use.") {
+                systemLinkButton(
+                    "Open", url: SupportLinkCatalog.terms, label: "Open Terms of Use")
+            }
+        }
+
+        SettingsRowCard(title: "App Information") {
             SettingsInlineRow(
                 title: "Theme",
                 help: "Dark earth interface tuned for low reflection on set.",
@@ -3234,18 +3318,27 @@ struct OperatorSettingsPanel: View {
             ) {
                 SettingsValueText(value: Self.appVersionText)
             }
-            SettingsInlineRow(
-                title: "Support",
-                help: "Connection guides, camera controls, media workflows, and troubleshooting."
-            ) {
-                Button("Open") {
-                    guard let url = URL(string: "https://openzcine.app/support/") else { return }
-                    openURL(url)
-                }
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(LiveDesign.accent)
-                .buttonStyle(.zcTapTarget)
-                .accessibilityLabel("Open OpenZCine Support")
+        }
+    }
+
+    private func systemLinkButton(_ title: String, url: URL, label: String) -> some View {
+        Button(title) { openURL(url) }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(LiveDesign.accent)
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel(label)
+    }
+
+    private func prepareDiagnosticsReport() {
+        guard !isPreparingDiagnostics else { return }
+        isPreparingDiagnostics = true
+        Task {
+            defer { isPreparingDiagnostics = false }
+            do {
+                diagnosticsShareItem = DiagnosticsShareItem(
+                    url: try await AppDiagnostics.shared.makeReport())
+            } catch {
+                diagnosticsErrorMessage = error.localizedDescription
             }
         }
     }

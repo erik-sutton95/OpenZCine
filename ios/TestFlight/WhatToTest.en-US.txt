@@ -1,9 +1,11 @@
 What's changed
 
-- Find and pair no longer gets stuck on "Looking for cameras" when using your iPhone's Personal Hotspot.
+- System settings now links to support, bug reports, feature requests, source, privacy, and terms.
+- You can create and review a privacy-safe troubleshooting report from System settings.
+- The first live preview now opens with a short guide to camera, View Assist, and system controls.
 
 Please test
 
-- Connect your Nikon camera to your iPhone's Personal Hotspot, then open Find and pair.
-- Confirm the camera appears and completes pairing.
-- Report any camera that does not appear, disconnects, or repeatedly asks to pair.
+- Open a live preview and complete or skip the three guide cards.
+- In Operator Setup > System, open the support links and create a troubleshooting report.
+- Choose Show Again and confirm the live-view guide returns.

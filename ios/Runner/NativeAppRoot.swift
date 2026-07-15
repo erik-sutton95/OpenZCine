@@ -296,6 +296,17 @@ final class NativeAppModel {
             case .connected: "Connected"
             }
         }
+
+        var diagnosticEvent: AppDiagnosticEvent {
+            switch self {
+            case .disconnected: .connectionDisconnected
+            case .scanning: .connectionScanning
+            case .pairing: .connectionPairing
+            case .reconnecting: .connectionReconnecting
+            case .preparingLiveView: .connectionPreparingLiveView
+            case .connected: .connectionConnected
+            }
+        }
     }
 
     enum StartupMode: Equatable {
@@ -463,7 +474,11 @@ final class NativeAppModel {
     }
 
     var connection: ConnectionState = .disconnected {
-        didSet { publishWatchState() }
+        didSet {
+            publishWatchState()
+            guard oldValue != connection else { return }
+            AppDiagnostics.shared.record(connection.diagnosticEvent)
+        }
     }
     /// Phased lifecycle for the connection progress sheet.
     var connectionPhase: CameraConnectionPhase = .idle
@@ -507,7 +522,11 @@ final class NativeAppModel {
         didSet {
             syncScreenWakePolicy()
             publishWatchState()
-            if oldValue != isMonitorPresented { updateBluetoothShutter() }
+            if oldValue != isMonitorPresented {
+                updateBluetoothShutter()
+                AppDiagnostics.shared.record(
+                    isMonitorPresented ? .monitorPresented : .monitorDismissed)
+            }
         }
     }
     var isMediaPlaybackActive = false {
@@ -646,7 +665,15 @@ final class NativeAppModel {
     /// When non-nil, the next picker present opens on this mode tab (e.g. FOCUS Area = 1).
     var pickerInitialMode: Int?
     var prefersMediaDuration = false
-    var isRecording = false
+    var isRecording = false {
+        didSet {
+            guard oldValue != isRecording else { return }
+            AppDiagnostics.shared.record(isRecording ? .recordingStarted : .recordingStopped)
+        }
+    }
+    /// Current first-live-view guide card. Nil after completion or while the guide is not visible.
+    var liveViewGuideStep: LiveViewGuideStep?
+    @ObservationIgnored private var liveViewGuideStore: LiveViewGuideStore
     /// When non-nil, the operator must confirm before the queued start (`true`) or stop (`false`) runs.
     var pendingRecordConfirmation: Bool?
     /// When the app last sent a record start/stop, so the camera-authoritative record state (from the
@@ -663,6 +690,10 @@ final class NativeAppModel {
     /// level overlay. Nil until the body reports a level — the overlay falls back to CoreMotion then.
     var cameraLevelRoll: Double?
     var cameraLevelPitch: Double?
+
+    init(liveViewGuideStore: LiveViewGuideStore = LiveViewGuideStore()) {
+        self.liveViewGuideStore = liveViewGuideStore
+    }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
     /// are deliberately *not* persisted here; the connected camera is their source of truth.
@@ -1880,6 +1911,52 @@ final class NativeAppModel {
         disconnectCameraSession(resetConnection: true)
         startDiscoveryLoop(resetResults: false)
     }
+
+    /// Presents the versioned guide after the first successfully decoded live-view frame.
+    func presentLiveViewGuideIfNeeded() {
+        guard liveViewGuideStep == nil, !isDemoSession, liveViewGuideStore.shouldPresent else {
+            return
+        }
+        liveViewGuideStep = .cameraControls
+        AppDiagnostics.shared.record(.guidePresented)
+    }
+
+    /// Advances the guide or records completion after the final card.
+    func advanceLiveViewGuide() {
+        guard let current = liveViewGuideStep else { return }
+        if let next = current.next {
+            liveViewGuideStep = next
+            return
+        }
+        liveViewGuideStore.markCompleted()
+        liveViewGuideStep = nil
+        AppDiagnostics.shared.record(.guideCompleted)
+    }
+
+    /// Dismisses the guide and prevents another automatic presentation for this guide version.
+    func skipLiveViewGuide() {
+        guard liveViewGuideStep != nil else { return }
+        liveViewGuideStore.markCompleted()
+        liveViewGuideStep = nil
+        AppDiagnostics.shared.record(.guideSkipped)
+    }
+
+    /// Resets the guide from System settings, showing it immediately when a monitor is active.
+    func replayLiveViewGuide() {
+        liveViewGuideStore.reset()
+        guard isMonitorPresented else { return }
+        activePanel = nil
+        liveViewGuideStep = .cameraControls
+        AppDiagnostics.shared.record(.guidePresented)
+    }
+
+    #if DEBUG
+        /// Selects a deterministic guide card for simulator screenshot verification.
+        func forceLiveViewGuide(_ step: LiveViewGuideStep) {
+            activePanel = nil
+            liveViewGuideStep = step
+        }
+    #endif
 
     // Demo-session entry points (screenshot/marketing harness — see DemoHarness.swift). Debug-only:
     // with these compiled out, `isDemoSession`/`demoUIMode` can never become true in a Release
@@ -3172,6 +3249,7 @@ final class NativeAppModel {
     /// worst battery/thermal profile on set, and enough sustained work for iOS to jetsam-kill the
     /// app so it vanishes mid-shoot. The session object is kept so `enterForeground()` can resume.
     func enterBackground() {
+        AppDiagnostics.shared.record(.enteredBackground)
         screenWakeSuppressedForBackground = true
         syncScreenWakePolicy()
         // Give the volume buttons (and the phone camera) back to the system while backgrounded.
@@ -3208,6 +3286,7 @@ final class NativeAppModel {
     /// event drain, resumes live view if it was up, or restarts discovery on the connect screen. If
     /// the connection died while suspended, the live-view task's own backoff/reconnect recovers.
     func enterForeground() {
+        AppDiagnostics.shared.record(.enteredForeground)
         screenWakeSuppressedForBackground = false
         syncScreenWakePolicy()
         guard let session = cameraSession else {
@@ -3299,6 +3378,8 @@ final class NativeAppModel {
             liveViewFocus = firstFrame.focus
             applyLiveViewHeaderState(firstFrame)
             isMonitorPresented = true
+            AppDiagnostics.shared.record(.liveViewStarted)
+            presentLiveViewGuideIfNeeded()
             dismissConnectionProgress()
             deliveredFirstFrame = true
             consecutiveStartFailures = 0
@@ -3455,6 +3536,7 @@ final class NativeAppModel {
         } catch {
             guard !Task.isCancelled else { return .taskCancelled }
             if !deliveredFirstFrame {
+                AppDiagnostics.shared.record(.liveViewFailed)
                 let reason =
                     (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 connectionMessage =

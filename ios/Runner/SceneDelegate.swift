@@ -21,5 +21,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = hostingController
         window.makeKeyAndVisible()
         self.window = window
+        AppDiagnostics.shared.record(.sceneConnected)
     }
 }
