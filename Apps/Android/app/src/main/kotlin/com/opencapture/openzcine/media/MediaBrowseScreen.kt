@@ -116,17 +116,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Enumeration cap handed to the facade — at most this many ObjectInfo round
- * trips per listing, so a packed card never wedges the session (the iOS USB
- * lesson: never gate on cataloging a whole card).
+ * ObjectInfo budget per cursor advance. The facade alternates cards inside
+ * each page, and Compose publishes every page before requesting the next one.
  */
-private const val MAX_LISTED_OBJECTS = 256
+private const val MEDIA_BROWSE_PAGE_SIZE = 32
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
 private sealed interface BrowseState {
     data object Loading : BrowseState
 
-    data class Loaded(val clips: List<MediaClipRecord>) : BrowseState
+    data class Loaded(
+        val clips: List<MediaClipRecord>,
+        val isLoadingMore: Boolean = false,
+    ) : BrowseState
 
     data class Failed(val message: String) : BrowseState
 }
@@ -499,24 +501,47 @@ internal fun MediaBrowseScreen(
     LaunchedEffect(cameraID, options.source, effectiveCameraConnected, reloadKey) {
         state = BrowseState.Loading
         val nextState =
-            withContext(Dispatchers.IO) {
-                when (options.source) {
-                    MediaLibrarySource.CAMERA -> {
-                        if (!effectiveCameraConnected) {
-                            BrowseState.Failed("Reconnect the camera or choose On device media.")
-                        } else if (!SwiftCore.isAvailable) {
-                            BrowseState.Failed("Camera core is not bundled in this build.")
-                        } else {
-                            SwiftCore.sessionListMedia(MAX_LISTED_OBJECTS)
-                                ?.let { wire ->
-                                    val clips = MediaClips.parse(wire)
-                                    libraryIndex.rememberCameraListing(cameraID, clips)
-                                    BrowseState.Loaded(clips)
-                                }
-                                ?: BrowseState.Failed("Not connected to a camera.")
+            when (options.source) {
+                MediaLibrarySource.CAMERA -> {
+                    if (!effectiveCameraConnected) {
+                        BrowseState.Failed("Reconnect the camera or choose On device media.")
+                    } else if (!SwiftCore.isAvailable) {
+                        BrowseState.Failed("Camera core is not bundled in this build.")
+                    } else {
+                        try {
+                            val clips =
+                                loadCameraMediaPages(
+                                    pageSize = MEDIA_BROWSE_PAGE_SIZE,
+                                    onPage = { snapshot ->
+                                        withContext(Dispatchers.IO) {
+                                            libraryIndex.rememberCameraListing(
+                                                cameraID,
+                                                snapshot.clips,
+                                                snapshot.removedObjects,
+                                            )
+                                        }
+                                        state =
+                                            BrowseState.Loaded(
+                                                clips = snapshot.clips,
+                                                isLoadingMore = snapshot.hasMore,
+                                            )
+                                    },
+                                )
+                            BrowseState.Loaded(clips)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: MediaBrowsePagingException) {
+                            val partial = (state as? BrowseState.Loaded)?.clips.orEmpty()
+                            if (partial.isEmpty()) {
+                                BrowseState.Failed("Couldn't finish listing camera media.")
+                            } else {
+                                BrowseState.Loaded(partial)
+                            }
                         }
                     }
-                    MediaLibrarySource.LOCAL -> {
+                }
+                MediaLibrarySource.LOCAL ->
+                    withContext(Dispatchers.IO) {
                         val clips =
                             libraryIndex.persistedClips(cameraID).filter { clip ->
                                 runCatching {
@@ -529,7 +554,6 @@ internal fun MediaBrowseScreen(
                             }
                         BrowseState.Loaded(clips)
                     }
-                }
             }
         state = nextState
         if (
@@ -1846,7 +1870,9 @@ private fun MediaLibraryBody(
             BrowseState.Loading -> ListingState(source)
             is BrowseState.Failed -> FailedState(state.message, onRetry)
             is BrowseState.Loaded ->
-                if (clips.isEmpty()) {
+                if (clips.isEmpty() && state.isLoadingMore) {
+                    ListingState(source)
+                } else if (clips.isEmpty()) {
                     EmptyState(source)
                 } else if (layout == MediaLibraryLayout.GRID) {
                     MediaClipGrid(
@@ -2448,7 +2474,12 @@ private fun itemCountLabel(state: BrowseState, displayedCount: Int): String =
     when (state) {
         BrowseState.Loading -> "Scanning…"
         is BrowseState.Failed -> "—"
-        is BrowseState.Loaded -> "$displayedCount item${if (displayedCount == 1) "" else "s"}"
+        is BrowseState.Loaded ->
+            if (state.isLoadingMore) {
+                "Listing… ${state.clips.size} found"
+            } else {
+                "$displayedCount item${if (displayedCount == 1) "" else "s"}"
+            }
     }
 
 private val CapsuleShape: RoundedCornerShape

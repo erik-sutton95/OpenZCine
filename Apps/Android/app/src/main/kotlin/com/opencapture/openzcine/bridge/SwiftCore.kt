@@ -807,14 +807,22 @@ object SwiftCore {
     // ── Media browse (OPE-34) ──
 
     /**
-     * Lists browsable media (clips, stills, unpaired R3D masters) on the
-     * active session's cards, flattened one record per line (see
-     * `MediaClips.parse`). Enumeration is bounded to [maxObjects] ObjectInfo
-     * reads so a packed card never blocks the session unboundedly. Null when
-     * no session is active or the listing failed; empty string for an empty
-     * card. Blocking — call from a background dispatcher.
+     * Snapshots object handles across every usable camera card and returns an
+     * opaque latest-wins cursor, or -1 when no session is active. A newer call
+     * invalidates the prior cursor before taking its snapshot. Blocking; call
+     * from a background dispatcher.
      */
-    external fun sessionListMedia(maxObjects: Int): String?
+    external fun sessionBeginMediaBrowse(): Long
+
+    /**
+     * Advances [cursor] by at most [maxObjects] ObjectInfo transactions and
+     * returns one versioned `MediaBrowsePageWire`, or null when invalidated,
+     * cancelled, or failed. Blocking; call from a background dispatcher.
+     */
+    external fun sessionNextMediaBrowsePage(cursor: Long, maxObjects: Int): String?
+
+    /** Cancels one opaque media cursor. Safe after its final page. */
+    external fun sessionCancelMediaBrowse(cursor: Long)
 
     /**
      * The camera's embedded thumbnail JPEG for one object handle, or null

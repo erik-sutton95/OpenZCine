@@ -200,6 +200,22 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `incremental proxy delta removes the paired R3D from persistence`() {
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val master = clip(handle = 7, filename = "A001.R3D", kind = MediaContentKind.R3D_MASTER)
+        val proxy = clip(handle = 8, filename = "A001.MP4")
+
+        index.rememberCameraListing("camera", listOf(master))
+        index.rememberCameraListing(
+            cameraID = "camera",
+            clips = listOf(proxy),
+            removedObjects = listOf(MediaObjectIdentity(master.storageId, master.handle)),
+        )
+
+        assertEquals(listOf(proxy), index.persistedClips("camera"))
+    }
+
+    @Test
     fun `favorites are camera scoped and persist by full object identity`() {
         val preferences = MemoryPreferences()
         val index = MediaLibraryIndex(preferences)

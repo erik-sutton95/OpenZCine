@@ -3,8 +3,8 @@
 // separate slice).
 //
 // Mirrors the iOS shell's PTP media path (`NativeCameraSession`): usable
-// storage IDs (`GetVendorStorageIDs` 0x9209 falling back to `GetStorageIDs`
-// 0x1004) → `GetObjectHandles` 0x1007 → per-object `GetObjectInfo` 0x1008,
+// storage IDs (`GetVendorStorageIDs` 0x9209 plus `GetStorageIDs` 0x1004) →
+// `GetObjectHandles` 0x1007 → per-object `GetObjectInfo` 0x1008,
 // decoded by the core's `PTPObjectInfo`, plus `GetThumb` 0x100A for the
 // embedded thumbnail JPEGs. Like the zone-map wire, this file compiles on
 // every platform so `swift test` exercises it against the fake ZR; only the
@@ -58,6 +58,220 @@ public struct FacadeMediaClip: Equatable, Sendable {
     }
 }
 
+/// One bounded increment from an Android camera-media enumeration cursor.
+public struct FacadeMediaBrowsePage: Equatable, Sendable {
+    /// Newly discovered records. A record is emitted exactly once per cursor.
+    public let clips: [FacadeMediaClip]
+    /// Previously emitted R3D masters hidden by a proxy discovered on this page.
+    public let removedObjects: [MediaObjectHandle]
+    /// Number of `GetObjectInfo` round trips consumed by this page.
+    public let inspectedObjectCount: Int
+    /// True while another bounded page is available.
+    public let hasMore: Bool
+
+    /// Creates one page after a bounded cursor advance.
+    public init(
+        clips: [FacadeMediaClip],
+        removedObjects: [MediaObjectHandle] = [],
+        inspectedObjectCount: Int,
+        hasMore: Bool
+    ) {
+        self.clips = clips
+        self.removedObjects = removedObjects
+        self.inspectedObjectCount = inspectedObjectCount
+        self.hasMore = hasMore
+    }
+}
+
+/// Typed failures from one Android camera-media enumeration cursor.
+public enum FacadeMediaBrowseCursorError: LocalizedError, Equatable {
+    case cancelled
+    case invalidPageSize(Int)
+
+    /// Operator-safe description of the rejected cursor operation.
+    public var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            "The camera media listing was cancelled."
+        case .invalidPageSize(let size):
+            "Camera media page size \(size) is outside the supported range."
+        }
+    }
+}
+
+/// One card's stable handle snapshot, retained only for the lifetime of a browse cursor.
+struct MediaBrowseStorageSnapshot: Sendable {
+    let storageID: UInt32
+    let handles: [UInt32]
+}
+
+/// Cancellation-aware incremental enumeration over every usable camera card.
+///
+/// Handle arrays are snapshotted once, then consumed newest-first and round-robin
+/// across cards. Every call is capped to `supportedPageSizes`, which gives the
+/// Android collector a cancellation and UI-update point without letting a packed
+/// first card hide newer media on a second card. Page deltas preserve the shared
+/// core's R3D pairing policy when a matching proxy arrives on a later page or
+/// another card, while still publishing unpaired masters incrementally like iOS.
+public final class FacadeMediaBrowseCursor: @unchecked Sendable {
+    /// Hard safety bound for a single cursor advance.
+    public static let supportedPageSizes: ClosedRange<Int> = 1...128
+
+    typealias ClipFetcher = (MediaObjectHandle) -> FacadeMediaClip?
+
+    private let pageLock = NSLock()
+    private let cancellationLock = NSLock()
+    private let snapshots: [MediaBrowseStorageSnapshot]
+    private let fetchClip: ClipFetcher
+    private var positions: [Int]
+    private var nextStorageIndex = 0
+    private var discoveredProxyStems: Set<String> = []
+    private var visibleMastersByStem: [String: [MediaObjectHandle]] = [:]
+    private var pendingChanges: [MediaBrowseChange] = []
+    private var nextPendingChangeIndex = 0
+    private var cancelled = false
+    private var finished = false
+
+    private enum MediaBrowseChange {
+        case add(FacadeMediaClip)
+        case remove(MediaObjectHandle)
+    }
+
+    init(
+        snapshots: [MediaBrowseStorageSnapshot],
+        fetchClip: @escaping ClipFetcher
+    ) {
+        self.snapshots = snapshots
+        self.fetchClip = fetchClip
+        positions = snapshots.map { $0.handles.count - 1 }
+    }
+
+    /// Stops this cursor. An in-flight object transaction finishes, then the
+    /// next cancellation check prevents any further camera command or result.
+    public func cancel() {
+        cancellationLock.lock()
+        cancelled = true
+        cancellationLock.unlock()
+    }
+
+    /// Advances by at most `maxObjects` metadata commands and records.
+    public func nextPage(maxObjects: Int) throws -> FacadeMediaBrowsePage {
+        guard Self.supportedPageSizes.contains(maxObjects) else {
+            throw FacadeMediaBrowseCursorError.invalidPageSize(maxObjects)
+        }
+
+        pageLock.lock()
+        defer { pageLock.unlock() }
+        try checkCancellation()
+        guard !finished else {
+            return FacadeMediaBrowsePage(
+                clips: [], removedObjects: [], inspectedObjectCount: 0, hasMore: false)
+        }
+
+        var clips: [FacadeMediaClip] = []
+        var removedObjects: [MediaObjectHandle] = []
+        var inspectedObjectCount = 0
+        while clips.count + removedObjects.count < maxObjects {
+            drainPendingChanges(
+                clips: &clips, removedObjects: &removedObjects, limit: maxObjects)
+            guard clips.count + removedObjects.count < maxObjects,
+                inspectedObjectCount < maxObjects,
+                let object = nextObject()
+            else { break }
+
+            try checkCancellation()
+            inspectedObjectCount += 1
+            let clip = fetchClip(object)
+            try checkCancellation()
+            guard let clip else { continue }
+
+            switch clip.contentClassification.kind {
+            case .r3dMaster:
+                let stem = MediaClipFilename.stem(of: clip.filename)
+                if !discoveredProxyStems.contains(stem) {
+                    visibleMastersByStem[stem, default: []].append(
+                        MediaObjectHandle(storageID: clip.storageID, handle: clip.handle))
+                    pendingChanges.append(.add(clip))
+                }
+            case .playableProxy:
+                let stem = MediaClipFilename.stem(of: clip.filename)
+                discoveredProxyStems.insert(stem)
+                let pairedMasters = visibleMastersByStem.removeValue(forKey: stem) ?? []
+                pendingChanges.append(
+                    contentsOf: pairedMasters.map {
+                        .remove($0)
+                    })
+                pendingChanges.append(.add(clip))
+            case .stillPhoto:
+                pendingChanges.append(.add(clip))
+            case .unsupported:
+                continue
+            }
+        }
+
+        let hasMore = hasRemainingObjects || hasPendingChanges
+        if !hasMore {
+            finished = true
+            visibleMastersByStem.removeAll(keepingCapacity: false)
+        }
+        return FacadeMediaBrowsePage(
+            clips: clips,
+            removedObjects: removedObjects,
+            inspectedObjectCount: inspectedObjectCount,
+            hasMore: hasMore)
+    }
+
+    private var hasRemainingObjects: Bool {
+        positions.contains(where: { $0 >= 0 })
+    }
+
+    private var hasPendingChanges: Bool {
+        nextPendingChangeIndex < pendingChanges.count
+    }
+
+    private func nextObject() -> MediaObjectHandle? {
+        guard !snapshots.isEmpty else { return nil }
+        for _ in snapshots.indices {
+            let index = nextStorageIndex
+            nextStorageIndex = (nextStorageIndex + 1) % snapshots.count
+            guard positions[index] >= 0 else { continue }
+            let handle = snapshots[index].handles[positions[index]]
+            positions[index] -= 1
+            return MediaObjectHandle(storageID: snapshots[index].storageID, handle: handle)
+        }
+        return nil
+    }
+
+    private func drainPendingChanges(
+        clips: inout [FacadeMediaClip],
+        removedObjects: inout [MediaObjectHandle],
+        limit: Int
+    ) {
+        while clips.count + removedObjects.count < limit,
+            nextPendingChangeIndex < pendingChanges.count
+        {
+            switch pendingChanges[nextPendingChangeIndex] {
+            case .add(let clip):
+                clips.append(clip)
+            case .remove(let object):
+                removedObjects.append(object)
+            }
+            nextPendingChangeIndex += 1
+        }
+        if nextPendingChangeIndex == pendingChanges.count {
+            pendingChanges.removeAll(keepingCapacity: true)
+            nextPendingChangeIndex = 0
+        }
+    }
+
+    private func checkCancellation() throws {
+        cancellationLock.lock()
+        let isCancelled = cancelled
+        cancellationLock.unlock()
+        if isCancelled { throw FacadeMediaBrowseCursorError.cancelled }
+    }
+}
+
 extension PTPIPClientSession {
     /// Reads the first camera storage slot that reports valid capacity data.
     ///
@@ -80,50 +294,20 @@ extension PTPIPClientSession {
         return nil
     }
 
-    /// Lists browsable media on the camera's cards, applying the iOS browse
-    /// policies: media-library filtering (movies, stills, R3D masters) and the
-    /// R3D-hide pairing rule (a master with a same-stem playable proxy is
-    /// represented by the proxy).
+    /// Starts a stable, incremental media enumeration across every usable card.
     ///
-    /// Enumeration is BOUNDED: at most `maxObjects` `GetObjectInfo` round
-    /// trips across all cards, so a packed card can never block the session
-    /// thread unboundedly (the iOS USB lesson: never gate a session on
-    /// cataloging a whole card). Newest handles are inspected first — PTP
-    /// object handles arrive in on-card order, so the tail of each volume's
-    /// handle list is the most recent footage.
-    // ponytail: cap + newest-first is the whole v1 policy; cursor-style paging
-    // arrives with the playback slice if a real card overflows the cap.
-    public func listMedia(maxObjects: Int = 256) throws -> [FacadeMediaClip] {
-        var inspected = 0
-        var clips: [FacadeMediaClip] = []
-        for storageID in try usableStorageIDs() {
-            let handles = try objectHandles(storageID: storageID)
-            for handle in handles.reversed() {
-                guard inspected < maxObjects else { break }
-                inspected += 1
-                guard let info = try? objectInfo(handle: handle),
-                    info.isMediaLibraryObject,
-                    let filename = MediaClipFilename.safeCameraBasename(info.filename)
-                else { continue }
-                let resolvedSize =
-                    (try? resolvedObjectSize(
-                        handle: handle, reportedSize: UInt64(info.compressedSize)))
-                    ?? UInt64(info.compressedSize)
-                clips.append(
-                    FacadeMediaClip(
-                        handle: handle,
-                        storageID: storageID,
-                        sizeBytes: resolvedSize,
-                        captureDate: info.captureDate,
-                        pixelWidth: info.imagePixWidth,
-                        pixelHeight: info.imagePixHeight,
-                        filename: filename))
-            }
+    /// Each card's handle list is captured in one command, matching iOS's
+    /// discovery snapshot, while per-object metadata remains deferred to
+    /// bounded cursor pages. A card rejecting `GetObjectHandles` is skipped so
+    /// another installed card can still be browsed.
+    public func beginMediaBrowse() throws -> FacadeMediaBrowseCursor {
+        let snapshots = try usableStorageIDs().map { storageID in
+            MediaBrowseStorageSnapshot(
+                storageID: storageID,
+                handles: (try? objectHandles(storageID: storageID)) ?? [])
         }
-        let proxyStems = MediaClipFilename.playableProxyStems(in: clips.map(\.filename))
-        return clips.filter {
-            MediaClipFilename.shouldShowInMediaBrowser(
-                filename: $0.filename, playableProxyStems: proxyStems)
+        return FacadeMediaBrowseCursor(snapshots: snapshots) { [weak self] object in
+            self?.mediaClip(object)
         }
     }
 
@@ -136,16 +320,20 @@ extension PTPIPClientSession {
         return result.data.isEmpty ? nil : result.data
     }
 
-    /// The *valid* (card-present) storage IDs: `GetVendorStorageIDs` preferred
-    /// (standard `GetStorageIDs` reports placeholder per-slot IDs), falling
-    /// back to the standard list; de-duplicated, placeholder/empty stripped —
-    /// the iOS `usableStorageIDs` policy.
+    /// The candidate card IDs from both Nikon's vendor list and standard PTP
+    /// list, de-duplicated and stripped of known placeholder values. Querying
+    /// both matches iOS and keeps a vendor-list omission from hiding card 2;
+    /// later per-card commands harmlessly skip any remaining absent-slot ID.
     private func usableStorageIDs() throws -> [UInt32] {
-        var candidates: [UInt32] = []
-        candidates += (try? storageIDList(via: .getVendorStorageIDs)) ?? []
-        if candidates.isEmpty {
-            candidates += try storageIDList(via: .getStorageIDs)
+        let vendorResult = Result { try storageIDList(via: .getVendorStorageIDs) }
+        let standardResult = Result { try storageIDList(via: .getStorageIDs) }
+        if case .failure(let error) = vendorResult,
+            case .failure = standardResult
+        {
+            throw error
         }
+        var candidates = (try? vendorResult.get()) ?? []
+        candidates += (try? standardResult.get()) ?? []
         var seen = Set<UInt32>()
         return candidates.filter { $0 != 0 && $0 != 0xFFFF_FFFF && seen.insert($0).inserted }
     }
@@ -171,6 +359,25 @@ extension PTPIPClientSession {
             .getObjectInfo, parameters: [handle], dataPhase: .dataIn)
         return try PTPObjectInfo(result.data)
     }
+
+    private func mediaClip(_ object: MediaObjectHandle) -> FacadeMediaClip? {
+        guard let info = try? objectInfo(handle: object.handle),
+            info.isMediaLibraryObject,
+            let filename = MediaClipFilename.safeCameraBasename(info.filename)
+        else { return nil }
+        let resolvedSize =
+            (try? resolvedObjectSize(
+                handle: object.handle, reportedSize: UInt64(info.compressedSize)))
+            ?? UInt64(info.compressedSize)
+        return FacadeMediaClip(
+            handle: object.handle,
+            storageID: object.storageID,
+            sizeBytes: resolvedSize,
+            captureDate: info.captureDate,
+            pixelWidth: info.imagePixWidth,
+            pixelHeight: info.imagePixHeight,
+            filename: filename)
+    }
 }
 
 /// Flat wire format for the media listing crossing the JNI seam — one clip
@@ -192,5 +399,146 @@ public enum MediaListWire {
                 clip.filename,
             ].joined(separator: "\t")
         }.joined(separator: "\n")
+    }
+}
+
+/// Versioned JNI wire for one bounded media cursor page.
+public enum MediaBrowsePageWire {
+    /// Stable header token mirrored by Android's `MediaBrowsePages` parser.
+    public static let version = "OZCMEDIA1"
+
+    /// Encodes a header, typed removal records, then zero or more
+    /// `MediaListWire` additions. Android applies additions before removals so
+    /// an R3D and its later proxy may share one incremental page safely.
+    public static func encode(_ page: FacadeMediaBrowsePage) -> String {
+        let header = [
+            version,
+            page.hasMore ? "1" : "0",
+            String(page.inspectedObjectCount),
+            String(page.removedObjects.count),
+        ].joined(separator: "\t")
+        let removals = page.removedObjects.map { object in
+            "-\t\(object.storageID)\t\(object.handle)"
+        }.joined(separator: "\n")
+        let records = MediaListWire.encode(page.clips)
+        return [header, removals, records].filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+}
+
+/// Process-local opaque cursor handles used only by the Android JNI seam.
+final class MediaBrowseCursorRegistry: @unchecked Sendable {
+    static let shared = MediaBrowseCursorRegistry()
+
+    private struct Entry {
+        let sessionID: ObjectIdentifier
+        let cursor: FacadeMediaBrowseCursor
+    }
+
+    private let lock = NSLock()
+    private var nextHandle: Int64 = 1
+    private var entries: [Int64: Entry] = [:]
+    private var latestHandleBySession: [ObjectIdentifier: Int64] = [:]
+
+    /// Starts the latest cursor for `session`. A concurrently superseded
+    /// snapshot is discarded rather than publishing a stale handle.
+    func begin(session: PTPIPClientSession) throws -> Int64? {
+        let sessionID = ObjectIdentifier(session)
+        let reservation: Int64
+        let staleCursors: [FacadeMediaBrowseCursor]
+        lock.lock()
+        reservation = reserveHandleLocked()
+        staleCursors = entries.values.compactMap { entry in
+            entry.sessionID == sessionID ? entry.cursor : nil
+        }
+        entries = entries.filter { $0.value.sessionID != sessionID }
+        latestHandleBySession[sessionID] = reservation
+        lock.unlock()
+        for cursor in staleCursors {
+            cursor.cancel()
+        }
+
+        let cursor: FacadeMediaBrowseCursor
+        do {
+            cursor = try session.beginMediaBrowse()
+        } catch {
+            clearReservation(reservation, sessionID: sessionID)
+            throw error
+        }
+
+        lock.lock()
+        guard latestHandleBySession[sessionID] == reservation else {
+            lock.unlock()
+            cursor.cancel()
+            return nil
+        }
+        entries[reservation] = Entry(sessionID: sessionID, cursor: cursor)
+        lock.unlock()
+        return reservation
+    }
+
+    func next(handle: Int64, maxObjects: Int) throws -> FacadeMediaBrowsePage? {
+        lock.lock()
+        let entry = entries[handle]
+        lock.unlock()
+        guard let entry else { return nil }
+
+        let page = try entry.cursor.nextPage(maxObjects: maxObjects)
+        if !page.hasMore {
+            remove(handle: handle, matching: entry)
+        }
+        return page
+    }
+
+    func cancel(handle: Int64) {
+        guard handle > 0 else { return }
+        lock.lock()
+        let entry = entries.removeValue(forKey: handle)
+        if let entry, latestHandleBySession[entry.sessionID] == handle {
+            latestHandleBySession.removeValue(forKey: entry.sessionID)
+        }
+        lock.unlock()
+        entry?.cursor.cancel()
+    }
+
+    func cancel(session: PTPIPClientSession) {
+        let sessionID = ObjectIdentifier(session)
+        lock.lock()
+        latestHandleBySession.removeValue(forKey: sessionID)
+        let cursors = entries.values.compactMap { entry in
+            entry.sessionID == sessionID ? entry.cursor : nil
+        }
+        entries = entries.filter { $0.value.sessionID != sessionID }
+        lock.unlock()
+        for cursor in cursors {
+            cursor.cancel()
+        }
+    }
+
+    private func reserveHandleLocked() -> Int64 {
+        while entries[nextHandle] != nil || latestHandleBySession.values.contains(nextHandle) {
+            nextHandle = nextHandle == Int64.max ? 1 : nextHandle + 1
+        }
+        let reserved = nextHandle
+        nextHandle = nextHandle == Int64.max ? 1 : nextHandle + 1
+        return reserved
+    }
+
+    private func clearReservation(_ handle: Int64, sessionID: ObjectIdentifier) {
+        lock.lock()
+        if latestHandleBySession[sessionID] == handle {
+            latestHandleBySession.removeValue(forKey: sessionID)
+        }
+        lock.unlock()
+    }
+
+    private func remove(handle: Int64, matching entry: Entry) {
+        lock.lock()
+        if entries[handle]?.cursor === entry.cursor {
+            entries.removeValue(forKey: handle)
+            if latestHandleBySession[entry.sessionID] == handle {
+                latestHandleBySession.removeValue(forKey: entry.sessionID)
+            }
+        }
+        lock.unlock()
     }
 }
