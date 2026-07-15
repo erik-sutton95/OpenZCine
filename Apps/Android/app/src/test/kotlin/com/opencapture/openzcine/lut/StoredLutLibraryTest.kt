@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.lut
 
+import com.opencapture.openzcine.FeedLut
+import com.opencapture.openzcine.FeedLutSelection
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -71,6 +73,74 @@ class StoredLutLibraryTest {
         assertFalse(library.contains(imported.selection))
         assertTrue(library.entries.value.isEmpty())
         assertNull(library.packedCube(imported.selection))
+    }
+
+    @Test
+    fun `active deletion replacement stays in category and skips invalid stored LUTs`() = runTest {
+        val root = createTempDirectory("openzcine-lut-replacement").toFile()
+        val library = StoredLutLibrary(root, FakeLutCore())
+        val alpha =
+            assertIs<CustomLutImportResult.Imported>(
+                library.importCustom(byteArrayOf(1), "alpha.cube"),
+            ).entry
+        val bravo =
+            assertIs<CustomLutImportResult.Imported>(
+                library.importCustom(byteArrayOf(2), "bravo.cube"),
+            ).entry
+        val active =
+            assertIs<CustomLutImportResult.Imported>(
+                library.importCustom(byteArrayOf(3), "active.cube"),
+            ).entry
+        File(root, "custom/${alpha.selection.fileName}").writeBytes(byteArrayOf())
+
+        assertTrue(library.delete(active.selection))
+
+        assertEquals(bravo.selection, library.firstPreparedReplacement(active.selection))
+        assertEquals(
+            StoredLutFailure.InvalidOrCorrupt,
+            library.failures.value[alpha.selection],
+        )
+    }
+
+    @Test
+    fun `replacement candidates exclude deleted and other categories`() {
+        val deleted = StoredLutSelection.generated(StoredLutCategory.RED, "deleted-000000000001.cube")
+        val red = StoredLutSelection.generated(StoredLutCategory.RED, "red-000000000002.cube")
+        val custom = StoredLutSelection.generated(StoredLutCategory.CUSTOM, "custom-000000000003.cube")
+        val entries =
+            listOf(
+                StoredLutEntry(deleted, "Deleted"),
+                StoredLutEntry(red, "RED replacement"),
+                StoredLutEntry(custom, "Custom replacement"),
+            )
+
+        assertEquals(
+            listOf(red),
+            storedLutReplacementCandidates(entries, deleted).map(StoredLutEntry::selection),
+        )
+        assertTrue(storedLutReplacementCandidates(listOf(entries.first()), deleted).isEmpty())
+    }
+
+    @Test
+    fun `active stored selection prefers prepared replacement then protected built in`() {
+        val deleted = StoredLutSelection.generated(StoredLutCategory.RED, "deleted-000000000001.cube")
+        val replacement = StoredLutSelection.generated(StoredLutCategory.RED, "red-000000000002.cube")
+        val active = FeedLutSelection.Stored(deleted)
+
+        assertEquals(
+            FeedLutSelection.Stored(replacement),
+            reconciledLutSelectionAfterDeletion(active, deleted, replacement),
+        )
+        assertEquals(
+            FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709),
+            reconciledLutSelectionAfterDeletion(active, deleted, null),
+        )
+
+        val protectedBuiltIn = FeedLutSelection.BuiltIn(FeedLut.MONO)
+        assertEquals(
+            protectedBuiltIn,
+            reconciledLutSelectionAfterDeletion(protectedBuiltIn, deleted, replacement),
+        )
     }
 
     @Test

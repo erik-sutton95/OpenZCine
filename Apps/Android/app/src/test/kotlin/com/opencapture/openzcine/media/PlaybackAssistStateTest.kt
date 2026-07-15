@@ -90,9 +90,19 @@ class PlaybackAssistStateTest {
     fun `playback option tools match iOS long press contract`() {
         val configurable = AssistTool.entries.filter(::hasPlaybackAssistOptions).toSet()
 
-        assertEquals(AssistTool.entries.toSet() - AssistTool.AUDIO, configurable)
+        assertEquals(
+            AssistTool.entries.toSet() - setOf(AssistTool.AUDIO, AssistTool.LEVEL),
+            configurable,
+        )
         assertFalse(hasPlaybackAssistOptions(AssistTool.AUDIO))
+        assertFalse(hasPlaybackAssistOptions(AssistTool.LEVEL))
         assertTrue(hasPlaybackAssistOptions(AssistTool.CROSS))
+        assertEquals(
+            listOf(AssistTool.LUT, AssistTool.AUDIO),
+            playbackAssistToolbarTools(
+                listOf(AssistTool.LUT, AssistTool.LEVEL, AssistTool.AUDIO),
+            ),
+        )
     }
 
     @Test

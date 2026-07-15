@@ -1187,7 +1187,10 @@ private fun ProgressivePlayer(
                                 Modifier.weight(1f)
                                     .height(58.dp)
                                     .onGloballyPositioned { assistToolbarBounds = it.boundsInRoot() },
-                            visibleTools = operatorSettings.visibleAssistToolbarTools,
+                            visibleTools =
+                                playbackAssistToolbarTools(
+                                    operatorSettings.visibleAssistToolbarTools,
+                                ),
                             imageEffectsAvailable = imageEffectsAvailable,
                             framingConfiguration = playbackFramingConfiguration,
                             onToggleFramingTool = { tool ->

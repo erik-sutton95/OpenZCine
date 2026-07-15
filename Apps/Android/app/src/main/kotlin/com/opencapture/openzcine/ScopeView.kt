@@ -1752,9 +1752,13 @@ private fun DrawScope.drawScope(
         ScopeKind.WAVEFORM, ScopeKind.PARADE -> {
             val brightness =
                 if (kind == ScopeKind.WAVEFORM) {
-                    configuration.waveformBrightness / 100f
+                    ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(
+                        configuration.waveformBrightness,
+                    )
                 } else {
-                    configuration.paradeBrightness / 100f
+                    ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(
+                        configuration.paradeBrightness,
+                    )
                 }
             data?.trailTraces?.let {
                 drawTrace(kind, it, plot, ScopePalette.TRAIL_DECAY * brightness, configuration)

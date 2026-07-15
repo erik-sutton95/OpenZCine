@@ -236,6 +236,7 @@ class OperatorSettingsTest {
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.GUIDES))
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.GRID))
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.CROSS))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.LEVEL))
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.DESQ))
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.PEAK))
         assertFalse(migrated.isAssistToolbarToolVisible(AssistTool.WAVE))
@@ -243,9 +244,11 @@ class OperatorSettingsTest {
         migrated.toggleAssistToolbarToolVisibility(AssistTool.LIGHTS)
         migrated.toggleAssistToolbarToolVisibility(AssistTool.AUDIO)
         migrated.toggleAssistToolbarToolVisibility(AssistTool.GUIDES)
+        migrated.toggleAssistToolbarToolVisibility(AssistTool.LEVEL)
         assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.LIGHTS))
         assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.AUDIO))
         assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.GUIDES))
+        assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.LEVEL))
     }
 
     @Test
@@ -258,6 +261,7 @@ class OperatorSettingsTest {
         assertEquals(AssistTool.VECTOR, settings.assistToolbarOrder.first())
         assertEquals(AssistTool.LUT, settings.assistToolbarOrder[1])
         assertEquals(AssistTool.entries.toSet(), settings.assistToolbarOrder.toSet())
+        assertTrue(store.getString("display.assistToolbar.order.v1", null).orEmpty().contains("LEVEL"))
 
         settings.moveAssistToolbarTool(AssistTool.LUT, targetIndex = 0)
         assertEquals(AssistTool.LUT, OperatorSettings(store).assistToolbarOrder.first())
@@ -270,9 +274,13 @@ class OperatorSettingsTest {
     fun `settings reorder geometry accepts only the handle and clamps direct destinations`() {
         assertFalse(settingsReorderGripHit(pointerX = 250f, containerWidth = 320f, gripWidth = 48f))
         assertTrue(settingsReorderGripHit(pointerX = 280f, containerWidth = 320f, gripWidth = 48f))
-        assertEquals(0, settingsReorderIndex(pointerY = -40f, rowHeight = 50f, itemCount = 14))
-        assertEquals(6, settingsReorderIndex(pointerY = 349f, rowHeight = 50f, itemCount = 14))
-        assertEquals(13, settingsReorderIndex(pointerY = 900f, rowHeight = 50f, itemCount = 14))
+        val toolCount = AssistTool.entries.size
+        assertEquals(0, settingsReorderIndex(pointerY = -40f, rowHeight = 50f, itemCount = toolCount))
+        assertEquals(6, settingsReorderIndex(pointerY = 349f, rowHeight = 50f, itemCount = toolCount))
+        assertEquals(
+            toolCount - 1,
+            settingsReorderIndex(pointerY = 900f, rowHeight = 50f, itemCount = toolCount),
+        )
     }
 
     @Test
@@ -394,9 +402,15 @@ class OperatorSettingsTest {
         assertTrue(settings.ruleOfThirdsEnabled.value)
 
         settings.toggleLocalFramingTool(AssistTool.CROSS)
+        settings.toggleLocalFramingTool(AssistTool.LEVEL)
         settings.toggleLocalFramingTool(AssistTool.DESQ)
         assertTrue(settings.centerCrosshairEnabled.value)
+        assertTrue(settings.levelAssistEnabled.value)
         assertTrue(settings.desqueezeEnabled.value)
+
+        val restored = OperatorSettings(store)
+        assertTrue(restored.isLocalFramingToolVisible(AssistTool.LEVEL))
+        assertTrue(restored.localFramingAssistConfiguration.levelEnabled)
 
         settings.toggleLocalFramingTool(AssistTool.GUIDES)
         assertFalse(settings.localFramingAssistConfiguration.drawsGuides)
@@ -482,6 +496,106 @@ class OperatorSettingsTest {
         assertEquals(150, restored.scopeAssistConfiguration.vectorscopeBrightness)
         assertEquals(0.8f, restored.scopeAssistConfiguration.histogramScale)
         assertEquals(1.6f, restored.scopeAssistConfiguration.trafficLightsScale)
+    }
+
+    @Test
+    fun `waveform and parade use calibrated quarter strength while vectorscope stays unchanged`() {
+        assertEquals(0f, ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(0))
+        assertEquals(0.25f, ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(100))
+        assertEquals(0.5f, ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(200))
+        assertEquals(0.5f, ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(Int.MAX_VALUE))
+        assertEquals(100, ScopeAssistConfiguration().vectorscopeBrightness)
+    }
+
+    @Test
+    fun `waveform parade brightness decoder covers absent current corrupt legacy and overflow`() {
+        val version = ScopeAssistConfiguration.WAVEFORM_PARADE_BRIGHTNESS_CALIBRATION_VERSION
+        assertEquals(
+            100,
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(null, null),
+        )
+        assertEquals(
+            25,
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(25, version),
+        )
+        assertEquals(
+            200,
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(Int.MAX_VALUE, version),
+        )
+        assertEquals(
+            100,
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(25, null),
+        )
+        assertEquals(
+            200,
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(50, -1),
+        )
+        assertEquals(
+            200,
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(Int.MAX_VALUE, null),
+        )
+        assertEquals(
+            0,
+            ScopeAssistConfiguration.decodedWaveformParadeBrightness(Int.MIN_VALUE, null),
+        )
+    }
+
+    @Test
+    fun `waveform parade brightness persistence migrates once and repairs wrong typed values`() {
+        val versionKey = "assist.scopes.waveformParade.brightnessCalibrationVersion.v1"
+        val waveformKey = "assist.scopes.waveform.brightness.v1"
+        val paradeKey = "assist.scopes.parade.brightness.v1"
+        val vectorKey = "assist.scopes.vector.brightness.v1"
+        val version = ScopeAssistConfiguration.WAVEFORM_PARADE_BRIGHTNESS_CALIBRATION_VERSION
+
+        val absent = TestSharedPreferences()
+        val absentSettings = OperatorSettings(absent)
+        assertEquals(100, absentSettings.scopeAssistConfiguration.waveformBrightness)
+        assertEquals(100, absentSettings.scopeAssistConfiguration.paradeBrightness)
+        assertEquals(version, absent.getInt(versionKey, -1))
+
+        val legacy = TestSharedPreferences()
+        legacy.edit()
+            .putInt(waveformKey, 25)
+            .putInt(paradeKey, 50)
+            .putInt(vectorKey, 25)
+            .apply()
+        val migrated = OperatorSettings(legacy).scopeAssistConfiguration
+        assertEquals(100, migrated.waveformBrightness)
+        assertEquals(200, migrated.paradeBrightness)
+        assertEquals(25, migrated.vectorscopeBrightness)
+        assertEquals(version, legacy.getInt(versionKey, -1))
+
+        val current = TestSharedPreferences()
+        current.edit()
+            .putInt(versionKey, version)
+            .putInt(waveformKey, 25)
+            .putInt(paradeKey, 50)
+            .apply()
+        val currentSettings = OperatorSettings(current).scopeAssistConfiguration
+        assertEquals(25, currentSettings.waveformBrightness)
+        assertEquals(50, currentSettings.paradeBrightness)
+
+        val corrupt = TestSharedPreferences()
+        corrupt.edit()
+            .putString(versionKey, "not-a-version")
+            .putString(waveformKey, "not-a-brightness")
+            .putInt(paradeKey, Int.MAX_VALUE)
+            .apply()
+        val repaired = OperatorSettings(corrupt).scopeAssistConfiguration
+        assertEquals(100, repaired.waveformBrightness)
+        assertEquals(200, repaired.paradeBrightness)
+        assertEquals(version, corrupt.getInt(versionKey, -1))
+        assertEquals(100, corrupt.getInt(waveformKey, -1))
+
+        val overflow = TestSharedPreferences()
+        overflow.edit()
+            .putInt(waveformKey, Int.MAX_VALUE)
+            .putInt(paradeKey, Int.MIN_VALUE)
+            .apply()
+        val overflowSettings = OperatorSettings(overflow).scopeAssistConfiguration
+        assertEquals(200, overflowSettings.waveformBrightness)
+        assertEquals(0, overflowSettings.paradeBrightness)
     }
 
     @Test

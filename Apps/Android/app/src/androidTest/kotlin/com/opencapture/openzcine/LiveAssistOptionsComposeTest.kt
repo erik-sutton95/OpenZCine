@@ -1,8 +1,14 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -10,7 +16,9 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.openzcine.media.LiveAssistOptionsOverlay
@@ -88,6 +96,61 @@ class LiveAssistOptionsComposeTest {
         composeRule.onNodeWithText("Recenter panel").performScrollTo().performClick()
 
         composeRule.runOnIdle { assertEquals(1, recenterCount) }
+        preferences.edit().clear().commit()
+    }
+
+    @Test
+    fun levelToolbarTapAndLongPressShareThePersistedCameraFirstConfiguration() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences =
+            context.getSharedPreferences("ope88-live-level-toolbar", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val settings = OperatorSettings(preferences)
+        val assistState = AssistState(FeedEffects.NONE, null)
+        val optionsOpen = mutableStateOf(false)
+        val anchor = mutableStateOf<Rect?>(null)
+        composeRule.setContent {
+            OpenZCineTheme {
+                Box(Modifier.fillMaxSize()) {
+                    AssistToolbar(
+                        state = assistState,
+                        visibleTools = listOf(AssistTool.LEVEL),
+                        framingConfiguration = settings.localFramingAssistConfiguration,
+                        onToggleFramingTool = settings::toggleLocalFramingTool,
+                        hapticsEnabled = false,
+                        onLongPressToolAnchored = { tool, bounds ->
+                            if (tool == AssistTool.LEVEL) {
+                                anchor.value = bounds
+                                optionsOpen.value = true
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.BottomCenter).height(58.dp),
+                    )
+                    if (optionsOpen.value) {
+                        LiveAssistOptionsOverlay(
+                            tool = AssistTool.LEVEL,
+                            anchorBounds = anchor.value,
+                            assistState = assistState,
+                            settings = settings,
+                            cameraInput = ExposureAssistCameraInput(),
+                            lutLibrary = null,
+                            onDismiss = { optionsOpen.value = false },
+                        )
+                    }
+                }
+            }
+        }
+
+        val level = composeRule.onNodeWithContentDescription(AssistTool.LEVEL.settingsTitle)
+        level.performClick()
+        composeRule.runOnIdle { assertEquals(true, settings.levelAssistEnabled.value) }
+        level.performSemanticsAction(SemanticsActions.OnLongClick)
+        composeRule.runOnIdle { assertEquals(true, settings.levelAssistEnabled.value) }
+        composeRule.onNodeWithText("Style").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Horizon").assertIsDisplayed()
+        composeRule.onNodeWithText("Gauge").assertIsDisplayed()
+
+        assertEquals(true, OperatorSettings(preferences).levelAssistEnabled.value)
         preferences.edit().clear().commit()
     }
 }

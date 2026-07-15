@@ -60,9 +60,9 @@ import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 /**
  * The assist-toolbar tools, mirroring the iOS bottom-left strip
  * (`MonitorAssistTool` in the shared core): four feed effects, five scopes,
- * and camera-derived audio meters, plus the Android-owned framing controls.
- * Camera horizon remains a separate OPE-58 concern; framing commands only
- * change local monitor composition and never Nikon camera state.
+ * camera-derived audio meters, and the Android-owned framing controls. LEVEL
+ * only changes local presentation: the overlay still prefers camera metadata
+ * and labels its device-gravity fallback, and never writes Nikon camera state.
  */
 enum class AssistTool(val label: String, val settingsTitle: String) {
     LUT("LUT", "LUT"),
@@ -77,6 +77,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     GUIDES("GUIDES", "Frame Guides"),
     GRID("GRID", "Composition Grid"),
     CROSS("CROSS", "Centre Crosshair"),
+    LEVEL("LEVEL", "Horizon"),
     DESQ("DE-SQ", "Desqueeze"),
     AUDIO("AUDIO", "Audio Levels"),
 
@@ -88,7 +89,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
 
     companion object {
         /** Local framing tools rendered from [OperatorSettings], never camera state. */
-        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, DESQ)
+        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, DESQ)
 
         /** Independently selectable scope panels subject to the portrait fit-mode cap. */
         val scopeTools: Set<AssistTool> = setOf(WAVE, PARADE, HISTO, VECTOR, LIGHTS)
@@ -190,6 +191,7 @@ class AssistState(
             AssistTool.GUIDES,
             AssistTool.GRID,
             AssistTool.CROSS,
+            AssistTool.LEVEL,
             AssistTool.DESQ,
             -> false
         }
@@ -242,6 +244,7 @@ class AssistState(
             AssistTool.GUIDES,
             AssistTool.GRID,
             AssistTool.CROSS,
+            AssistTool.LEVEL,
             AssistTool.DESQ,
             -> false
         }
@@ -748,6 +751,7 @@ private fun LocalFramingAssistConfiguration.isToolEnabled(tool: AssistTool): Boo
         AssistTool.GUIDES -> drawsGuides
         AssistTool.GRID -> drawsGrid
         AssistTool.CROSS -> centerCrosshairEnabled
+        AssistTool.LEVEL -> levelEnabled
         AssistTool.DESQ -> desqueezeEnabled
         else -> false
     }
@@ -1009,6 +1013,20 @@ private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = 
                 val arm = size.minDimension * 0.42f
                 drawLine(tint, Offset(centre.x - arm, centre.y), Offset(centre.x + arm, centre.y), 1.7.dp.toPx())
                 drawLine(tint, Offset(centre.x, centre.y - arm), Offset(centre.x, centre.y + arm), 1.7.dp.toPx())
+            }
+            // SF `gyroscope`: horizon ring, level line, and centre marker.
+            AssistTool.LEVEL -> {
+                val centre = Offset(size.width / 2, size.height / 2)
+                val radius = size.minDimension * 0.42f
+                drawCircle(tint, radius, centre, style = stroke)
+                drawLine(
+                    tint,
+                    Offset(centre.x - radius * 0.72f, centre.y),
+                    Offset(centre.x + radius * 0.72f, centre.y),
+                    1.7.dp.toPx(),
+                    StrokeCap.Round,
+                )
+                drawCircle(tint, size.minDimension * 0.08f, centre)
             }
             // SF `arrow.left.and.right`: local anamorphic de-squeeze.
             AssistTool.DESQ -> {

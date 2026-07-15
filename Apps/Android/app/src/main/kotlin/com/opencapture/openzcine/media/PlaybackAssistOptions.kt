@@ -73,6 +73,7 @@ import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
 import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.LocalFramingGuideFamily
+import com.opencapture.openzcine.settings.LocalLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.settings.ScopeAssistConfiguration
@@ -88,9 +89,13 @@ import com.opencapture.openzcine.zebraMonitorPercent
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
-/** Pure parity seam used by playback and JVM tests. Audio remains the only tap-only iOS tool. */
+/** Pure parity seam used by playback and JVM tests. Playback has no live camera horizon. */
 internal fun hasPlaybackAssistOptions(tool: AssistTool): Boolean =
-    tool.hasConfiguration
+    tool.hasConfiguration && tool != AssistTool.LEVEL
+
+/** Mirrors iOS by keeping the live-only camera horizon out of playback's assist toolbar. */
+internal fun playbackAssistToolbarTools(tools: List<AssistTool>): List<AssistTool> =
+    tools.filterNot { it == AssistTool.LEVEL }
 
 /** Returns whether a live quick-settings panel still belongs to the visible monitor lifecycle. */
 internal fun retainLiveAssistOptions(
@@ -366,6 +371,7 @@ private fun PlaybackAssistOptionsContent(
             OptionCopy(
                 "Tap the toolbar button to show or hide the centre crosshair in ${actions.contextLabel}.",
             )
+        AssistTool.LEVEL -> LevelOptions(actions, settings)
         AssistTool.DESQ -> DesqueezeOptions(actions, settings)
         AssistTool.AUDIO ->
             OptionCopy("Meters the playing clip's audio. iOS exposes this as a tap-only tool.")
@@ -687,6 +693,25 @@ private fun GridOptions(settings: OperatorSettings) {
             ) { settings.diagonalGridEnabled.toggle() }
         }
     }
+}
+
+@Composable
+private fun LevelOptions(actions: AssistOptionsActions, settings: OperatorSettings) {
+    SettingsSwitchRow(
+        "Enable",
+        actions.isOn(AssistTool.LEVEL),
+        showTopDivider = false,
+    ) { actions.setVisible(AssistTool.LEVEL, !actions.isOn(AssistTool.LEVEL)) }
+    OptionSection("Style") {
+        ChoiceRow(
+            LocalLevelStyle.entries.toList(),
+            LocalLevelStyle::label,
+            selected = { settings.levelStyle == it },
+        ) { settings.levelStyle = it }
+    }
+    OptionCopy(
+        "Uses camera horizon metadata when available. Device tilt is a labelled fallback only.",
+    )
 }
 
 @Composable
