@@ -189,7 +189,8 @@ class MainActivity : ComponentActivity() {
                     remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
                 var completedMediaBuckets by
                     remember { mutableStateOf(emptyMap<String, MediaLibraryCameraBucket>()) }
-                LaunchedEffect(savedCameras, monitorSession, offlineMediaBucket) {
+                var mediaCacheRevision by remember { mutableStateOf(0) }
+                LaunchedEffect(savedCameras, monitorSession, offlineMediaBucket, mediaCacheRevision) {
                     if (monitorSession != null) return@LaunchedEffect
                     completedMediaBuckets =
                         withContext(Dispatchers.IO) {
@@ -365,6 +366,7 @@ class MainActivity : ComponentActivity() {
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =
                                     liveViewGuide::replayOnNextRealFrame,
+                                onCompletedMediaCacheCleared = { mediaCacheRevision += 1 },
                                 onClose = { standaloneSettingsPresented = false },
                             )
                         }

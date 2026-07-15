@@ -54,10 +54,15 @@ public data class SavedCameraRecord(
     val wifiSsid: String?,
     /** Optional operator-facing nickname. */
     val customName: String? = null,
+    /**
+     * Durable saved-profile identity. Legacy records default to their original
+     * host, then retain that value when a dynamic hotspot address changes.
+     */
+    val profileID: String = host,
 ) {
     /** Stable profile identity. */
     public val id: String
-        get() = host
+        get() = profileID
 
     /** Operator-facing name, preferring a deliberate nickname. */
     public val displayTitle: String
@@ -78,7 +83,8 @@ public object SavedCameraRecords {
             val normalized = normalized(record) ?: continue
             val existingIndex =
                 output.indexOfFirst { existing ->
-                    existing.host == normalized.host ||
+                    existing.profileID == normalized.profileID ||
+                        existing.host == normalized.host ||
                         (
                             existing.transport == normalized.transport &&
                                 cameraNamesMatch(existing.cameraName, normalized.cameraName)
@@ -147,6 +153,7 @@ public object SavedCameraRecords {
         val cameraName = normalizedCameraName(record.cameraName, host)
         return record.copy(
             host = host,
+            profileID = normalizedProfileID(record.profileID) ?: host,
             cameraName = cameraName,
             wifiSsid = normalizedTag(record.wifiSsid),
             customName = normalizedTag(record.customName),
@@ -168,11 +175,17 @@ public object SavedCameraRecords {
         return preferred.copy(
             wifiSsid = preferred.wifiSsid ?: fallback.wifiSsid,
             customName = preferred.customName ?: fallback.customName,
+            // The existing card owns reconnect state and any offline-media
+            // bucket. A refreshed route must not silently create a new owner.
+            profileID = existing.profileID,
         )
     }
 
     private fun normalizedHost(host: String): String? =
         host.trim().lowercase(Locale.ROOT).takeIf(String::isNotEmpty)
+
+    private fun normalizedProfileID(profileID: String): String? =
+        profileID.trim().lowercase(Locale.ROOT).takeIf(String::isNotEmpty)
 
     private fun normalizedCameraName(cameraName: String, host: String): String =
         cameraName.trim().takeIf(String::isNotEmpty) ?: "Camera $host"
@@ -241,7 +254,8 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
                     .put(TRANSPORT_KEY, record.transport.persistedValue)
                     .put(LAST_SEEN_KEY, record.lastSeenAtEpochMillis)
                     .put(WIFI_SSID_KEY, record.wifiSsid)
-                    .put(CUSTOM_NAME_KEY, record.customName),
+                    .put(CUSTOM_NAME_KEY, record.customName)
+                    .put(PROFILE_ID_KEY, record.profileID),
             )
         }
         preferences.edit().putString(RECORDS_KEY, encoded.toString()).apply()
@@ -263,6 +277,9 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
                 },
             wifiSsid = value.optString(WIFI_SSID_KEY).takeIf(String::isNotBlank),
             customName = value.optString(CUSTOM_NAME_KEY).takeIf(String::isNotBlank),
+            profileID =
+                value.optString(PROFILE_ID_KEY).takeIf(String::isNotBlank)
+                    ?: host,
         )
     }
 
@@ -275,5 +292,6 @@ public class SharedPreferencesSavedCameraStore(context: Context) : SavedCameraSt
         const val LAST_SEEN_KEY = "last-seen-at"
         const val WIFI_SSID_KEY = "wifi-ssid"
         const val CUSTOM_NAME_KEY = "custom-name"
+        const val PROFILE_ID_KEY = "profile-id"
     }
 }

@@ -54,6 +54,7 @@ class SavedCameraRecordsTest {
 
         assertEquals(1, updated.size)
         assertEquals("172.20.10.7", updated.single().host)
+        assertEquals("172.20.10.2", updated.single().id)
         assertEquals("NIKON_ZR_01234", updated.single().wifiSsid)
         assertEquals("A camera", updated.single().customName)
     }

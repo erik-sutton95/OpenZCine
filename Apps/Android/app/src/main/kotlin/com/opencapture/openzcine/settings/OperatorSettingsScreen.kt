@@ -185,6 +185,7 @@ internal fun OperatorSettingsScreen(
     liveViewGuideController: LiveViewGuideController,
     onShowGuideNow: (() -> Unit)? = null,
     onShowGuideOnNextRealFrame: () -> Unit,
+    onCompletedMediaCacheCleared: () -> Unit = {},
     initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
     onClose: () -> Unit,
 ) {
@@ -269,6 +270,7 @@ internal fun OperatorSettingsScreen(
                     liveViewGuideController,
                     onShowGuideNow,
                     onShowGuideOnNextRealFrame,
+                    onCompletedMediaCacheCleared,
                     onSettingToggle = toggleSetting,
                     onAssistToggle = toggleAssist,
                     onInteraction = emitHaptic,
@@ -299,6 +301,7 @@ internal fun OperatorSettingsScreen(
                         liveViewGuideController,
                         onShowGuideNow,
                         onShowGuideOnNextRealFrame,
+                        onCompletedMediaCacheCleared,
                         onSettingToggle = toggleSetting,
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
@@ -543,6 +546,7 @@ private fun SettingsContentPane(
     liveViewGuideController: LiveViewGuideController,
     onShowGuideNow: (() -> Unit)?,
     onShowGuideOnNextRealFrame: () -> Unit,
+    onCompletedMediaCacheCleared: () -> Unit,
     onSettingToggle: (OperatorSettings.Toggle) -> Unit,
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
@@ -639,7 +643,12 @@ private fun SettingsContentPane(
                                     viewportBounds,
                                 )
                             OperatorSettingsTab.STORAGE ->
-                                StorageRows(mediaCacheStore, frameioController, condensed)
+                                StorageRows(
+                                    mediaCacheStore,
+                                    frameioController,
+                                    condensed,
+                                    onCompletedMediaCacheCleared,
+                                )
                             OperatorSettingsTab.SYSTEM ->
                                 SystemRows(
                                     actions = systemSettingsActions,
@@ -2671,6 +2680,7 @@ private fun StorageRows(
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController?,
     condensed: Boolean,
+    onCompletedMediaCacheCleared: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2776,6 +2786,7 @@ private fun StorageRows(
                         scope.launch {
                             try {
                                 snapshot = withContext(Dispatchers.IO) { storageState.clearCompleted() }
+                                onCompletedMediaCacheCleared()
                             } catch (error: Exception) {
                                 loadFailure =
                                     error.message ?: "Couldn't clear the local media cache."

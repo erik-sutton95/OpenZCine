@@ -545,18 +545,19 @@ internal fun MediaBrowseScreen(
                     } else if (!SwiftCore.isAvailable) {
                         BrowseState.Failed("Camera core is not bundled in this build.")
                     } else {
+                        val listingCheckpoint =
+                            withContext(Dispatchers.IO) {
+                                libraryIndex.beginCameraListing(cameraID)
+                            }
                         try {
                             val clips =
                                 loadCameraMediaPages(
                                     pageSize = MEDIA_BROWSE_PAGE_SIZE,
                                     onPage = { snapshot ->
-                                        withContext(Dispatchers.IO) {
-                                            libraryIndex.rememberCameraListing(
-                                                cameraID,
-                                                snapshot.clips,
-                                                snapshot.removedObjects,
-                                            )
-                                        }
+                                        listingCheckpoint.applyPage(
+                                            snapshot.addedClips,
+                                            snapshot.removedObjects,
+                                        )
                                         state =
                                             BrowseState.Loaded(
                                                 clips = snapshot.clips,
@@ -564,10 +565,12 @@ internal fun MediaBrowseScreen(
                                             )
                                     },
                                 )
+                            withContext(Dispatchers.IO) { listingCheckpoint.commit() }
                             BrowseState.Loaded(clips)
                         } catch (error: CancellationException) {
                             throw error
                         } catch (_: MediaBrowsePagingException) {
+                            withContext(Dispatchers.IO) { listingCheckpoint.commit() }
                             val partial = (state as? BrowseState.Loaded)?.clips.orEmpty()
                             incompleteCameraBrowseState(partial)
                         }
@@ -1245,6 +1248,9 @@ internal fun MediaBrowseScreen(
                 lutLibrary = lutLibrary,
                 frameioController = frameioController,
                 onToggleFavorite = ::toggleFavorite,
+                onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                    libraryIndex.rememberResolvedObjectSize(cameraID, resolvedClip, resolvedSize)
+                },
                 onClose = {
                     playingClip = null
                     reloadKey += 1
@@ -1256,6 +1262,9 @@ internal fun MediaBrowseScreen(
                 clip = clip,
                 cameraID = cameraID,
                 cameraTransferAvailable = cameraConnected,
+                onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                    libraryIndex.rememberResolvedObjectSize(cameraID, resolvedClip, resolvedSize)
+                },
                 onClose = {
                     viewingPhoto = null
                     reloadKey += 1

@@ -3,6 +3,9 @@ package com.opencapture.openzcine.media
 import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.openzcine.pairing.SavedCameraRecord
+import com.opencapture.openzcine.pairing.SavedCameraRecords
+import com.opencapture.openzcine.pairing.SavedCameraTransport
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
@@ -256,6 +259,80 @@ class MediaLibraryStateTest {
         assertEquals(1_300, index.persistedClips("camera").size)
         assertTrue(index.persistedClips("camera").any { it.handle == 1L })
         assertTrue(index.persistedClips("camera").any { it.handle == 1_300L })
+    }
+
+    @Test
+    fun `paged listing checkpoints encode one final unbounded catalog`() {
+        val preferences = MemoryPreferences()
+        val index = MediaLibraryIndex(preferences)
+        val checkpoint = index.beginCameraListing("camera")
+
+        (1L..1_280L).chunked(32).forEach { handles ->
+            checkpoint.applyPage(
+                addedClips =
+                    handles.map { handle ->
+                        clip(handle, "C${handle.toString().padStart(4, '0')}.MOV")
+                    },
+                removedObjects = emptyList(),
+            )
+        }
+        checkpoint.commit()
+
+        assertEquals(1, preferences.writeCount)
+        assertEquals(1_280, index.persistedClips("camera").size)
+    }
+
+    @Test
+    fun `resolved size written while pages load survives the final checkpoint commit`() {
+        val preferences = MemoryPreferences()
+        val index = MediaLibraryIndex(preferences)
+        val sentinel = clip(1, "LARGE.MOV").copy(sizeBytes = 0xFFFF_FFFFL)
+        val laterPage = clip(2, "LATER.MOV")
+        val checkpoint = index.beginCameraListing("camera")
+        checkpoint.applyPage(listOf(sentinel), emptyList())
+
+        // Opening the first incremental card resolves its true 64-bit length
+        // before the remaining camera pages and final catalog commit finish.
+        index.rememberResolvedObjectSize("camera", sentinel, 8_000_000_000L)
+        checkpoint.applyPage(listOf(laterPage), emptyList())
+        val writesBeforeFinalCommit = preferences.writeCount
+        checkpoint.commit()
+
+        assertEquals(writesBeforeFinalCommit + 1, preferences.writeCount)
+        assertEquals(
+            8_000_000_000L,
+            index.persistedClips("camera").first { it.handle == sentinel.handle }.sizeBytes,
+        )
+        assertEquals(2, index.persistedClips("camera").size)
+    }
+
+    @Test
+    fun `dynamic host refresh keeps the saved profile linked to its media bucket`() {
+        val original =
+            SavedCameraRecord(
+                host = "172.20.10.2",
+                cameraName = "ZR_6001234",
+                transport = SavedCameraTransport.PHONE_HOTSPOT,
+                lastSeenAtEpochMillis = 1L,
+                wifiSsid = null,
+            )
+        val refreshed =
+            SavedCameraRecords.upserting(
+                host = "172.20.10.7",
+                cameraName = "ZR_6001234",
+                transport = SavedCameraTransport.PHONE_HOTSPOT,
+                lastSeenAtEpochMillis = 2L,
+                wifiSsid = null,
+                records = listOf(original),
+            ).single()
+        val index = MediaLibraryIndex(MemoryPreferences())
+        index.rememberCameraBucket(original.id, "serial-bucket", "A camera")
+
+        assertEquals(original.id, refreshed.id)
+        assertEquals(
+            listOf("serial-bucket"),
+            index.registeredCameraBuckets(listOf(refreshed.id)).map { it.cameraID },
+        )
     }
 
     @Test
@@ -609,10 +686,13 @@ class MediaLibraryStateTest {
 
     private class MemoryPreferences(initial: Map<String, String> = emptyMap()) : MediaLibraryPreferences {
         private val values = initial.toMutableMap()
+        var writeCount = 0
+            private set
 
         override fun getString(key: String): String? = values[key]
 
         override fun putString(key: String, value: String?) {
+            writeCount += 1
             if (value == null) values.remove(key) else values[key] = value
         }
     }

@@ -121,6 +121,68 @@ class MediaObjectTransferTest {
         }
     }
 
+    @Test
+    fun `resolved large object length survives listing fallback and process restart`() {
+        val root = createTempDirectory("openzcine-large-object-transfer")
+        try {
+            val preferences = ObjectTransferMemoryPreferences()
+            val index = MediaLibraryIndex(preferences)
+            val reported =
+                mediaRecord(
+                    handle = 0x3001,
+                    filename = "LARGE.MOV",
+                    contentKind = MediaContentKind.PLAYABLE_PROXY,
+                ).copy(sizeBytes = 0xFFFF_FFFFL)
+            index.rememberCameraListing("camera", listOf(reported))
+            val cacheStore = MediaCacheStore(root)
+
+            val prepared =
+                assertIs<MediaTransferPreparation.Ready>(
+                    prepareMediaObjectTransfer(
+                        cacheStore = cacheStore,
+                        cameraID = "camera",
+                        clip = reported,
+                        objectLabel = "clip",
+                        bridge = ResolvedLargeTransferBridge(6),
+                        onResolvedSize = { resolved ->
+                            index.rememberResolvedObjectSize("camera", reported, resolved)
+                        },
+                    ),
+                )
+
+            assertEquals(MediaCacheState.COMPLETE, prepared.entry.state)
+            val persisted = index.persistedClips("camera").single()
+            assertEquals(6L, persisted.sizeBytes)
+
+            // A later transient listing failure must not replace the durable
+            // authoritative size with PTP's 32-bit sentinel.
+            index.beginCameraListing("camera").apply {
+                applyPage(listOf(reported), emptyList())
+                commit()
+            }
+            val restored = index.persistedClips("camera").single()
+            assertEquals(6L, restored.sizeBytes)
+
+            val relaunchedStore = MediaCacheStore(root)
+            val offline =
+                assertIs<MediaTransferPreparation.Ready>(
+                    prepareMediaObjectTransfer(
+                        cacheStore = relaunchedStore,
+                        cameraID = "camera",
+                        clip = restored,
+                        objectLabel = "clip",
+                        bridge = UnavailableTransferBridge(),
+                        cameraTransferAvailable = false,
+                    ),
+                )
+            assertEquals(6L, offline.entry.expectedLength)
+        } finally {
+            Files.walk(root).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
     private fun mediaRecord(
         handle: Long,
         filename: String,
@@ -173,6 +235,34 @@ class MediaObjectTransferTest {
             resumeOffset: Long,
             listener: SwiftCore.MediaTransferListener,
         ) = error("A disconnected cache must never start a camera transfer.")
+    }
+
+    private class ResolvedLargeTransferBridge(private val resolvedSize: Long) :
+        MediaObjectTransferBridge {
+        override val isAvailable: Boolean = true
+
+        override fun resolveMediaSize(handle: Int, reportedSize: Long): Long = resolvedSize
+
+        override fun startMediaTransfer(
+            handle: Int,
+            reportedSize: Long,
+            resumeOffset: Long,
+            listener: SwiftCore.MediaTransferListener,
+        ) {
+            listener.onStarted(resolvedSize)
+            check(listener.onChunk(resumeOffset, ByteArray(resolvedSize.toInt()) { 1 }))
+            listener.onCompleted(resolvedSize)
+        }
+    }
+
+    private class ObjectTransferMemoryPreferences : MediaLibraryPreferences {
+        private val values = mutableMapOf<String, String>()
+
+        override fun getString(key: String): String? = values[key]
+
+        override fun putString(key: String, value: String?) {
+            if (value == null) values.remove(key) else values[key] = value
+        }
     }
 
     private data class StartedTransfer(

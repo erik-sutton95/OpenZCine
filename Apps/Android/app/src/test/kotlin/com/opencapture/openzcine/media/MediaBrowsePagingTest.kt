@@ -82,6 +82,7 @@ class MediaBrowsePagingTest {
             )
 
         assertEquals(listOf(2, 3, 4), updates.map { it.clips.size })
+        assertEquals(listOf(2, 1, 1), updates.map { it.addedClips.size })
         assertEquals(setOf(1L, 2L), updates.first().clips.map { it.storageId }.toSet())
         assertEquals(setOf(1L, 2L), clips.map { it.storageId }.toSet())
         assertEquals(listOf(2, 2, 2), gateway.requestedPageSizes)
@@ -124,6 +125,8 @@ class MediaBrowsePagingTest {
             )
 
         assertEquals(listOf("A001.R3D"), updates.first().clips.map { it.filename })
+        assertEquals(listOf("A001.R3D"), updates.first().addedClips.map { it.filename })
+        assertEquals(listOf("A001.MP4"), updates.last().addedClips.map { it.filename })
         assertEquals(listOf("A001.MP4"), clips.map { it.filename })
     }
 

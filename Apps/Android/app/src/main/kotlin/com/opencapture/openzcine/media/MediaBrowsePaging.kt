@@ -30,7 +30,10 @@ internal data class MediaBrowsePage(
 
 /** Incremental catalog state delivered to the Compose media browser. */
 internal data class MediaBrowseSnapshot(
+    /** Full newest-first catalog for the incremental Compose presentation. */
     val clips: List<MediaClipRecord>,
+    /** Additions from this native page only, for bounded persistence work. */
+    val addedClips: List<MediaClipRecord>,
     val removedObjects: List<MediaObjectIdentity>,
     val hasMore: Boolean,
 )
@@ -140,6 +143,7 @@ internal suspend fun loadCameraMediaPages(
             onPage(
                 MediaBrowseSnapshot(
                     clips = clips,
+                    addedClips = page.clips,
                     removedObjects = page.removedObjects,
                     hasMore = page.hasMore,
                 ),

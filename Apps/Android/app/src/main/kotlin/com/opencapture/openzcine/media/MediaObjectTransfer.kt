@@ -102,6 +102,7 @@ internal fun prepareMediaObjectTransfer(
     objectLabel: String,
     bridge: MediaObjectTransferBridge = SwiftCoreMediaObjectTransferBridge,
     cameraTransferAvailable: Boolean = true,
+    onResolvedSize: (Long) -> Unit = {},
 ): MediaTransferPreparation {
     val cached =
         try {
@@ -128,6 +129,7 @@ internal fun prepareMediaObjectTransfer(
     return try {
         val totalBytes = bridge.resolveMediaSize(clip.handle.toInt(), clip.sizeBytes)
         if (totalBytes < 0) throw IOException("Camera did not provide the $objectLabel size.")
+        onResolvedSize(totalBytes)
 
         val entry = cacheStore.openEntry(cameraID, MediaCacheObjectIdentity(clip), totalBytes)
         when (entry.state) {

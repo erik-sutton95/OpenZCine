@@ -180,6 +180,7 @@ internal fun MediaPlaybackScreen(
     lutLibrary: AndroidLutLibrary?,
     frameioController: FrameioDeliveryController,
     onToggleFavorite: (MediaClipRecord) -> Unit,
+    onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ): Unit {
     var activeClip by remember(initialClip.libraryKey(cameraID)) { mutableStateOf(initialClip) }
@@ -207,6 +208,7 @@ internal fun MediaPlaybackScreen(
             lutLibrary = lutLibrary,
             frameioController = frameioController,
             onToggleFavorite = { onToggleFavorite(activeClip) },
+            onResolvedObjectSize = onResolvedObjectSize,
             onNavigate = { target -> activeClip = target },
             onClose = onClose,
         )
@@ -230,6 +232,7 @@ private fun PlaybackClipSession(
     lutLibrary: AndroidLutLibrary?,
     frameioController: FrameioDeliveryController,
     onToggleFavorite: () -> Unit,
+    onResolvedObjectSize: (MediaClipRecord, Long) -> Unit,
     onNavigate: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -244,6 +247,7 @@ private fun PlaybackClipSession(
         remember(context, galleryFailureInjection) {
             AndroidMediaGalleryGateway(context.contentResolver, galleryFailureInjection)
         }
+    val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
     val coordinator =
         remember(cacheStore, cameraID, clip, cameraTransferAvailable) {
             MediaTransferCoordinator(
@@ -255,6 +259,9 @@ private fun PlaybackClipSession(
                             clip = clip,
                             objectLabel = "clip",
                             cameraTransferAvailable = cameraTransferAvailable,
+                            onResolvedSize = { resolvedSize ->
+                                currentOnResolvedObjectSize(clip, resolvedSize)
+                            },
                         )
                     }
                 },

@@ -276,7 +276,9 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   arrangements, long-press selection, and a grid sweep gesture. The Camera source is listed through
   the facade's latest-wins `sessionBeginMediaBrowse`/`sessionNextMediaBrowsePage` cursor plus
   `sessionThumbnail`. Handle snapshots cover every usable card, while round-robin 32-object pages
-  bound `GetObjectInfo` work and update the grid incrementally. MOV/MP4/M4V
+  bound `GetObjectInfo` work and update the grid incrementally. Page deltas stay in memory until a
+  listing finishes, so persistence encodes the camera catalog once per listing. Exact identity
+  removals also prevent proxy-first R3D listings from retaining stale masters. MOV/MP4/M4V
   proxies open `MediaPlaybackScreen`; within the current filtered result it provides previous/next
   playable-proxy navigation, persisted favorite state, complete-cache-only native delivery,
   play/pause/replay and ±15-second transport, throttled preview plus final precise seeking,
@@ -302,7 +304,11 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   `GetObjectSize`/`GetPartialObjectEx` path and pumps ordered 4 MiB chunks over JNI. Kotlin
   persists them below `noBackupFilesDir` in a
   resumable `.part` cache while Media3 reads the growing file; completion publishes the final file
-  atomically. The still viewer uses the same generic cache and transfer seam; closing it invalidates
+  atomically. Resolved 64-bit object lengths remain authoritative across later listings and app
+  restarts, including offline cache validation. Saved camera profile identity keeps that catalog
+  attached across address changes, and clearing the cache in Settings immediately refreshes the
+  standalone browser action. The still viewer uses the same generic cache and transfer seam;
+  closing it invalidates
   late decode results and joins the active transfer before returning to the browser. Opening Media
   stops and excludes live view until the browser closes, so both pumps
   never contend for the serialized camera command channel. The On device source reads only a

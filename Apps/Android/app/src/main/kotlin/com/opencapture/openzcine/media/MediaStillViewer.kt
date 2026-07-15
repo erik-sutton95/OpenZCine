@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,6 +93,7 @@ internal fun MediaStillViewer(
     clip: MediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
+    onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -102,6 +104,7 @@ internal fun MediaStillViewer(
         remember(context) {
             MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
         }
+    val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
     val coordinator =
         remember(cacheStore, cameraID, clip, cameraTransferAvailable) {
             MediaTransferCoordinator(
@@ -113,6 +116,9 @@ internal fun MediaStillViewer(
                             clip = clip,
                             objectLabel = "image",
                             cameraTransferAvailable = cameraTransferAvailable,
+                            onResolvedSize = { resolvedSize ->
+                                currentOnResolvedObjectSize(clip, resolvedSize)
+                            },
                         )
                     }
                 },

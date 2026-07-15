@@ -116,6 +116,39 @@ class OfflineMediaMainActivityTest {
         saveDeviceScreenshot("openzcine-android-offline-media-library.png")
     }
 
+    @Test
+    fun clearingStandaloneSettingsImmediatelyRemovesTheCachedMediaAction() {
+        scenario =
+            ActivityScenario.launch(
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+
+        assertNotNull(device.waitForText("Browse cached media"))
+        device.waitForText("Settings").click()
+        val clearAction =
+            device.wait(
+                Until.findObject(By.desc("Clear local media cache")),
+                UI_TIMEOUT_MILLIS,
+            ) ?: throw AssertionError("Timed out waiting for the clear-cache action")
+        clearAction.click()
+        device.waitForText("Clear cache").click()
+        assertNotNull(
+            device.wait(
+                Until.findObject(By.textStartsWith("Removed ")),
+                UI_TIMEOUT_MILLIS,
+            ),
+        )
+
+        device.pressBack()
+        val removed =
+            device.wait(
+                Until.gone(By.text("Browse cached media")),
+                UI_TIMEOUT_MILLIS,
+            )
+        if (!removed) throw AssertionError("Cached-media action remained after clearing Settings")
+    }
+
     private fun UiDevice.waitForText(text: String): UiObject2 =
         wait(Until.findObject(By.text(text)), UI_TIMEOUT_MILLIS)
             ?: throw AssertionError("Timed out waiting for text: $text")

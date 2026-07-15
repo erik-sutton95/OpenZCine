@@ -146,33 +146,76 @@ internal data class MediaLibraryCameraBucket(
  * item or share candidate.
  */
 internal class MediaLibraryIndex(private val preferences: MediaLibraryPreferences) {
+    private val persistenceLock = Any()
+
     /**
-     * Adds one incremental camera listing while retaining prior cached objects.
-     * [removedObjects] carries only authoritative page deltas such as an R3D
-     * master superseded by its newly discovered proxy.
+     * Applies and commits one bounded listing delta. Multi-page callers should
+     * use [beginCameraListing] so the unbounded catalog is encoded only once.
      */
     fun rememberCameraListing(
         cameraID: String,
         clips: List<MediaClipRecord>,
         removedObjects: Collection<MediaObjectIdentity> = emptyList(),
     ) {
-        val merged = LinkedHashMap<String, MediaClipRecord>()
-        persistedClips(cameraID).forEach { merged[it.libraryKey(cameraID)] = it }
-        clips.forEach { merged[it.libraryKey(cameraID)] = it }
-        val removedKeys = removedObjects.map { it.libraryKey(cameraID) }.toSet()
-        if (removedKeys.isNotEmpty()) {
-            merged.keys.removeAll(removedKeys)
+        beginCameraListing(cameraID).apply {
+            applyPage(clips, removedObjects)
+            commit()
         }
-        val ordered =
-            MediaLibraryFiltering.sort(
-                merged.values.toList(),
-                MediaLibrarySortOrder.NEWEST,
-            )
-        preferences.putString(indexKey(cameraID), MediaLibraryRecordCodec.encode(ordered))
+    }
+
+    /**
+     * Loads the existing catalog once and accumulates true native page deltas
+     * in memory. [MediaLibraryListingCheckpoint.commit] performs at most one
+     * SharedPreferences write for the complete or retryable partial pass.
+     */
+    fun beginCameraListing(cameraID: String): MediaLibraryListingCheckpoint =
+        MediaLibraryListingCheckpoint(
+            cameraID = cameraID,
+            initialClips = persistedClips(cameraID),
+            commitCatalog = { candidateClips, shouldWrite ->
+                synchronized(persistenceLock) {
+                    val currentByIdentity =
+                        persistedClipsLocked(cameraID).associateBy { clip ->
+                            clip.libraryKey(cameraID)
+                        }
+                    val reconciled =
+                        candidateClips.map { clip ->
+                            mergeAuthoritativeObjectSize(
+                                currentByIdentity[clip.libraryKey(cameraID)],
+                                clip,
+                            )
+                        }
+                    if (shouldWrite) {
+                        preferences.putString(
+                            indexKey(cameraID),
+                            MediaLibraryRecordCodec.encode(reconciled),
+                        )
+                    }
+                    reconciled
+                }
+            },
+        )
+
+    /**
+     * Replaces a listing sentinel with the authoritative length resolved by
+     * Swift immediately before transfer, keeping the completed cache valid
+     * after process death and while disconnected.
+     */
+    fun rememberResolvedObjectSize(
+        cameraID: String,
+        clip: MediaClipRecord,
+        resolvedSizeBytes: Long,
+    ) {
+        require(resolvedSizeBytes >= 0) { "resolvedSizeBytes must not be negative." }
+        if (resolvedSizeBytes == clip.sizeBytes) return
+        rememberCameraListing(cameraID, listOf(clip.copy(sizeBytes = resolvedSizeBytes)))
     }
 
     /** Returns only records previously received from the shared-core listing wire. */
     fun persistedClips(cameraID: String): List<MediaClipRecord> =
+        synchronized(persistenceLock) { persistedClipsLocked(cameraID) }
+
+    private fun persistedClipsLocked(cameraID: String): List<MediaClipRecord> =
         preferences.getString(indexKey(cameraID))
             ?.let(MediaLibraryRecordCodec::decode)
             .orEmpty()
@@ -278,6 +321,58 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         const val PREF_LAYOUT = "view.layout"
         const val PREF_SORT = "view.sort"
         const val PREF_THUMBNAIL_SIZE = "view.thumbnail-size"
+    }
+}
+
+/** One in-memory camera-listing transaction with a single durable commit. */
+internal class MediaLibraryListingCheckpoint(
+    private val cameraID: String,
+    initialClips: List<MediaClipRecord>,
+    private val commitCatalog: (List<MediaClipRecord>, Boolean) -> List<MediaClipRecord>,
+) {
+    private val clipsByIdentity = LinkedHashMap<String, MediaClipRecord>()
+    private var dirty = false
+    private var committed = false
+
+    init {
+        initialClips.forEach { clip -> clipsByIdentity[clip.libraryKey(cameraID)] = clip }
+    }
+
+    /** Applies additions and exact removals from one native page without disk I/O. */
+    fun applyPage(
+        addedClips: Collection<MediaClipRecord>,
+        removedObjects: Collection<MediaObjectIdentity>,
+    ) {
+        check(!committed) { "Camera listing checkpoint is already committed." }
+        addedClips.forEach { incoming ->
+            val key = incoming.libraryKey(cameraID)
+            val merged = mergeAuthoritativeObjectSize(clipsByIdentity[key], incoming)
+            if (clipsByIdentity[key] != merged) {
+                clipsByIdentity[key] = merged
+                dirty = true
+            }
+        }
+        removedObjects.forEach { identity ->
+            if (clipsByIdentity.remove(identity.libraryKey(cameraID)) != null) dirty = true
+        }
+    }
+
+    /**
+     * Encodes the final newest-first catalog once; repeated commits are
+     * rejected. A clip may begin transfer while later camera pages are still
+     * loading, so commit re-reads exact current identities and carries any
+     * authoritative size resolved during that window over the stale sentinel
+     * held by this checkpoint.
+     */
+    fun commit(): List<MediaClipRecord> {
+        check(!committed) { "Camera listing checkpoint is already committed." }
+        committed = true
+        val candidate =
+            MediaLibraryFiltering.sort(
+                clipsByIdentity.values.toList(),
+                MediaLibrarySortOrder.NEWEST,
+            )
+        return commitCatalog(candidate, dirty)
     }
 }
 
@@ -407,6 +502,22 @@ private fun mediaLibraryKey(
         listOf(cameraID, storageID.toString(), handle.toString(), captureDate, filename)
             .joinToString(separator = "\u0000"),
     )
+
+private fun mergeAuthoritativeObjectSize(
+    existing: MediaClipRecord?,
+    incoming: MediaClipRecord,
+): MediaClipRecord =
+    if (
+        incoming.sizeBytes == PTP_UINT32_SENTINEL &&
+            existing != null &&
+            existing.sizeBytes != PTP_UINT32_SENTINEL
+    ) {
+        incoming.copy(sizeBytes = existing.sizeBytes)
+    } else {
+        incoming
+    }
+
+private const val PTP_UINT32_SENTINEL = 0xFFFF_FFFFL
 
 /** Serialized records remain core-authorized metadata, never inferred locally from filenames. */
 private object MediaLibraryRecordCodec {

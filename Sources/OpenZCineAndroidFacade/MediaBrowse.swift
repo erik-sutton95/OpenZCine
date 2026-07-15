@@ -234,13 +234,18 @@ public final class FacadeMediaBrowseCursor: @unchecked Sendable {
             switch clip.contentClassification.kind {
             case .r3dMaster:
                 let stem = MediaClipFilename.stem(of: clip.filename)
-                if let proxy = visibleProxiesByStem[stem], clip.pixelWidth > 0,
-                    clip.pixelHeight > 0
-                {
-                    let linked = proxy.withSourceDimensions(
-                        width: clip.pixelWidth, height: clip.pixelHeight)
-                    visibleProxiesByStem[stem] = linked
-                    pendingChanges.append(.add(linked))
+                if let proxy = visibleProxiesByStem[stem] {
+                    // A prior browse pass may have persisted this master even
+                    // though the current proxy-first pass never displayed it.
+                    // Remove its full identity before updating the proxy so a
+                    // reused handle cannot delete an unrelated older object.
+                    pendingChanges.append(.remove(FacadeMediaClipIdentity(clip)))
+                    if clip.pixelWidth > 0, clip.pixelHeight > 0 {
+                        let linked = proxy.withSourceDimensions(
+                            width: clip.pixelWidth, height: clip.pixelHeight)
+                        visibleProxiesByStem[stem] = linked
+                        pendingChanges.append(.add(linked))
+                    }
                 } else if !discoveredProxyStems.contains(stem) {
                     visibleMastersByStem[stem, default: []].append(
                         VisibleR3DMaster(

@@ -271,11 +271,39 @@ struct MediaBrowseTests {
         #expect(first.hasMore)
 
         let second = try cursor.nextPage(maxObjects: 1)
-        let enriched = try #require(second.clips.first)
+        #expect(second.clips.isEmpty)
+        #expect(second.removedObjects == [FacadeMediaClipIdentity(master)])
+        #expect(second.hasMore)
+
+        let third = try cursor.nextPage(maxObjects: 1)
+        let enriched = try #require(third.clips.first)
         #expect(enriched.filename == proxy.filename)
         #expect(enriched.sourcePixelWidth == master.pixelWidth)
         #expect(enriched.sourcePixelHeight == master.pixelHeight)
-        #expect(second.removedObjects.isEmpty)
+        #expect(third.removedObjects.isEmpty)
+        #expect(!third.hasMore)
+    }
+
+    @Test func removesSuppressedProxyFirstMasterWithoutDimensions() throws {
+        let proxy = FacadeMediaClip(
+            handle: 3, storageID: 1, sizeBytes: 1, captureDate: "20260715T120000",
+            pixelWidth: 1, pixelHeight: 1, filename: "A001_C001.MP4")
+        let master = FacadeMediaClip(
+            handle: 2, storageID: 2, sizeBytes: 2, captureDate: "20260715T120001",
+            pixelWidth: 0, pixelHeight: 0, filename: "A001_C001.R3D")
+        let clipsByHandle = [proxy.handle: proxy, master.handle: master]
+        let cursor = FacadeMediaBrowseCursor(
+            snapshots: [
+                MediaBrowseStorageSnapshot(storageID: 1, handles: [proxy.handle]),
+                MediaBrowseStorageSnapshot(storageID: 2, handles: [master.handle]),
+            ],
+            fetchClip: { clipsByHandle[$0.handle] })
+
+        let first = try cursor.nextPage(maxObjects: 1)
+        #expect(first.clips == [proxy])
+        let second = try cursor.nextPage(maxObjects: 1)
+        #expect(second.clips.isEmpty)
+        #expect(second.removedObjects == [FacadeMediaClipIdentity(master)])
         #expect(!second.hasMore)
     }
 
