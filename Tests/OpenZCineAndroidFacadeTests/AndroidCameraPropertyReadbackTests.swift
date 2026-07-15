@@ -175,6 +175,53 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["storageSlot.1.freeSpaceBytes"] == "111000000000")
     }
 
+    @Test func mediaEntryClosesTheEmptyBootstrapStorageRace() throws {
+        let secondStorageID: UInt32 = 0x0002_0001
+        var options = FakeZRServer.Options()
+        options.storageCards = [
+            FakeZRStorageCard(
+                storageID: FakeZRMediaCard.storageID,
+                totalCapacityBytes: 954_000_000_000,
+                freeSpaceBytes: 242_000_000_000),
+            FakeZRStorageCard(
+                storageID: secondStorageID,
+                totalCapacityBytes: 512_000_000_000,
+                freeSpaceBytes: 111_000_000_000),
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        // Media wins the race before any monitor bootstrap has populated the
+        // accumulated property snapshot.
+        let preparation = session.enterMediaModeForBrowse()
+        let start = preparation.readback
+        defer { session.exitMediaMode() }
+
+        #expect(start.result == .mediaBusy)
+        #expect(start.properties.iso == nil)
+        #expect(start.storage?.totalCapacityBytes == 954_000_000_000)
+        #expect(
+            start.storageSlots.map(\.storageID) == [FakeZRMediaCard.storageID, secondStorageID])
+        #expect(start.storageSlots.map(\.slotNumber) == [1, 2])
+        #expect(
+            start.storageSlots.map(\.storage.freeSpaceBytes) == [
+                242_000_000_000, 111_000_000_000,
+            ])
+
+        let busyBootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(busyBootstrap.result == .mediaBusy)
+        #expect(busyBootstrap.storageSlots == start.storageSlots)
+        #expect(
+            server.receivedRequests().filter { $0.operation == .getDevicePropValueEx }.isEmpty)
+
+        let wire = MediaBrowseStartWire.encode(cursor: 41, readback: start)
+        #expect(wire.hasPrefix("OZCMEDIASTART1\t41\nresult\tmediaBusy\n"))
+        #expect(wire.contains("storageSlotCount\t2"))
+        #expect(wire.contains("storageSlot.1.storageId\t\(secondStorageID)"))
+    }
+
     @Test func unsupportedAndMediaOwnedReadbacksRemainNonTerminal() throws {
         var options = FakeZRServer.Options()
         options.unsupportedPropertyCodes.insert(PTPPropertyCode.movieISOSensitivity.rawValue)
@@ -202,10 +249,34 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(unknown.result == .accepted)
         #expect(readsAfterUnknownEvent == readsBeforeUnknownEvent)
 
-        session.enterMediaMode()
+        _ = session.enterMediaModeForBrowse()
         let mediaBusy = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
         #expect(mediaBusy.result == .mediaBusy)
         #expect(mediaBusy.properties.batteryPercent == 80)
+    }
+
+    @Test func browseFailureCleanupReleasesOnlyItsOwnershipGeneration() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let failed = session.enterMediaModeForBrowse()
+        session.exitMediaMode(ifOwnedBy: failed.ownershipGeneration)
+        let resumed = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.batteryLevel.rawValue))
+        #expect(resumed.result == .accepted)
+
+        let stale = session.enterMediaModeForBrowse()
+        let current = session.enterMediaModeForBrowse()
+        session.exitMediaMode(ifOwnedBy: stale.ownershipGeneration)
+        let stillOwned = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
+        #expect(stillOwned.result == .mediaBusy)
+
+        session.exitMediaMode(ifOwnedBy: current.ownershipGeneration)
+        let resumedAgain = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.batteryLevel.rawValue))
+        #expect(resumedAgain.result == .accepted)
     }
 
     private func wireFields(_ wire: String) -> [String: String] {

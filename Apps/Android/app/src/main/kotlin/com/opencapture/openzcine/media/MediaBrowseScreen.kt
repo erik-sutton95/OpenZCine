@@ -508,6 +508,8 @@ internal fun MediaBrowseScreen(
     var nativeDeliveryPresented by remember { mutableStateOf(false) }
     var filters by remember(cameraID) { mutableStateOf(MediaLibraryFilters()) }
     var filterDialogPresented by remember { mutableStateOf(false) }
+    var browseStorageSlots by
+        remember(cameraID) { mutableStateOf<List<CameraStorageSlotStatus>?>(null) }
 
     fun updateOptions(updated: MediaLibraryViewOptions) {
         if (shareInProgress) return
@@ -555,6 +557,7 @@ internal fun MediaBrowseScreen(
         val nextState =
             when (options.source) {
                 MediaLibrarySource.CAMERA -> {
+                    browseStorageSlots = null
                     if (!effectiveCameraConnected) {
                         BrowseState.Failed("Reconnect the camera or choose On device media.")
                     } else if (!SwiftCore.isAvailable) {
@@ -568,6 +571,7 @@ internal fun MediaBrowseScreen(
                             val clips =
                                 loadCameraMediaPages(
                                     pageSize = MEDIA_BROWSE_PAGE_SIZE,
+                                    onStart = { slots -> browseStorageSlots = slots },
                                     onPage = { snapshot ->
                                         listingCheckpoint.applyPage(
                                             snapshot.addedClips,
@@ -626,7 +630,7 @@ internal fun MediaBrowseScreen(
             source = options.source,
             cameraConnected = cameraConnected,
             cameraSessionAvailable = cameraSessionAvailable,
-            slots = cameraStorageSlots,
+            slots = browseStorageSlots ?: cameraStorageSlots,
         )
     LaunchedEffect(cameraID, options.source, state, visibleStorageSlots) {
         if (state !is BrowseState.Loaded) return@LaunchedEffect
@@ -1451,14 +1455,14 @@ private fun MediaStorageSlotCard(
             summary,
             style = chromeStyle(9f, FontWeight.Medium, mono = true),
             color = LiveDesign.muted,
-            maxLines = 1,
+            maxLines = if (horizontal) 1 else 2,
         )
     }
 }
 
 /** Landscape navigation rail. */
 @Composable
-private fun MediaLibraryRail(
+internal fun MediaLibraryRail(
     source: MediaLibrarySource,
     category: MediaLibraryCategory,
     storageSlots: List<MediaStorageSlotPresentation>,
@@ -1469,7 +1473,10 @@ private fun MediaLibraryRail(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier.glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)).padding(4.dp),
+        modifier
+            .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
+            .verticalScroll(rememberScrollState())
+            .padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         MediaLibrarySource.entries.forEach { candidate ->

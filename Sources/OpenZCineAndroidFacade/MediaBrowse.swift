@@ -518,6 +518,23 @@ public enum MediaBrowsePageWire {
     }
 }
 
+/// Versioned JNI wire for one media-cursor reservation and the authoritative
+/// storage generation captured immediately before media ownership.
+public enum MediaBrowseStartWire {
+    /// Stable header token mirrored by Android's `MediaBrowseStarts` parser.
+    public static let version = "OZCMEDIASTART1"
+
+    /// Encodes the opaque cursor followed by the existing semantic property
+    /// readback. Reusing that wire keeps storage validation identical for the
+    /// monitor bootstrap and the empty-bootstrap media-entry race.
+    public static func encode(
+        cursor: Int64,
+        readback: AndroidCameraPropertyReadback
+    ) -> String {
+        "\(version)\t\(cursor)\n\(AndroidCameraPropertyReadbackWire.encode(readback))"
+    }
+}
+
 /// Process-local opaque cursor handles used only by the Android JNI seam.
 final class MediaBrowseCursorRegistry: @unchecked Sendable {
     static let shared = MediaBrowseCursorRegistry()

@@ -16,6 +16,29 @@ import kotlinx.coroutines.withContext
 
 class MediaBrowsePagingTest {
     @Test
+    fun `parses browse start with authoritative storage generation`() {
+        val start =
+            MediaBrowseStarts.parse(
+                startWire(
+                    cursor = 41,
+                    slots =
+                        listOf(
+                            StorageSlot(65_537, 1, 954_000_000_000, 242_000_000_000),
+                            StorageSlot(131_073, 2, 512_000_000_000, 111_000_000_000),
+                        ),
+                ),
+            )
+
+        requireNotNull(start)
+        assertEquals(41L, start.cursor)
+        assertEquals(listOf(65_537L, 131_073L), start.storageSlots.map { it.storageId })
+        assertEquals(listOf(1, 2), start.storageSlots.map { it.slotNumber })
+        assertNull(MediaBrowseStarts.parse("OZCMEDIASTART0\t41\nresult\tmediaBusy"))
+        assertNull(MediaBrowseStarts.parse("OZCMEDIASTART1\t0\nresult\tmediaBusy"))
+        assertNull(MediaBrowseStarts.parse("OZCMEDIASTART1\t41\nresult\taccepted"))
+    }
+
+    @Test
     fun `parses versioned page header and records`() {
         val page =
             MediaBrowsePages.parse(
@@ -90,6 +113,36 @@ class MediaBrowsePagingTest {
     }
 
     @Test
+    fun `empty bootstrap receives storage before the first media page`() = runTest {
+        val slots =
+            listOf(
+                StorageSlot(65_537, 1, 954_000_000_000, 242_000_000_000),
+                StorageSlot(131_073, 2, 512_000_000_000, 111_000_000_000),
+            )
+        val gateway =
+            FakeMediaBrowseGateway(
+                pages = listOf(page(hasMore = false, inspected = 0, records = emptyList())),
+                storageSlots = slots,
+            )
+        val callbacks = mutableListOf<String>()
+        var receivedSlots = emptyList<Long>()
+
+        loadCameraMediaPages(
+            pageSize = 32,
+            gateway = gateway,
+            ioContext = Dispatchers.Unconfined,
+            onStart = { authoritative ->
+                callbacks += "start"
+                receivedSlots = authoritative.map { it.storageId }
+            },
+            onPage = { callbacks += "page" },
+        )
+
+        assertEquals(listOf("start", "page"), callbacks)
+        assertEquals(listOf(65_537L, 131_073L), receivedSlots)
+    }
+
+    @Test
     fun `later proxy removal wins over an earlier R3D addition`() = runTest {
         val master = "7\t1\t2\t20260715T120000\t6144\t3240\t0\t0\t0\tr3d\t\t\tA001.R3D"
         val proxy = record(8, 2, "A001.MP4")
@@ -155,10 +208,10 @@ class MediaBrowsePagingTest {
         val cancelledCursors = mutableListOf<Long>()
         val gateway =
             object : MediaBrowseGateway {
-                override fun begin(): Long {
+                override fun begin(): String {
                     began.countDown()
                     check(release.await(5, TimeUnit.SECONDS))
-                    return 41
+                    return startWire(cursor = 41)
                 }
 
                 override fun next(cursor: Long, maxObjects: Int): String? =
@@ -213,12 +266,13 @@ class MediaBrowsePagingTest {
     private class FakeMediaBrowseGateway(
         pages: List<String>,
         private val cursor: Long = 41,
+        private val storageSlots: List<StorageSlot> = emptyList(),
     ) : MediaBrowseGateway {
         private val remainingPages = ArrayDeque(pages)
         val requestedPageSizes = mutableListOf<Int>()
         val cancelledCursors = mutableListOf<Long>()
 
-        override fun begin(): Long = cursor
+        override fun begin(): String = startWire(cursor, storageSlots)
 
         override fun next(cursor: Long, maxObjects: Int): String? {
             assertEquals(this.cursor, cursor)
@@ -232,6 +286,26 @@ class MediaBrowsePagingTest {
     }
 
     private companion object {
+        data class StorageSlot(
+            val storageId: Long,
+            val slotNumber: Int,
+            val totalCapacityBytes: Long,
+            val freeSpaceBytes: Long,
+        )
+
+        fun startWire(cursor: Long, slots: List<StorageSlot> = emptyList()): String =
+            buildList {
+                add("OZCMEDIASTART1\t$cursor")
+                add("result\tmediaBusy")
+                add("storageSlotCount\t${slots.size}")
+                slots.forEachIndexed { index, slot ->
+                    add("storageSlot.$index.storageId\t${slot.storageId}")
+                    add("storageSlot.$index.slotNumber\t${slot.slotNumber}")
+                    add("storageSlot.$index.totalCapacityBytes\t${slot.totalCapacityBytes}")
+                    add("storageSlot.$index.freeSpaceBytes\t${slot.freeSpaceBytes}")
+                }
+            }.joinToString(separator = "\n")
+
         fun page(
             hasMore: Boolean,
             inspected: Int,

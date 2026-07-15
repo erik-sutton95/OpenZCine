@@ -807,12 +807,13 @@ object SwiftCore {
     // ── Media browse (OPE-34) ──
 
     /**
-     * Snapshots object handles across every usable camera card and returns an
-     * opaque latest-wins cursor, or -1 when no session is active. A newer call
-     * invalidates the prior cursor before taking its snapshot. Blocking; call
-     * from a background dispatcher.
+     * Refreshes card capacity before claiming media ownership, snapshots object
+     * handles across every usable camera card, and returns one versioned
+     * cursor/readback record. A newer call invalidates the prior cursor before
+     * taking its snapshot. Null means no session is active or the snapshot
+     * failed. Blocking; call from a background dispatcher.
      */
-    external fun sessionBeginMediaBrowse(): Long
+    external fun sessionBeginMediaBrowse(): String?
 
     /**
      * Advances [cursor] by at most [maxObjects] ObjectInfo transactions and

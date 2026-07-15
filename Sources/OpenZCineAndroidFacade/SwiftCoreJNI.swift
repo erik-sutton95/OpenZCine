@@ -1676,17 +1676,32 @@
 
     // MARK: - Media browse (OPE-34)
 
-    /// `SwiftCore.sessionBeginMediaBrowse(): Long` — snapshots every usable
-    /// card's object handles and returns the latest process-local cursor. A
-    /// newer call cancels the prior cursor before taking its snapshot. Returns
-    /// -1 when disconnected or the snapshot failed. Blocking; call from IO.
+    /// `SwiftCore.sessionBeginMediaBrowse(): String?` — refreshes authoritative
+    /// card capacity before media ownership, snapshots every usable card's
+    /// object handles, and returns one versioned cursor/readback record. A newer
+    /// call cancels the prior cursor before taking its snapshot. Null means the
+    /// session is disconnected or the snapshot failed. Blocking; call from IO.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionBeginMediaBrowse")
     public func swiftCoreSessionBeginMediaBrowse(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
-    ) -> jlong {
-        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
-        session.enterMediaMode()
-        return (try? MediaBrowseCursorRegistry.shared.begin(session: session)) ?? -1
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jstring? {
+        guard let session = ActiveSessionSlot.shared.current() else { return nil }
+        let preparation = session.enterMediaModeForBrowse()
+        let cursor: Int64
+        do {
+            guard let reserved = try MediaBrowseCursorRegistry.shared.begin(session: session) else {
+                // A newer concurrent begin owns the reservation and media mode.
+                return nil
+            }
+            cursor = reserved
+        } catch {
+            // This begin claimed media mode but produced no cursor. Do not
+            // strand monitor commands behind a failed storage/handle snapshot.
+            session.exitMediaMode(ifOwnedBy: preparation.ownershipGeneration)
+            return nil
+        }
+        return javaString(
+            env, MediaBrowseStartWire.encode(cursor: cursor, readback: preparation.readback))
     }
 
     /// `SwiftCore.sessionNextMediaBrowsePage(cursor, maxObjects): String?` —

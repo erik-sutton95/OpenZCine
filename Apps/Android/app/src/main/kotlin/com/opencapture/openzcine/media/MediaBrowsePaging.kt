@@ -1,6 +1,9 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.openzcine.bridge.CameraPropertySnapshotWire
+import com.opencapture.openzcine.bridge.NativePropertyRefreshResult
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.core.CameraStorageSlotStatus
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -37,6 +40,29 @@ internal data class MediaBrowseSnapshot(
     val removedObjects: List<MediaObjectIdentity>,
     val hasMore: Boolean,
 )
+
+/** One native cursor and the card generation captured before media ownership. */
+internal data class MediaBrowseStart(
+    val cursor: Long,
+    val storageSlots: List<CameraStorageSlotStatus>,
+)
+
+/** Stable parser for `MediaBrowseStartWire` from the Swift facade. */
+internal object MediaBrowseStarts {
+    private const val VERSION = "OZCMEDIASTART1"
+
+    fun parse(wire: String?): MediaBrowseStart? {
+        val separator = wire?.indexOf('\n')?.takeIf { it > 0 } ?: return null
+        val header = wire.substring(0, separator).split('\t')
+        if (header.size != 2 || header[0] != VERSION) return null
+        val cursor = header[1].toLongOrNull()?.takeIf { it > 0 } ?: return null
+        val readback = CameraPropertySnapshotWire.decode(wire.substring(separator + 1))
+        if (!readback.isValid || readback.result != NativePropertyRefreshResult.MEDIA_BUSY) {
+            return null
+        }
+        return MediaBrowseStart(cursor, readback.snapshot.storageSlots)
+    }
+}
 
 /** Stable parser for `MediaBrowsePageWire` from the Swift facade. */
 internal object MediaBrowsePages {
@@ -83,7 +109,7 @@ internal object MediaBrowsePages {
 
 /** Small injectable boundary around the three blocking JNI cursor calls. */
 internal interface MediaBrowseGateway {
-    fun begin(): Long
+    fun begin(): String?
 
     fun next(cursor: Long, maxObjects: Int): String?
 
@@ -91,7 +117,7 @@ internal interface MediaBrowseGateway {
 }
 
 private object SwiftMediaBrowseGateway : MediaBrowseGateway {
-    override fun begin(): Long = SwiftCore.sessionBeginMediaBrowse()
+    override fun begin(): String? = SwiftCore.sessionBeginMediaBrowse()
 
     override fun next(cursor: Long, maxObjects: Int): String? =
         SwiftCore.sessionNextMediaBrowsePage(cursor, maxObjects)
@@ -111,13 +137,21 @@ internal suspend fun loadCameraMediaPages(
     pageSize: Int,
     gateway: MediaBrowseGateway = SwiftMediaBrowseGateway,
     ioContext: CoroutineContext = Dispatchers.IO,
+    onStart: suspend (List<CameraStorageSlotStatus>) -> Unit = {},
     onPage: suspend (MediaBrowseSnapshot) -> Unit,
 ): List<MediaClipRecord> {
     require(pageSize in 1..128) { "Camera media page size must be between 1 and 128." }
     var cursor = -1L
     try {
-        withContext(ioContext) { cursor = gateway.begin() }
-        if (cursor <= 0) throw MediaBrowsePagingException("Camera media listing could not start.")
+        val start =
+            withContext(ioContext) {
+                val parsed =
+                    MediaBrowseStarts.parse(gateway.begin())
+                        ?: throw MediaBrowsePagingException("Camera media listing could not start.")
+                cursor = parsed.cursor
+                parsed
+            }
+        onStart(start.storageSlots)
 
         val clipsByIdentity = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
         while (true) {

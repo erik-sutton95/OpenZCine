@@ -312,6 +312,12 @@ extension String {
     fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
+/// One storage readback and the ownership generation that captured it.
+struct AndroidMediaBrowsePreparation: Sendable {
+    let readback: AndroidCameraPropertyReadback
+    let ownershipGeneration: UInt64
+}
+
 /// A synchronous PTP-IP camera session: two TCP sockets (command + event) to
 /// port 15740, the CIPA DC-005 Init handshake, and the Nikon open/pair/identify
 /// sequence — the Android twin of `NativeCameraSession.establish`.
@@ -362,6 +368,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var liveViewPumpActive = false
     private var liveViewStopRequested = false
     private var mediaModeActive = false
+    private var mediaModeOwnershipGeneration: UInt64 = 0
     /// Preview-only pacing selected by the shared Android live-view policy.
     /// Access while `commandLifecycleLock` is held before start, then copied
     /// into the pump under `liveViewCondition`; this never changes camera
@@ -2245,23 +2252,61 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Media ownership and transfer
 
-    /// Gives media browsing/playback exclusive ownership of the camera's
-    /// serialized command channel. Claiming media mode first prevents a new
-    /// live-view start from racing the transition; the existing pump is then
-    /// stopped and joined before this method returns.
+    /// Gives media playback or transfer exclusive ownership without performing
+    /// browse-specific preparation.
     public func enterMediaMode() {
+        _ = claimMediaMode(refreshStorage: false)
+    }
+
+    /// Refreshes card capacity and gives media browsing/playback exclusive
+    /// ownership of the camera's serialized command channel.
+    ///
+    /// The storage refresh and ownership transition share
+    /// `commandLifecycleLock`, so a property bootstrap cannot slip between
+    /// them. This lets Android render authoritative cards even when Media is
+    /// opened before the initial monitor bootstrap finishes. An already-active
+    /// media visit keeps its captured storage snapshot while reserving a newer
+    /// ownership generation, without issuing a redundant card refresh.
+    func enterMediaModeForBrowse() -> AndroidMediaBrowsePreparation {
+        claimMediaMode(refreshStorage: true)
+    }
+
+    private func claimMediaMode(refreshStorage: Bool) -> AndroidMediaBrowsePreparation {
         commandLifecycleLock.lock()
+        liveViewCondition.lock()
+        let wasAlreadyActive = mediaModeActive
+        liveViewCondition.unlock()
+        if refreshStorage, !wasAlreadyActive {
+            _ = refreshAndroidStorage()
+        }
+        mediaModeOwnershipGeneration =
+            mediaModeOwnershipGeneration == UInt64.max ? 1 : mediaModeOwnershipGeneration + 1
         liveViewCondition.lock()
         mediaModeActive = true
         liveViewCondition.unlock()
+        let preparation = AndroidMediaBrowsePreparation(
+            readback: androidPropertyReadback(result: .mediaBusy),
+            ownershipGeneration: mediaModeOwnershipGeneration)
         commandLifecycleLock.unlock()
         stopLiveView()
+        return preparation
     }
 
     /// Releases media ownership so monitor live view may start again.
     public func exitMediaMode() {
         commandLifecycleLock.lock()
         defer { commandLifecycleLock.unlock() }
+        stopMediaTransfer()
+        releaseMediaMode()
+    }
+
+    /// Releases only the failed browse generation that made this claim. A
+    /// newer concurrent begin keeps ownership and is never unlocked by stale
+    /// failure cleanup.
+    func exitMediaMode(ifOwnedBy ownershipGeneration: UInt64) {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard mediaModeOwnershipGeneration == ownershipGeneration else { return }
         stopMediaTransfer()
         releaseMediaMode()
     }
