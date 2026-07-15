@@ -161,6 +161,15 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   writes on the typed `CameraSession`/Swift seam. **[VERIFY-ON-HW]** Exercise every configurable
   assist plus dashboard/settings drags against a supported Nikon camera in Samsung portrait and
   landscape, then inspect all four panel and dragged-row edges.
+- **Android configurable DISP and monitor-chrome parity** (OPE-66, in review): persist and reconcile
+  the enabled Live/Clean/Command order, recover a disabled active mode, and project the typed mode
+  through the existing shared Swift zone map. Android now honors supported chrome and individual
+  status-readout visibility while retaining a Settings recovery control, plus an active-recording
+  control, when the landscape rails are hidden. Pending camera writes remain on the typed session
+  seam as modes or chrome change. Samsung SM-A127F demo-fixture verification covers portrait and
+  landscape, reorder/disable persistence, active-mode recovery, two-mode DISP cycling, hidden-rail
+  Settings recovery, and the tight 602dp noncompact grid. **[VERIFY-ON-HW]** Repeat command-mode
+  stream release and recording safety against a supported Nikon body.
 - **Android monitor feed texture parity** (OPE-72, in review): the Android monitor now mirrors
   iOS's feed-local vignette and deterministic static grain after the camera frame/effect pipeline.
   Resolution-only state and cached draw resources keep same-resolution frames from rebuilding its

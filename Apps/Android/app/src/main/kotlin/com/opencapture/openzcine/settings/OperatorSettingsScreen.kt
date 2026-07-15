@@ -2295,6 +2295,183 @@ internal fun AssistToolbarOrderList(
     }
 }
 
+/** Direct-drag DISP order with an equivalent TalkBack move action. */
+@Composable
+internal fun DisplayModeOrderList(
+    settings: OperatorSettings,
+    onInteraction: () -> Unit,
+) {
+    val modes = settings.displayModeOrder
+    val latestModes by rememberUpdatedState(modes)
+    var draggingMode by remember { mutableStateOf<MonitorDisplayMode?>(null) }
+    var dragPosition by remember { mutableStateOf(Offset.Zero) }
+    val rowHeight = 50.dp
+    val gripWidth = 48.dp
+    val density = LocalDensity.current
+    val rowHeightPx = with(density) { rowHeight.toPx() }
+    val gripWidthPx = with(density) { gripWidth.toPx() }
+
+    BoxWithConstraints(
+        Modifier.fillMaxWidth()
+            .height(rowHeight * modes.size)
+            .pointerInput(Unit) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { start ->
+                        if (settingsReorderGripHit(start.x, size.width.toFloat(), gripWidthPx)) {
+                            val current = latestModes
+                            if (current.isNotEmpty()) {
+                                draggingMode =
+                                    current[
+                                        settingsReorderIndex(
+                                            start.y,
+                                            rowHeightPx,
+                                            current.size,
+                                        )
+                                    ]
+                                dragPosition = start
+                                onInteraction()
+                            }
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        val mode = draggingMode
+                        if (mode != null) {
+                            change.consume()
+                            dragPosition = change.position
+                            val current = latestModes
+                            if (current.isNotEmpty()) {
+                                val target =
+                                    settingsReorderIndex(
+                                        change.position.y,
+                                        rowHeightPx,
+                                        current.size,
+                                    )
+                                if (current.indexOf(mode) != target) {
+                                    settings.moveDisplayMode(mode, target)
+                                }
+                            }
+                        }
+                    },
+                    onDragEnd = { draggingMode = null },
+                    onDragCancel = { draggingMode = null },
+                )
+            },
+    ) {
+        val listHeightPx = constraints.maxHeight.toFloat()
+        modes.forEachIndexed { index, mode ->
+            key(mode) {
+                val dragging = mode == draggingMode
+                val y =
+                    if (dragging) {
+                        (dragPosition.y - rowHeightPx / 2f)
+                            .coerceIn(0f, (listHeightPx - rowHeightPx).coerceAtLeast(0f))
+                    } else {
+                        index * rowHeightPx
+                    }
+                val accessibilityActions =
+                    buildList {
+                        if (index > 0) {
+                            add(
+                                CustomAccessibilityAction("Move ${mode.label} earlier") {
+                                    settings.moveDisplayMode(mode, index - 1)
+                                    onInteraction()
+                                    true
+                                },
+                            )
+                        }
+                        if (index < modes.lastIndex) {
+                            add(
+                                CustomAccessibilityAction("Move ${mode.label} later") {
+                                    settings.moveDisplayMode(mode, index + 1)
+                                    onInteraction()
+                                    true
+                                },
+                            )
+                        }
+                    }
+                Column(
+                    Modifier.offset { IntOffset(0, y.roundToInt()) }
+                        .fillMaxWidth()
+                        .height(rowHeight)
+                        .graphicsLayer {
+                            scaleX = if (dragging) 1.02f else 1f
+                            scaleY = if (dragging) 1.02f else 1f
+                            shadowElevation = if (dragging) 12.dp.toPx() else 0f
+                            shape = ChromeShape
+                        }
+                        .zIndex(if (dragging) 1f else 0f)
+                        .background(
+                            if (dragging) LiveDesign.surface else androidx.compose.ui.graphics.Color.Transparent,
+                        ),
+                ) {
+                    if (index != 0) {
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(22.dp)
+                                .background(LiveDesign.surface, CircleShape)
+                                .semantics { contentDescription = "Position ${index + 1}" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "${index + 1}",
+                                style = chromeStyle(9f, FontWeight.Medium, mono = true),
+                                color = LiveDesign.muted,
+                            )
+                        }
+                        val enabled = mode in settings.enabledDisplayModes
+                        Text(
+                            mode.label,
+                            style = chromeStyle(12.5f, FontWeight.SemiBold),
+                            color = if (enabled) LiveDesign.text else LiveDesign.muted,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Box(
+                            Modifier.settingsClickable(role = Role.Switch) {
+                                if (settings.toggleDisplayMode(mode)) onInteraction()
+                            }.semantics {
+                                contentDescription = "Include ${mode.label} in DISP cycle"
+                                stateDescription = if (enabled) "Enabled" else "Disabled"
+                            },
+                        ) {
+                            SettingsSwitchGraphic(enabled)
+                        }
+                        Box(
+                            Modifier.width(gripWidth)
+                                .fillMaxHeight()
+                                .semantics {
+                                    contentDescription =
+                                        "Reorder ${mode.label}, position ${index + 1}"
+                                    customActions = accessibilityActions
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Canvas(Modifier.size(18.dp, 14.dp)) {
+                                val stroke = 1.6.dp.toPx()
+                                listOf(2f, 7f, 12f).forEach { yOffset ->
+                                    drawLine(
+                                        LiveDesign.faint,
+                                        Offset(1.dp.toPx(), yOffset.dp.toPx()),
+                                        Offset(size.width - 1.dp.toPx(), yOffset.dp.toPx()),
+                                        strokeWidth = stroke,
+                                        cap = StrokeCap.Round,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /**
  * Display tab. Every exposed toggle maps to Android monitor chrome rather
  * than merely recording an intent for a later shell pass.
@@ -2310,47 +2487,28 @@ private fun DisplayRows(
 ) {
     SettingsGroupCard(
         title = "Monitor Chrome",
-        caption = "Show only the monitor regions you need during a take.",
+        caption =
+            "Show only the monitor regions you need. Settings stays reachable when landscape rails are hidden.",
     ) {
-        if (compact) {
-            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    DisplayToggleItem(
-                        "STATUS",
-                        isOn = settings.statusBarVisible.value,
-                        modifier = Modifier.weight(1f),
-                    ) { onToggle(settings.statusBarVisible) }
-                    DisplayToggleItem(
-                        "ASSISTS",
-                        isOn = settings.assistToolbarVisible.value,
-                        modifier = Modifier.weight(1f),
-                    ) { onToggle(settings.assistToolbarVisible) }
-                }
-                DisplayToggleItem(
-                    "VALUES",
-                    isOn = settings.cameraValuesVisible.value,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { onToggle(settings.cameraValuesVisible) }
-            }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                DisplayToggleItem(
-                    "STATUS",
-                    isOn = settings.statusBarVisible.value,
-                    modifier = Modifier.weight(1f),
-                ) { onToggle(settings.statusBarVisible) }
-                DisplayToggleItem(
-                    "ASSISTS",
-                    isOn = settings.assistToolbarVisible.value,
-                    modifier = Modifier.weight(1f),
-                ) { onToggle(settings.assistToolbarVisible) }
-                DisplayToggleItem(
-                    "VALUES",
-                    isOn = settings.cameraValuesVisible.value,
-                    modifier = Modifier.weight(1f),
-                ) { onToggle(settings.cameraValuesVisible) }
-            }
-        }
+        DisplayToggleGrid(
+            compact = compact,
+            entries =
+                listOf(
+                    DisplayToggleEntry("STATUS", settings.statusBarVisible.value) {
+                        onToggle(settings.statusBarVisible)
+                    },
+                    DisplayToggleEntry("RAILS", settings.sideRailsVisible.value) {
+                        onToggle(settings.sideRailsVisible)
+                    },
+                    DisplayToggleEntry("ASSISTS", settings.assistToolbarVisible.value) {
+                        onToggle(settings.assistToolbarVisible)
+                    },
+                    DisplayToggleEntry("VALUES", settings.cameraValuesVisible.value) {
+                        onToggle(settings.cameraValuesVisible)
+                    },
+                ),
+            twoColumnOrder = listOf(0, 2, 1, 3),
+        )
     }
     SettingsGroupCard(
         title = "View Assist Toolbar",
@@ -2371,55 +2529,81 @@ private fun DisplayRows(
         title = "Live Status Readouts",
         caption = "Hide readouts you do not ride during a take.",
     ) {
-        if (compact) {
-            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    DisplayToggleItem(
-                        "REC",
-                        isOn = settings.recReadoutVisible.value,
-                        modifier = Modifier.weight(1f),
-                    ) { onToggle(settings.recReadoutVisible) }
-                    DisplayToggleItem(
-                        "CODEC",
-                        isOn = settings.codecReadoutVisible.value,
-                        modifier = Modifier.weight(1f),
-                    ) { onToggle(settings.codecReadoutVisible) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    DisplayToggleItem(
-                        "MEDIA",
-                        isOn = settings.mediaReadoutVisible.value,
-                        modifier = Modifier.weight(1f),
-                    ) { onToggle(settings.mediaReadoutVisible) }
-                    DisplayToggleItem(
-                        "FPS",
-                        isOn = settings.fpsReadoutVisible.value,
-                        modifier = Modifier.weight(1f),
-                    ) { onToggle(settings.fpsReadoutVisible) }
-                }
+        DisplayToggleGrid(
+            compact = compact,
+            entries =
+                listOf(
+                    DisplayToggleEntry("REC", settings.recReadoutVisible.value) {
+                        onToggle(settings.recReadoutVisible)
+                    },
+                    DisplayToggleEntry("CODEC", settings.codecReadoutVisible.value) {
+                        onToggle(settings.codecReadoutVisible)
+                    },
+                    DisplayToggleEntry("MEDIA", settings.mediaReadoutVisible.value) {
+                        onToggle(settings.mediaReadoutVisible)
+                    },
+                    DisplayToggleEntry("FPS", settings.fpsReadoutVisible.value) {
+                        onToggle(settings.fpsReadoutVisible)
+                    },
+                ),
+        )
+    }
+    SettingsGroupCard(
+        title = "DISP Button Order",
+        caption = "Drag to reorder; disable modes you do not use. One mode always remains.",
+    ) {
+        DisplayModeOrderList(settings, onInteraction)
+        SettingsLinkAction("Reset DISP") {
+            settings.resetDisplayModePreferences()
+            onInteraction()
+        }
+    }
+}
+
+private const val FOUR_COLUMN_DISPLAY_TOGGLE_MIN_WIDTH_DP: Float = 480f
+
+/** Number of switch columns that fit without compressing a label or switch. */
+internal fun displayToggleGridColumnCount(compact: Boolean, availableWidthDp: Float): Int {
+    require(availableWidthDp >= 0f) { "display toggle width must not be negative" }
+    return if (compact || availableWidthDp < FOUR_COLUMN_DISPLAY_TOGGLE_MIN_WIDTH_DP) 2 else 4
+}
+
+private data class DisplayToggleEntry(
+    val title: String,
+    val isOn: Boolean,
+    val onToggle: () -> Unit,
+)
+
+/** Responsive 4-up/2-by-2 switch grid for the narrow post-tab-rail pane. */
+@Composable
+private fun DisplayToggleGrid(
+    compact: Boolean,
+    entries: List<DisplayToggleEntry>,
+    twoColumnOrder: List<Int>? = null,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columns = displayToggleGridColumnCount(compact, maxWidth.value)
+        val orderedEntries =
+            if (columns == 2 && twoColumnOrder != null) {
+                twoColumnOrder.map(entries::get)
+            } else {
+                entries
             }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                DisplayToggleItem(
-                    "REC",
-                    isOn = settings.recReadoutVisible.value,
-                    modifier = Modifier.weight(1f),
-                ) { onToggle(settings.recReadoutVisible) }
-                DisplayToggleItem(
-                    "CODEC",
-                    isOn = settings.codecReadoutVisible.value,
-                    modifier = Modifier.weight(1f),
-                ) { onToggle(settings.codecReadoutVisible) }
-                DisplayToggleItem(
-                    "MEDIA",
-                    isOn = settings.mediaReadoutVisible.value,
-                    modifier = Modifier.weight(1f),
-                ) { onToggle(settings.mediaReadoutVisible) }
-                DisplayToggleItem(
-                    "FPS",
-                    isOn = settings.fpsReadoutVisible.value,
-                    modifier = Modifier.weight(1f),
-                ) { onToggle(settings.fpsReadoutVisible) }
+        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            orderedEntries.chunked(columns).forEach { rowEntries ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    rowEntries.forEach { entry ->
+                        DisplayToggleItem(
+                            entry.title,
+                            isOn = entry.isOn,
+                            modifier = Modifier.weight(1f),
+                            onToggle = entry.onToggle,
+                        )
+                    }
+                }
             }
         }
     }

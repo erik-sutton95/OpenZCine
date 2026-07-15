@@ -9,6 +9,7 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -67,7 +68,7 @@ class MonitorCameraControlsTest {
     }
 
     @Test
-    fun `picker state respects lock and DISP clears by contract`() {
+    fun `picker state respects lock`() {
         assertEquals(
             MonitorPickerKind.ISO,
             nextMonitorPicker(null, MonitorPickerKind.ISO, controlsEnabled = true),
@@ -87,9 +88,89 @@ class MonitorCameraControlsTest {
                 controlsEnabled = false,
             ),
         )
-        assertEquals(1, nextMonitorDispIndex(0))
-        assertEquals(2, nextMonitorDispIndex(1))
-        assertEquals(0, nextMonitorDispIndex(2))
+    }
+
+    @Test
+    fun `hidden rails preserve settings and active recording safety`() {
+        assertEquals(
+            LandscapeSideRailPlan(
+                fullRailsVisible = false,
+                settingsRecoveryVisible = true,
+                recordingSafetyVisible = false,
+            ),
+            landscapeSideRailPlan(
+                sideRailsVisible = false,
+                recording = false,
+                recordCommandPending = false,
+                recordConfirmationPending = false,
+            ),
+        )
+        assertTrue(
+            landscapeSideRailPlan(
+                sideRailsVisible = false,
+                recording = true,
+                recordCommandPending = false,
+                recordConfirmationPending = false,
+            ).recordingSafetyVisible,
+        )
+        assertTrue(
+            landscapeSideRailPlan(
+                sideRailsVisible = false,
+                recording = false,
+                recordCommandPending = true,
+                recordConfirmationPending = false,
+            ).recordingSafetyVisible,
+        )
+        assertTrue(
+            landscapeSideRailPlan(
+                sideRailsVisible = false,
+                recording = false,
+                recordCommandPending = false,
+                recordConfirmationPending = true,
+            ).recordingSafetyVisible,
+        )
+        val full =
+            landscapeSideRailPlan(
+                sideRailsVisible = true,
+                recording = true,
+                recordCommandPending = true,
+                recordConfirmationPending = true,
+            )
+        assertTrue(full.fullRailsVisible)
+        assertTrue(!full.settingsRecoveryVisible)
+        assertTrue(!full.recordingSafetyVisible)
+    }
+
+    @Test
+    fun `picker waits for pending camera command before chrome closes it`() {
+        assertTrue(
+            retainMonitorPickerForChrome(
+                mode = MonitorDisplayMode.COMMAND,
+                cameraValuesVisible = false,
+                cameraCommandPending = true,
+            ),
+        )
+        assertTrue(
+            !retainMonitorPickerForChrome(
+                mode = MonitorDisplayMode.COMMAND,
+                cameraValuesVisible = true,
+                cameraCommandPending = false,
+            ),
+        )
+        assertTrue(
+            !retainMonitorPickerForChrome(
+                mode = MonitorDisplayMode.LIVE,
+                cameraValuesVisible = false,
+                cameraCommandPending = false,
+            ),
+        )
+        assertTrue(
+            retainMonitorPickerForChrome(
+                mode = MonitorDisplayMode.LIVE,
+                cameraValuesVisible = true,
+                cameraCommandPending = false,
+            ),
+        )
     }
 
     @Test
