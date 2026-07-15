@@ -49,6 +49,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import com.opencapture.openzcine.core.LiveFrameTimecode
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
 // MonitorControls.swift + MonitorExperience.swift). Layout frames come from the
@@ -87,14 +88,42 @@ fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextSty
         platformStyle = PlatformTextStyle(includeFontPadding = false),
     )
 
-/** `HH:MM:SS` in text with the `:FF` frame field tinted accent (iOS TimecodeReadout). */
-fun timecodeAnnotated(frameCount: Long, fps: Int): AnnotatedString {
-    val seconds = frameCount / fps
-    val main = "%02d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60)
-    val frames = ":%02d".format(frameCount % fps)
+/** Camera `HH:MM:SS` with the exact camera-provided `:FF` field tinted accent. */
+fun timecodeAnnotated(timecode: LiveFrameTimecode): AnnotatedString {
+    val label = cameraTimecodeLabel(timecode)
+    val main = label.take(8)
+    val frames = label.drop(8)
     return buildAnnotatedString {
         withStyle(SpanStyle(color = LiveDesign.text)) { append(main) }
         withStyle(SpanStyle(color = LiveDesign.accent)) { append(frames) }
+    }
+}
+
+/** Camera timecode text that never substitutes an elapsed shell clock. */
+@Composable
+fun CameraTimecodeReadout(
+    timecode: LiveFrameTimecode?,
+    sizeSp: Float,
+    weight: FontWeight = FontWeight.Normal,
+    modifier: Modifier = Modifier,
+) {
+    val available = authoritativeTimecode(timecode)
+    if (available == null) {
+        Text(
+            UNAVAILABLE_TIMECODE,
+            style = chromeStyle(sizeSp, weight, mono = true),
+            color = LiveDesign.muted,
+            maxLines = 1,
+            modifier = modifier.semantics { contentDescription = "Camera timecode unavailable" },
+        )
+    } else {
+        val label = cameraTimecodeLabel(available)
+        Text(
+            timecodeAnnotated(available),
+            style = chromeStyle(sizeSp, weight, mono = true),
+            maxLines = 1,
+            modifier = modifier.semantics { contentDescription = "Camera timecode $label" },
+        )
     }
 }
 
@@ -354,24 +383,46 @@ fun RecordButton(
     }
 }
 
-/** Battery glyph + percent + device glyph column (iOS `BatteryIndicator`, `.rail`). */
+/** Battery glyph + authoritative value + device glyph column (iOS `BatteryIndicator`, `.rail`). */
 @Composable
-fun BatteryIndicatorColumn(percent: Int, isCamera: Boolean, modifier: Modifier = Modifier) {
-    val low = if (isCamera) percent < 10 else percent <= 15
+fun BatteryIndicatorColumn(
+    percent: Int?,
+    isCamera: Boolean,
+    modifier: Modifier = Modifier,
+    externalPower: Boolean? = null,
+) {
+    val presentation = monitorBatteryPresentation(percent, externalPower)
+    val batteryPercent = presentation.percent
+    val low = batteryPercent?.let { if (isCamera) it < 10 else it <= 15 } == true
     val tint =
         when {
             low -> Color.Red
+            batteryPercent == null && externalPower != true -> LiveDesign.faint
             isCamera -> LiveDesign.accent
             else -> LiveDesign.text.copy(alpha = 0.85f)
         }
+    val source = if (isCamera) "Camera" else "Phone"
+    val description =
+        when {
+            batteryPercent != null && externalPower == true ->
+                "$source battery $batteryPercent percent, external power"
+            batteryPercent != null -> "$source battery $batteryPercent percent"
+            externalPower == true -> "$source external power"
+            else -> "$source battery unavailable"
+        }
     Column(
-        modifier = modifier,
+        modifier = modifier.semantics { contentDescription = description },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
     ) {
-        BatteryGlyph(percent = percent, tint = tint, modifier = Modifier.size(22.dp, 11.dp))
+        BatteryGlyph(
+            percent = batteryPercent,
+            tint = tint,
+            modifier = Modifier.size(22.dp, 11.dp),
+            externalPower = presentation.externalPower,
+        )
         Text(
-            "$percent%",
+            presentation.label,
             style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
             color = LiveDesign.text.copy(alpha = 0.72f),
         )
@@ -385,16 +436,22 @@ fun BatteryIndicatorColumn(percent: Int, isCamera: Boolean, modifier: Modifier =
 
 // MARK: - Canvas glyphs (SF Symbol approximations)
 
-/** SF `battery.NNpercent` (horizontal body, quarter-bucket fill). */
+/** SF `battery.NNpercent` (horizontal body, quarter-bucket fill), empty when unavailable. */
 @Composable
-fun BatteryGlyph(percent: Int, tint: Color, modifier: Modifier = Modifier) {
+fun BatteryGlyph(
+    percent: Int?,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    externalPower: Boolean = false,
+) {
+    val batteryPercent = validBatteryPercent(percent)
     // iOS buckets the fill at 0/25/50/75/100%.
     val fill =
         when {
-            percent < 13 -> 0f
-            percent < 38 -> 0.25f
-            percent < 63 -> 0.5f
-            percent < 88 -> 0.75f
+            batteryPercent == null || batteryPercent < 13 -> 0f
+            batteryPercent < 38 -> 0.25f
+            batteryPercent < 63 -> 0.5f
+            batteryPercent < 88 -> 0.75f
             else -> 1f
         }
     Canvas(modifier) {
@@ -423,7 +480,31 @@ fun BatteryGlyph(percent: Int, tint: Color, modifier: Modifier = Modifier) {
                 cornerRadius = CornerRadius(size.height * 0.18f),
             )
         }
+        if (externalPower) {
+            drawBatteryPowerMarker(bodyWidth)
+        }
     }
+}
+
+/** Dark charging bolt with a light keyline, matching iOS's visible powered-state treatment. */
+private fun DrawScope.drawBatteryPowerMarker(bodyWidth: Float): Unit {
+    val centerX = bodyWidth * 0.5f
+    val marker =
+        Path().apply {
+            moveTo(centerX + size.height * 0.08f, size.height * 0.08f)
+            lineTo(centerX - size.height * 0.25f, size.height * 0.53f)
+            lineTo(centerX + size.height * 0.02f, size.height * 0.53f)
+            lineTo(centerX - size.height * 0.14f, size.height * 0.92f)
+            lineTo(centerX + size.height * 0.38f, size.height * 0.42f)
+            lineTo(centerX + size.height * 0.11f, size.height * 0.42f)
+            close()
+        }
+    drawPath(
+        path = marker,
+        color = LiveDesign.text.copy(alpha = 0.92f),
+        style = Stroke(width = 0.9.dp.toPx()),
+    )
+    drawPath(path = marker, color = LiveDesign.background)
 }
 
 /** SF `iphone` outline. */

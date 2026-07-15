@@ -144,6 +144,15 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   resolution and codec controls remain read-only. **[VERIFY-ON-HW]** Confirm picker writes and the
   tightest fit/fill portrait plus landscape states against a supported Nikon body and inspect all
   four screen edges on the Android hardware floor.
+- **Android authoritative monitor readouts** (OPE-63, in progress): render live-view timecode only
+  from the camera frame accepted for display; render resolution, codec, card space, recording FPS,
+  camera battery, ISO, shutter, iris, focus, and white balance from `CameraPropertySnapshot`; and
+  read handset battery from Android. Missing, disabled, malformed, or unsupported values remain
+  visibly unavailable. Synthetic timecode exists only in the explicit debug feed. The readout path
+  adds no live-frame subscriber, so OPE-60 link scoring and DISP 3 stream shutdown retain their
+  existing ownership. **[VERIFY-ON-HW]** Confirm timecode on/off and frame progression, property and
+  battery readback (including external power), card-space formatting, live link bars, connected-idle
+  DISP 3 behavior, and every chrome edge against a supported Nikon body on the Android hardware floor.
 - **Android monitor feed texture parity** (OPE-72, to do) — mirror iOS's feed-local vignette and
   deterministic static grain after the camera frame/effect pipeline, clipped to the visible image
   without affecting clean-source analysis, framing/focus/horizon geometry, or monitor chrome.

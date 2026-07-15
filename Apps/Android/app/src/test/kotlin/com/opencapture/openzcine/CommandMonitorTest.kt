@@ -128,6 +128,58 @@ class CommandMonitorTest {
     }
 
     @Test
+    fun `malformed command values are unavailable and never expose writes`() {
+        val presentation =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        iso = 0,
+                        exposureMode = " ",
+                        shutterMode = CameraShutterMode.SPEED,
+                        shutterLocked = false,
+                        shutterSpeed = "",
+                        iris = "\t",
+                        whiteBalanceMode = " ",
+                        whiteBalanceKelvin = 0,
+                        resolution = " ",
+                        frameRate = -1,
+                        codec = "",
+                        storage = CameraStorageStatus(100, 101),
+                        lens = "\n",
+                        focusMode = " ",
+                        focusArea = "",
+                        focusSubject = "\t",
+                        microphoneSensitivity = " ",
+                        audioSensitivity = "",
+                        audioInput = " ",
+                        windFilter = "",
+                        inputAttenuator = "\t",
+                        audio32BitFloat = " ",
+                        vibrationReduction = "",
+                        electronicVr = " ",
+                        cameraGrid = "\t",
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = " ", model = "", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        assertTrue(presentation.tiles.all { it.value == "—" && it.request == null })
+        assertTrue(
+            presentation.sideSections
+                .flatMap(CommandSideSectionPresentation::cells)
+                .all { it.value == "—" && it.request == null },
+        )
+        assertEquals("—", presentation.storage)
+        assertEquals("—", presentation.camera)
+        assertEquals("—", presentation.lens)
+        assertEquals("—", presentation.frameRate)
+    }
+
+    @Test
     fun `camera shutter lock keeps the current value visible but blocks writes`() {
         val presentation =
             commandDashboardPresentation(

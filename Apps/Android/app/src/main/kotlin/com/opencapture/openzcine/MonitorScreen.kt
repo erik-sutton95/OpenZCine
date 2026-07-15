@@ -30,7 +30,6 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,6 +55,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
@@ -74,10 +76,8 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
@@ -92,16 +92,6 @@ import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-
-/**
- * Monitor values that still await OPE-63's timecode/platform battery seam.
- * Camera settings and storage no longer fall back to this demo state.
- */
-internal object DemoMonitorState {
-    const val FRAME_RATE = 25
-    const val CAMERA_BATTERY = 80
-    const val PHONE_BATTERY = 84
-}
 
 /** Places a composable at an absolute zone frame (full-viewport dp coordinates). */
 internal fun Modifier.zone(frame: ZoneFrame): Modifier =
@@ -217,6 +207,8 @@ fun MonitorScreen(
         }
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
+    val cameraReadouts = remember(cameraProperties) { monitorCameraReadouts(cameraProperties) }
+    val phoneBatteryReadout = rememberPhoneBatteryReadout()
     val exposureAssistCameraInput =
         remember(cameraProperties.codec, cameraProperties.iso, cameraProperties.baseIso) {
             ExposureAssistCameraInput(
@@ -258,7 +250,7 @@ fun MonitorScreen(
     }
 
     // Shell state, iOS-model-equivalent: DISP index (0 live, 1 clean,
-    // 2 command), the interface lock, and the fake-clock timecode tick.
+    // 2 command) and the interface lock.
     // Recording is owned by the CameraSession; the shell only renders its
     // state and asks it to send a Nikon command.
     var dispIndex by remember { mutableIntStateOf(0) }
@@ -474,16 +466,6 @@ fun MonitorScreen(
         }
         onDispose { shutter?.disarm() }
     }
-    var frameCount by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) {
-        val startNanos = System.nanoTime()
-        while (true) {
-            delay(40)
-            frameCount =
-                (System.nanoTime() - startNanos) * DemoMonitorState.FRAME_RATE / 1_000_000_000L
-        }
-    }
-
     // Sticky-immersive bar cycle. The platform's own transient reveal is
     // deliberately opaque to apps (measured on the SM-A127F: no WindowInsets
     // change, no visibility event, and only an unreliable zero-inset
@@ -717,6 +699,14 @@ fun MonitorScreen(
         // can hold the shared Swift source open, so its final collector ends
         // live view.
         val monitorFrameSource = monitorPreviewFrameSource(activeFrameSource, isCommand)
+        // The chrome observes only frames the existing feed decoder actually
+        // presents. This adds no LiveFrameSource subscriber, so OPE-60's
+        // current-stream health collector remains the sole link-score input
+        // and DISP 3 still releases native live view.
+        val timecodeOwner = monitorTimecodeOwner(sessionState)
+        val timecodeRetention =
+            remember(session, timecodeOwner) { MonitorTimecodeRetention(timecodeOwner) }
+        val presentedTimecode = timecodeRetention.timecodeFor(sessionState)
         val watchRelayState =
             remember(
                 sessionState,
@@ -876,7 +866,10 @@ fun MonitorScreen(
                             scaleY = localFraming.verticalPresentationScale
                         },
                         onFrame = glass::submit,
-                        onPresentedFrame = wearRelay::ingestPresentedFrame,
+                        onPresentedFrame = { frame, bitmap, baker ->
+                            timecodeRetention.accept(frame.timecode)
+                            wearRelay.ingestPresentedFrame(frame, bitmap, baker)
+                        },
                         presentationState = liveFeedPresentation,
                         effects = assist.effects,
                         configuration = operatorSettings.feedEffectsConfiguration,
@@ -922,7 +915,8 @@ fun MonitorScreen(
                     isFill = isPortraitFill,
                     locked = locked,
                     recording = recording,
-                    frameCount = frameCount,
+                    timecode = presentedTimecode,
+                    cameraReadouts = cameraReadouts,
                     assist = assist,
                     operatorSettings = operatorSettings,
                     commandPresentation = commandPresentation,
@@ -973,9 +967,7 @@ fun MonitorScreen(
                     val top = maxOf(14f, safeTop)
                     CommandDashboard(
                         recording = recording,
-                        // The dashboard does not yet own the per-frame timecode state.
-                        // Keep it neutral rather than showing the shell clock.
-                        frameCount = null,
+                        timecode = presentedTimecode,
                         presentation = commandPresentation,
                         controlsEnabled = commandControlsEnabled,
                         pendingControl = pendingCommandControl,
@@ -1007,24 +999,16 @@ fun MonitorScreen(
                                 InfoPill(
                                     compact = isClean,
                                     recording = recording,
-                                    frameCount = frameCount,
+                                    timecode = presentedTimecode,
                                     recReadoutVisible = operatorSettings.recReadoutVisible.value,
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
                                     fpsReadoutVisible = operatorSettings.fpsReadoutVisible.value,
                                     signalBars = actualLinkHealth.presentation.signalBars,
-                                    resolution =
-                                        commandPresentation.tiles
-                                            .firstOrNull {
-                                                it.kind == CommandTileKind.RESOLUTION_FRAMERATE
-                                            }
-                                            ?.value ?: "—",
-                                    codec =
-                                        commandPresentation.tiles
-                                            .firstOrNull { it.kind == CommandTileKind.CODEC }
-                                            ?.value ?: "—",
-                                    media = commandPresentation.storage,
-                                    fps = commandPresentation.frameRate,
+                                    resolution = cameraReadouts.resolution,
+                                    codec = cameraReadouts.codec,
+                                    media = cameraReadouts.media,
+                                    fps = cameraReadouts.framesPerSecond,
                                 )
                             }
                         }
@@ -1085,16 +1069,18 @@ fun MonitorScreen(
                 LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
                 zones.batteryPhone?.let {
                     BatteryIndicatorColumn(
-                        percent = DemoMonitorState.PHONE_BATTERY,
+                        percent = phoneBatteryReadout.percent,
                         isCamera = false,
                         modifier = Modifier.zone(it),
+                        externalPower = phoneBatteryReadout.externalPower,
                     )
                 }
                 zones.batteryCamera?.let {
                     BatteryIndicatorColumn(
-                        percent = DemoMonitorState.CAMERA_BATTERY,
+                        percent = cameraReadouts.batteryPercent,
                         isCamera = true,
                         modifier = Modifier.zone(it),
+                        externalPower = cameraReadouts.externalPower,
                     )
                 }
                 AuxCircleButton(
@@ -1277,7 +1263,7 @@ fun MonitorScreen(
 private fun InfoPill(
     compact: Boolean,
     recording: Boolean,
-    frameCount: Long,
+    timecode: LiveFrameTimecode?,
     recReadoutVisible: Boolean,
     codecReadoutVisible: Boolean,
     mediaReadoutVisible: Boolean,
@@ -1294,11 +1280,7 @@ private fun InfoPill(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (recReadoutVisible) RecordChip(recording)
-        Text(
-            timecodeAnnotated(frameCount, DemoMonitorState.FRAME_RATE),
-            style = chromeStyle(20f, FontWeight.Medium, mono = true),
-            maxLines = 1,
-        )
+        CameraTimecodeReadout(timecode = timecode, sizeSp = 20f, weight = FontWeight.Medium)
         if (!compact) {
             ReadoutPill(resolution) { VideoGlyph(LiveDesign.muted) }
             if (codecReadoutVisible) {
@@ -1329,7 +1311,8 @@ private fun PortraitChrome(
     isFill: Boolean,
     locked: Boolean,
     recording: Boolean,
-    frameCount: Long,
+    timecode: LiveFrameTimecode?,
+    cameraReadouts: MonitorCameraReadouts,
     assist: AssistState,
     operatorSettings: OperatorSettings,
     commandPresentation: CommandDashboardPresentation,
@@ -1355,8 +1338,10 @@ private fun PortraitChrome(
     }
     if (operatorSettings.statusBarVisible.value) {
         PortraitInfoBar(
-            frameCount = frameCount,
-            media = commandPresentation.storage,
+            timecode = timecode,
+            media = cameraReadouts.media,
+            cameraBatteryPercent = cameraReadouts.batteryPercent,
+            cameraExternalPower = cameraReadouts.externalPower,
             modifier = Modifier.zone(zones.infoBar),
         )
     }
@@ -1394,6 +1379,7 @@ private fun PortraitChrome(
         if (isCommand) {
             PortraitCommandDashboard(
                 presentation = commandPresentation,
+                timecode = timecode,
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
                 onOpenControl = onOpenCommandControl,
@@ -1523,10 +1509,14 @@ private fun PortraitChrome(
  */
 @Composable
 private fun PortraitInfoBar(
-    frameCount: Long,
+    timecode: LiveFrameTimecode?,
     media: String,
+    cameraBatteryPercent: Int?,
+    cameraExternalPower: Boolean?,
     modifier: Modifier = Modifier,
 ) {
+    val cameraBattery =
+        monitorBatteryPresentation(cameraBatteryPercent, cameraExternalPower)
     Box(modifier.background(LiveDesign.glass).padding(horizontal = 16.dp)) {
         Text(
             media,
@@ -1536,23 +1526,24 @@ private fun PortraitInfoBar(
             modifier = Modifier.align(Alignment.Center),
         )
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                timecodeAnnotated(frameCount, DemoMonitorState.FRAME_RATE),
-                style = chromeStyle(15f, FontWeight.Normal, mono = true),
-                maxLines = 1,
-            )
+            CameraTimecodeReadout(timecode = timecode, sizeSp = 15f)
             Spacer(Modifier.weight(1f))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BatteryGlyph(
-                    DemoMonitorState.CAMERA_BATTERY,
-                    LiveDesign.accent,
-                    Modifier.size(22.dp, 11.dp),
+                    cameraBattery.percent,
+                    if (cameraBattery.percent == null && !cameraBattery.externalPower) {
+                        LiveDesign.faint
+                    } else {
+                        LiveDesign.accent
+                    },
+                    modifier = Modifier.size(22.dp, 11.dp),
+                    externalPower = cameraBattery.externalPower,
                 )
                 Text(
-                    "${DemoMonitorState.CAMERA_BATTERY}%",
+                    cameraBattery.label,
                     style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
                     color = LiveDesign.text.copy(alpha = 0.72f),
                 )
