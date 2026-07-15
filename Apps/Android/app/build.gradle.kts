@@ -179,6 +179,12 @@ tasks.named("preBuild").configure {
     dependsOn(stageSwiftCore)
 }
 
+// Brand resource tests compare Android derivatives with the canonical iOS
+// catalog assets from the repository root, independent of Gradle's test cwd.
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    systemProperty("openzcine.repositoryRoot", repositoryRoot.absolutePath)
+}
+
 /**
  * Inspects the unsigned release APK and AAB without extracting either archive.
  * Every staged Swift runtime library must be present under the sole supported
@@ -210,6 +216,7 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)

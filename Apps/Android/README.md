@@ -14,9 +14,15 @@ write selectors are available. General monitor picker panels and the portrait fi
 deferred. Without the staged Swift core the app falls back to the placeholder monitor ("No
 camera") and every unavailable command value is shown as an em dash rather than a demo value.
 
-The installed app uses an adaptive launcher icon with the same monitor, exposure-graph, and camera
-language as the iOS app icon. Its foreground stays inside Android's adaptive safe zone, so circular,
-squircle, and themed launcher masks retain the mark rather than cropping it.
+Android branding is mechanically derived from the iOS asset catalog, which is the source of truth:
+`ios/Runner/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` supplies every normal, round, and
+adaptive launcher surface, while `ios/Runner/Assets.xcassets/AppLogo.imageset/AppLogo.png` supplies
+the startup splash. The adaptive foreground scales the complete AppIcon to 66 dp inside Android's
+108 dp canvas and only extends its edge pixels into the maskable area, so no launcher shape crops
+the mark. The splash places the byte-exact 512 px AppLogo at the centre of a transparent 288 dp
+xxxhdpi canvas. AndroidX SplashScreen delegates that resource to the platform on API 31+ and renders
+the same branded fallback on the app's API 29-30 floor before restoring the fullscreen,
+edge-to-edge runtime theme. Do not replace either raster with an Android-specific redraw.
 
 - **Build:** `just android-build` from the repo root (or `just android-check` for build + tests + lint).
 - **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
