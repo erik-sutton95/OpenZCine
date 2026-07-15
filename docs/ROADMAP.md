@@ -127,6 +127,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   where 100% matches the former 25% appearance and saved iOS settings migrate without a visual jump.
 - **Classic-notch iPhone layout hardening** (in progress) — fit the 16:9 feed tightly beside the
   notch and keep live-view chrome collision-free on compact landscape devices such as iPhone 11.
+- **Compact-Pro guide panel hardening** (in progress) — keep cinema aspect-ratio choices on one
+  line in the five-column Guides grid on non-Max iPhone 15 Pro, 16 Pro, and 17 Pro displays.
 - **Android beta-readiness parity** (planned) — port the diagnostics, support links, and live-view
   guide after the iOS behavior is validated with external testers.
 

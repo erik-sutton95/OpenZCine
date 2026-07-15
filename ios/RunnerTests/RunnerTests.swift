@@ -1,10 +1,22 @@
 import CoreImage
+import SwiftUI
 import UIKit
 import XCTest
 
 @testable import Runner
 
 final class RunnerTests: XCTestCase {
+
+    @MainActor
+    func testGlassChoiceKeepsCinemaRatioOnOneLineAtCompactProWidth() {
+        let choice = GlassChoice(title: "2.76:1")
+            .frame(width: 48)
+        let host = UIHostingController(rootView: choice)
+
+        let fittingSize = host.sizeThatFits(in: CGSize(width: 48, height: 1_000))
+
+        XCTAssertLessThanOrEqual(fittingSize.height, 52)
+    }
 
     func testDemoSettingsTabSelection() {
         XCTAssertEqual(OperatorSettingsTab.demoLaunchTab("assist"), .assist)
