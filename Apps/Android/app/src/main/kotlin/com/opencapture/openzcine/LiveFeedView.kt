@@ -16,12 +16,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.core.LiveCameraLevel
 import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFrame
@@ -189,6 +194,9 @@ class JpegFrameDecoder {
  * see [FeedEffectsRenderer]) into the drawn frame. The default preserves the
  * plain feed unless the debug harness switched effects on; devices below
  * API 33 (AGSL) or builds without the staged Swift core always render plain.
+ * [configuration] is local operator choice only; [cameraInput] is forwarded
+ * unchanged to Swift, which owns camera curve/clip policy for both the
+ * renderer and the optional false-colour reference key.
  */
 @Composable
 fun LiveFeedView(
@@ -197,6 +205,8 @@ fun LiveFeedView(
     onFrame: ((Bitmap) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects = FeedEffectsState.current,
+    configuration: FeedEffectsConfiguration = FeedEffectsConfiguration(),
+    cameraInput: ExposureAssistCameraInput = ExposureAssistCameraInput(),
     lutLibrary: AndroidLutLibrary? = null,
 ) {
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
@@ -208,14 +218,27 @@ fun LiveFeedView(
         if (stored != null) lutLibrary?.prepare(stored)
     }
     val renderer =
-        remember(effects, lutLibrary, lutRenderGeneration) {
+        remember(effects, configuration, cameraInput, lutLibrary, lutRenderGeneration) {
             when {
                 effects.isIdentity -> null
-                Build.VERSION.SDK_INT >= 33 -> FeedEffectsRenderer.create(effects, lutLibrary)
+                Build.VERSION.SDK_INT >= 33 ->
+                    FeedEffectsRenderer.create(effects, configuration, cameraInput, lutLibrary)
                 else -> {
                     Log.w(TAG, "feed effects need Android 13+ (AGSL); rendering the plain feed")
                     null
                 }
+            }
+        }
+    val falseColorReference =
+        remember(renderer, effects.falseColor, configuration.falseColorReferenceEnabled, cameraInput) {
+            // Do not show a palette for an effect that failed closed (for
+            // example below API 33 or if the Swift payload was rejected).
+            if (renderer == null) {
+                null
+            } else {
+                effects.falseColor
+                    ?.takeIf { configuration.falseColorReferenceEnabled }
+                    ?.let { scale -> resolveFalseColorReference(scale, cameraInput) }
             }
         }
 
@@ -269,6 +292,39 @@ fun LiveFeedView(
         } else {
             drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
         }
+        falseColorReference?.let { reference ->
+            drawFalseColorReference(reference, content.left.toFloat(), content.top.toFloat(), content.width.toFloat())
+        }
+    }
+}
+
+/** Draws the Swift-derived palette key only while false colour is actively rendered. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorReference(
+    reference: FeedFalseColorReference,
+    feedLeft: Float,
+    feedTop: Float,
+    feedWidth: Float,
+) {
+    if (reference.colors.isEmpty()) return
+    val block = 8.dp.toPx()
+    val gap = 2.dp.toPx()
+    val padding = 5.dp.toPx()
+    val keyWidth = padding * 2 + reference.colors.size * block + (reference.colors.size - 1) * gap
+    val left = (feedLeft + feedWidth - keyWidth - 8.dp.toPx()).coerceAtLeast(feedLeft + 4.dp.toPx())
+    val top = feedTop + 8.dp.toPx()
+    drawRoundRect(
+        color = Color(0.025f, 0.036f, 0.03f, 0.82f),
+        topLeft = Offset(left, top),
+        size = Size(keyWidth, block + padding * 2),
+        cornerRadius = CornerRadius(4.dp.toPx()),
+    )
+    reference.colors.forEachIndexed { index, rgb ->
+        drawRoundRect(
+            color = Color(rgb[0], rgb[1], rgb[2]),
+            topLeft = Offset(left + padding + index * (block + gap), top + padding),
+            size = Size(block, block),
+            cornerRadius = CornerRadius(1.dp.toPx()),
+        )
     }
 }
 

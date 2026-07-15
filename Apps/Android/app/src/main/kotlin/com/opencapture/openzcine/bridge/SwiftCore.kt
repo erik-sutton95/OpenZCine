@@ -164,8 +164,10 @@ object SwiftCore {
      * Samples one downsampled RGBA frame for the waveform / parade /
      * histogram scopes: `[N, (x, luma, r, g, b) × N, 4 × 256 display bins]`
      * with all levels already on the core's 3-anchor display axis — see
-     * [ScopeTraces.parse] and the Swift mirror `ScopeFrameWire.traces`. The
-     * [crushClipCompensationRaw] argument is the persisted raw value for
+     * [ScopeTraces.parse] and the Swift mirror `ScopeFrameWire.traces`.
+     * [clipNative] is a camera-resolved warning endpoint returned by the
+     * Swift exposure facade, keeping the scope axis aligned with false colour
+     * and zebras. [crushClipCompensationRaw] is the persisted raw value for
      * Swift's `AssistConfiguration.CrushClipCompensation`; Swift alone
      * applies it when measuring the additive Traffic Lights trailer.
      * Blocking (one CPU sampling pass); call from a background dispatcher.
@@ -176,6 +178,7 @@ object SwiftCore {
         height: Int,
         bytesPerRow: Int,
         curve: Int,
+        clipNative: Float,
         crushClipCompensationRaw: Int,
     ): FloatArray
 
@@ -183,8 +186,9 @@ object SwiftCore {
      * Samples one downsampled RGBA frame for the vectorscope: a 128×128
      * premultiplied-RGBA density image of the BT.709 chroma plane, computed
      * from the clean points pushed through the core's built-in display tone
-     * map (`ScopeFrameWire.vectorPixels`). Empty when the frame yields no
-     * samples. Blocking; call from a background dispatcher.
+     * map (`ScopeFrameWire.vectorPixels`). [zoom] is the stable Swift-owned
+     * trace-gain ordinal (0 = 1×, 1 = 2×, 2 = 4×). Empty when the frame yields
+     * no samples. Blocking; call from a background dispatcher.
      */
     external fun scopeVector(
         rgba: ByteArray,
@@ -192,6 +196,7 @@ object SwiftCore {
         height: Int,
         bytesPerRow: Int,
         curve: Int,
+        zoom: Int,
     ): ByteArray
 
     // ── Feed effects (colour math baked in the core, uploaded by Kotlin) ──
@@ -208,12 +213,84 @@ object SwiftCore {
     external fun bakeLut(lookOrdinal: Int, size: Int): ByteArray?
 
     /**
+     * Resolves the active camera signal mapping in Swift: `[curveOrdinal,
+     * blackNative, middleGrayNative, clipNative]`. Kotlin forwards raw
+     * camera metadata only; it never selects a curve or derives a clip code.
+     */
+    external fun exposureAssistMapping(codec: String?, iso: Long, baseIso: String?): FloatArray
+
+    /**
+     * Converts a canonical monitor-percent zebra threshold into an editor
+     * value. Unsupported [unitOrdinal] returns `NaN` and callers must leave
+     * the saved canonical setting untouched.
+     */
+    external fun zebraEditorValue(
+        codec: String?,
+        iso: Long,
+        baseIso: String?,
+        unitOrdinal: Int,
+        monitorPercent: Float,
+    ): Float
+
+    /**
+     * Converts a native-code or monitor-IRE zebra editor value into the
+     * canonical 0…100 monitor axis. Unsupported input returns `NaN`.
+     */
+    external fun zebraMonitorPercent(
+        codec: String?,
+        iso: Long,
+        baseIso: String?,
+        unitOrdinal: Int,
+        editorValue: Float,
+    ): Float
+
+    /**
+     * Swift-resolved shader record for source-measured peaking and dual
+     * zebras. It contains the camera curve, de-log anchors, sensitivity
+     * threshold/ramp, and all overlay RGB; Kotlin only validates and uploads
+     * it (see `FeedEffectsRenderConfiguration`).
+     */
+    external fun feedEffectsConfiguration(
+        codec: String?,
+        iso: Long,
+        baseIso: String?,
+        peakingSensitivity: Int,
+        peakingColor: Int,
+        highlightEnabled: Boolean,
+        highlightIre: Float,
+        highlightColor: Int,
+        midtoneEnabled: Boolean,
+        midtoneIre: Float,
+        midtoneColor: Int,
+    ): FloatArray?
+
+    /**
      * The core's false-colour cube (64³) in the same packed-2D RGBA8 grid.
      * [scaleOrdinal] is `FeedFalseColorScale.wireOrdinal`; [curveOrdinal]
-     * selects the signal curve (0 = Log3G10, 1 = N-Log). Null for unknown
-     * ordinals.
+     * and [clipNative] are already resolved by [exposureAssistMapping]. Null
+     * for unsupported scales or curve records.
      */
-    external fun bakeFalseColorCube(scaleOrdinal: Int, curveOrdinal: Int): ByteArray?
+    external fun bakeFalseColorCube(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): ByteArray?
+
+    /** Swift-owned Limits paint cube for composition over the selected LUT. */
+    external fun bakeFalseColorLimitsPaint(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    /** Swift-owned Limits zone-weight cube paired with the paint cube. */
+    external fun bakeFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    /**
+     * Compact reference palette `[count, r, g, b × count]`, taken from the
+     * exact false-colour scale/mapping that produced the GPU cube.
+     */
+    external fun falseColorReference(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): FloatArray?
 
     /**
      * Assist thresholds on the normalized 0–1 code axis:

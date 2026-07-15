@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -58,6 +59,10 @@ import com.opencapture.openzcine.bridge.TrafficLightsBarSide
 import com.opencapture.openzcine.bridge.TrafficLightsReading
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.openzcine.settings.ScopeAssistConfiguration
+import com.opencapture.openzcine.settings.ScopeGuideLines
+import com.opencapture.openzcine.settings.ScopeParadeMode
+import com.opencapture.openzcine.settings.ScopeWaveformMode
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.cos
@@ -74,9 +79,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TAG = "ZCScope"
-
-/** Wire ordinal for RED Log3G10 — the ZR live-view default and iOS fallback curve. */
-private const val CURVE_LOG3G10 = 0
 
 /** Scope refresh period — ~10 Hz, timer-driven on an absolute schedule. */
 private const val SCOPE_PERIOD_NANOS = 100_000_000L
@@ -178,13 +180,27 @@ fun portraitDisplayedScopes(selected: Set<ScopeKind>, activationOrder: List<Scop
 }
 
 /** One floating panel's default physical size, mirroring the iOS base footprints. */
-fun scopePanelSize(kind: ScopeKind): Pair<Float, Float> =
-    when (kind) {
+fun scopePanelSize(
+    kind: ScopeKind,
+    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
+): Pair<Float, Float> {
+    val (width, height) =
+        when (kind) {
         ScopeKind.WAVEFORM, ScopeKind.PARADE -> 250f to 153f
         ScopeKind.HISTOGRAM -> 250f to 77f
         ScopeKind.VECTORSCOPE -> 190f to 190f
         ScopeKind.TRAFFIC_LIGHTS -> 74f to 168f
     }
+    val scale =
+        when (kind) {
+            ScopeKind.WAVEFORM -> configuration.waveformScale
+            ScopeKind.PARADE -> configuration.paradeScale
+            ScopeKind.HISTOGRAM -> configuration.histogramScale
+            ScopeKind.VECTORSCOPE -> configuration.vectorscopeScale
+            ScopeKind.TRAFFIC_LIGHTS -> configuration.trafficLightsScale
+        }
+    return width * scale to height * scale
+}
 
 /**
  * Default landscape frame for a floating panel. The anchors mirror iOS's
@@ -198,8 +214,9 @@ fun floatingScopeFrame(
     feed: ZoneFrame,
     infoBar: ZoneFrame,
     viewport: ZoneFrame = feed,
+    configuration: ScopeAssistConfiguration = ScopeAssistConfiguration(),
 ): ZoneFrame {
-    val (width, height) = scopePanelSize(kind)
+    val (width, height) = scopePanelSize(kind, configuration)
     val top = max(feed.y, infoBar.y + infoBar.height) + SCOPE_PANEL_EDGE_GAP
     val bottomEdge =
         min(
@@ -251,6 +268,11 @@ private object ScopePalette {
     val paradeRed = rgba(255, 86, 78, 1.0f)
     val paradeGreen = rgba(102, 232, 132, 1.0f)
     val paradeBlue = rgba(92, 156, 255, 1.0f)
+    // RGB waveform overlays share one plot, so iOS uses lower-alpha colours
+    // than the separated full-opacity parade lanes.
+    val overlayRed = rgba(255, 64, 54, 0.55f)
+    val overlayGreen = rgba(70, 240, 110, 0.55f)
+    val overlayBlue = rgba(72, 148, 255, 0.62f)
     val boundary = rgba(220, 235, 225, 0.8f)
     val clip = rgba(255, 150, 142, 0.8f)
     val middle = rgba(246, 241, 226, 0.8f)
@@ -306,6 +328,8 @@ fun ScopePanels(
     portraitScopes: List<ScopeKind>,
     crushClipCompensationRaw: Int,
     histogramTrafficLightsEnabled: Boolean,
+    configuration: ScopeAssistConfiguration,
+    cameraInput: ExposureAssistCameraInput,
     source: com.opencapture.openzcine.core.LiveFrameSource,
     isPortrait: Boolean,
     feed: ZoneFrame,
@@ -322,6 +346,9 @@ fun ScopePanels(
     // This guard also stops all collection when no displayed panel exists.
     if (displayed.isEmpty()) return
     if (isPortrait && scopeZone == null) return
+    // A scope cannot honor camera-dependent display mapping without the Swift
+    // facade, so fail closed rather than locally selecting a fallback curve.
+    val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return
 
     val snapshot =
         rememberScopeSnapshot(
@@ -329,16 +356,26 @@ fun ScopePanels(
             displayed.toSet(),
             crushClipCompensationRaw,
             histogramTrafficLightsEnabled,
+            mapping.curveOrdinal,
+            mapping.clipNative,
+            configuration.vectorscopeZoom.wireOrdinal,
         )
     val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
     val anchors =
-        remember(needsAnchors) {
-            if (needsAnchors) ScopeAnchors.parse(SwiftCore.scopeAnchors(CURVE_LOG3G10)) else null
+        remember(needsAnchors, mapping.curveOrdinal) {
+            if (needsAnchors) ScopeAnchors.parse(SwiftCore.scopeAnchors(mapping.curveOrdinal)) else null
         }
 
     if (isPortrait) {
         val zone = requireNotNull(scopeZone)
-        PortraitScopePanels(displayed, zone, anchors, snapshot, histogramTrafficLightsEnabled)
+        PortraitScopePanels(
+            displayed,
+            zone,
+            anchors,
+            snapshot,
+            histogramTrafficLightsEnabled,
+            configuration,
+        )
     } else {
         LandscapeScopePanels(
             displayed,
@@ -348,6 +385,7 @@ fun ScopePanels(
             anchors,
             snapshot,
             histogramTrafficLightsEnabled,
+            configuration,
         )
     }
 }
@@ -360,6 +398,7 @@ private fun PortraitScopePanels(
     anchors: ScopeAnchors?,
     snapshot: ScopeDrawData?,
     histogramTrafficLightsEnabled: Boolean,
+    configuration: ScopeAssistConfiguration,
 ) {
     val spacing = 8f
     val panelHeight = max(0f, (zone.height - spacing * (displayed.size - 1)) / displayed.size)
@@ -370,6 +409,8 @@ private fun PortraitScopePanels(
                 anchors = anchors,
                 data = snapshot,
                 histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
+                configuration = configuration,
+                applyFootprintScale = true,
                 fillsWidth = kind == ScopeKind.TRAFFIC_LIGHTS,
                 modifier =
                     Modifier.zone(
@@ -395,18 +436,21 @@ private fun LandscapeScopePanels(
     anchors: ScopeAnchors?,
     snapshot: ScopeDrawData?,
     histogramTrafficLightsEnabled: Boolean,
+    configuration: ScopeAssistConfiguration,
 ) {
     val context = LocalContext.current.applicationContext
     val store = remember(context) { ScopePanelPlacementStore(context) }
     Box(Modifier.fillMaxSize()) {
         displayed.forEach { kind ->
-            val default = floatingScopeFrame(kind, feed, infoBar, viewport)
+            val default = floatingScopeFrame(kind, feed, infoBar, viewport, configuration)
             FloatingScopePanel(kind, default, viewport, store) { modifier ->
                 ScopePanel(
                     kind = kind,
                     anchors = anchors,
                     data = snapshot,
                     histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
+                    configuration = configuration,
+                    applyFootprintScale = false,
                     fillsWidth = false,
                     modifier = modifier,
                 )
@@ -483,21 +527,44 @@ private fun ScopePanel(
     anchors: ScopeAnchors?,
     data: ScopeDrawData?,
     histogramTrafficLightsEnabled: Boolean,
+    configuration: ScopeAssistConfiguration,
+    applyFootprintScale: Boolean,
     fillsWidth: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val footprintScale =
+        if (!applyFootprintScale) {
+            1f
+        } else {
+            when (kind) {
+                ScopeKind.WAVEFORM -> configuration.waveformScale
+                ScopeKind.PARADE -> configuration.paradeScale
+                ScopeKind.HISTOGRAM -> configuration.histogramScale
+                ScopeKind.VECTORSCOPE -> configuration.vectorscopeScale
+                ScopeKind.TRAFFIC_LIGHTS -> configuration.trafficLightsScale
+            }
+        }
+    val scaledModifier =
+        if (footprintScale == 1f) {
+            modifier
+        } else {
+            modifier.graphicsLayer {
+                scaleX = footprintScale
+                scaleY = footprintScale
+            }
+        }
     if (kind == ScopeKind.TRAFFIC_LIGHTS) {
-        TrafficLightsPanel(data?.trafficLights ?: TrafficLightsReading.EMPTY, fillsWidth, modifier)
+        TrafficLightsPanel(data?.trafficLights ?: TrafficLightsReading.EMPTY, fillsWidth, scaledModifier)
         return
     }
     val resolvedAnchors = anchors ?: return
     Box(
-        modifier
+        scaledModifier
             .background(ScopePalette.panelBackground, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape),
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            drawScope(kind, resolvedAnchors, data, histogramTrafficLightsEnabled)
+            drawScope(kind, resolvedAnchors, data, histogramTrafficLightsEnabled, configuration)
         }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(top = 4.dp),
@@ -511,7 +578,7 @@ private fun ScopePanel(
                 maxLines = 1,
             )
             Text(
-                kind.chip,
+                scopeChip(kind, configuration),
                 style = chromeStyle(9.5f, FontWeight.Bold, mono = true),
                 color = LiveDesign.text.copy(alpha = 0.58f),
                 maxLines = 1,
@@ -519,6 +586,16 @@ private fun ScopePanel(
         }
     }
 }
+
+/** Compact current-option readout in each scope title bar. */
+private fun scopeChip(kind: ScopeKind, configuration: ScopeAssistConfiguration): String =
+    when (kind) {
+        ScopeKind.WAVEFORM -> configuration.waveformMode.label
+        ScopeKind.PARADE -> configuration.paradeMode.label
+        ScopeKind.HISTOGRAM -> ScopeKind.HISTOGRAM.chip
+        ScopeKind.VECTORSCOPE -> "MON · ${configuration.vectorscopeZoom.label}"
+        ScopeKind.TRAFFIC_LIGHTS -> ScopeKind.TRAFFIC_LIGHTS.chip
+    }
 
 /** Real RED-style RGB goal-post meter; side/fill arrives fully computed from Swift. */
 @Composable
@@ -699,10 +776,21 @@ private fun rememberScopeSnapshot(
     selected: Set<ScopeKind>,
     crushClipCompensationRaw: Int,
     histogramTrafficLightsEnabled: Boolean,
+    curveOrdinal: Int,
+    clipNative: Float,
+    vectorscopeZoomOrdinal: Int,
 ): ScopeDrawData? {
     val data = remember { mutableStateOf<ScopeDrawData?>(null) }
     val ordered = ScopeKind.canonical.filter(selected::contains)
-    LaunchedEffect(source, ordered, crushClipCompensationRaw, histogramTrafficLightsEnabled) {
+    LaunchedEffect(
+        source,
+        ordered,
+        crushClipCompensationRaw,
+        histogramTrafficLightsEnabled,
+        curveOrdinal,
+        clipNative,
+        vectorscopeZoomOrdinal,
+    ) {
         data.value = null
         withContext(Dispatchers.Default) {
             pumpScopes(
@@ -710,6 +798,9 @@ private fun rememberScopeSnapshot(
                 ordered.toSet(),
                 crushClipCompensationRaw,
                 histogramTrafficLightsEnabled,
+                curveOrdinal,
+                clipNative,
+                vectorscopeZoomOrdinal,
             ) { data.value = it }
         }
     }
@@ -725,6 +816,9 @@ private suspend fun pumpScopes(
     selected: Set<ScopeKind>,
     crushClipCompensationRaw: Int,
     histogramTrafficLightsEnabled: Boolean,
+    curveOrdinal: Int,
+    clipNative: Float,
+    vectorscopeZoomOrdinal: Int,
     present: (ScopeDrawData) -> Unit,
 ): Unit = coroutineScope {
     val demand = scopeSamplingDemand(selected, histogramTrafficLightsEnabled)
@@ -759,7 +853,10 @@ private suspend fun pumpScopes(
                     ScopeTraces.parse(
                         SwiftCore.scopeTraces(
                             reduced.rgba, reduced.width, reduced.height,
-                            reduced.bytesPerRow, CURVE_LOG3G10, crushClipCompensationRaw,
+                            reduced.bytesPerRow,
+                            curveOrdinal,
+                            clipNative,
+                            crushClipCompensationRaw,
                         ),
                     )
                 } catch (error: IllegalArgumentException) {
@@ -773,8 +870,10 @@ private suspend fun pumpScopes(
             if (demand.vector) {
                 vectorBitmaps.imageFrom(
                     SwiftCore.scopeVector(
-                        reduced.rgba, reduced.width, reduced.height,
-                        reduced.bytesPerRow, CURVE_LOG3G10,
+                            reduced.rgba, reduced.width, reduced.height,
+                        reduced.bytesPerRow,
+                        curveOrdinal,
+                        vectorscopeZoomOrdinal,
                     ),
                 )
             } else {
@@ -953,6 +1052,7 @@ private fun DrawScope.drawScope(
     anchors: ScopeAnchors,
     data: ScopeDrawData?,
     histogramTrafficLightsEnabled: Boolean,
+    configuration: ScopeAssistConfiguration,
 ) {
     val plot =
         if (kind == ScopeKind.HISTOGRAM) {
@@ -962,9 +1062,19 @@ private fun DrawScope.drawScope(
         }
     when (kind) {
         ScopeKind.WAVEFORM, ScopeKind.PARADE -> {
-            data?.trailTraces?.let { drawTrace(kind, it, plot, ScopePalette.TRAIL_DECAY) }
-            data?.traces?.let { drawTrace(kind, it, plot, 1f) }
-            drawAxisGuides(anchors, plot)
+            val brightness =
+                if (kind == ScopeKind.WAVEFORM) {
+                    configuration.waveformBrightness / 100f
+                } else {
+                    configuration.paradeBrightness / 100f
+                }
+            data?.trailTraces?.let {
+                drawTrace(kind, it, plot, ScopePalette.TRAIL_DECAY * brightness, configuration)
+            }
+            data?.traces?.let { drawTrace(kind, it, plot, brightness, configuration) }
+            val guides =
+                if (kind == ScopeKind.WAVEFORM) configuration.waveformGuides else configuration.paradeGuides
+            drawAxisGuides(anchors, plot, guides)
         }
         ScopeKind.HISTOGRAM -> {
             val lights = data?.trafficLights?.takeIf { histogramTrafficLightsEnabled }
@@ -980,8 +1090,9 @@ private fun DrawScope.drawScope(
                     plot.center.x - side / 2, plot.center.y - side / 2,
                     plot.center.x + side / 2, plot.center.y + side / 2,
                 )
-            data?.vectorTrail?.let { drawVectorDensity(it, square, ScopePalette.TRAIL_DECAY) }
-            data?.vector?.let { drawVectorDensity(it, square, 1f) }
+            val brightness = configuration.vectorscopeBrightness / 100f
+            data?.vectorTrail?.let { drawVectorDensity(it, square, ScopePalette.TRAIL_DECAY * brightness) }
+            data?.vector?.let { drawVectorDensity(it, square, brightness) }
             drawVectorGraticule(anchors, square)
         }
         ScopeKind.TRAFFIC_LIGHTS -> Unit // Rendered by TrafficLightsPanel, never this Canvas path.
@@ -1037,7 +1148,13 @@ private fun fillChannel(
     return traces.pointCount
 }
 
-private fun DrawScope.drawTrace(kind: ScopeKind, traces: ScopeTraces, plot: Rect, opacity: Float) {
+private fun DrawScope.drawTrace(
+    kind: ScopeKind,
+    traces: ScopeTraces,
+    plot: Rect,
+    opacity: Float,
+    configuration: ScopeAssistConfiguration,
+) {
     if (traces.pointCount == 0) return
     var scratch = pointScratch.get() ?: FloatArray(0)
     if (scratch.size < traces.pointCount * 2) {
@@ -1046,26 +1163,39 @@ private fun DrawScope.drawTrace(kind: ScopeKind, traces: ScopeTraces, plot: Rect
     }
     when (kind) {
         ScopeKind.WAVEFORM -> {
-            // Luma trace: 2px additive ghost + 1px core, brighter every 4th dot.
-            val count = fillChannel(traces, 1, plot, plot.left, plot.width, scratch)
-            drawPointPass(scratch, count, ScopePalette.lumaGhost, 2.dp.toPx(), opacity)
-            drawPointPass(scratch, count, ScopePalette.luma, 1.dp.toPx(), opacity)
-            var hot = 0
-            for (index in 0 until count step 4) {
-                scratch[hot * 2] = scratch[index * 2]
-                scratch[hot * 2 + 1] = scratch[index * 2 + 1]
-                hot++
+            if (configuration.waveformMode == ScopeWaveformMode.LUMA) {
+                // Luma trace: 2px additive ghost + 1px core, brighter every 4th dot.
+                val count = fillChannel(traces, 1, plot, plot.left, plot.width, scratch)
+                drawPointPass(scratch, count, ScopePalette.lumaGhost, 2.dp.toPx(), opacity)
+                drawPointPass(scratch, count, ScopePalette.luma, 1.dp.toPx(), opacity)
+                var hot = 0
+                for (index in 0 until count step 4) {
+                    scratch[hot * 2] = scratch[index * 2]
+                    scratch[hot * 2 + 1] = scratch[index * 2 + 1]
+                    hot++
+                }
+                drawPointPass(scratch, hot, ScopePalette.lumaHot, 1.dp.toPx(), opacity)
+            } else {
+                waveformRgbChannels(traces, plot, scratch, opacity)
             }
-            drawPointPass(scratch, hot, ScopePalette.lumaHot, 1.dp.toPx(), opacity)
         }
         ScopeKind.PARADE -> {
-            val laneWidth = plot.width / 3
             val lanes =
-                listOf(
-                    Pair(2, ScopePalette.paradeRed),
-                    Pair(3, ScopePalette.paradeGreen),
-                    Pair(4, ScopePalette.paradeBlue),
-                )
+                if (configuration.paradeMode == ScopeParadeMode.RGB) {
+                    listOf(
+                        Pair(2, ScopePalette.paradeRed),
+                        Pair(3, ScopePalette.paradeGreen),
+                        Pair(4, ScopePalette.paradeBlue),
+                    )
+                } else {
+                    listOf(
+                        Pair(1, ScopePalette.luma),
+                        Pair(2, ScopePalette.paradeRed),
+                        Pair(3, ScopePalette.paradeGreen),
+                        Pair(4, ScopePalette.paradeBlue),
+                    )
+                }
+            val laneWidth = plot.width / lanes.size
             for ((laneIndex, lane) in lanes.withIndex()) {
                 val origin = plot.left + laneIndex * laneWidth
                 val count = fillChannel(traces, lane.first, plot, origin, laneWidth - 1, scratch)
@@ -1076,8 +1206,27 @@ private fun DrawScope.drawTrace(kind: ScopeKind, traces: ScopeTraces, plot: Rect
     }
 }
 
+/** RGB waveform mode overlays source channels over the same horizontal scan. */
+private fun DrawScope.waveformRgbChannels(
+    traces: ScopeTraces,
+    plot: Rect,
+    scratch: FloatArray,
+    opacity: Float,
+) {
+    val channels =
+        listOf(
+            Pair(2, ScopePalette.overlayRed),
+            Pair(3, ScopePalette.overlayGreen),
+            Pair(4, ScopePalette.overlayBlue),
+        )
+    for ((offset, color) in channels) {
+        val count = fillChannel(traces, offset, plot, plot.left, plot.width, scratch)
+        drawPointPass(scratch, count, color, 1.dp.toPx(), opacity)
+    }
+}
+
 /** Boundary lines (code 0/255) plus the three fixed anchor lines. */
-private fun DrawScope.drawAxisGuides(anchors: ScopeAnchors, plot: Rect) {
+private fun DrawScope.drawAxisGuides(anchors: ScopeAnchors, plot: Rect, guides: ScopeGuideLines) {
     val dashed = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
     fun line(level: Float, color: Color, width: Float, effect: PathEffect? = null) {
         val y = levelY(level, plot)
@@ -1088,9 +1237,9 @@ private fun DrawScope.drawAxisGuides(anchors: ScopeAnchors, plot: Rect) {
     }
     line(0f, ScopePalette.boundary, 1.25.dp.toPx())
     line(1f, ScopePalette.boundary, 1.25.dp.toPx())
-    line(anchors.clipLine, ScopePalette.clip, 1.dp.toPx(), dashed)
-    line(anchors.midGray, ScopePalette.middle, 1.dp.toPx())
-    line(anchors.crushLine, ScopePalette.clip, 1.dp.toPx(), dashed)
+    if (guides.clip) line(anchors.clipLine, ScopePalette.clip, 1.dp.toPx(), dashed)
+    if (guides.middle) line(anchors.midGray, ScopePalette.middle, 1.dp.toPx())
+    if (guides.crush) line(anchors.crushLine, ScopePalette.clip, 1.dp.toPx(), dashed)
 }
 
 private fun DrawScope.drawHistogram(display: HistogramDisplay, plot: Rect) {

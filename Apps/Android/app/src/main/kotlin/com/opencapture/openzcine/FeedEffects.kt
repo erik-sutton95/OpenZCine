@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import androidx.compose.runtime.Immutable
 import com.opencapture.openzcine.lut.StoredLutSelection
 
 /**
@@ -33,7 +34,12 @@ sealed interface FeedLutSelection {
 /** False-colour scales. [wireOrdinal] mirrors `FeedEffectsWire.bakedFalseColor`. */
 enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int, val label: String) {
     STOPS("stops", 0, "STOPS"),
-    IRE("ire", 1, "IRE");
+    IRE("ire", 1, "IRE"),
+    /**
+     * Crush/clip-only false colour. Unlike STOPS/IRE it composites over the
+     * selected monitor look, matching iOS `FalseColorScale.limits`.
+     */
+    LIMITS("limits", 2, "LIMITS");
 
     companion object {
         fun fromId(id: String): FeedFalseColorScale? = entries.firstOrNull { it.id == id }
@@ -41,14 +47,88 @@ enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int, val label: 
 }
 
 /**
+ * Camera-owned values forwarded untouched into the Swift exposure-assist
+ * facade. Kotlin never selects a tone curve or derives a clip endpoint from
+ * these fields; the shared core resolves that camera policy.
+ */
+@Immutable
+data class ExposureAssistCameraInput(
+    val codec: String? = null,
+    val iso: Long? = null,
+    val baseIso: String? = null,
+) {
+    /** JNI sentinel for a camera that has not reported ISO yet. */
+    val isoWireValue: Long
+        get() = iso ?: -1L
+}
+
+/** iOS `Peaking.Sensitivity`, with ordinals owned by the Swift facade. */
+enum class FeedPeakingSensitivity(val wireOrdinal: Int, val label: String) {
+    LOW(0, "LOW"),
+    MEDIUM(1, "MED"),
+    HIGH(2, "HIGH"),
+}
+
+/** iOS `Peaking.Color`, with the actual RGB resolved only by Swift. */
+enum class FeedPeakingColor(val wireOrdinal: Int, val label: String) {
+    WHITE(0, "WHITE"),
+    BLUE(1, "BLUE"),
+    RED(2, "RED"),
+    GREEN(3, "GREEN"),
+}
+
+/** Editor units for the shared-core zebra thresholds. */
+enum class FeedZebraUnit(val wireOrdinal: Int, val label: String) {
+    NATIVE(0, "0–255"),
+    IRE(1, "IRE"),
+}
+
+/** iOS `AssistConfiguration.Zebra.StripeColor`; Swift resolves its RGB value. */
+enum class FeedZebraStripeColor(val wireOrdinal: Int, val label: String) {
+    WHITE(0, "WHITE"),
+    AMBER(1, "AMBER"),
+    RED(2, "RED"),
+    CYAN(3, "CYAN"),
+    GREEN(4, "GREEN"),
+}
+
+/**
+ * Persistable operator configuration for image assists. Thresholds remain on
+ * the shared core's normalized 0…100 monitor axis even while the UI edits
+ * them in native code values; the conversion lives at the Swift wire.
+ */
+@Immutable
+data class FeedEffectsConfiguration(
+    val falseColorReferenceEnabled: Boolean = true,
+    val peakingSensitivity: FeedPeakingSensitivity = FeedPeakingSensitivity.MEDIUM,
+    val peakingColor: FeedPeakingColor = FeedPeakingColor.RED,
+    val zebraUnit: FeedZebraUnit = FeedZebraUnit.IRE,
+    val zebraHighlightEnabled: Boolean = true,
+    val zebraHighlightIre: Float = 100f,
+    val zebraHighlightColor: FeedZebraStripeColor = FeedZebraStripeColor.WHITE,
+    val zebraMidtoneEnabled: Boolean = true,
+    val zebraMidtoneIre: Float = 55f,
+    val zebraMidtoneColor: FeedZebraStripeColor = FeedZebraStripeColor.AMBER,
+) {
+    /** Keeps corruption or a stale preference from producing an invalid core request. */
+    fun normalized(): FeedEffectsConfiguration =
+        copy(
+            zebraHighlightIre = zebraHighlightIre.coerceIn(0f, 100f),
+            zebraMidtoneIre = zebraMidtoneIre.coerceIn(0f, 100f),
+        )
+}
+
+/**
  * Which analysis effects the live feed bakes in, mirroring the iOS shell's
- * `LiveImageEffects`. False colour and the LUT are mutually exclusive — false
- * colour *is* the monitoring image, so it replaces the creative look.
+ * `LiveImageEffects`. LUT and false-colour activation are independent, just
+ * like iOS. The renderer gives STOPS/IRE false colour visual precedence while
+ * preserving the active look so disabling False resumes it; LIMITS composites
+ * only crush/clip zones over that look.
  *
  * The shared [AssistState] owns this in normal operation. Debug intent extras
  * (see `DemoHarness`) still seed deterministic sessions: `--es zc.assist
  * lut,falsecolor,peaking,zebra`, plus `--es zc.lut <log3g10|nlog|mono>` and
- * `--es zc.fc.scale <stops|ire>`.
+ * `--es zc.fc.scale <stops|ire|limits>`.
  */
 data class FeedEffects(
     val lut: FeedLutSelection? = null,
@@ -84,9 +164,11 @@ data class FeedEffects(
                     null
                 }
             return FeedEffects(
-                // False colour replaces the creative look, like iOS.
+                // Toolbar activation is independent: STOPS/IRE render before
+                // the look, but turning False off must reveal the same active
+                // selection without a second tap. Limits paints over it.
                 lut =
-                    if (falseColor == null && "lut" in tokens) {
+                    if ("lut" in tokens) {
                         FeedLutSelection.BuiltIn(
                             lutId?.let(FeedLut::fromId) ?: FeedLut.LOG3G10_709,
                         )

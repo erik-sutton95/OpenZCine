@@ -357,7 +357,7 @@
         javaFloatArray(env, ScopeFrameWire.anchors(curveOrdinal: Int(curve)))
     }
 
-    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve, compensation): FloatArray`
+    /// `SwiftCore.scopeTraces(rgba, width, height, bytesPerRow, curve, clip, compensation): FloatArray`
     /// — one scope tick's waveform/parade/histogram payload plus the additive
     /// Swift-owned Traffic Lights trailer described by `ScopeFrameWire.traces`.
     /// `compensation` is a persisted core enum raw value; Swift decodes and
@@ -367,7 +367,8 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeTraces")
     public func swiftCoreScopeTraces(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
-        width: jint, height: jint, bytesPerRow: jint, curve: jint, compensation: jint
+        width: jint, height: jint, bytesPerRow: jint, curve: jint, clipNative: jfloat,
+        compensation: jint
     ) -> jfloatArray? {
         guard let buffer = swiftBytes(env, rgba) else { return nil }
         return javaFloatArray(
@@ -375,23 +376,24 @@
             ScopeFrameWire.traces(
                 rgba: buffer, width: Int(width), height: Int(height),
                 bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve),
+                clipNative: Double(clipNative),
                 crushClipCompensationRaw: Int(compensation)))
     }
 
-    /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve): ByteArray`
+    /// `SwiftCore.scopeVector(rgba, width, height, bytesPerRow, curve, zoom): ByteArray`
     /// — one scope tick's 128×128 premultiplied-RGBA vectorscope density image
     /// per `ScopeFrameWire.vectorPixels`. Empty for a frame with no samples.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_scopeVector")
     public func swiftCoreScopeVector(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, rgba: jbyteArray?,
-        width: jint, height: jint, bytesPerRow: jint, curve: jint
+        width: jint, height: jint, bytesPerRow: jint, curve: jint, zoom: jint
     ) -> jbyteArray? {
         guard let buffer = swiftBytes(env, rgba) else { return nil }
         return javaByteArray(
             env,
             ScopeFrameWire.vectorPixels(
                 rgba: buffer, width: Int(width), height: Int(height),
-                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve)))
+                bytesPerRow: Int(bytesPerRow), curveOrdinal: Int(curve), zoomOrdinal: Int(zoom)))
     }
 
     // MARK: - Feed effects (baked in the core, uploaded by Kotlin)
@@ -410,18 +412,122 @@
         return javaByteArray(env, bytes)
     }
 
-    /// `SwiftCore.bakeFalseColorCube(scaleOrdinal, curveOrdinal): ByteArray?` —
+    /// `SwiftCore.exposureAssistMapping(codec, iso, baseIso): FloatArray` —
+    /// camera-aware curve and code-value anchors. Kotlin forwards camera
+    /// metadata but never selects a curve or clip endpoint itself.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_exposureAssistMapping")
+    public func swiftCoreExposureAssistMapping(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
+        baseISO: jstring?
+    ) -> jfloatArray? {
+        javaFloatArray(
+            env,
+            FeedEffectsWire.cameraMappingPayload(
+                codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO))
+        )
+    }
+
+    /// `SwiftCore.zebraEditorValue(...)` — converts a canonical monitor-percent
+    /// threshold into the requested editor unit. `NaN` is a fail-closed result
+    /// for an unsupported unit ordinal.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraEditorValue")
+    public func swiftCoreZebraEditorValue(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
+        baseISO: jstring?, unitOrdinal: jint, monitorPercent: jfloat
+    ) -> jfloat {
+        FeedEffectsWire.zebraEditorValue(
+            codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
+            unitOrdinal: Int(unitOrdinal), monitorPercent: Double(monitorPercent)) ?? .nan
+    }
+
+    /// `SwiftCore.zebraMonitorPercent(...)` — converts an editor threshold to
+    /// the canonical monitor axis. `NaN` makes malformed unit input fail closed.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraMonitorPercent")
+    public func swiftCoreZebraMonitorPercent(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
+        baseISO: jstring?, unitOrdinal: jint, editorValue: jfloat
+    ) -> jfloat {
+        FeedEffectsWire.zebraMonitorPercent(
+            codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
+            unitOrdinal: Int(unitOrdinal), value: Double(editorValue)) ?? .nan
+    }
+
+    /// `SwiftCore.feedEffectsConfiguration(...)` — full source-measurement
+    /// thresholds and overlay RGB for the Android shader. Every colour,
+    /// threshold, and camera mapping stays owned by the Swift core.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_feedEffectsConfiguration")
+    public func swiftCoreFeedEffectsConfiguration(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
+        baseISO: jstring?, peakingSensitivity: jint, peakingColor: jint,
+        highlightEnabled: jboolean, highlightIRE: jfloat, highlightColor: jint,
+        midtoneEnabled: jboolean, midtoneIRE: jfloat, midtoneColor: jint
+    ) -> jfloatArray? {
+        guard
+            let values = FeedEffectsWire.renderConfiguration(
+                codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
+                peakingSensitivityOrdinal: Int(peakingSensitivity),
+                peakingColorOrdinal: Int(peakingColor),
+                highlightEnabled: highlightEnabled != 0, highlightIRE: Double(highlightIRE),
+                highlightColorOrdinal: Int(highlightColor), midtoneEnabled: midtoneEnabled != 0,
+                midtoneIRE: Double(midtoneIRE), midtoneColorOrdinal: Int(midtoneColor))
+        else { return nil }
+        return javaFloatArray(env, values)
+    }
+
+    /// `SwiftCore.bakeFalseColorCube(scaleOrdinal, curveOrdinal, clipNative): ByteArray?` —
     /// the core's false-colour cube (64³) in the same packed-2D RGBA8 grid.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorCube")
     public func swiftCoreBakeFalseColorCube(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
-        curveOrdinal: jint
+        curveOrdinal: jint, clipNative: jfloat
     ) -> jbyteArray? {
         guard
             let bytes = FeedEffectsWire.bakedFalseColor(
-                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal))
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
+                clipNative: Double(clipNative))
         else { return nil }
         return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.bakeFalseColorLimitsPaint(curveOrdinal, clipNative): ByteArray?` —
+    /// the Swift-owned colour paint for additive Limits false colour.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorLimitsPaint")
+    public func swiftCoreBakeFalseColorLimitsPaint(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedFalseColorLimitsPaint(
+                curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.bakeFalseColorLimitsWeight(curveOrdinal, clipNative): ByteArray?` —
+    /// the Swift-owned weight mask for additive Limits false colour.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorLimitsWeight")
+    public func swiftCoreBakeFalseColorLimitsWeight(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedFalseColorLimitsWeight(
+                curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    /// `SwiftCore.falseColorReference(scaleOrdinal, curveOrdinal, clipNative): FloatArray?` —
+    /// same palette bands as the baked false-colour payload.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_falseColorReference")
+    public func swiftCoreFalseColorReference(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
+        curveOrdinal: jint, clipNative: jfloat
+    ) -> jfloatArray? {
+        guard
+            let values = FeedEffectsWire.falseColorReference(
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
+                clipNative: Double(clipNative))
+        else { return nil }
+        return javaFloatArray(env, values)
     }
 
     /// `SwiftCore.feedEffectsScalars(curveOrdinal, zebraHighlightIre, zebraMidtoneIre):

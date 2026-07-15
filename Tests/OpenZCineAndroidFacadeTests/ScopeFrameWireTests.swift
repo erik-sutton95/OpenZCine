@@ -129,6 +129,26 @@ struct ScopeFrameWireTests {
         #expect(levels[3] > anchors[2])
     }
 
+    @Test func tracesUseTheCameraResolvedClipEndpoint() {
+        let (rgba, width, height) = syntheticBuffer()
+        let clip: Double = 215
+        let mapping = ExposureSignalMapping(curve: .redLog3G10, clipNative: clip)
+        let flat = ScopeFrameWire.traces(
+            rgba: rgba, width: width, height: height, bytesPerRow: width * 4,
+            curveOrdinal: 0, clipNative: clip)
+        let count = Int(flat[0])
+        let levels = (0..<count).map { flat[1 + $0 * ScopeFrameWire.pointStride + 1] }.sorted()
+        let expected = Float(
+            ScopeDisplayScale.waveformLevel(
+                signalNative: ExposureToneCurve.redLog3G10.defaultClipNative,
+                mapping: mapping))
+        // The synthetic clip code is now below the higher camera warning;
+        // the core remaps it below the fixed clip line rather than Kotlin
+        // applying a stale Log3G10 endpoint.
+        #expect(abs(levels[2] - expected) < 0.01)
+        #expect(levels[2] < ScopeFrameWire.anchors(curveOrdinal: 0)[2])
+    }
+
     @Test func histogramsCarryEverySampledPixel() {
         let (rgba, width, height) = syntheticBuffer()
         let flat = ScopeFrameWire.traces(
@@ -266,6 +286,13 @@ struct ScopeFrameWireTests {
     @Test func emptyFrameYieldsEmptyVectorImage() {
         let pixels = ScopeFrameWire.vectorPixels(
             rgba: [], width: 0, height: 0, bytesPerRow: 0, curveOrdinal: 0)
+        #expect(pixels.isEmpty)
+    }
+
+    @Test func invalidVectorscopeZoomFailsClosed() {
+        let pixels = ScopeFrameWire.vectorPixels(
+            rgba: [255, 0, 0, 255], width: 1, height: 1, bytesPerRow: 4,
+            curveOrdinal: 0, zoomOrdinal: 9)
         #expect(pixels.isEmpty)
     }
 }

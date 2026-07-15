@@ -89,6 +89,50 @@ struct FeedEffectsWireTests {
         #expect(scalars[3] > scalars[0])
     }
 
+    @Test("Camera mapping and renderer record follow the shared N-Log low-ISO policy")
+    func cameraAwareRendererRecordUsesCoreMapping() throws {
+        let mapping = ExposureSignalMapping.camera(codec: "N-Log", iso: 200, baseISO: nil)
+        let payload = FeedEffectsWire.cameraMappingPayload(codec: "N-Log", iso: 200, baseISO: nil)
+        #expect(
+            payload == [
+                1,
+                Float(mapping.blackNative),
+                Float(mapping.middleGrayNative),
+                Float(mapping.clipNative),
+            ])
+
+        let render = try #require(
+            FeedEffectsWire.renderConfiguration(
+                codec: "N-Log", iso: 200, baseISO: nil,
+                peakingSensitivityOrdinal: 2, peakingColorOrdinal: 1,
+                highlightEnabled: false, highlightIRE: 96, highlightColorOrdinal: 3,
+                midtoneEnabled: true, midtoneIRE: 42, midtoneColorOrdinal: 4))
+        #expect(render.count == FeedEffectsWire.renderConfigurationFieldCount)
+        #expect(render[0] == 1)
+        #expect(render[1] == 200)
+        #expect(render[4] == Float(0.022 * 0.06))
+        #expect(render[9] == 0)
+        #expect(render[14] == 1)
+        #expect(render[10] == Float(mapping.signalNative(monitorPercent: 96) / 255))
+        #expect(render[15] == Float(mapping.signalNative(monitorPercent: 42) / 255))
+        let blue = Peaking.Color.blue.rgb
+        #expect(Array(render[6...8]) == [Float(blue.0), Float(blue.1), Float(blue.2)])
+    }
+
+    @Test("Limits cubes preserve a separate paint and mask while reference bands stay core-owned")
+    func limitsPayloadsAreAvailable() throws {
+        let paint = try #require(
+            FeedEffectsWire.bakedFalseColorLimitsPaint(curveOrdinal: 0, clipNative: 180))
+        let weight = try #require(
+            FeedEffectsWire.bakedFalseColorLimitsWeight(curveOrdinal: 0, clipNative: 180))
+        #expect(paint.count == 64 * 64 * 64 * 4)
+        #expect(weight.count == paint.count)
+        let reference = try #require(
+            FeedEffectsWire.falseColorReference(scaleOrdinal: 2, curveOrdinal: 0, clipNative: 180))
+        #expect(Int(reference[0]) == 4)
+        #expect(reference.count == 1 + Int(reference[0]) * 3)
+    }
+
     @Test("Unknown ordinals and unsupported sizes are rejected")
     func unknownOrdinalsAreRejected() {
         #expect(FeedEffectsWire.bakedLUT(lookOrdinal: 3, size: 33) == nil)

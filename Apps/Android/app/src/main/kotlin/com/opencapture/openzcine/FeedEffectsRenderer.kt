@@ -29,20 +29,22 @@ object FeedEffectsState {
  * GPU effect chain for the live feed — one AGSL pass over the decoded frame,
  * mirroring the iOS `LiveFrameProcessor` order of operations:
  *
- * 1. **Base look**: false colour (which replaces the creative grade) or the
- *    selected LUT, as a 3D-LUT sample of the encoded source pixel. The cube is
- *    baked by the Swift core and uploaded once as a packed-2D texture
+ * 1. **Base look**: STOPS/IRE false colour replaces the creative grade; LIMITS
+ *    keeps the selected LUT and composites a core-baked paint/mask pair over
+ *    it. Every cube is baked by Swift and uploaded once as a packed-2D texture
  *    (`width = size²`, `height = size`; slice tiles along x). The shader takes
  *    two bilinear taps on adjacent blue slices and mixes — trilinear, the same
  *    interpolation `CIColorCube`/`CubeLUT.map` perform.
  * 2. **Focus peaking**, measured from the *source* frame: the de-logged grey
- *    (the core's black→clip stretch, uniforms from `feedEffectsScalars`) runs a
+ *    (the core's camera-aware black→clip stretch, uniforms from
+ *    `feedEffectsConfiguration`) runs a
  *    two-scale gradient difference — first-derivative magnitude peaks ON the
  *    edge (single line), and subtracting the coarse-scale gradient cancels
- *    defocused background edges. Overlay colour is `LiveDesign.accent`.
+ *    defocused background edges. Overlay colour comes from the shared-core
+ *    iOS peaking-colour configuration.
  * 3. **Zebra**, also measured from the source frame: Rec.709 luma against the
- *    core-supplied highlight threshold and midtone band, drawn as diagonal
- *    stripes over the graded image.
+ *    core-supplied dual-zone thresholds and independently selected stripe
+ *    colours, drawn over the graded image.
  *
  * All colour math lives in the Swift core; this class uploads baked payloads
  * and interpolates. Requires API 33 (AGSL) and the staged Swift core —
@@ -80,15 +82,6 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
     }
 
     companion object {
-        /** Curve ordinal for RED Log3G10 — the offline-monitoring default (see iOS
-         * `playbackExposureSignalMapping`); camera-driven curve selection lands with
-         * the session-backed feed. Mirrors `FeedEffectsWire.curve`. */
-        private const val CURVE_LOG3G10 = 0
-
-        /** iOS `ZebraSettings` defaults: highlight at monitor 100%, midtone at 55%. */
-        private const val ZEBRA_HIGHLIGHT_IRE = 100f
-        private const val ZEBRA_MIDTONE_IRE = 55f
-
         /** 33³ matches the iOS built-in looks; false colour uses the core's 64³. */
         private const val LUT_SIZE = 33
 
@@ -99,6 +92,8 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
          */
         fun create(
             effects: FeedEffects,
+            configuration: FeedEffectsConfiguration,
+            cameraInput: ExposureAssistCameraInput,
             lutLibrary: AndroidLutLibrary? = null,
         ): FeedEffectsRenderer? {
             if (effects.isIdentity) return null
@@ -107,7 +102,7 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
                 return null
             }
             return try {
-                build(effects, lutLibrary)
+                build(effects, configuration.normalized(), cameraInput, lutLibrary)
             } catch (e: RuntimeException) {
                 Log.e(TAG, "feed-effects pipeline setup failed; rendering the plain feed", e)
                 null
@@ -117,16 +112,41 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
         /** Bakes once per selection: cube upload + threshold uniforms, never per frame. */
         private fun build(
             effects: FeedEffects,
+            configuration: FeedEffectsConfiguration,
+            cameraInput: ExposureAssistCameraInput,
             lutLibrary: AndroidLutLibrary?,
         ): FeedEffectsRenderer {
             val shader = RuntimeShader(EFFECTS_AGSL)
+
+            val renderConfiguration =
+                requireNotNull(
+                    SwiftCore.feedEffectsConfiguration(
+                        cameraInput.codec,
+                        cameraInput.isoWireValue,
+                        cameraInput.baseIso,
+                        configuration.peakingSensitivity.wireOrdinal,
+                        configuration.peakingColor.wireOrdinal,
+                        configuration.zebraHighlightEnabled,
+                        configuration.zebraHighlightIre,
+                        configuration.zebraHighlightColor.wireOrdinal,
+                        configuration.zebraMidtoneEnabled,
+                        configuration.zebraMidtoneIre,
+                        configuration.zebraMidtoneColor.wireOrdinal,
+                    ),
+                ) { "core rejected the effect configuration" }
+                    .let(FeedEffectsRenderConfiguration::parse)
 
             val cube: ByteArray?
             val cubeSize: Int
             val lutSelection = effects.lut
             when {
-                effects.falseColor != null -> {
-                    cube = SwiftCore.bakeFalseColorCube(effects.falseColor.wireOrdinal, CURVE_LOG3G10)
+                effects.falseColor != null && effects.falseColor != FeedFalseColorScale.LIMITS -> {
+                    cube =
+                        SwiftCore.bakeFalseColorCube(
+                            effects.falseColor.wireOrdinal,
+                            renderConfiguration.curveOrdinal,
+                            renderConfiguration.clipNative,
+                        )
                     cubeSize = 64
                 }
                 lutSelection is FeedLutSelection.BuiltIn -> {
@@ -149,54 +169,104 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
             if (cubeSize > 0 && cube == null) {
                 Log.w(TAG, "core returned no cube for $effects; base look disabled")
             }
-            if (cube != null) {
-                check(cube.size == cubeSize * cubeSize * cubeSize * 4) { "bad cube payload" }
-                val lut = Bitmap.createBitmap(cubeSize * cubeSize, cubeSize, Bitmap.Config.ARGB_8888)
-                lut.copyPixelsFromBuffer(ByteBuffer.wrap(cube))
-                shader.setInputShader(
-                    "lut",
-                    BitmapShader(lut, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-                        filterMode = BitmapShader.FILTER_MODE_LINEAR
-                    },
-                )
-                shader.setFloatUniform("lutSize", cubeSize.toFloat())
-            } else {
-                // Every declared child must be bound; lutSize 0 keeps grade() a no-op.
-                val stub = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-                shader.setInputShader(
-                    "lut",
-                    BitmapShader(stub, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP),
-                )
-                shader.setFloatUniform("lutSize", 0f)
-            }
+            uploadCube(shader, "lut", "lutSize", cube, cubeSize)
 
-            val scalars =
-                requireNotNull(
-                    SwiftCore.feedEffectsScalars(
-                        CURVE_LOG3G10,
-                        ZEBRA_HIGHLIGHT_IRE,
-                        ZEBRA_MIDTONE_IRE,
-                    ),
-                ) { "core rejected the effect scalars" }
-            shader.setFloatUniform("deLogRange", scalars[0], scalars[1])
+            val limitsActive = effects.falseColor == FeedFalseColorScale.LIMITS
+            val limitsPaint =
+                if (limitsActive) {
+                    SwiftCore.bakeFalseColorLimitsPaint(
+                        renderConfiguration.curveOrdinal,
+                        renderConfiguration.clipNative,
+                    )
+                } else {
+                    null
+                }
+            val limitsWeight =
+                if (limitsActive) {
+                    SwiftCore.bakeFalseColorLimitsWeight(
+                        renderConfiguration.curveOrdinal,
+                        renderConfiguration.clipNative,
+                    )
+                } else {
+                    null
+                }
+            val limitsReady = limitsPaint != null && limitsWeight != null
+            uploadCube(shader, "limitsPaintCube", "limitsPaintSize", limitsPaint, 64)
+            uploadCube(shader, "limitsWeightCube", "limitsWeightSize", limitsWeight, 64)
+            shader.setFloatUniform("limitsOn", if (limitsReady) 1f else 0f)
+
+            shader.setFloatUniform("deLogRange", renderConfiguration.deLogBlack, renderConfiguration.deLogClip)
             shader.setFloatUniform("peakingOn", if (effects.peaking) 1f else 0f)
             shader.setFloatUniform(
                 "peakingColor",
-                LiveDesign.accent.red,
-                LiveDesign.accent.green,
-                LiveDesign.accent.blue,
+                renderConfiguration.peakingColor[0],
+                renderConfiguration.peakingColor[1],
+                renderConfiguration.peakingColor[2],
             )
-            shader.setFloatUniform("zebraOn", if (effects.zebra) 1f else 0f)
-            shader.setFloatUniform("zebraHighlight", scalars[2])
-            shader.setFloatUniform("zebraMidtone", scalars[3])
+            shader.setFloatUniform("peakingThreshold", renderConfiguration.peakingThreshold)
+            shader.setFloatUniform("peakingRamp", renderConfiguration.peakingRamp)
+            shader.setFloatUniform(
+                "zebraHighlightOn",
+                if (effects.zebra && renderConfiguration.highlightEnabled) 1f else 0f,
+            )
+            shader.setFloatUniform("zebraHighlight", renderConfiguration.highlightCode)
+            shader.setFloatUniform(
+                "zebraHighlightColor",
+                renderConfiguration.highlightColor[0],
+                renderConfiguration.highlightColor[1],
+                renderConfiguration.highlightColor[2],
+            )
+            shader.setFloatUniform(
+                "zebraMidtoneOn",
+                if (effects.zebra && renderConfiguration.midtoneEnabled) 1f else 0f,
+            )
+            shader.setFloatUniform("zebraMidtone", renderConfiguration.midtoneCode)
+            shader.setFloatUniform(
+                "zebraMidtoneColor",
+                renderConfiguration.midtoneColor[0],
+                renderConfiguration.midtoneColor[1],
+                renderConfiguration.midtoneColor[2],
+            )
             if (BuildConfig.DEBUG) {
                 Log.d(
                     TAG,
                     "pipeline up: $effects cube=${cube?.size ?: 0}B " +
-                        "scalars=${scalars.joinToString()}",
+                        "curve=${renderConfiguration.curveOrdinal} clip=${renderConfiguration.clipNative} " +
+                        "limits=$limitsReady",
                 )
             }
             return FeedEffectsRenderer(shader)
+        }
+
+        /** Uploads a core-baked packed cube, or a bound stub when that stage is unavailable. */
+        private fun uploadCube(
+            shader: RuntimeShader,
+            shaderName: String,
+            sizeName: String,
+            cube: ByteArray?,
+            cubeSize: Int,
+        ) {
+            if (cube != null && cubeSize >= 2) {
+                check(cube.size == cubeSize * cubeSize * cubeSize * 4) { "bad $shaderName cube payload" }
+                val bitmap = Bitmap.createBitmap(cubeSize * cubeSize, cubeSize, Bitmap.Config.ARGB_8888)
+                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(cube))
+                shader.setInputShader(
+                    shaderName,
+                    BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+                        filterMode = BitmapShader.FILTER_MODE_LINEAR
+                    },
+                )
+                shader.setFloatUniform(sizeName, cubeSize.toFloat())
+            } else {
+                // AGSL requires every declared child to be bound. The zero size keeps this cube
+                // stage inactive without inventing a local colour fallback.
+                val stub = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+                shader.setInputShader(
+                    shaderName,
+                    BitmapShader(stub, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP),
+                )
+                shader.setFloatUniform(sizeName, 0f)
+            }
         }
     }
 }
@@ -211,23 +281,31 @@ class FeedEffectsRenderer private constructor(private val shader: RuntimeShader)
  */
 private val EFFECTS_AGSL =
     """
-    uniform shader feed;          // decoded frame, bitmap px
-    uniform shader lut;           // packed cube: width = n*n, height = n
-    uniform float lutSize;        // cube edge n; < 2 disables the base look
-    uniform float2 dstOffset;     // letterbox origin, canvas px
-    uniform float srcScale;       // canvas px -> bitmap px
+    uniform shader feed;               // decoded frame, bitmap px
+    uniform shader lut;                // packed cube: width = n*n, height = n
+    uniform float lutSize;             // cube edge n; < 2 disables the base look
+    uniform shader limitsPaintCube;    // Swift-baked additive Limits colour cube
+    uniform float limitsPaintSize;
+    uniform shader limitsWeightCube;   // Swift-baked additive Limits zone mask
+    uniform float limitsWeightSize;
+    uniform float limitsOn;
+    uniform float2 dstOffset;          // letterbox origin, canvas px
+    uniform float srcScale;            // canvas px -> bitmap px
 
     uniform float peakingOn;
     uniform float3 peakingColor;
-    uniform float2 deLogRange;    // core black/clip anchors, normalized code
+    uniform float2 deLogRange;         // core black/clip anchors, normalized code
+    uniform float peakingThreshold;    // core sensitivity policy
+    uniform float peakingRamp;         // core sensitivity policy
 
-    uniform float zebraOn;
-    uniform float zebraHighlight; // core threshold, normalized code
-    uniform float zebraMidtone;   // core band centre, normalized code
+    uniform float zebraHighlightOn;
+    uniform float zebraHighlight;      // core threshold, normalized code
+    uniform float3 zebraHighlightColor;
+    uniform float zebraMidtoneOn;
+    uniform float zebraMidtone;        // core band centre, normalized code
+    uniform float3 zebraMidtoneColor;
 
     const float3 LUMA709 = float3(0.2126, 0.7152, 0.0722);
-    const float PEAKING_THRESHOLD = 0.04;   // on the defocus-cancelled gradient
-    const float PEAKING_RAMP = 24.0;
     const float DEFOCUS_REJECTION = 1.35;   // iOS ImageEffectsCompositor
     const float ZEBRA_GAIN = 40.0;          // iOS soft-threshold ramp
     const float ZEBRA_HALF_WIDTH = 5.0 / 255.0;
@@ -244,6 +322,32 @@ private val EFFECTS_AGSL =
         float3 lo = float3(lut.eval(float2(s0 * n + x, y)).rgb);
         float3 hi = float3(lut.eval(float2(s1 * n + x, y)).rgb);
         return mix(lo, hi, b - s0);
+    }
+
+    float3 limitsPaint(float3 c) {
+        if (limitsPaintSize < 2.0) return c;
+        float n = limitsPaintSize;
+        float b = clamp(c.b, 0.0, 1.0) * (n - 1.0);
+        float s0 = floor(b);
+        float s1 = min(s0 + 1.0, n - 1.0);
+        float x = clamp(c.r, 0.0, 1.0) * (n - 1.0) + 0.5;
+        float y = clamp(c.g, 0.0, 1.0) * (n - 1.0) + 0.5;
+        float3 lo = float3(limitsPaintCube.eval(float2(s0 * n + x, y)).rgb);
+        float3 hi = float3(limitsPaintCube.eval(float2(s1 * n + x, y)).rgb);
+        return mix(lo, hi, b - s0);
+    }
+
+    float limitsWeight(float3 c) {
+        if (limitsWeightSize < 2.0) return 0.0;
+        float n = limitsWeightSize;
+        float b = clamp(c.b, 0.0, 1.0) * (n - 1.0);
+        float s0 = floor(b);
+        float s1 = min(s0 + 1.0, n - 1.0);
+        float x = clamp(c.r, 0.0, 1.0) * (n - 1.0) + 0.5;
+        float y = clamp(c.g, 0.0, 1.0) * (n - 1.0) + 0.5;
+        float lo = limitsWeightCube.eval(float2(s0 * n + x, y)).r;
+        float hi = limitsWeightCube.eval(float2(s1 * n + x, y)).r;
+        return clamp(mix(lo, hi, b - s0), 0.0, 1.0);
     }
 
     // De-logged grey: the core's black->clip stretch of the mean channel.
@@ -265,24 +369,32 @@ private val EFFECTS_AGSL =
         float3 source = float3(feed.eval(src).rgb);
         float3 color = grade(source);
 
+        if (limitsOn > 0.5) {
+            color = mix(color, limitsPaint(source), limitsWeight(source));
+        }
+
         if (peakingOn > 0.5) {
             // fine - k*coarse: a sharp edge keeps fine-scale gradient a wide
             // (defocused) edge lacks; both scales cancel on blurred edges.
             float fine = gradMag(src, 1.0);
             float coarse = gradMag(src, 2.6);
             float response = fine - DEFOCUS_REJECTION * coarse;
-            float mask = clamp((response - PEAKING_THRESHOLD) * PEAKING_RAMP, 0.0, 1.0);
+            float mask = clamp((response - peakingThreshold) * peakingRamp, 0.0, 1.0);
             color = mix(color, peakingColor, mask);
         }
 
-        if (zebraOn > 0.5) {
+        if (zebraHighlightOn > 0.5 || zebraMidtoneOn > 0.5) {
             float luma = dot(source, LUMA709);
             float stripe = step(0.5, fract((fragCoord.x + fragCoord.y) / STRIPE_PITCH));
-            float hi = clamp((luma - zebraHighlight) * ZEBRA_GAIN, 0.0, 1.0);
-            color = mix(color, float3(1.0), hi * stripe);
-            float mid = clamp((luma - (zebraMidtone - ZEBRA_HALF_WIDTH)) * ZEBRA_GAIN, 0.0, 1.0)
-                * clamp(((zebraMidtone + ZEBRA_HALF_WIDTH) - luma) * ZEBRA_GAIN, 0.0, 1.0);
-            color = mix(color, float3(1.0, 0.72, 0.2), mid * stripe);
+            if (zebraHighlightOn > 0.5) {
+                float hi = clamp((luma - zebraHighlight) * ZEBRA_GAIN, 0.0, 1.0);
+                color = mix(color, zebraHighlightColor, hi * stripe);
+            }
+            if (zebraMidtoneOn > 0.5) {
+                float mid = clamp((luma - (zebraMidtone - ZEBRA_HALF_WIDTH)) * ZEBRA_GAIN, 0.0, 1.0)
+                    * clamp(((zebraMidtone + ZEBRA_HALF_WIDTH) - luma) * ZEBRA_GAIN, 0.0, 1.0);
+                color = mix(color, zebraMidtoneColor, mid * stripe);
+            }
         }
 
         return half4(half3(color), 1.0);

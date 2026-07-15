@@ -21,14 +21,34 @@ class AssistStateTest {
     }
 
     @Test
-    fun `false colour replaces the lut and restores the selected look`() {
+    fun `stops false colour takes render precedence but preserves lut activation`() {
         val state = AssistState(FeedEffects(lut = FeedLutSelection.BuiltIn(FeedLut.MONO)), null)
         state.toggle(AssistTool.FALSE)
-        assertNull(state.effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), state.effects.lut)
         assertEquals(FeedFalseColorScale.STOPS, state.effects.falseColor)
-        state.toggle(AssistTool.LUT)
+        state.toggle(AssistTool.FALSE)
         assertNull(state.effects.falseColor)
         assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), state.effects.lut)
+    }
+
+    @Test
+    fun `limits to stops keeps the active lut and false off resumes it`() {
+        val mono = FeedLutSelection.BuiltIn(FeedLut.MONO)
+        val state = AssistState(FeedEffects(lut = mono), null)
+
+        state.selectFalseColorScale(FeedFalseColorScale.LIMITS)
+        state.toggle(AssistTool.FALSE)
+
+        assertEquals(FeedFalseColorScale.LIMITS, state.effects.falseColor)
+        assertEquals(mono, state.effects.lut)
+
+        state.selectFalseColorScale(FeedFalseColorScale.STOPS)
+        assertEquals(FeedFalseColorScale.STOPS, state.effects.falseColor)
+        assertEquals(mono, state.effects.lut)
+
+        state.toggle(AssistTool.FALSE)
+        assertNull(state.effects.falseColor)
+        assertEquals(mono, state.effects.lut)
     }
 
     @Test

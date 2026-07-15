@@ -107,14 +107,17 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   Lights decisions behind the facade (`Sources/OpenZCineAndroidFacade/ScopeFrameWire.swift` ↔
   `bridge/ScopeWire.kt`): the 3-anchor display axis (log-black floor → 5% crush line, fixed
   per-curve mid grey, clip warning → 95% line), tone-mapped vectorscope, and RGB goal-post
-  direction/fill/clip/crush values come back as flat payloads. Kotlin reduces each JPEG once
-  (1/2ⁿ decode to ≤160 px wide) and draws (`ScopeView.kt`). Scope tools toggle independently;
-  landscape panels are draggable with per-scope persisted placement, while portrait displays the
-  two most-recent active scopes in canonical order. The histogram carries the iOS-style RGB
-  crush/clip edge blocks (default on) and a 95–100 IRE clip tint from that same Swift result.
-  View Assist persists iOS's five-step crush/clip compensation selector (`0`, `¼`, `½`, `¾`,
-  `1` stop) and forwards its raw value to Swift; Kotlin never remeasures the Traffic Lights
-  result. Debug intent selections are
+  direction/fill/clip/crush values come back as flat payloads. The active camera codec/base ISO
+  resolves the curve and current clip in Swift before both renderer and scopes consume it. Kotlin
+  reduces each JPEG once (1/2ⁿ decode to ≤160 px wide) and draws (`ScopeView.kt`). Scope tools
+  toggle independently; landscape panels are draggable with per-scope persisted placement, while
+  portrait displays the two most-recent active scopes in canonical order. Operator Setup persists
+  the iOS-equivalent waveform/parade mode, guides, brightness, footprint, vectorscope zoom, and
+  histogram/Traffic Lights footprint; Kotlin does not duplicate any signal math. The histogram
+  carries the iOS-style RGB crush/clip edge blocks (default on) and a 95–100 IRE clip tint from
+  that same Swift result. View Assist persists iOS's five-step crush/clip compensation selector
+  (`0`, `¼`, `½`, `¾`, `1` stop) and forwards its raw value to Swift; Kotlin never remeasures the
+  Traffic Lights result. Debug intent selections are
   comma-separated:
 
   ```sh
@@ -123,17 +126,21 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   ```
 
 - **Feed effects (view assists):** `FeedEffectsRenderer` bakes LUT preview, false colour,
-  focus peaking, and zebras into the live feed in one AGSL pass. All colour math is baked in
-  the shared Swift core (`Sources/OpenZCineAndroidFacade/FeedEffectsWire.swift` — cubes from
-  `MonitorLUT`/`FalseColorMap`, thresholds from `ExposureSignalMapping`); Kotlin only uploads
-  textures/uniforms and interpolates. Requires **API 33 (AGSL)** and the staged Swift core —
-  below that the plain feed still renders (minSdk 29) and a warning is logged. The assist
-  toolbar (`AssistToolbar.kt`) is the operator switch — LUT/PEAK/FALSE/ZEBRA plus five
-  independently selectable scope pills, toggles persisted in SharedPreferences. The debug intent
-  still seeds an exact session state for tests (intent beats persistence):
+  focus peaking, and zebras into the live feed in one AGSL pass. All colour math is resolved by
+  the shared Swift core (`Sources/OpenZCineAndroidFacade/FeedEffectsWire.swift`): camera-aware
+  curve/clip mapping, LUT and false-colour cubes, Limits paint/weight overlays, peaking thresholds
+  and RGB, zebra code thresholds, and stripe RGB values. Kotlin only uploads textures/uniforms,
+  interpolates, and samples the clean source once. LUT and false-color activation remain
+  independent exactly as on iOS: Stops/IRE false color has renderer precedence over the LUT,
+  Limits overlays the active LUT, and turning false color off resumes that LUT. The false-color
+  reference key is on by default and uses the same Swift palette. Requires **API 33 (AGSL)** and
+  the staged Swift core — below that the plain feed still renders (minSdk 29) and a warning is
+  logged. The assist toolbar (`AssistToolbar.kt`) is the operator switch — LUT/PEAK/FALSE/ZEBRA
+  plus five independently selectable scope pills, toggles persisted in SharedPreferences. The
+  debug intent still seeds an exact session state for tests (intent beats persistence):
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
   --es zc.assist lut,peaking,zebra --es zc.lut log3g10` (`zc.assist` also takes `falsecolor`,
-  with `--es zc.fc.scale stops|ire`; false colour replaces the LUT, like iOS).
+  with `--es zc.fc.scale stops|ire|limits`).
 - **Custom LUT library:** Operator Setup → View Assist opens a one-document Android picker for
   operator-selected `.cube` files. The picker URI is used only for that read: Android bounds it to
   16 MiB, asks the shared Swift core to enforce strict UTF-8/`.cube` validation and pack the

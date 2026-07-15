@@ -214,6 +214,14 @@ fun MonitorScreen(
         }
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
+    val exposureAssistCameraInput =
+        remember(cameraProperties.codec, cameraProperties.iso, cameraProperties.baseIso) {
+            ExposureAssistCameraInput(
+                codec = cameraProperties.codec,
+                iso = cameraProperties.iso,
+                baseIso = cameraProperties.baseIso,
+            )
+        }
     LaunchedEffect(session) { session.connect() }
 
     // Shared glass state: the active tier plus the one blurred backdrop
@@ -664,6 +672,9 @@ fun MonitorScreen(
                         },
                         onFrame = glass::submit,
                         presentationState = liveFeedPresentation,
+                        effects = assist.effects,
+                        configuration = operatorSettings.feedEffectsConfiguration,
+                        cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
                     )
                 } else {
@@ -851,6 +862,8 @@ fun MonitorScreen(
                 portraitScopes = portraitScopes,
                 crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
                 histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
+                configuration = operatorSettings.scopeAssistConfiguration,
+                cameraInput = exposureAssistCameraInput,
                 source = activeFrameSource,
                 isPortrait = isPortrait,
                 feed = zones.feed,

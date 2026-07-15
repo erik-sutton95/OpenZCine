@@ -2,9 +2,15 @@ package com.opencapture.openzcine.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
 import com.opencapture.openzcine.AssistTool
+import com.opencapture.openzcine.FeedEffectsConfiguration
+import com.opencapture.openzcine.FeedPeakingColor
+import com.opencapture.openzcine.FeedPeakingSensitivity
+import com.opencapture.openzcine.FeedZebraStripeColor
+import com.opencapture.openzcine.FeedZebraUnit
 
 /**
  * A local delivery-frame guide drawn over the Android monitor feed.
@@ -118,6 +124,84 @@ public enum class ScopeCrushClipCompensation(
     }
 }
 
+/** Plot channel arrangement for the waveform panel, matching iOS. */
+public enum class ScopeWaveformMode(public val label: String) {
+    LUMA("LUMA"),
+    RGB("RGB"),
+}
+
+/** Plot channel arrangement for the parade panel, matching iOS. */
+public enum class ScopeParadeMode(public val label: String) {
+    RGB("RGB"),
+    YRGB("YRGB"),
+}
+
+/** Core-owned vectorscope density gain; Kotlin forwards only this stable ordinal. */
+public enum class ScopeVectorscopeZoom(
+    public val wireOrdinal: Int,
+    public val label: String,
+) {
+    X1(0, "1×"),
+    X2(1, "2×"),
+    X4(2, "4×"),
+}
+
+/** Independently toggleable waveform/parade reference lines. */
+@Immutable
+public data class ScopeGuideLines(
+    public val clip: Boolean = true,
+    public val crush: Boolean = true,
+    public val middle: Boolean = true,
+)
+
+/**
+ * Persistable per-panel scope presentation controls. The Android Canvas only
+ * exposes fields it actually honors; sampling and display-axis math remain in
+ * the Swift core.
+ */
+@Immutable
+public data class ScopeAssistConfiguration(
+    public val waveformScale: Float = DEFAULT_SCALE,
+    public val waveformMode: ScopeWaveformMode = ScopeWaveformMode.LUMA,
+    public val waveformGuides: ScopeGuideLines = ScopeGuideLines(),
+    public val waveformBrightness: Int = DEFAULT_BRIGHTNESS,
+    public val paradeScale: Float = DEFAULT_SCALE,
+    public val paradeMode: ScopeParadeMode = ScopeParadeMode.RGB,
+    public val paradeGuides: ScopeGuideLines = ScopeGuideLines(),
+    public val paradeBrightness: Int = DEFAULT_BRIGHTNESS,
+    public val vectorscopeScale: Float = DEFAULT_SCALE,
+    public val vectorscopeZoom: ScopeVectorscopeZoom = ScopeVectorscopeZoom.X1,
+    public val vectorscopeBrightness: Int = DEFAULT_BRIGHTNESS,
+    public val histogramScale: Float = DEFAULT_SCALE,
+    public val trafficLightsScale: Float = DEFAULT_SCALE,
+) {
+    /** Clamps stale/corrupt preferences to the same iOS-supported ranges. */
+    public fun normalized(): ScopeAssistConfiguration =
+        copy(
+            waveformScale = clampScale(waveformScale),
+            waveformBrightness = clampBrightness(waveformBrightness),
+            paradeScale = clampScale(paradeScale),
+            paradeBrightness = clampBrightness(paradeBrightness),
+            vectorscopeScale = clampScale(vectorscopeScale),
+            vectorscopeBrightness = clampBrightness(vectorscopeBrightness),
+            histogramScale = clampScale(histogramScale),
+            trafficLightsScale = clampScale(trafficLightsScale),
+        )
+
+    public companion object {
+        public const val MIN_SCALE: Float = 0.6f
+        public const val MAX_SCALE: Float = 1.6f
+        public const val DEFAULT_SCALE: Float = 1f
+        public const val MIN_BRIGHTNESS: Int = 0
+        public const val MAX_BRIGHTNESS: Int = 200
+        public const val DEFAULT_BRIGHTNESS: Int = 100
+
+        public fun clampScale(value: Float): Float = value.coerceIn(MIN_SCALE, MAX_SCALE)
+
+        public fun clampBrightness(value: Int): Int = value.coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
+    }
+}
+
 /**
  * The local monitor-only framing configuration consumed by the Compose feed
  * overlay. Camera framing-grid state is intentionally absent.
@@ -226,6 +310,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     private val desqueezePresentationState = mutableStateOf(loadDesqueezePresentation())
     private val levelStyleState = mutableStateOf(loadLevelStyle())
     private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
+    private val feedEffectsConfigurationState = mutableStateOf(loadFeedEffectsConfiguration())
+    private val scopeAssistConfigurationState = mutableStateOf(loadScopeAssistConfiguration())
 
     /** Selected local delivery-frame guide; persisted immediately on change. */
     public var framingGuide: LocalFramingGuide
@@ -261,6 +347,27 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         set(new) {
             scopeCrushClipCompensationState.value = new
             preferences.edit().putInt(SCOPE_METER_PREFERENCE, new.wireValue).apply()
+        }
+
+    /**
+     * Local image-assist choices only. Camera codec, ISO, and curve selection
+     * stay on the session and are forwarded separately into the Swift facade.
+     */
+    public var feedEffectsConfiguration: FeedEffectsConfiguration
+        get() = feedEffectsConfigurationState.value
+        set(new) {
+            val normalized = new.normalized()
+            feedEffectsConfigurationState.value = normalized
+            persistFeedEffectsConfiguration(normalized)
+        }
+
+    /** Per-scope presentation controls; clean-frame sampling remains unchanged. */
+    public var scopeAssistConfiguration: ScopeAssistConfiguration
+        get() = scopeAssistConfigurationState.value
+        set(new) {
+            val normalized = new.normalized()
+            scopeAssistConfigurationState.value = normalized
+            persistScopeAssistConfiguration(normalized)
         }
 
     /** Compose-observable framing state for the monitor overlay. */
@@ -442,6 +549,114 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         return ScopeCrushClipCompensation.fromWireValue(raw)
     }
 
+    /** Absent keys deliberately use iOS's first-use image-assist defaults. */
+    private fun loadFeedEffectsConfiguration(): FeedEffectsConfiguration =
+        FeedEffectsConfiguration(
+            falseColorReferenceEnabled = preferences.getBoolean(FALSE_COLOR_REFERENCE_KEY, true),
+            peakingSensitivity =
+                preferences.getString(PEAKING_SENSITIVITY_KEY, null)
+                    ?.let { stored -> FeedPeakingSensitivity.entries.firstOrNull { it.name == stored } }
+                    ?: FeedPeakingSensitivity.MEDIUM,
+            peakingColor =
+                preferences.getString(PEAKING_COLOR_KEY, null)
+                    ?.let { stored -> FeedPeakingColor.entries.firstOrNull { it.name == stored } }
+                    ?: FeedPeakingColor.RED,
+            zebraUnit =
+                preferences.getString(ZEBRA_UNIT_KEY, null)
+                    ?.let { stored -> FeedZebraUnit.entries.firstOrNull { it.name == stored } }
+                    ?: FeedZebraUnit.IRE,
+            zebraHighlightEnabled = preferences.getBoolean(ZEBRA_HIGHLIGHT_ENABLED_KEY, true),
+            zebraHighlightIre = preferences.getFloat(ZEBRA_HIGHLIGHT_IRE_KEY, 100f),
+            zebraHighlightColor =
+                preferences.getString(ZEBRA_HIGHLIGHT_COLOR_KEY, null)
+                    ?.let { stored -> FeedZebraStripeColor.entries.firstOrNull { it.name == stored } }
+                    ?: FeedZebraStripeColor.WHITE,
+            zebraMidtoneEnabled = preferences.getBoolean(ZEBRA_MIDTONE_ENABLED_KEY, true),
+            zebraMidtoneIre = preferences.getFloat(ZEBRA_MIDTONE_IRE_KEY, 55f),
+            zebraMidtoneColor =
+                preferences.getString(ZEBRA_MIDTONE_COLOR_KEY, null)
+                    ?.let { stored -> FeedZebraStripeColor.entries.firstOrNull { it.name == stored } }
+                    ?: FeedZebraStripeColor.AMBER,
+        ).normalized()
+
+    private fun persistFeedEffectsConfiguration(configuration: FeedEffectsConfiguration) {
+        preferences.edit()
+            .putBoolean(FALSE_COLOR_REFERENCE_KEY, configuration.falseColorReferenceEnabled)
+            .putString(PEAKING_SENSITIVITY_KEY, configuration.peakingSensitivity.name)
+            .putString(PEAKING_COLOR_KEY, configuration.peakingColor.name)
+            .putString(ZEBRA_UNIT_KEY, configuration.zebraUnit.name)
+            .putBoolean(ZEBRA_HIGHLIGHT_ENABLED_KEY, configuration.zebraHighlightEnabled)
+            .putFloat(ZEBRA_HIGHLIGHT_IRE_KEY, configuration.zebraHighlightIre)
+            .putString(ZEBRA_HIGHLIGHT_COLOR_KEY, configuration.zebraHighlightColor.name)
+            .putBoolean(ZEBRA_MIDTONE_ENABLED_KEY, configuration.zebraMidtoneEnabled)
+            .putFloat(ZEBRA_MIDTONE_IRE_KEY, configuration.zebraMidtoneIre)
+            .putString(ZEBRA_MIDTONE_COLOR_KEY, configuration.zebraMidtoneColor.name)
+            .apply()
+    }
+
+    private fun loadScopeAssistConfiguration(): ScopeAssistConfiguration {
+        fun waveformMode(): ScopeWaveformMode =
+            preferences.getString(SCOPE_WAVEFORM_MODE_KEY, null)
+                ?.let { stored -> ScopeWaveformMode.entries.firstOrNull { it.name == stored } }
+                ?: ScopeWaveformMode.LUMA
+        fun paradeMode(): ScopeParadeMode =
+            preferences.getString(SCOPE_PARADE_MODE_KEY, null)
+                ?.let { stored -> ScopeParadeMode.entries.firstOrNull { it.name == stored } }
+                ?: ScopeParadeMode.RGB
+        fun vectorZoom(): ScopeVectorscopeZoom =
+            preferences.getString(SCOPE_VECTOR_ZOOM_KEY, null)
+                ?.let { stored -> ScopeVectorscopeZoom.entries.firstOrNull { it.name == stored } }
+                ?: ScopeVectorscopeZoom.X1
+        fun guides(prefix: String): ScopeGuideLines =
+            ScopeGuideLines(
+                clip = preferences.getBoolean("$prefix.clip", true),
+                crush = preferences.getBoolean("$prefix.crush", true),
+                middle = preferences.getBoolean("$prefix.middle", true),
+            )
+        return ScopeAssistConfiguration(
+            waveformScale = preferences.getFloat(SCOPE_WAVEFORM_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
+            waveformMode = waveformMode(),
+            waveformGuides = guides(SCOPE_WAVEFORM_GUIDES_PREFIX),
+            waveformBrightness =
+                preferences.getInt(SCOPE_WAVEFORM_BRIGHTNESS_KEY, ScopeAssistConfiguration.DEFAULT_BRIGHTNESS),
+            paradeScale = preferences.getFloat(SCOPE_PARADE_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
+            paradeMode = paradeMode(),
+            paradeGuides = guides(SCOPE_PARADE_GUIDES_PREFIX),
+            paradeBrightness =
+                preferences.getInt(SCOPE_PARADE_BRIGHTNESS_KEY, ScopeAssistConfiguration.DEFAULT_BRIGHTNESS),
+            vectorscopeScale = preferences.getFloat(SCOPE_VECTOR_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
+            vectorscopeZoom = vectorZoom(),
+            vectorscopeBrightness =
+                preferences.getInt(SCOPE_VECTOR_BRIGHTNESS_KEY, ScopeAssistConfiguration.DEFAULT_BRIGHTNESS),
+            histogramScale = preferences.getFloat(SCOPE_HISTOGRAM_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
+            trafficLightsScale =
+                preferences.getFloat(SCOPE_TRAFFIC_LIGHTS_SCALE_KEY, ScopeAssistConfiguration.DEFAULT_SCALE),
+        ).normalized()
+    }
+
+    private fun persistScopeAssistConfiguration(configuration: ScopeAssistConfiguration) {
+        fun SharedPreferences.Editor.putGuides(prefix: String, guides: ScopeGuideLines): SharedPreferences.Editor =
+            putBoolean("$prefix.clip", guides.clip)
+                .putBoolean("$prefix.crush", guides.crush)
+                .putBoolean("$prefix.middle", guides.middle)
+
+        preferences.edit()
+            .putFloat(SCOPE_WAVEFORM_SCALE_KEY, configuration.waveformScale)
+            .putString(SCOPE_WAVEFORM_MODE_KEY, configuration.waveformMode.name)
+            .putGuides(SCOPE_WAVEFORM_GUIDES_PREFIX, configuration.waveformGuides)
+            .putInt(SCOPE_WAVEFORM_BRIGHTNESS_KEY, configuration.waveformBrightness)
+            .putFloat(SCOPE_PARADE_SCALE_KEY, configuration.paradeScale)
+            .putString(SCOPE_PARADE_MODE_KEY, configuration.paradeMode.name)
+            .putGuides(SCOPE_PARADE_GUIDES_PREFIX, configuration.paradeGuides)
+            .putInt(SCOPE_PARADE_BRIGHTNESS_KEY, configuration.paradeBrightness)
+            .putFloat(SCOPE_VECTOR_SCALE_KEY, configuration.vectorscopeScale)
+            .putString(SCOPE_VECTOR_ZOOM_KEY, configuration.vectorscopeZoom.name)
+            .putInt(SCOPE_VECTOR_BRIGHTNESS_KEY, configuration.vectorscopeBrightness)
+            .putFloat(SCOPE_HISTOGRAM_SCALE_KEY, configuration.histogramScale)
+            .putFloat(SCOPE_TRAFFIC_LIGHTS_SCALE_KEY, configuration.trafficLightsScale)
+            .apply()
+    }
+
     private companion object {
         const val STORE_NAME = "openzcine.operator-settings"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
@@ -454,6 +669,29 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
         const val LEVEL_STYLE_KEY = "assist.local.levelStyle.v1"
         const val SCOPE_METER_PREFERENCE = "scope-meter-v1"
+        const val FALSE_COLOR_REFERENCE_KEY = "assist.falseColor.reference.v1"
+        const val PEAKING_SENSITIVITY_KEY = "assist.peaking.sensitivity.v1"
+        const val PEAKING_COLOR_KEY = "assist.peaking.color.v1"
+        const val ZEBRA_UNIT_KEY = "assist.zebra.unit.v1"
+        const val ZEBRA_HIGHLIGHT_ENABLED_KEY = "assist.zebra.highlight.enabled.v1"
+        const val ZEBRA_HIGHLIGHT_IRE_KEY = "assist.zebra.highlight.ire.v1"
+        const val ZEBRA_HIGHLIGHT_COLOR_KEY = "assist.zebra.highlight.color.v1"
+        const val ZEBRA_MIDTONE_ENABLED_KEY = "assist.zebra.midtone.enabled.v1"
+        const val ZEBRA_MIDTONE_IRE_KEY = "assist.zebra.midtone." + "ire.v1"
+        const val ZEBRA_MIDTONE_COLOR_KEY = "assist.zebra.midtone.color.v1"
+        const val SCOPE_WAVEFORM_SCALE_KEY = "assist.scopes.waveform.scale.v1"
+        const val SCOPE_WAVEFORM_MODE_KEY = "assist.scopes.waveform.mode.v1"
+        const val SCOPE_WAVEFORM_GUIDES_PREFIX = "assist.scopes.waveform.guides.v1"
+        const val SCOPE_WAVEFORM_BRIGHTNESS_KEY = "assist.scopes.waveform.brightness.v1"
+        const val SCOPE_PARADE_SCALE_KEY = "assist.scopes.parade.scale.v1"
+        const val SCOPE_PARADE_MODE_KEY = "assist.scopes.parade.mode.v1"
+        const val SCOPE_PARADE_GUIDES_PREFIX = "assist.scopes.parade.guides.v1"
+        const val SCOPE_PARADE_BRIGHTNESS_KEY = "assist.scopes.parade.brightness.v1"
+        const val SCOPE_VECTOR_SCALE_KEY = "assist.scopes.vector.scale.v1"
+        const val SCOPE_VECTOR_ZOOM_KEY = "assist.scopes.vector." + "zoom.v1"
+        const val SCOPE_VECTOR_BRIGHTNESS_KEY = "assist.scopes.vector.brightness.v1"
+        const val SCOPE_HISTOGRAM_SCALE_KEY = "assist.scopes.histogram." + "scale.v1"
+        const val SCOPE_TRAFFIC_LIGHTS_SCALE_KEY = "assist.scopes.trafficLights.scale.v1"
 
         private fun legacyScopeMeterPreference(): String =
             "assist.scopes." + "crushClipCompensation.v1"

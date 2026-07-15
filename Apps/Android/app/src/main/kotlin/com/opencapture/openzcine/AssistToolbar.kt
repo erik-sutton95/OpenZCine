@@ -152,28 +152,26 @@ class AssistState(
         }
 
     /**
-     * Toggles [tool]. LUT and false colour are mutually exclusive (false
-     * colour *is* the monitoring image, iOS semantics). Scopes are independent:
-     * tapping another scope leaves an existing scope visible and records the
-     * recency Android's portrait layout needs.
+     * Toggles [tool]. LUT and false-colour activation remain independent, as
+     * on iOS: STOPS/IRE takes visual precedence in the renderer, then turning
+     * False off reveals the same active look. LIMITS paints over that look.
+     * Scopes are independent: tapping another scope leaves an existing scope
+     * visible and records the recency Android's portrait layout needs.
      */
     fun toggle(tool: AssistTool) {
         when (tool) {
             AssistTool.LUT ->
-                update(
-                    effects.copy(
-                        lut = if (effects.lut == null) selectedLut else null,
-                        falseColor = null,
-                    ),
-                )
+                if (effects.lut == null) {
+                    update(effects.copy(lut = selectedLut))
+                } else {
+                    update(effects.copy(lut = null))
+                }
             AssistTool.FALSE ->
-                update(
-                    effects.copy(
-                        falseColor =
-                            if (effects.falseColor == null) selectedFalseColorScale else null,
-                        lut = null,
-                    ),
-                )
+                if (effects.falseColor != null) {
+                    update(effects.copy(falseColor = null))
+                } else {
+                    update(effects.copy(falseColor = selectedFalseColorScale))
+                }
             AssistTool.PEAK -> update(effects.copy(peaking = !effects.peaking))
             AssistTool.ZEBRA -> update(effects.copy(zebra = !effects.zebra))
             AssistTool.WAVE -> toggleScope(ScopeKind.WAVEFORM)

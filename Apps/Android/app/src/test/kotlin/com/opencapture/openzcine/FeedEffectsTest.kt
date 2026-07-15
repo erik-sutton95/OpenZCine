@@ -25,9 +25,9 @@ class FeedEffectsTest {
     }
 
     @Test
-    fun `false colour replaces the lut like iOS`() {
+    fun `false colour retains lut activation while the renderer chooses precedence`() {
         val effects = FeedEffects.parse("lut,falsecolor", "mono", "ire")
-        assertNull(effects.lut)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.MONO), effects.lut)
         assertEquals(FeedFalseColorScale.IRE, effects.falseColor)
     }
 
@@ -67,5 +67,6 @@ class FeedEffectsTest {
         assertEquals(2, FeedLut.MONO.wireOrdinal)
         assertEquals(0, FeedFalseColorScale.STOPS.wireOrdinal)
         assertEquals(1, FeedFalseColorScale.IRE.wireOrdinal)
+        assertEquals(2, FeedFalseColorScale.LIMITS.wireOrdinal)
     }
 }

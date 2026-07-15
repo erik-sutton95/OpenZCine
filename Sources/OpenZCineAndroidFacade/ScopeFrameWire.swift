@@ -111,14 +111,25 @@ public enum ScopeFrameWire {
     /// goal-post fill. Invalid buffer geometry yields `[0]`, four empty
     /// histograms, and the core's empty-sample reading.
     ///
+    /// - Parameter clipNative: Camera-resolved clip warning endpoint. It is
+    ///   optional for source compatibility, but Android passes the same Swift
+    ///   camera mapping used by false colour and zebras when it is available.
     /// - Parameter crushClipCompensationRaw: Raw value for the persisted
     ///   shared-core `CrushClipCompensation` selector. It defaults to iOS's
     ///   `.quarter` migration default for direct Swift callers.
     public static func traces(
         rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int,
+        clipNative: Double? = nil,
         crushClipCompensationRaw: Int = AssistConfiguration.CrushClipCompensation.quarter.rawValue
     ) -> [Float] {
-        let mapping = ExposureSignalMapping(curve: curve(ordinal: curveOrdinal))
+        let curve = curve(ordinal: curveOrdinal)
+        let resolvedClip: Double
+        if let clipNative, clipNative.isFinite {
+            resolvedClip = clipNative
+        } else {
+            resolvedClip = curve.defaultClipNative
+        }
+        let mapping = ExposureSignalMapping(curve: curve, clipNative: resolvedClip)
         let samples = ScopeSampler.sample(
             rgba: rgba, width: width, height: height, bytesPerRow: bytesPerRow,
             stride: sampleStride)
@@ -204,15 +215,17 @@ public enum ScopeFrameWire {
     /// `VectorscopeDensityRasterizer` at default brightness. Empty when the
     /// frame yields no samples.
     public static func vectorPixels(
-        rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int
+        rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, curveOrdinal: Int,
+        zoomOrdinal: Int = 0
     ) -> [UInt8] {
+        guard let gain = vectorscopeGain(zoomOrdinal) else { return [] }
         let samples = ScopeSampler.sample(
             rgba: rgba, width: width, height: height, bytesPerRow: bytesPerRow,
             stride: sampleStride)
         let cube = curveOrdinal == 1 ? nLogMonitorCube : log3G10MonitorCube
         let monitorPoints = VectorscopeSampler.monitorPoints(samples.points, through: cube)
         let bins = VectorscopeSampler.accumulate(
-            points: monitorPoints, binCount: vectorBinCount, gain: 1)
+            points: monitorPoints, binCount: vectorBinCount, gain: gain)
         let n = bins.binCount
         guard n > 0, bins.peak > 0 else { return [] }
         let peak = Double(bins.peak)
@@ -235,5 +248,15 @@ public enum ScopeFrameWire {
             pixels[offset + 3] = UInt8(255 * alpha)
         }
         return pixels
+    }
+
+    /// iOS `VectorscopeZoom` gains, exposed as a narrow stable wire ordinal.
+    private static func vectorscopeGain(_ ordinal: Int) -> Double? {
+        switch ordinal {
+        case 0: 1
+        case 1: 2
+        case 2: 4
+        default: nil
+        }
     }
 }
