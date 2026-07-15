@@ -245,6 +245,62 @@ class MediaCacheStore(rootDirectory: Path) {
         return entry
     }
 
+    /**
+     * Returns an already-published entry for [identity], or `null` when its
+     * final artifact is unavailable or no longer validates against
+     * [expectedLength].
+     *
+     * This is deliberately a lookup, not an open: callers such as the local
+     * media library and batch share must never create an empty `.part` file
+     * merely by inspecting availability. The method consults one
+     * identity-derived path only; it never scans an app directory for media.
+     */
+    @Synchronized
+    fun completedEntryOrNull(
+        cameraID: String,
+        identity: MediaCacheObjectIdentity,
+        expectedLength: Long,
+    ): MediaCacheEntry? {
+        require(cameraID.isNotBlank()) { "cameraID must not be blank." }
+        require(expectedLength >= 0) { "expectedLength must not be negative." }
+        validateFilename(identity.filename)
+
+        val bucket = bucketPath(cameraID)
+        if (
+            !Files.isDirectory(bucket, LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(bucket)
+        ) {
+            return null
+        }
+
+        val artifactName = sha256Hex(identity.cacheKeyMaterial())
+        val finalPath = containedPath(bucket, "$artifactName.media")
+        val partialPath = containedPath(bucket, "$artifactName.part")
+        val key = CacheKey(bucket.fileName.toString(), artifactName)
+        entries[key]?.let { existing ->
+            if (
+                existing.expectedLength != expectedLength ||
+                    existing.state != MediaCacheState.COMPLETE ||
+                    existing.downloadedBytes != expectedLength
+            ) {
+                return null
+            }
+            if (hasExactFinalLength(finalPath, expectedLength)) {
+                return existing
+            }
+            // Only evict a stale completed entry. An active entry remains in
+            // the map so its transfer owner can continue resuming it.
+            entries.remove(key)
+            return null
+        }
+
+        if (!hasExactFinalLength(finalPath, expectedLength)) return null
+
+        return MediaCacheEntry.completed(partialPath, finalPath, expectedLength).also { entry ->
+            entries[key] = entry
+        }
+    }
+
     private fun createEntry(
         partialPath: Path,
         finalPath: Path,
@@ -277,6 +333,14 @@ class MediaCacheStore(rootDirectory: Path) {
             throw InvalidMediaCacheFileException(path.fileName.toString())
         }
     }
+
+    private fun hasExactFinalLength(path: Path, expectedLength: Long): Boolean =
+        try {
+            Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
+                Files.size(path) == expectedLength
+        } catch (_: IOException) {
+            false
+        }
 
     private fun bucketPath(cameraID: String): Path =
         rootDirectory.resolve(sha256Hex(cameraID)).normalize().also { path ->

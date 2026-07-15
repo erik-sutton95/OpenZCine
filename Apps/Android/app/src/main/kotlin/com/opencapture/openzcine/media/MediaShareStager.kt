@@ -26,10 +26,6 @@ class IncompleteMediaShareException(
 class UnsafeMediaShareFilenameException(filename: String) :
     MediaShareException("Unsafe camera media filename for sharing: $filename")
 
-/** The camera filename has no supported video extension for a native share target. */
-class UnsupportedMediaShareFormatException(filename: String) :
-    MediaShareException("This clip format cannot be shared: $filename")
-
 /** The published cache file was missing, mutable, or did not match the camera byte count. */
 class InvalidMediaShareSourceException(message: String) : MediaShareException(message)
 
@@ -48,7 +44,7 @@ data class StagedMediaShare(
     val file: Path,
     /** Validated camera filename shown by the receiving app. */
     val displayName: String,
-    /** Accurate MIME type resolved from [displayName]. */
+    /** MIME family from the core action when available, otherwise generic media. */
     val mimeType: String,
 )
 
@@ -68,18 +64,37 @@ internal data class MediaShareIntentSpec(
 ) {
     companion object {
         /** Builds the immutable policy for one staged clip. */
-        fun forShare(share: StagedMediaShare): MediaShareIntentSpec =
-            MediaShareIntentSpec(
-                action = ACTION_SEND,
-                mimeType = share.mimeType,
+        fun forShare(share: StagedMediaShare): MediaShareIntentSpec = forShares(listOf(share))
+
+        /**
+         * Builds the immutable policy for one or more already-staged artifacts.
+         *
+         * Mixed camera media deliberately uses a wildcard MIME type: every individual URI
+         * keeps its filename extension and FileProvider type, while a narrow
+         * shared MIME type would hide one of the selected assets from many
+         * native share targets.
+         */
+        fun forShares(shares: List<StagedMediaShare>): MediaShareIntentSpec {
+            require(shares.isNotEmpty()) { "At least one staged media file is required." }
+            val first = shares.first()
+            val single = shares.size == 1
+            return MediaShareIntentSpec(
+                action = if (single) ACTION_SEND else ACTION_SEND_MULTIPLE,
+                mimeType =
+                    shares.map(StagedMediaShare::mimeType).distinct().singleOrNull() ?: "*/*",
                 streamExtraIncluded = true,
-                clipDataLabel = share.displayName,
+                clipDataLabel = if (single) first.displayName else "OpenZCine media",
                 grantsReadUriPermission = true,
-                chooserTitle = "Share ${share.displayName}",
+                chooserTitle =
+                    if (single) "Share ${first.displayName}" else "Share ${shares.size} items",
             )
+        }
 
         /** Android's canonical `ACTION_SEND` string, kept JVM-testable here. */
         const val ACTION_SEND = "android.intent.action.SEND"
+
+        /** Android's canonical multi-stream share action, kept JVM-testable here. */
+        const val ACTION_SEND_MULTIPLE = "android.intent.action.SEND_MULTIPLE"
     }
 }
 
@@ -169,28 +184,62 @@ class MediaShareStager private constructor(
      * @param cancellationCheck Invoked between bounded I/O operations so callers
      * can stop staging before any share intent is launched.
      * @throws IncompleteMediaShareException when the progressive transfer is incomplete.
-     * @throws MediaShareException when the filename, MIME type, cache capacity,
-     * or final cache artifact is unsafe.
+     * The MIME family comes from [clip]'s shared-core [MediaContentKind], while
+     * its filename remains display metadata and a validated target suffix only.
+     * Kotlin never selects a media action from a filename extension.
+     *
+     * @throws MediaShareException when the filename, cache capacity, or final
+     * cache artifact is unsafe.
+     */
+    fun stage(
+        entry: MediaCacheEntry,
+        clip: MediaClipRecord,
+        cancellationCheck: () -> Unit = {},
+    ): StagedMediaShare =
+        stage(
+            entry = entry,
+            filename = clip.filename,
+            mimeType = mimeTypeFor(clip.contentKind),
+            cancellationCheck = cancellationCheck,
+        )
+
+    /**
+     * Stages a legacy caller's already-authorized display name with a generic
+     * MIME type. New camera-media callers must use [stage] with a
+     * [MediaClipRecord] so the shared-core action determines the MIME family.
      */
     fun stage(
         entry: MediaCacheEntry,
         filename: String,
         cancellationCheck: () -> Unit = {},
+    ): StagedMediaShare =
+        stage(
+            entry = entry,
+            filename = filename,
+            mimeType = GENERIC_MEDIA_MIME_TYPE,
+            cancellationCheck = cancellationCheck,
+        )
+
+    private fun stage(
+        entry: MediaCacheEntry,
+        filename: String,
+        mimeType: String,
+        cancellationCheck: () -> Unit,
     ): StagedMediaShare {
-        val mimeType = mimeTypeFor(filename)
+        validateFilename(filename)
         ensureComplete(entry)
         cancellationCheck()
 
         val source = entry.finalPath.toAbsolutePath().normalize()
         validatePublishedSourcePath(entry, source)
 
-        val extension = filename.substringAfterLast('.').lowercase(Locale.ROOT)
+        val displayExtension = filename.substringAfterLast('.').lowercase(Locale.ROOT)
         val temporary = Files.createTempFile(stagingDirectory, "share-", ".tmp")
         var movedTarget: Path? = null
         var targetWasPublished = false
         try {
             val copied = copySourceToTemporary(entry, source, temporary, cancellationCheck)
-            val target = targetPath(copied.contentDigest, extension)
+            val target = targetPath(copied.contentDigest, displayExtension)
 
             synchronized(readyCacheLock) {
                 cancellationCheck()
@@ -489,11 +538,14 @@ class MediaShareStager private constructor(
         }
     }
 
-    private fun mimeTypeFor(filename: String): String {
-        validateFilename(filename)
-        val extension = filename.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT)
-        return MIME_TYPES[extension] ?: throw UnsupportedMediaShareFormatException(filename)
-    }
+    private fun mimeTypeFor(contentKind: MediaContentKind): String =
+        when (contentKind) {
+            MediaContentKind.PLAYABLE_PROXY -> "video/*"
+            MediaContentKind.STILL_PHOTO -> "image/*"
+            MediaContentKind.R3D_MASTER,
+            MediaContentKind.UNSUPPORTED,
+            -> GENERIC_MEDIA_MIME_TYPE
+        }
 
     private fun validateFilename(filename: String) {
         if (
@@ -548,18 +600,9 @@ class MediaShareStager private constructor(
         const val DEFAULT_MAXIMUM_READY_BYTES: Long = 1_073_741_824L
         const val DEFAULT_MAXIMUM_READY_ARTIFACTS: Int = 8
         const val URI_GRANT_RETENTION_MILLIS: Long = 24L * 60L * 60L * 1000L
+        const val GENERIC_MEDIA_MIME_TYPE: String = "application/octet-stream"
 
         /** Serializes ready-cache publication and eviction across stager instances in this process. */
         val readyCacheLock: Any = Any()
-
-        val MIME_TYPES: Map<String, String> =
-            mapOf(
-                "mov" to "video/quicktime",
-                "qt" to "video/quicktime",
-                "mp4" to "video/mp4",
-                "m4v" to "video/mp4",
-                "mkv" to "video/x-matroska",
-                "avi" to "video/x-msvideo",
-            )
     }
 }

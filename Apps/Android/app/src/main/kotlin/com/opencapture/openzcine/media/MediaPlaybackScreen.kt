@@ -232,7 +232,7 @@ fun MediaPlaybackScreen(
                                     val staged =
                                         withContext(Dispatchers.IO) {
                                             MediaShareStager(shareCacheDirectory)
-                                                .stage(completedEntry, clip.filename) {
+                                                .stage(completedEntry, clip) {
                                                     stageContext.ensureActive()
                                                 }
                                         }

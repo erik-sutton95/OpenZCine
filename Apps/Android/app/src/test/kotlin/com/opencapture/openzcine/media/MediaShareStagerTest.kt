@@ -21,10 +21,14 @@ class MediaShareStagerTest {
             val bytes = byteArrayOf(9, 8, 7, 6)
             val entry = completedEntry(root, "C0001.MOV", bytes)
 
-            val staged = MediaShareStager(root.resolve("cache")).stage(entry, "C0001.MOV")
+            val staged =
+                MediaShareStager(root.resolve("cache")).stage(
+                    entry,
+                    clip("C0001.MOV", MediaContentKind.PLAYABLE_PROXY),
+                )
 
             assertEquals("C0001.MOV", staged.displayName)
-            assertEquals("video/quicktime", staged.mimeType)
+            assertEquals("video/*", staged.mimeType)
             assertTrue(staged.file.startsWith(root.resolve("cache/share/ready")))
             assertFalse(staged.file.startsWith(root.resolve("no-backup")))
             assertFalse(staged.file.fileName.toString().endsWith(".part"))
@@ -52,7 +56,7 @@ class MediaShareStagerTest {
         }
 
     @Test
-    fun `stage validates filename and MIME before it creates a provider visible copy`() =
+    fun `stage validates a display filename before it creates a provider visible copy`() =
         withRoot { root ->
             val entry = completedEntry(root, "C0003.MOV", byteArrayOf(1, 2, 3))
             val stager = MediaShareStager(root.resolve("cache"))
@@ -61,8 +65,22 @@ class MediaShareStagerTest {
                 .forEach { filename ->
                     assertFailsWith<UnsafeMediaShareFilenameException> { stager.stage(entry, filename) }
                 }
-            assertFailsWith<UnsupportedMediaShareFormatException> { stager.stage(entry, "C0003.R3D") }
             Files.list(root.resolve("cache/share/ready")).use { files -> assertEquals(0, files.count()) }
+        }
+
+    @Test
+    fun `stage derives MIME family from the shared core action not the filename`() =
+        withRoot { root ->
+            val entry = completedEntry(root, "C0003.BIN", byteArrayOf(1, 2, 3))
+
+            val staged =
+                MediaShareStager(root.resolve("cache")).stage(
+                    entry,
+                    clip("C0003.BIN", MediaContentKind.STILL_PHOTO),
+                )
+
+            assertEquals("image/*", staged.mimeType)
+            assertEquals("C0003.BIN", staged.displayName)
         }
 
     @Test
@@ -205,16 +223,46 @@ class MediaShareStagerTest {
     fun `share intent policy carries a typed stream URI and read grant`() =
         withRoot { root ->
             val entry = completedEntry(root, "C0005.M4V", byteArrayOf(4, 2))
-            val staged = MediaShareStager(root.resolve("cache")).stage(entry, "C0005.M4V")
+            val staged =
+                MediaShareStager(root.resolve("cache")).stage(
+                    entry,
+                    clip("C0005.M4V", MediaContentKind.PLAYABLE_PROXY),
+                )
 
             val spec = MediaShareIntentSpec.forShare(staged)
 
             assertEquals(MediaShareIntentSpec.ACTION_SEND, spec.action)
-            assertEquals("video/mp4", spec.mimeType)
+            assertEquals("video/*", spec.mimeType)
             assertTrue(spec.streamExtraIncluded)
             assertEquals("C0005.M4V", spec.clipDataLabel)
             assertTrue(spec.grantsReadUriPermission)
             assertEquals("Share C0005.M4V", spec.chooserTitle)
+        }
+
+    @Test
+    fun `batch policy uses send multiple and a safe mixed media MIME type`() =
+        withRoot { root ->
+            val stager = MediaShareStager(root.resolve("cache"))
+            val video =
+                stager.stage(
+                    completedEntry(root, "C0005A.MOV", byteArrayOf(4, 2)),
+                    clip("C0005A.MOV", MediaContentKind.PLAYABLE_PROXY),
+                )
+            val still =
+                stager.stage(
+                    completedEntry(root, "DSC_0007.JPG", byteArrayOf(7, 7)),
+                    clip("DSC_0007.JPG", MediaContentKind.STILL_PHOTO),
+                )
+
+            val spec = MediaShareIntentSpec.forShares(listOf(video, still))
+
+            assertEquals(MediaShareIntentSpec.ACTION_SEND_MULTIPLE, spec.action)
+            assertEquals("*/*", spec.mimeType)
+            assertTrue(spec.streamExtraIncluded)
+            assertEquals("OpenZCine media", spec.clipDataLabel)
+            assertTrue(spec.grantsReadUriPermission)
+            assertEquals("Share 2 items", spec.chooserTitle)
+            assertEquals("image/*", still.mimeType)
         }
 
     @Test
@@ -251,6 +299,24 @@ class MediaShareStagerTest {
         entry.complete()
         return entry
     }
+
+    private fun clip(filename: String, contentKind: MediaContentKind): MediaClipRecord =
+        MediaClipRecord(
+            handle = 1,
+            storageId = 1,
+            sizeBytes = 0,
+            captureDate = "20260715T120000",
+            pixelWidth = 0,
+            pixelHeight = 0,
+            filename = filename,
+            contentKind = contentKind,
+            stillPhoto =
+                if (contentKind == MediaContentKind.STILL_PHOTO) {
+                    StillPhotoClassification("Photo", StillPreviewStrategy.COMPLETE_FILE)
+                } else {
+                    null
+                },
+        )
 
     private fun constrainedStager(root: Path, clock: () -> Long): MediaShareStager =
         MediaShareStager(
