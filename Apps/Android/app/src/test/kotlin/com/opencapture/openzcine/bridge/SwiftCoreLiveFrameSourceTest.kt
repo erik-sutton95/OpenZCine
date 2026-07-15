@@ -10,6 +10,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -19,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.StandardTestDispatcher
 
 /**
  * Pure marshaling behavior with injected start/stop hooks — the native pump
@@ -362,5 +365,82 @@ class SwiftCoreLiveFrameSourceTest {
         runCurrent()
         assertContentEquals(byteArrayOf(2), health.await().jpegData)
         visual.cancelAndJoin()
+    }
+
+    @Test
+    fun `request changed after configuration never starts the stale preview`() = runTest {
+        val replacement = SwiftLiveViewRequest(1, 3, 49_500_000L)
+        val configured = mutableListOf<SwiftLiveViewRequest>()
+        val started = mutableListOf<SwiftLiveViewRequest>()
+        val reachedReservation = CompletableDeferred<Unit>()
+        val releaseReservation = CompletableDeferred<Unit>()
+        var pauseFirstReservation = true
+        var mostRecentlyConfigured: SwiftLiveViewRequest? = null
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { started += requireNotNull(mostRecentlyConfigured) },
+                stop = {},
+                configurePreview = { request ->
+                    configured += request
+                    mostRecentlyConfigured = request
+                    true
+                },
+                sharingScope = backgroundScope,
+                beforeStartReservation = {
+                    if (pauseFirstReservation) {
+                        pauseFirstReservation = false
+                        reachedReservation.complete(Unit)
+                        releaseReservation.await()
+                    }
+                },
+            )
+
+        val collector = launch { source.frames.collect() }
+        runCurrent()
+        assertTrue(reachedReservation.isCompleted)
+
+        assertTrue(source.updatePreviewRequest(replacement))
+        releaseReservation.complete(Unit)
+        runCurrent()
+
+        assertEquals(listOf(SwiftLiveViewRequest.DEFAULT, replacement), configured)
+        assertEquals(listOf(replacement), started)
+        assertEquals(replacement, source.appliedPreviewRequest)
+        collector.cancelAndJoin()
+    }
+
+    @Test
+    fun `cancellation after claiming a restart still stops the native pump`() = runTest {
+        var stops = 0
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val nativeStopDispatcher = StandardTestDispatcher(testScheduler, name = "native-stop")
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener = it },
+                stop = {
+                    stops++
+                    listener.onEnded()
+                },
+                configurePreview = { true },
+                sharingScope = backgroundScope,
+                restartDelayMillis = 0L,
+                stopDispatcher = nativeStopDispatcher,
+            )
+        val collector = launch { source.frames.collect() }
+        runCurrent()
+
+        val update =
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                source.updatePreviewRequest(SwiftLiveViewRequest(1, 3, 49_500_000L))
+            }
+        assertFalse(update.isCompleted)
+        update.cancel()
+        runCurrent()
+
+        assertEquals(1, stops)
+        update.join()
+        collector.cancelAndJoin()
     }
 }

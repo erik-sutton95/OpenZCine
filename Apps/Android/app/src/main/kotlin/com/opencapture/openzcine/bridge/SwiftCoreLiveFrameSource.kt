@@ -4,11 +4,12 @@ import com.opencapture.openzcine.core.LiveFrame
 import com.opencapture.openzcine.core.LiveAudioMeterChannel
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
 import com.opencapture.openzcine.core.LiveFrameSource
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
@@ -31,6 +32,38 @@ private data class StreamFrame(
     val generation: Long,
     val frame: LiveFrame,
 )
+
+private data class PreviewRequestPlan(
+    val request: SwiftLiveViewRequest,
+    val version: Long,
+)
+
+/**
+ * Ownership of the native pump. Every transition is protected by
+ * `previewRequestLock`; native calls intentionally happen after ownership is
+ * claimed, never while the lock is held.
+ */
+private sealed interface NativePumpState {
+    data object Idle : NativePumpState
+
+    data class Starting(
+        val requestVersion: Long,
+        val generation: Long,
+    ) : NativePumpState
+
+    data class Running(
+        val requestVersion: Long,
+        val generation: Long,
+    ) : NativePumpState
+
+    data class Stopping(val generation: Long) : NativePumpState
+}
+
+private enum class PumpStartReservation {
+    Reserved,
+    Stale,
+    Busy,
+}
 
 /** The outcome of applying Android's Swift-owned preview request to the active camera. */
 internal sealed interface SwiftLiveViewPreviewState {
@@ -85,6 +118,8 @@ class SwiftCoreLiveFrameSource(
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val restartDelayMillis: Long = 250L,
     private val onRecordingState: (Boolean) -> Unit = {},
+    private val stopDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val beforeStartReservation: suspend () -> Unit = {},
 ) : LiveFrameSource {
     init {
         require(restartDelayMillis >= 0L) { "restartDelayMillis must not be negative." }
@@ -92,10 +127,12 @@ class SwiftCoreLiveFrameSource(
 
     private val previewRequestLock = Any()
     private var requestedPreview = SwiftLiveViewRequest.DEFAULT
+    private var requestedPreviewVersion = 0L
     private var appliedPreview: SwiftLiveViewRequest? = null
+    private var nativePumpState: NativePumpState = NativePumpState.Idle
     private val previewUpdates = Channel<Unit>(Channel.CONFLATED)
+    private val pumpStateUpdates = Channel<Unit>(Channel.CONFLATED)
     private val _previewState = MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle)
-    private val liveViewPumpActive = AtomicBoolean(false)
     private val nextStreamGeneration = AtomicLong(0L)
     private val activeStreamGeneration = AtomicLong(0L)
 
@@ -123,10 +160,8 @@ class SwiftCoreLiveFrameSource(
                 // If a body rejects a new verify-on-HW enum, restore only a
                 // previously confirmed request; otherwise leave live view
                 // paused and make the rejection visible to the Link surface.
-                awaitConfiguredPreviewRequest()
-                val generation = nextStreamGeneration.incrementAndGet()
-                activeStreamGeneration.set(generation)
-                liveViewPumpActive.set(true)
+                val reservation = awaitReservedPumpStart()
+                val generation = reservation.generation
                 try {
                     start(
                         object : SwiftCore.LiveFrameListener {
@@ -248,13 +283,14 @@ class SwiftCoreLiveFrameSource(
                         },
                     )
                 } catch (error: Throwable) {
-                    activeStreamGeneration.compareAndSet(generation, 0L)
-                    liveViewPumpActive.set(false)
+                    failPumpStart(generation)
                     throw error
                 }
+                if (completePumpStart(reservation)) {
+                    stopClaimedPump(generation)
+                }
                 awaitClose {
-                    activeStreamGeneration.compareAndSet(generation, 0L)
-                    if (liveViewPumpActive.getAndSet(false)) stop()
+                    releasePumpFromFlow(generation)
                 }
             }
             .buffer(Channel.CONFLATED)
@@ -286,50 +322,200 @@ class SwiftCoreLiveFrameSource(
             }
         }
 
-    private suspend fun awaitConfiguredPreviewRequest(): SwiftLiveViewRequest {
+    private suspend fun awaitReservedPumpStart(): NativePumpState.Starting {
         while (true) {
-            val requested = previewRequest
-            _previewState.value = SwiftLiveViewPreviewState.Pending(requested)
-            if (configurePreviewSafely(requested)) {
-                if (!isCurrentPreviewRequest(requested)) continue
-                synchronized(previewRequestLock) { appliedPreview = requested }
-                _previewState.value = SwiftLiveViewPreviewState.Applied(requested)
-                return requested
+            awaitPumpIdle()
+            val plan = awaitConfiguredPreviewRequest()
+            beforeStartReservation()
+            val generation = nextStreamGeneration.incrementAndGet()
+            when (reservePumpStart(plan, generation)) {
+                PumpStartReservation.Reserved ->
+                    return NativePumpState.Starting(plan.version, generation)
+                PumpStartReservation.Stale -> continue
+                PumpStartReservation.Busy -> pumpStateUpdates.receive()
+            }
+        }
+    }
+
+    private suspend fun awaitPumpIdle() {
+        while (synchronized(previewRequestLock) { nativePumpState !is NativePumpState.Idle }) {
+            pumpStateUpdates.receive()
+        }
+    }
+
+    private suspend fun awaitConfiguredPreviewRequest(): PreviewRequestPlan {
+        while (true) {
+            val plan = currentPreviewPlan()
+            if (!publishPendingIfCurrent(plan)) continue
+            if (configurePreviewSafely(plan.request)) {
+                val accepted =
+                    synchronized(previewRequestLock) {
+                        if (!isCurrentPreviewPlanLocked(plan)) {
+                            false
+                        } else {
+                            appliedPreview = plan.request
+                            _previewState.value = SwiftLiveViewPreviewState.Applied(plan.request)
+                            true
+                        }
+                    }
+                if (!accepted) continue
+                return plan
             }
 
-            if (!isCurrentPreviewRequest(requested)) continue
+            if (!isCurrentPreviewPlan(plan)) continue
             val retained = appliedPreviewRequest
             if (
                 retained != null &&
-                    retained != requested &&
+                    retained != plan.request &&
                     configurePreviewSafely(retained)
             ) {
-                if (!isCurrentPreviewRequest(requested)) continue
-                _previewState.value =
-                    SwiftLiveViewPreviewState.Rejected(
-                        requested = requested,
-                        retainedRequest = retained,
-                    )
-                return retained
+                val restored =
+                    synchronized(previewRequestLock) {
+                        if (!isCurrentPreviewPlanLocked(plan)) {
+                            false
+                        } else {
+                            _previewState.value =
+                                SwiftLiveViewPreviewState.Rejected(
+                                    requested = plan.request,
+                                    retainedRequest = retained,
+                                )
+                            true
+                        }
+                    }
+                if (!restored) continue
+                return plan
             }
 
-            if (!isCurrentPreviewRequest(requested)) continue
-            if (retained != null) {
+            val rejected =
                 synchronized(previewRequestLock) {
+                    if (!isCurrentPreviewPlanLocked(plan)) return@synchronized false
                     if (appliedPreview == retained) appliedPreview = null
+                    _previewState.value =
+                        SwiftLiveViewPreviewState.Rejected(
+                            requested = plan.request,
+                            retainedRequest = null,
+                        )
+                    true
                 }
-            }
-            _previewState.value =
-                SwiftLiveViewPreviewState.Rejected(
-                    requested = requested,
-                    retainedRequest = null,
-                )
+            if (!rejected) continue
             previewUpdates.receive()
         }
     }
 
-    private fun isCurrentPreviewRequest(request: SwiftLiveViewRequest): Boolean =
-        synchronized(previewRequestLock) { requestedPreview == request }
+    private fun currentPreviewPlan(): PreviewRequestPlan =
+        synchronized(previewRequestLock) {
+            PreviewRequestPlan(requestedPreview, requestedPreviewVersion)
+        }
+
+    private fun publishPendingIfCurrent(plan: PreviewRequestPlan): Boolean =
+        synchronized(previewRequestLock) {
+            if (!isCurrentPreviewPlanLocked(plan)) {
+                false
+            } else {
+                _previewState.value = SwiftLiveViewPreviewState.Pending(plan.request)
+                true
+            }
+        }
+
+    private fun isCurrentPreviewPlan(plan: PreviewRequestPlan): Boolean =
+        synchronized(previewRequestLock) { isCurrentPreviewPlanLocked(plan) }
+
+    private fun isCurrentPreviewPlanLocked(plan: PreviewRequestPlan): Boolean =
+        requestedPreviewVersion == plan.version && requestedPreview == plan.request
+
+    private fun reservePumpStart(
+        plan: PreviewRequestPlan,
+        generation: Long,
+    ): PumpStartReservation =
+        synchronized(previewRequestLock) {
+            if (!isCurrentPreviewPlanLocked(plan)) {
+                PumpStartReservation.Stale
+            } else if (nativePumpState !is NativePumpState.Idle) {
+                PumpStartReservation.Busy
+            } else {
+                nativePumpState = NativePumpState.Starting(plan.version, generation)
+                activeStreamGeneration.set(generation)
+                PumpStartReservation.Reserved
+            }
+        }
+
+    private fun completePumpStart(reservation: NativePumpState.Starting): Boolean =
+        synchronized(previewRequestLock) {
+            check(nativePumpState == reservation) { "Native live-view start ownership was lost." }
+            if (requestedPreviewVersion == reservation.requestVersion) {
+                nativePumpState =
+                    NativePumpState.Running(
+                        requestVersion = reservation.requestVersion,
+                        generation = reservation.generation,
+                    )
+                false
+            } else {
+                activeStreamGeneration.compareAndSet(reservation.generation, 0L)
+                nativePumpState = NativePumpState.Stopping(reservation.generation)
+                true
+            }
+        }
+
+    private fun failPumpStart(generation: Long) {
+        val released =
+            synchronized(previewRequestLock) {
+                val state = nativePumpState
+                if (state !is NativePumpState.Starting || state.generation != generation) {
+                    false
+                } else {
+                    activeStreamGeneration.compareAndSet(generation, 0L)
+                    nativePumpState = NativePumpState.Idle
+                    true
+                }
+            }
+        if (released) pumpStateUpdates.trySend(Unit)
+    }
+
+    private fun releasePumpFromFlow(generation: Long) {
+        val claimed =
+            synchronized(previewRequestLock) {
+                when (val state = nativePumpState) {
+                    is NativePumpState.Starting -> state.generation == generation
+                    is NativePumpState.Running -> state.generation == generation
+                    is NativePumpState.Idle,
+                    is NativePumpState.Stopping,
+                    -> false
+                }.also { shouldStop ->
+                    if (shouldStop) {
+                        activeStreamGeneration.compareAndSet(generation, 0L)
+                        nativePumpState = NativePumpState.Stopping(generation)
+                    }
+                }
+            }
+        if (!claimed) return
+        try {
+            stop()
+        } finally {
+            completePumpStop(generation)
+        }
+    }
+
+    private suspend fun stopClaimedPump(generation: Long) {
+        try {
+            withContext(NonCancellable + stopDispatcher) { stop() }
+        } finally {
+            completePumpStop(generation)
+        }
+    }
+
+    private fun completePumpStop(generation: Long) {
+        val released =
+            synchronized(previewRequestLock) {
+                val state = nativePumpState
+                if (state !is NativePumpState.Stopping || state.generation != generation) {
+                    false
+                } else {
+                    nativePumpState = NativePumpState.Idle
+                    true
+                }
+            }
+        if (released) pumpStateUpdates.trySend(Unit)
+    }
 
     private fun configurePreviewSafely(request: SwiftLiveViewRequest): Boolean =
         try {
@@ -346,26 +532,37 @@ class SwiftCoreLiveFrameSource(
      * again. The request contains preview size/compression/pull cadence only.
      */
     internal suspend fun updatePreviewRequest(request: SwiftLiveViewRequest): Boolean {
-        val changed =
+        var changed = false
+        var stopGeneration: Long? = null
+        val accepted =
             synchronized(previewRequestLock) {
-                if (requestedPreview == request) {
-                    false
-                } else {
+                changed = requestedPreview != request
+                val retryingRejectedRequest =
+                    !changed && _previewState.value is SwiftLiveViewPreviewState.Rejected
+                if (!changed && !retryingRejectedRequest) return@synchronized false
+                if (changed) {
                     requestedPreview = request
-                    true
                 }
+                requestedPreviewVersion += 1
+                _previewState.value = SwiftLiveViewPreviewState.Pending(request)
+                when (val state = nativePumpState) {
+                    is NativePumpState.Starting ->
+                        activeStreamGeneration.compareAndSet(state.generation, 0L)
+                    is NativePumpState.Running -> {
+                        activeStreamGeneration.compareAndSet(state.generation, 0L)
+                        nativePumpState = NativePumpState.Stopping(state.generation)
+                        stopGeneration = state.generation
+                    }
+                    is NativePumpState.Idle,
+                    is NativePumpState.Stopping,
+                    -> Unit
+                }
+                true
             }
-        val retryingRejectedRequest = !changed && _previewState.value is SwiftLiveViewPreviewState.Rejected
-        if (!changed && !retryingRejectedRequest) return false
+        if (!accepted) return false
 
-        _previewState.value = SwiftLiveViewPreviewState.Pending(request)
         previewUpdates.trySend(Unit)
-        if (liveViewPumpActive.compareAndSet(true, false)) {
-            // The requested generation has changed. Do not let a late frame
-            // or replay from the stopping pump count as fresh link health.
-            activeStreamGeneration.set(0L)
-            withContext(Dispatchers.IO) { stop() }
-        }
+        stopGeneration?.let { stopClaimedPump(it) }
         return changed
     }
 }
