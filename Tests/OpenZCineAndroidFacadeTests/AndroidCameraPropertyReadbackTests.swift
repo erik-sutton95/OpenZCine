@@ -34,7 +34,12 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(bootstrap.controls.resolutionFrameRate == "6K · 25p")
         #expect(bootstrap.controls.codec == "R3D NE")
         #expect(bootstrap.controls.whiteBalanceTint == "Neutral")
+        #expect(bootstrap.controls.isoValues == ISOPickerPolicy.highBaseOptions)
         #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
+        #expect(bootstrap.controls.irisValues.first == "f/2.8")
+        #expect(bootstrap.controls.whiteBalanceValues.contains("5600K"))
+        #expect(bootstrap.controls.focusModes.contains("AF-C"))
+        #expect(bootstrap.controls.audioInputs == ["Microphone", "Line"])
         #expect(bootstrap.controls.baseISO == ["Low", "High"])
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
 
@@ -65,6 +70,7 @@ struct AndroidCameraPropertyReadbackTests {
             server.receivedRequests().filter { $0.operation == .getDevicePropValueEx }
         let expectedBootstrap = [
             PTPPropertyCode.movieISOSensitivity,
+            .movieBaseISO,
             .movieShutterMode,
             .movieShutterAngle,
             .movieShutterSpeed,
@@ -99,6 +105,11 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["resolutionFrameRate"] == "6K · 25p")
         #expect(fields["codecSelection"] == "R3D NE")
         #expect(fields["whiteBalanceTint"] == "Neutral")
+        #expect(
+            fields["options.iso"] == ISOPickerPolicy.highBaseOptions.joined(separator: "\u{1F}"))
+        #expect(fields["options.iris"]?.contains("f/2.8") == true)
+        #expect(fields["options.focusMode"]?.contains("AF-C") == true)
+        #expect(fields["options.audioInput"] == "Microphone\u{1F}Line")
         #expect(fields["options.shutter"] == "90°\u{1F}180°\u{1F}360°")
         #expect(fields["options.codec"] == "R3D NE\u{1F}H.265")
         #expect(!wire.contains("D09E"))

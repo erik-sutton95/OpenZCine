@@ -105,7 +105,18 @@ internal object CameraPropertySnapshotWire {
             cameraGrid = value.optionalString("cameraGrid"),
             controlCapabilities =
                 CameraControlCapabilities(
+                    isoValues = value.options("options.iso"),
                     shutterValues = value.options("options.shutter"),
+                    irisValues = value.options("options.iris"),
+                    whiteBalanceValues = value.options("options.whiteBalance"),
+                    focusModes = value.options("options.focusMode"),
+                    focusAreas = value.options("options.focusArea"),
+                    focusSubjects = value.options("options.focusSubject"),
+                    audioSensitivities = value.options("options.audioSensitivity"),
+                    audioInputs = value.options("options.audioInput"),
+                    windFilters = value.options("options.windFilter"),
+                    attenuators = value.options("options.attenuator"),
+                    audio32BitFloat = value.options("options.audio32BitFloat"),
                     baseIso = value.options("options.baseIso"),
                     shutterModes = value.options("options.shutterMode"),
                     shutterLocks = value.options("options.shutterLock"),

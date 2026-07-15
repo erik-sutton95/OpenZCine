@@ -158,14 +158,38 @@ public data class CameraStorageStatus(
 )
 
 /**
- * Camera-advertised control labels whose exact raw descriptor values remain in Swift.
+ * Swift-authorized control labels whose protocol values remain in the native session.
  *
- * An empty list means the body did not advertise that control in its current mode.
- * Kotlin must never synthesize fallback values for these fields.
+ * Values normally come from the connected body's descriptors. A Nikon ZR may also receive a
+ * model-scoped fallback for stable controls that its firmware omits or temporarily narrows. An
+ * empty list means no safe write domain is known in the current mode. Kotlin must never synthesize
+ * values for these fields.
  */
 public data class CameraControlCapabilities(
+    /** Movie ISO values valid for the active codec and base-ISO circuit. */
+    val isoValues: List<String> = emptyList(),
     /** Values from the active shutter angle/speed descriptor. */
     val shutterValues: List<String> = emptyList(),
+    /** Apertures advertised for the mounted lens, or the body-scoped lens fallback. */
+    val irisValues: List<String> = emptyList(),
+    /** Kelvin and preset white-balance values valid on the connected body. */
+    val whiteBalanceValues: List<String> = emptyList(),
+    /** Movie autofocus modes valid on the connected body. */
+    val focusModes: List<String> = emptyList(),
+    /** Movie autofocus areas valid on the connected body. */
+    val focusAreas: List<String> = emptyList(),
+    /** Movie autofocus subject modes valid on the connected body. */
+    val focusSubjects: List<String> = emptyList(),
+    /** Audio-input sensitivity values valid on the connected body. */
+    val audioSensitivities: List<String> = emptyList(),
+    /** Audio input-source values valid on the connected body. */
+    val audioInputs: List<String> = emptyList(),
+    /** Wind-filter values valid on the connected body. */
+    val windFilters: List<String> = emptyList(),
+    /** Input-attenuator values valid on the connected body. */
+    val attenuators: List<String> = emptyList(),
+    /** 32-bit-float audio states valid on the connected body. */
+    val audio32BitFloat: List<String> = emptyList(),
     /** Dual-base ISO circuits advertised by the camera. */
     val baseIso: List<String> = emptyList(),
     /** Shutter display circuits advertised by the camera. */
@@ -186,7 +210,18 @@ public data class CameraControlCapabilities(
     /** Returns the advertised labels for one descriptor-dependent control. */
     public fun options(control: CameraControl): List<String> =
         when (control) {
+            CameraControl.ISO -> isoValues
             CameraControl.SHUTTER -> shutterValues
+            CameraControl.IRIS -> irisValues
+            CameraControl.WHITE_BALANCE -> whiteBalanceValues
+            CameraControl.FOCUS_MODE -> focusModes
+            CameraControl.FOCUS_AREA -> focusAreas
+            CameraControl.FOCUS_SUBJECT -> focusSubjects
+            CameraControl.AUDIO_SENSITIVITY -> audioSensitivities
+            CameraControl.AUDIO_INPUT -> audioInputs
+            CameraControl.WIND_FILTER -> windFilters
+            CameraControl.ATTENUATOR -> attenuators
+            CameraControl.AUDIO_32_BIT_FLOAT -> audio32BitFloat
             CameraControl.BASE_ISO -> baseIso
             CameraControl.SHUTTER_MODE -> shutterModes
             CameraControl.SHUTTER_LOCK -> shutterLocks

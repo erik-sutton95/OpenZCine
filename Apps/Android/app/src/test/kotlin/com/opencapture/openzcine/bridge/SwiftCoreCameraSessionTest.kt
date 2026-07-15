@@ -506,6 +506,50 @@ class SwiftCoreCameraSessionTest {
             listOf("6K · 25p", "4K · 60p"),
             session.cameraProperties.value.controlCapabilities.resolutionFrameRates,
         )
+        assertEquals(
+            listOf("1600", "3200"),
+            session.cameraProperties.value.controlCapabilities.isoValues,
+        )
+        assertEquals(
+            listOf("f/2.8", "f/4"),
+            session.cameraProperties.value.controlCapabilities.irisValues,
+        )
+        assertEquals(
+            listOf("Sunny", "5600K"),
+            session.cameraProperties.value.controlCapabilities.whiteBalanceValues,
+        )
+        assertEquals(
+            listOf("AF-C", "MF"),
+            session.cameraProperties.value.controlCapabilities.focusModes,
+        )
+        assertEquals(
+            listOf("Wide-L", "Subject"),
+            session.cameraProperties.value.controlCapabilities.focusAreas,
+        )
+        assertEquals(
+            listOf("People", "Animal"),
+            session.cameraProperties.value.controlCapabilities.focusSubjects,
+        )
+        assertEquals(
+            listOf("Auto", "12"),
+            session.cameraProperties.value.controlCapabilities.audioSensitivities,
+        )
+        assertEquals(
+            listOf("Line", "Microphone"),
+            session.cameraProperties.value.controlCapabilities.audioInputs,
+        )
+        assertEquals(
+            listOf("OFF", "ON"),
+            session.cameraProperties.value.controlCapabilities.windFilters,
+        )
+        assertEquals(
+            listOf("OFF", "ON"),
+            session.cameraProperties.value.controlCapabilities.attenuators,
+        )
+        assertEquals(
+            listOf("OFF", "ON"),
+            session.cameraProperties.value.controlCapabilities.audio32BitFloat,
+        )
         assertEquals("24-70mm f/2.8", session.cameraProperties.value.lens)
         assertEquals("AF-C", session.cameraProperties.value.focusMode)
         assertEquals("Line", session.cameraProperties.value.audioInput)
@@ -941,7 +985,18 @@ class SwiftCoreCameraSessionTest {
                 "resolutionFrameRate\t6K · 25p",
                 "codecSelection\tR3D NE",
                 "whiteBalanceTint\tNeutral",
+                "options.iso\t1600\u001F3200",
                 "options.shutter\t90°\u001F180°\u001F360°",
+                "options.iris\tf/2.8\u001Ff/4",
+                "options.whiteBalance\tSunny\u001F5600K",
+                "options.focusMode\tAF-C\u001FMF",
+                "options.focusArea\tWide-L\u001FSubject",
+                "options.focusSubject\tPeople\u001FAnimal",
+                "options.audioSensitivity\tAuto\u001F12",
+                "options.audioInput\tLine\u001FMicrophone",
+                "options.windFilter\tOFF\u001FON",
+                "options.attenuator\tOFF\u001FON",
+                "options.audio32BitFloat\tOFF\u001FON",
                 "options.resolutionFrameRate\t6K · 25p\u001F4K · 60p",
                 "options.codec\tR3D NE\u001FH.265",
                 "batteryPercent\t80",

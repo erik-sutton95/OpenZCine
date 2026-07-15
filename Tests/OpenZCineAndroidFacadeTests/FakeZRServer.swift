@@ -76,6 +76,9 @@ final class FakeZRServer: @unchecked Sendable {
         var batteryPercent: UInt8 = 80
         /// Properties the fake rejects as unsupported for readback tests.
         var unsupportedPropertyCodes: Set<UInt32> = []
+        /// Per-property descriptor enums used to prove the app never exposes values outside the
+        /// connected body's current advertised domain.
+        var descriptorEnumOverrides: [PTPPropertyCode: [UInt32]] = [:]
         /// Properties that return valid bytes once, then an accepted short payload.
         var shortPropertyCodesAfterFirstRead: Set<UInt32> = []
         /// Deterministic command-response latency used to prove RTT is measured, not synthesized.
@@ -847,6 +850,14 @@ final class FakeZRServer: @unchecked Sendable {
 
     /// Protocol-shaped descriptor datasets consumed only by shared-core decoders.
     private func cameraPropertyDescriptor(for property: PTPPropertyCode) -> Data? {
+        if let values = options.descriptorEnumOverrides[property],
+            let byteCount = descriptorValueByteCount(property)
+        {
+            return enumDescriptor(
+                property: property,
+                valueByteCount: byteCount,
+                values: values.map { descriptorBytes($0, byteCount: byteCount) })
+        }
         switch property {
         case .movieRecordScreenSize:
             return enumDescriptor(
@@ -864,6 +875,47 @@ final class FakeZRServer: @unchecked Sendable {
                     ByteCoding.uint32LE(0x0031_0A03),
                     ByteCoding.uint32LE(0x0001_0A01),
                 ])
+        case .movieFNumber:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: [280, 400, 560, 800, 1_100, 1_600, 2_200].map(ByteCoding.uint16LE))
+        case .movieWBColorTemp:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: [3_200, 4_300, 5_400, 5_500, 5_600, 5_700, 6_500].map(
+                    ByteCoding.uint16LE))
+        case .movieWhiteBalance:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: [
+                    0x0002, 0x8016, 0x0004, 0x8010, 0x8011, 0x0006, 0x0005, 0x0007,
+                    0x8013, 0x8012,
+                ].map(ByteCoding.uint16LE))
+        case .movieFocusMode:
+            return enumDescriptor(
+                property: property, valueByteCount: 1, values: [[0], [1], [2], [4]])
+        case .movieFocusMeteringMode:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: [0x8010, 0x8011, 0x8018, 0x8019, 0x8033].map(ByteCoding.uint16LE))
+        case .movieAFSubjectDetection:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 1,
+                values: (0...6).map { [UInt8($0)] })
+        case .movieAudioInputSensitivity:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 1,
+                values: [[0xFF]] + (1...20).map { [UInt8($0)] })
+        case .audioInputSelection:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[1], [2]])
+        case .movWindNoiseReduction, .movieAttenuator, .movie32BitFloatAudioRecording:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[0], [1]])
         case .movieShutterAngle:
             return enumDescriptor(
                 property: property,
@@ -890,6 +942,31 @@ final class FakeZRServer: @unchecked Sendable {
             return rangeDescriptor(property: property, valueByteCount: 2)
         default:
             return nil
+        }
+    }
+
+    private func descriptorValueByteCount(_ property: PTPPropertyCode) -> Int? {
+        switch property {
+        case .movieFNumber, .movieWBColorTemp, .movieWhiteBalance,
+            .movieFocusMeteringMode:
+            2
+        case .movieFocusMode, .movieAFSubjectDetection, .movieAudioInputSensitivity,
+            .audioInputSelection, .movWindNoiseReduction, .movieAttenuator,
+            .movie32BitFloatAudioRecording, .movieBaseISO, .movieShutterMode,
+            .movieTVLockSetting, .movieVibrationReduction, .electronicVR:
+            1
+        case .movieFileType, .movieShutterAngle, .movieShutterSpeed:
+            4
+        default:
+            nil
+        }
+    }
+
+    private func descriptorBytes(_ value: UInt32, byteCount: Int) -> [UInt8] {
+        switch byteCount {
+        case 1: [UInt8(truncatingIfNeeded: value)]
+        case 2: ByteCoding.uint16LE(UInt16(truncatingIfNeeded: value))
+        default: ByteCoding.uint32LE(value)
         }
     }
 

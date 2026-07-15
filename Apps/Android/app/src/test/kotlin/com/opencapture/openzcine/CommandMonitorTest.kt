@@ -64,7 +64,19 @@ class CommandMonitorTest {
                         audio32BitFloat = "ON",
                         controlCapabilities =
                             CameraControlCapabilities(
+                                isoValues = listOf("800", "1600", "25600"),
                                 shutterValues = listOf("90°", "180°"),
+                                irisValues = listOf("f/2.8", "f/4"),
+                                whiteBalanceValues =
+                                    listOf("Natural auto", "Sunny", "5600K"),
+                                focusModes = listOf("AF-S", "AF-C", "MF"),
+                                focusAreas = listOf("Wide-L", "Subject"),
+                                focusSubjects = listOf("People", "Airplane"),
+                                audioSensitivities = listOf("Auto", "12", "20"),
+                                audioInputs = listOf("Microphone", "Line"),
+                                windFilters = listOf("OFF", "ON"),
+                                attenuators = listOf("OFF", "ON"),
+                                audio32BitFloat = listOf("OFF", "ON"),
                                 resolutionFrameRates = listOf("4K · 60p", "6K · 25p"),
                                 codecs = listOf("H.265", "R3D NE"),
                                 vibrationReduction = listOf("OFF", "ON"),
@@ -285,6 +297,8 @@ class CommandMonitorTest {
             CameraPropertySnapshot(
                 whiteBalanceMode = "Sunny",
                 whiteBalanceKelvin = 5600,
+                controlCapabilities =
+                    CameraControlCapabilities(whiteBalanceValues = listOf("Sunny", "5600K")),
             )
         val presentation =
             commandDashboardPresentation(
@@ -330,7 +344,13 @@ class CommandMonitorTest {
     fun `recording locks ISO until codec readback proves a non R3D format`() {
         fun presentation(codec: String?) =
             commandDashboardPresentation(
-                snapshot = CameraPropertySnapshot(iso = 800, codec = codec),
+                snapshot =
+                    CameraPropertySnapshot(
+                        iso = 800,
+                        codec = codec,
+                        controlCapabilities =
+                            CameraControlCapabilities(isoValues = listOf("800", "1600")),
+                    ),
                 refreshStatus = CameraPropertyRefreshStatus.Ready,
                 sessionState =
                     CameraSessionState.Connected(
@@ -362,6 +382,17 @@ class CommandMonitorTest {
                         windFilter = "ON",
                         inputAttenuator = "OFF",
                         audio32BitFloat = "ON",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                focusModes = listOf("AF-S", "AF-C", "MF"),
+                                focusAreas = listOf("Wide-L", "Subject"),
+                                focusSubjects = listOf("People", "Airplane"),
+                                audioSensitivities = listOf("Auto", "12", "20"),
+                                audioInputs = listOf("Microphone", "Line"),
+                                windFilters = listOf("OFF", "ON"),
+                                attenuators = listOf("OFF", "ON"),
+                                audio32BitFloat = listOf("OFF", "ON"),
+                            ),
                     ),
                 refreshStatus = CameraPropertyRefreshStatus.Ready,
                 sessionState =
@@ -390,6 +421,116 @@ class CommandMonitorTest {
         assertEquals(CameraControl.AUDIO_32_BIT_FLOAT, assertNotNull(audio[4].request).control)
         assertContains(assertNotNull(audio[0].request).options, "20")
         assertContains(assertNotNull(audio[1].request).options, "Microphone")
+    }
+
+    @Test
+    fun `dynamic controls expose only Swift advertised values`() {
+        val presentation =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        iso = 1_600,
+                        codec = "R3D NE",
+                        baseIso = "High",
+                        iris = "f/4",
+                        whiteBalanceMode = "Sunny",
+                        focusMode = "AF-C",
+                        audioInput = "Line",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                isoValues = listOf("1600", "3200"),
+                                irisValues = listOf("f/4", "f/5.6"),
+                                whiteBalanceValues = listOf("Sunny", "5600K"),
+                                focusModes = listOf("AF-C", "MF"),
+                                audioInputs = listOf("Line"),
+                            ),
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        val iso = assertNotNull(presentation.tiles.first { it.kind == CommandTileKind.ISO }.request)
+        assertEquals(listOf("1600", "3200"), iso.options)
+        assertFalse("800" in iso.options)
+        assertEquals(
+            listOf("f/4", "f/5.6"),
+            assertNotNull(presentation.tiles.first { it.kind == CommandTileKind.IRIS }.request).options,
+        )
+        assertEquals(
+            listOf("Sunny", "5600K"),
+            assertNotNull(
+                presentation.tiles.first { it.kind == CommandTileKind.WHITE_BALANCE }.request,
+            ).options,
+        )
+        assertEquals(
+            listOf("AF-C", "MF"),
+            assertNotNull(
+                presentation.sideSections.first { it.title == "Focus" }.cells.first().request,
+            ).options,
+        )
+        assertEquals(
+            listOf("Line"),
+            assertNotNull(
+                presentation.sideSections.first { it.title == "Audio" }.cells[1].request,
+            ).options,
+        )
+    }
+
+    @Test
+    fun `missing dynamic capability keeps current value visible and read only`() {
+        val presentation =
+            commandDashboardPresentation(
+                snapshot = CameraPropertySnapshot(iris = "f/2.8"),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        val iris = presentation.tiles.first { it.kind == CommandTileKind.IRIS }
+        assertEquals("f/2.8", iris.value)
+        assertEquals(null, iris.request)
+        assertContains(iris.unavailableReason.orEmpty(), "mounted lens")
+    }
+
+    @Test
+    fun `electronic VR fails closed for unknown and RAW codecs`() {
+        fun electronicVr(codec: String?): CommandTilePresentation {
+            val presentation =
+                commandDashboardPresentation(
+                    snapshot =
+                        CameraPropertySnapshot(
+                            codec = codec,
+                            electronicVr = "OFF",
+                            controlCapabilities =
+                                CameraControlCapabilities(electronicVr = listOf("OFF", "ON")),
+                        ),
+                    refreshStatus = CameraPropertyRefreshStatus.Ready,
+                    sessionState =
+                        CameraSessionState.Connected(
+                            CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                        ),
+                    tileOrder = CommandTileKind.entries.toList(),
+                )
+            return presentation.sideSections.first { it.title == "Image" }.cells[2]
+        }
+
+        assertEquals(null, electronicVr(null).request)
+        assertContains(electronicVr(null).unavailableReason.orEmpty(), "codec readback")
+        assertEquals(null, electronicVr("N-RAW").request)
+        assertEquals(null, electronicVr("R3D NE").request)
+        assertEquals(null, electronicVr("ProRes RAW HQ").request)
+        assertEquals(CameraControl.ELECTRONIC_VR, assertNotNull(electronicVr("H.265").request).control)
+        assertTrue(isRawCameraCodec("N-RAW"))
+        assertTrue(isRawCameraCodec("R3D NE"))
+        assertTrue(isRawCameraCodec("ProRes RAW HQ"))
+        assertFalse(isRawCameraCodec("H.265"))
     }
 
     @Test
