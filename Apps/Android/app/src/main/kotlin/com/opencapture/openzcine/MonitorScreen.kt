@@ -55,6 +55,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
@@ -73,9 +76,6 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveAudioMeterLevels
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.compose.currentStateAsState
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -208,7 +208,7 @@ fun MonitorScreen(
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     val cameraReadouts = remember(cameraProperties) { monitorCameraReadouts(cameraProperties) }
-    val phoneBatteryPercent = rememberPhoneBatteryPercent()
+    val phoneBatteryReadout = rememberPhoneBatteryReadout()
     val exposureAssistCameraInput =
         remember(cameraProperties.codec, cameraProperties.iso, cameraProperties.baseIso) {
             ExposureAssistCameraInput(
@@ -703,8 +703,10 @@ fun MonitorScreen(
         // presents. This adds no LiveFrameSource subscriber, so OPE-60's
         // current-stream health collector remains the sole link-score input
         // and DISP 3 still releases native live view.
-        var presentedTimecode by
-            remember(monitorFrameSource) { mutableStateOf<LiveFrameTimecode?>(null) }
+        val timecodeOwner = monitorTimecodeOwner(sessionState)
+        val timecodeRetention =
+            remember(session, timecodeOwner) { MonitorTimecodeRetention(timecodeOwner) }
+        val presentedTimecode = timecodeRetention.timecodeFor(sessionState)
         val watchRelayState =
             remember(
                 sessionState,
@@ -865,7 +867,7 @@ fun MonitorScreen(
                         },
                         onFrame = glass::submit,
                         onPresentedFrame = { frame, bitmap, baker ->
-                            presentedTimecode = authoritativeTimecode(frame.timecode)
+                            timecodeRetention.accept(frame.timecode)
                             wearRelay.ingestPresentedFrame(frame, bitmap, baker)
                         },
                         presentationState = liveFeedPresentation,
@@ -1067,9 +1069,10 @@ fun MonitorScreen(
                 LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
                 zones.batteryPhone?.let {
                     BatteryIndicatorColumn(
-                        percent = phoneBatteryPercent,
+                        percent = phoneBatteryReadout.percent,
                         isCamera = false,
                         modifier = Modifier.zone(it),
+                        externalPower = phoneBatteryReadout.externalPower,
                     )
                 }
                 zones.batteryCamera?.let {
@@ -1512,6 +1515,8 @@ private fun PortraitInfoBar(
     cameraExternalPower: Boolean?,
     modifier: Modifier = Modifier,
 ) {
+    val cameraBattery =
+        monitorBatteryPresentation(cameraBatteryPercent, cameraExternalPower)
     Box(modifier.background(LiveDesign.glass).padding(horizontal = 16.dp)) {
         Text(
             media,
@@ -1528,16 +1533,17 @@ private fun PortraitInfoBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BatteryGlyph(
-                    cameraBatteryPercent,
-                    if (cameraBatteryPercent == null && cameraExternalPower != true) {
+                    cameraBattery.percent,
+                    if (cameraBattery.percent == null && !cameraBattery.externalPower) {
                         LiveDesign.faint
                     } else {
                         LiveDesign.accent
                     },
-                    Modifier.size(22.dp, 11.dp),
+                    modifier = Modifier.size(22.dp, 11.dp),
+                    externalPower = cameraBattery.externalPower,
                 )
                 Text(
-                    batteryReadoutLabel(cameraBatteryPercent, cameraExternalPower),
+                    cameraBattery.label,
                     style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
                     color = LiveDesign.text.copy(alpha = 0.72f),
                 )

@@ -1,11 +1,14 @@
 package com.opencapture.openzcine
 
+import android.os.BatteryManager
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class MonitorReadoutsTest {
     @Test
@@ -66,7 +69,47 @@ class MonitorReadoutsTest {
         assertEquals("80%", batteryReadoutLabel(80, externalPower = true))
         assertEquals("EXT", batteryReadoutLabel(null, externalPower = true))
         assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(Int.MIN_VALUE))
+        val poweredPercentage = monitorBatteryPresentation(80, externalPower = true)
+        assertEquals("80%", poweredPercentage.label)
+        assertEquals(80, poweredPercentage.percent)
+        assertTrue(poweredPercentage.externalPower)
+        val poweredOnly = monitorBatteryPresentation(null, externalPower = true)
+        assertEquals("EXT", poweredOnly.label)
+        assertTrue(poweredOnly.externalPower)
+        assertFalse(monitorBatteryPresentation(80, externalPower = false).externalPower)
         assertNull(readPhoneBatteryPercent(null))
+    }
+
+    @Test
+    fun `phone battery broadcast preserves percentage and charging state`() {
+        val charging =
+            phoneBatteryReadout(
+                level = 167,
+                scale = 200,
+                status = BatteryManager.BATTERY_STATUS_CHARGING,
+                fallbackPercent = null,
+            )
+        assertEquals(84, charging.percent)
+        assertEquals(true, charging.externalPower)
+
+        val full =
+            phoneBatteryReadout(
+                level = 100,
+                scale = 100,
+                status = BatteryManager.BATTERY_STATUS_FULL,
+                fallbackPercent = null,
+            )
+        assertEquals(true, full.externalPower)
+
+        val unplugged =
+            phoneBatteryReadout(
+                level = -1,
+                scale = 0,
+                status = BatteryManager.BATTERY_STATUS_DISCHARGING,
+                fallbackPercent = 62,
+            )
+        assertEquals(62, unplugged.percent)
+        assertEquals(false, unplugged.externalPower)
     }
 
     @Test

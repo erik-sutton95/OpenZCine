@@ -391,8 +391,8 @@ fun BatteryIndicatorColumn(
     modifier: Modifier = Modifier,
     externalPower: Boolean? = null,
 ) {
-    val batteryPercent = validBatteryPercent(percent)
-    val label = batteryReadoutLabel(batteryPercent, externalPower)
+    val presentation = monitorBatteryPresentation(percent, externalPower)
+    val batteryPercent = presentation.percent
     val low = batteryPercent?.let { if (isCamera) it < 10 else it <= 15 } == true
     val tint =
         when {
@@ -415,9 +415,14 @@ fun BatteryIndicatorColumn(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
     ) {
-        BatteryGlyph(percent = batteryPercent, tint = tint, modifier = Modifier.size(22.dp, 11.dp))
+        BatteryGlyph(
+            percent = batteryPercent,
+            tint = tint,
+            modifier = Modifier.size(22.dp, 11.dp),
+            externalPower = presentation.externalPower,
+        )
         Text(
-            label,
+            presentation.label,
             style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
             color = LiveDesign.text.copy(alpha = 0.72f),
         )
@@ -433,7 +438,12 @@ fun BatteryIndicatorColumn(
 
 /** SF `battery.NNpercent` (horizontal body, quarter-bucket fill), empty when unavailable. */
 @Composable
-fun BatteryGlyph(percent: Int?, tint: Color, modifier: Modifier = Modifier) {
+fun BatteryGlyph(
+    percent: Int?,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    externalPower: Boolean = false,
+) {
     val batteryPercent = validBatteryPercent(percent)
     // iOS buckets the fill at 0/25/50/75/100%.
     val fill =
@@ -470,7 +480,31 @@ fun BatteryGlyph(percent: Int?, tint: Color, modifier: Modifier = Modifier) {
                 cornerRadius = CornerRadius(size.height * 0.18f),
             )
         }
+        if (externalPower) {
+            drawBatteryPowerMarker(bodyWidth)
+        }
     }
+}
+
+/** Dark charging bolt with a light keyline, matching iOS's visible powered-state treatment. */
+private fun DrawScope.drawBatteryPowerMarker(bodyWidth: Float): Unit {
+    val centerX = bodyWidth * 0.5f
+    val marker =
+        Path().apply {
+            moveTo(centerX + size.height * 0.08f, size.height * 0.08f)
+            lineTo(centerX - size.height * 0.25f, size.height * 0.53f)
+            lineTo(centerX + size.height * 0.02f, size.height * 0.53f)
+            lineTo(centerX - size.height * 0.14f, size.height * 0.92f)
+            lineTo(centerX + size.height * 0.38f, size.height * 0.42f)
+            lineTo(centerX + size.height * 0.11f, size.height * 0.42f)
+            close()
+        }
+    drawPath(
+        path = marker,
+        color = LiveDesign.text.copy(alpha = 0.92f),
+        style = Stroke(width = 0.9.dp.toPx()),
+    )
+    drawPath(path = marker, color = LiveDesign.background)
 }
 
 /** SF `iphone` outline. */

@@ -209,33 +209,46 @@ internal fun commandDashboardPresentation(
     recording: Boolean = false,
 ): CommandDashboardPresentation {
     val unavailable = commandPropertyUnavailableReason(sessionState, refreshStatus)
+    val codec = snapshot.codec.monitorValueOrNull()
+    val frameRate = validMonitorFrameRate(snapshot.frameRate)
     val shutter =
         when (snapshot.shutterMode) {
-            CameraShutterMode.ANGLE -> snapshot.shutterAngle ?: snapshot.shutterSpeed
-            CameraShutterMode.SPEED -> snapshot.shutterSpeed ?: snapshot.shutterAngle
-            null -> snapshot.shutterAngle ?: snapshot.shutterSpeed
+            CameraShutterMode.ANGLE ->
+                snapshot.shutterAngle.monitorValueOrNull()
+                    ?: snapshot.shutterSpeed.monitorValueOrNull()
+            CameraShutterMode.SPEED ->
+                snapshot.shutterSpeed.monitorValueOrNull()
+                    ?: snapshot.shutterAngle.monitorValueOrNull()
+            null ->
+                snapshot.shutterAngle.monitorValueOrNull()
+                    ?: snapshot.shutterSpeed.monitorValueOrNull()
         }
+    val whiteBalanceMode = snapshot.whiteBalanceMode.monitorValueOrNull()
+    val whiteBalanceKelvin = snapshot.whiteBalanceKelvin?.takeIf { it > 0 }
     val whiteBalance =
-        if (snapshot.whiteBalanceMode == COLOR_TEMPERATURE_MODE) {
-            snapshot.whiteBalanceKelvin?.let { "${it}K" } ?: snapshot.whiteBalanceMode
+        if (whiteBalanceMode == COLOR_TEMPERATURE_MODE) {
+            whiteBalanceKelvin?.let { "${it}K" } ?: whiteBalanceMode
         } else {
-            snapshot.whiteBalanceMode ?: snapshot.whiteBalanceKelvin?.let { "${it}K" }
+            whiteBalanceMode ?: whiteBalanceKelvin?.let { "${it}K" }
         }
     val resolution =
-        listOfNotNull(snapshot.resolution, snapshot.frameRate?.let { "${it}p" })
+        listOfNotNull(snapshot.resolution.monitorValueOrNull(), frameRate?.let { "${it}p" })
             .joinToString(separator = " · ")
             .ifBlank { null }
     val stabilization =
-        listOfNotNull(snapshot.vibrationReduction, snapshot.electronicVr)
+        listOfNotNull(
+            snapshot.vibrationReduction.monitorValueOrNull(),
+            snapshot.electronicVr.monitorValueOrNull(),
+        )
             .distinct()
             .joinToString(separator = " / ")
             .ifBlank { null }
     // A take must never gain an ISO write through a missing or stale codec
     // readback. Only an explicitly non-R3D codec unlocks ISO mid-recording.
     val isoLockedDuringRecording =
-        recording && snapshot.codec?.contains("R3D", ignoreCase = true) != false
+        recording && codec?.contains("R3D", ignoreCase = true) != false
     val isoLockReason =
-        if (snapshot.codec == null) {
+        if (codec == null) {
             "ISO is unavailable during recording until codec readback completes."
         } else {
             "ISO is locked while recording in R3D NE."
@@ -266,32 +279,36 @@ internal fun commandDashboardPresentation(
         options: List<String>,
         writable: Boolean = true,
         blockedReason: String = "This control is locked on the camera.",
-    ): CommandTilePresentation =
-        if (value == null) {
+    ): CommandTilePresentation {
+        val currentValue = value.monitorValueOrNull()
+        return if (currentValue == null) {
             CommandTilePresentation(kind, title, "—", unavailableReason = unavailable)
         } else if (!writable) {
-            CommandTilePresentation(kind, title, value, unavailableReason = blockedReason)
+            CommandTilePresentation(kind, title, currentValue, unavailableReason = blockedReason)
         } else {
             CommandTilePresentation(
                 kind = kind,
                 title = title,
-                value = value,
-                request = CommandControlRequest(title, control, value, options),
+                value = currentValue,
+                request = CommandControlRequest(title, control, currentValue, options),
             )
         }
+    }
 
     fun readOnly(
         kind: CommandTileKind? = null,
         title: String,
         value: String?,
         reason: String,
-    ): CommandTilePresentation =
-        CommandTilePresentation(
+    ): CommandTilePresentation {
+        val currentValue = value.monitorValueOrNull()
+        return CommandTilePresentation(
             kind = kind,
             title = title,
-            value = value ?: "—",
-            unavailableReason = if (value == null) unavailable else reason,
+            value = currentValue ?: "—",
+            unavailableReason = if (currentValue == null) unavailable else reason,
         )
+    }
 
     val tilesByKind =
         mapOf(
@@ -307,7 +324,7 @@ internal fun commandDashboardPresentation(
                 editable(
                     CommandTileKind.ISO,
                     "ISO",
-                    snapshot.iso?.toString(),
+                    snapshot.iso?.takeIf { it > 0 }?.toString(),
                     CameraControl.ISO,
                     ISO_OPTIONS,
                     writable = !isoLockedDuringRecording,
@@ -350,7 +367,7 @@ internal fun commandDashboardPresentation(
                 readOnly(
                     CommandTileKind.CODEC,
                     "Codec",
-                    snapshot.codec,
+                    codec,
                     "Codec changes need camera-advertised descriptor options.",
                 ),
             CommandTileKind.STABILIZATION to
@@ -386,7 +403,7 @@ internal fun commandDashboardPresentation(
             ),
         )
     val audioSensitivityCell =
-        if (snapshot.audioSensitivity != null) {
+        if (snapshot.audioSensitivity.monitorValueOrNull() != null) {
             editable(
                 null,
                 "Sens",
@@ -439,7 +456,8 @@ internal fun commandDashboardPresentation(
             ?.identity
             ?.let { identity ->
                 identity.name.takeIf(String::isNotBlank)
-                    ?: identity.model.takeIf(String::isNotBlank)
+                    ?.trim()
+                    ?: identity.model.monitorValueOrNull()
             }
             ?: "—"
     return CommandDashboardPresentation(
@@ -472,8 +490,8 @@ internal fun commandDashboardPresentation(
         temperature = commandTemperature(snapshot.temperatureStatus),
         storage = monitorStorageLabel(snapshot.storage),
         camera = camera,
-        lens = snapshot.lens ?: "—",
-        frameRate = snapshot.frameRate?.let { "${it}.00" } ?: "—",
+        lens = snapshot.lens.monitorValueOrNull() ?: "—",
+        frameRate = monitorFrameRateLabel(frameRate),
         refreshSummary = commandRefreshSummary(refreshStatus),
     )
 }
@@ -669,14 +687,16 @@ internal fun PortraitCommandDashboard(
                 .padding(start = 12.dp, end = 12.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Box(
+            BoxWithConstraints(
                 Modifier.fillMaxWidth().height(80.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                CommandTimecode(
-                    timecode = timecode,
-                    sizeSp = 52f,
-                )
+                FitScale(maxWidth) {
+                    CommandTimecode(
+                        timecode = timecode,
+                        sizeSp = 52f,
+                    )
+                }
             }
             CommandGrid(
                 tiles = presentation.tiles,

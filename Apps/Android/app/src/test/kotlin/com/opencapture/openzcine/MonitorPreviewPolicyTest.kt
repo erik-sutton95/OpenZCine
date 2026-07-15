@@ -1,7 +1,10 @@
 package com.opencapture.openzcine
 
 import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraRecordingState
+import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.LiveFrameTimecode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -48,6 +51,36 @@ class MonitorPreviewPolicyTest {
         advanceUntilIdle()
 
         assertEquals(1, stops)
+    }
+
+    @Test
+    fun `command transition retains camera timecode without retaining the preview source`() = runTest {
+        val cameraA = CameraIdentity("Nikon ZR A", "ZR", "ZR-A")
+        val cameraB = CameraIdentity("Nikon ZR B", "ZR", "ZR-B")
+        val connectedA = CameraSessionState.Connected(cameraA)
+        val timecode = LiveFrameTimecode(true, 1, 2, 3, 4)
+        val retention = MonitorTimecodeRetention(monitorTimecodeOwner(connectedA))
+        retention.accept(timecode)
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = {},
+                stop = {},
+                configurePreview = { true },
+                sharingScope = backgroundScope,
+            )
+
+        assertNull(monitorPreviewFrameSource(source, isCommandMode = true))
+        assertEquals(timecode, retention.timecodeFor(connectedA))
+        retention.accept(LiveFrameTimecode(false, 0, 0, 0, 0))
+        assertNull(retention.timecodeFor(connectedA))
+        retention.accept(timecode)
+        assertNull(retention.timecodeFor(CameraSessionState.Disconnected))
+        assertNull(retention.timecodeFor(CameraSessionState.Connected(cameraB)))
+        assertNull(
+            MonitorTimecodeRetention(cameraB)
+                .timecodeFor(CameraSessionState.Connected(cameraB)),
+        )
     }
 
     @Test
