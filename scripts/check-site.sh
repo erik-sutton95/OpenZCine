@@ -19,6 +19,18 @@ if grep -q 'REPO_URL' "${html_files[@]}"; then
   exit 1
 fi
 
+if grep -q 'href="https://github.com/erik-sutton95/OpenZCine"' site/index.html; then
+  echo "Landing page must not link visitors to the private repository." >&2
+  exit 1
+fi
+
+android_soon_count=$(grep -c 'data-coming-soon="android" aria-disabled="true"' site/index.html || true)
+repo_soon_count=$(grep -c 'data-coming-soon="public-repo" aria-disabled="true"' site/index.html || true)
+if (( android_soon_count != 2 || repo_soon_count != 4 )); then
+  echo "Landing page must expose disabled coming-soon states for Android and the public repo." >&2
+  exit 1
+fi
+
 if [[ "$mode" == "deployed" ]] && grep -q 'TESTFLIGHT_URL' "${html_files[@]}"; then
   echo "Deployed site still contains TESTFLIGHT_URL." >&2
   exit 1

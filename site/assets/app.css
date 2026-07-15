@@ -231,6 +231,31 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
   opacity: 1; transform: translateX(0);
 }
 
+/* Unavailable actions keep the pill silhouette while making their release
+  status unmistakable. They are spans, so they cannot receive focus or clicks. */
+.btn--disabled {
+  background: rgba(247,239,225,0.035);
+  color: var(--faint);
+  border: 1px solid var(--hairline);
+  cursor: not-allowed;
+  transform: none;
+  will-change: auto;
+}
+.btn--disabled:hover { background: rgba(247,239,225,0.035); border-color: var(--hairline); }
+.btn__status {
+  padding: 3px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: .08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .btn, .btn__rec, .btn__arrow { transition: none; }
   .btn--primary:hover .btn__rec { animation: none; }
@@ -287,11 +312,17 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
 .nav__links a:hover { color: var(--ink); }
 .nav__links a:hover::after { right: 0; }
 .nav__cta { display: flex; align-items: center; gap: 10px; }
-.nav__github { font-size: 14px; color: var(--muted); }
-.nav__github:hover { color: var(--ink); }
+.nav__repo-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--faint); font-size: 14px; cursor: not-allowed;
+}
+.nav__status {
+  color: var(--faint); font-family: var(--mono); font-size: 8px;
+  letter-spacing: .08em; text-transform: uppercase;
+}
 .nav__cta .btn { padding: 9px 16px; font-size: 14px; }
 @media (min-width: 860px) { .nav__links { display: flex; } }
-@media (max-width: 560px) { .nav__github { display: none; } }
+@media (max-width: 560px) { .nav__repo-status { display: none; } }
 
 /* ---- Footer ---- */
 .footer { background: var(--bg-deep); border-top: 1px solid var(--hairline); padding: 48px 0; }
