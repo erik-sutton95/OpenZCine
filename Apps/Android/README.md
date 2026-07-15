@@ -86,6 +86,16 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   (logcat tag `SwiftCoreCameraSession`). For a fake-ZR server on the development Mac (scripted
   twin: `Tests/OpenZCineAndroidFacadeTests/FakeZRServer.swift`), forward the port with
   `adb reverse tcp:15740 tcp:15740` and use host `127.0.0.1`.
+- **Live focus + level metadata:** optional AF/subject boxes and virtual-horizon angles stay paired
+  with the JPEG frame through the Swift/JNI `LiveFrameSource` seam, so Compose draws them against
+  the exact aspect-fit, locally de-squeezed feed rect rather than the larger monitor zone. View
+  Assist offers Horizon and two-axis Gauge styles. A valid camera level always wins; only when it
+  is absent does the monitor fall back to a visibly and accessibly labelled phone source:
+  `DEVICE GRAVITY` for Android's fused gravity sensor or `DEVICE TILT` for a normalized low-pass
+  accelerometer approximation. The SM-A127F hardware floor has no `TYPE_GRAVITY` sensor, so its
+  physical fallback check covers the latter. Debug-frame metadata is visibly and semantically
+  marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
+  camera pass.
 - **Liquid-glass chrome:** monitor chrome glass is a custom GPU treatment (`GlassChrome.kt`) —
   one shared blurred backdrop texture per feed frame, sampled by every pill (AGSL edge refraction
   on API 33+, plain pre-blurred fill on 31–32, the hand-rolled flat fill below). A frame-budget

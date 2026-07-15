@@ -66,6 +66,23 @@ public enum class LocalDesqueezePresentation(
     }
 }
 
+/** Presentation style for the local camera-level assist, matching iOS. */
+public enum class LocalLevelStyle(
+    /** Operator-facing style label. */
+    public val label: String,
+) {
+    /** A horizon line that rolls with the camera. */
+    HORIZON("Horizon"),
+    /** A two-axis bubble gauge for roll and pitch. */
+    GAUGE("Gauge"),
+    ;
+
+    internal companion object {
+        fun fromStoredName(value: String?): LocalLevelStyle? =
+            entries.firstOrNull { it.name == value }
+    }
+}
+
 /**
  * Shared-core crush/clip tolerance for Traffic Lights edge detection.
  *
@@ -114,6 +131,10 @@ public data class LocalFramingAssistConfiguration(
     public val guide: LocalFramingGuide,
     /** The local anamorphic presentation choice. */
     public val desqueezePresentation: LocalDesqueezePresentation,
+    /** Whether the local camera-level overlay is visible. */
+    public val levelEnabled: Boolean = false,
+    /** Operator-selected presentation for the camera-level overlay. */
+    public val levelStyle: LocalLevelStyle = LocalLevelStyle.HORIZON,
 ) {
     /** Human-readable accessibility summary that distinguishes local from camera state. */
     public val accessibilitySummary: String
@@ -124,6 +145,7 @@ public data class LocalFramingAssistConfiguration(
                 append(if (centerCrosshairEnabled) "Centre crosshair on. " else "Centre crosshair off. ")
                 append("Frame guide ${guide.label}. ")
                 append("Desqueeze presentation ${desqueezePresentation.label}. ")
+                append(if (levelEnabled) "Camera level ${levelStyle.label}. " else "Camera level off. ")
                 append("Camera Grid Display is unchanged.")
             }
 }
@@ -194,12 +216,15 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     // operator never accidentally changes the body while composing a shot.
     public val ruleOfThirdsEnabled: Toggle = Toggle("assist.local.ruleOfThirds", default = false)
     public val centerCrosshairEnabled: Toggle = Toggle("assist.local.centerCrosshair", default = false)
+    /** Enables the local camera-level assist; it never writes a camera property. */
+    public val levelAssistEnabled: Toggle = Toggle("assist.local.level", default = false)
     /** Shows the shared Swift meter's RGB edge blocks on the histogram. */
     public val histogramTrafficLightsEnabled: Toggle =
         Toggle("assist.scopes.histogramTrafficLights.v1", default = true)
 
     private val framingGuideState = mutableStateOf(loadFramingGuide())
     private val desqueezePresentationState = mutableStateOf(loadDesqueezePresentation())
+    private val levelStyleState = mutableStateOf(loadLevelStyle())
     private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
 
     /** Selected local delivery-frame guide; persisted immediately on change. */
@@ -216,6 +241,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         set(new) {
             desqueezePresentationState.value = new
             preferences.edit().putString(DESQUEEZE_PRESENTATION_KEY, new.name).apply()
+        }
+
+    /** Selected camera-level presentation; persisted immediately on change. */
+    public var levelStyle: LocalLevelStyle
+        get() = levelStyleState.value
+        set(new) {
+            levelStyleState.value = new
+            preferences.edit().putString(LEVEL_STYLE_KEY, new.name).apply()
         }
 
     /**
@@ -238,6 +271,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 centerCrosshairEnabled = centerCrosshairEnabled.value,
                 guide = framingGuide,
                 desqueezePresentation = desqueezePresentation,
+                levelEnabled = levelAssistEnabled.value,
+                levelStyle = levelStyle,
             )
 
     private val assistToolbarOrderState = mutableStateOf(loadAssistToolbarOrder())
@@ -330,6 +365,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             keepScreenAwake,
             ruleOfThirdsEnabled,
             centerCrosshairEnabled,
+            levelAssistEnabled,
         )
 
     private fun loadAssistToolbarOrder(): List<AssistTool> {
@@ -382,6 +418,10 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             preferences.getString(DESQUEEZE_PRESENTATION_KEY, null),
         ) ?: LocalDesqueezePresentation.OFF
 
+    private fun loadLevelStyle(): LocalLevelStyle =
+        LocalLevelStyle.fromStoredName(preferences.getString(LEVEL_STYLE_KEY, null))
+            ?: LocalLevelStyle.HORIZON
+
     private fun loadScopeCrushClipCompensation(): ScopeCrushClipCompensation {
         val default = ScopeCrushClipCompensation.QUARTER.wireValue
         val legacyPreference = legacyScopeMeterPreference()
@@ -412,6 +452,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             "display.assistToolbar.audioMeters.visibility.migrated.v1"
         const val FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"
+        const val LEVEL_STYLE_KEY = "assist.local.levelStyle.v1"
         const val SCOPE_METER_PREFERENCE = "scope-meter-v1"
 
         private fun legacyScopeMeterPreference(): String =

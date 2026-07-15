@@ -86,6 +86,18 @@
         return array
     }
 
+    /// Copies a Swift `Int32` buffer into a JVM-owned `int[]` local reference.
+    private func javaIntArray(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [Int32]
+    ) -> jintArray? {
+        let fns = table(env)
+        guard let array = fns.NewIntArray!(env, jsize(values.count)) else { return nil }
+        values.withUnsafeBufferPointer { buffer in
+            fns.SetIntArrayRegion!(env, array, 0, jsize(values.count), buffer.baseAddress)
+        }
+        return array
+    }
+
     /// Copies a Swift float buffer into a new JVM `float[]` local reference.
     private func javaFloatArray(
         _ env: UnsafeMutablePointer<JNIEnv?>, _ values: [Float]
@@ -114,6 +126,26 @@
         guard let close = fns.GetMethodID!(env, type, "close", "()V") else { return }
         var arguments = jvalue()
         fns.CallVoidMethodA!(env, transport, close, &arguments)
+    }
+
+    /// Resolves an optional Kotlin callback without leaving a pending
+    /// `NoSuchMethodError` when an older listener has not implemented it.
+    ///
+    /// This is used for additive listener callbacks: the legacy descriptor
+    /// remains a working fallback while newly built Kotlin code receives the
+    /// richer metadata descriptor.
+    private func optionalInstanceMethod(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _ type: jclass?,
+        _ name: String, _ signature: String
+    ) -> jmethodID? {
+        let fns = table(env)
+        let method = name.withCString { namePointer in
+            signature.withCString { signaturePointer in
+                fns.GetMethodID!(env, type, namePointer, signaturePointer)
+            }
+        }
+        if method == nil { fns.ExceptionClear!(env) }
+        return method
     }
 
     // MARK: - Info
@@ -1075,16 +1107,22 @@
         let vm: UnsafeMutablePointer<JavaVM?>
         let listener: jobject
         let onFrame: jmethodID
+        /// True when [onFrame] accepts focus and virtual-horizon metadata.
+        /// Older Kotlin listeners retain the audio-only descriptor.
+        let supportsMetadata: Bool
         let onEnded: jmethodID
     }
 
     /// `SwiftCore.sessionStartLiveView(listener)` — starts live view on the
     /// active session (blocking `StartLiveView` + readiness poll on the caller
     /// thread) and pumps JPEG frames to
-    /// `listener.onFrame(jpeg, timestampNanos, isRecording, audio...)` from
-    /// the facade's pump thread. `onEnded` fires exactly once when the
-    /// stream ends — stop, disconnect, a transport error, or (immediately, on
-    /// the calling thread) when there is no active session or the start fails.
+    /// `listener.onFrameWithMetadata(jpeg, timestampNanos, isRecording,
+    /// audio, focus, level...)` from the facade's pump thread. The older
+    /// audio-only `onFrame` descriptor remains a fallback for a listener that
+    /// has not adopted the additive callback. `onEnded` fires exactly once
+    /// when the stream ends — stop, disconnect, a transport error, or
+    /// (immediately, on the calling thread) when there is no active session or
+    /// the start fails.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStartLiveView")
     public func swiftCoreSessionStartLiveView(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, listener: jobject?
@@ -1094,14 +1132,30 @@
         guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
         guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
         guard let cls = fns.GetObjectClass!(env, global),
-            let onFrame = fns.GetMethodID!(env, cls, "onFrame", "([BJZDDDDZ)V"),
-            let onEnded = fns.GetMethodID!(env, cls, "onEnded", "()V")
+            let onEnded = optionalInstanceMethod(env, cls, "onEnded", "()V")
+        else {
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
+        // Keep the established `onFrame([BJZDDDDZ)V` ABI alive. A newer
+        // listener receives one richer callback per frame; an older one keeps
+        // receiving its exact legacy payload rather than failing start-up.
+        let metadataFrame = optionalInstanceMethod(
+            env, cls, "onFrameWithMetadata", "([BJZDDDDZZIIIZZI[IZDDD)V")
+        guard
+            let onFrame = metadataFrame
+                ?? optionalInstanceMethod(
+                    env, cls, "onFrame", "([BJZDDDDZ)V")
         else {
             fns.DeleteGlobalRef!(env, global)
             return
         }
         let handle = LiveFrameListenerHandle(
-            vm: vm, listener: global, onFrame: onFrame, onEnded: onEnded)
+            vm: vm,
+            listener: global,
+            onFrame: onFrame,
+            supportsMetadata: metadataFrame != nil,
+            onEnded: onEnded)
 
         /// Terminal path on the CALLING (JVM-owned) thread: report the end and
         /// release the listener without ever detaching this thread.
@@ -1122,9 +1176,11 @@
             try session.startLiveView(
                 onFrame: { frame, timestampNanos in
                     let audio = LiveAudioMeterWire(sound: frame.sound)
+                    let focus = LiveViewFocusWire(focus: frame.focus)
+                    let level = LiveViewLevelWire(level: frame.level)
                     pushLiveFrame(
                         handle, jpeg: frame.jpeg, timestampNanos: timestampNanos,
-                        isRecording: frame.isRecording, audio: audio)
+                        isRecording: frame.isRecording, audio: audio, focus: focus, level: level)
                 },
                 onEnded: { finishLiveFrameStream(handle) })
         } catch {
@@ -1146,7 +1202,8 @@
     /// attached); the matching single detach happens in `finishLiveFrameStream`.
     private func pushLiveFrame(
         _ handle: LiveFrameListenerHandle, jpeg: Data, timestampNanos: Int64,
-        isRecording: Bool, audio: LiveAudioMeterWire
+        isRecording: Bool, audio: LiveAudioMeterWire, focus: LiveViewFocusWire,
+        level: LiveViewLevelWire
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -1162,14 +1219,38 @@
                 env, array, 0, jsize(jpeg.count),
                 base.assumingMemoryBound(to: jbyte.self))
         }
-        var args = [
+        // JNI receives this buffer as `inout`, so it must remain mutable even
+        // though the metadata path only copies it into a larger argument list.
+        var legacyArgs = [
             jvalue(l: array), jvalue(j: timestampNanos),
             jvalue(z: isRecording ? 1 : 0),
             jvalue(d: audio.leftLevelDB), jvalue(d: audio.leftPeakDB),
             jvalue(d: audio.rightLevelDB), jvalue(d: audio.rightPeakDB),
             jvalue(z: audio.hasLevels ? 1 : 0),
         ]
-        fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &args)
+        guard handle.supportsMetadata else {
+            fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &legacyArgs)
+            fns.DeleteLocalRef!(env, array)
+            return
+        }
+        guard let boxes = javaIntArray(env, focus.boxes) else {
+            fns.DeleteLocalRef!(env, array)
+            return
+        }
+        var metadataArgs =
+            legacyArgs + [
+                jvalue(z: focus.hasFocus ? 1 : 0),
+                jvalue(i: focus.coordinateWidth), jvalue(i: focus.coordinateHeight),
+                jvalue(i: focus.result),
+                jvalue(z: focus.subjectDetectionActive ? 1 : 0),
+                jvalue(z: focus.trackingAFActive ? 1 : 0),
+                jvalue(i: focus.selectedBoxIndex), jvalue(l: boxes),
+                jvalue(z: level.hasLevel ? 1 : 0),
+                jvalue(d: level.rollDegrees), jvalue(d: level.pitchDegrees),
+                jvalue(d: level.yawDegrees),
+            ]
+        fns.CallVoidMethodA!(env, handle.listener, handle.onFrame, &metadataArgs)
+        fns.DeleteLocalRef!(env, boxes)
         fns.DeleteLocalRef!(env, array)
     }
 

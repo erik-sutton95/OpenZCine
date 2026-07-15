@@ -569,6 +569,23 @@ fun MonitorScreen(
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
         val localFraming = operatorSettings.localFramingAssistConfiguration
+        // The gauge is a HUD instrument, so its lower track must clear the
+        // bottom strips actually mounted over the feed. Pass this local pixel
+        // inset into the overlay rather than guessing from a device class or
+        // a global screen margin; it preserves the iOS visible-feed seating
+        // rule for every zone-map size and operator chrome configuration.
+        val bottomChromeTop =
+            listOfNotNull(
+                    zones.assistStrip?.takeIf { !isClean && assistToolbarVisible }?.y,
+                    zones.captureStrip?.takeIf { !isClean && cameraValuesVisible }?.y,
+                )
+                .minOrNull()
+        val levelGaugeBottomChromeInset =
+            with(density) {
+                bottomChromeTop?.let { chromeTop ->
+                    maxOf(0f, zones.feed.y + zones.feed.height - chromeTop).dp.toPx()
+                } ?: 0f
+            }
 
         // An explicit demo source wins; otherwise a connected Swift-core
         // session streams its own live view. Media ownership gates collection,
@@ -586,6 +603,8 @@ fun MonitorScreen(
                                 lifecycleState.isAtLeast(Lifecycle.State.STARTED)
                         }
             }
+        val liveFeedPresentation =
+            remember(activeFrameSource) { LiveFeedPresentationState() }
         val audioMetersEnabled = assist.audioMetersEnabled
         var liveAudioLevels by
             remember(activeFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
@@ -642,6 +661,7 @@ fun MonitorScreen(
                             scaleX = localFraming.desqueezePresentation.horizontalPresentationScale
                         },
                         onFrame = glass::submit,
+                        presentationState = liveFeedPresentation,
                     )
                 } else {
                     Text(
@@ -658,6 +678,13 @@ fun MonitorScreen(
                 LocalFramingAssistOverlay(
                     configuration = localFraming,
                     cleanMode = isClean,
+                )
+                LiveFrameMetadataOverlay(
+                    presentationState = liveFeedPresentation,
+                    configuration = localFraming,
+                    cleanMode = isClean,
+                    isPortrait = isPortrait,
+                    gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                 )
             }
         }

@@ -119,6 +119,12 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
+- **Android live focus and virtual-horizon parity** (OPE-58, in progress) — carry camera-origin
+  AF/subject boxes and virtual-horizon angles through the Swift/JNI frame seam, render them over
+  the exact aspect-fit feed rect, and offer Horizon/Gauge level styles with an explicitly labelled
+  device-tilt fallback when a frame has no reliable camera level (direct gravity sensor
+  where available; normalized low-pass accelerometer approximation otherwise). Physical Nikon validation
+  remains required; debug-fixture metadata is never presented as camera data.
 - **Android custom and RED LUT library parity** (to do) — operator-authorized `.cube` import,
   app-private stored selections, and a RED IPP2 terms/download flow with internet and camera-AP
   safeguards; non-redistributable LUT assets are never bundled or committed.
