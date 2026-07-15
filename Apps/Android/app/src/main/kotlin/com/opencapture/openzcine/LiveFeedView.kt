@@ -14,6 +14,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -182,6 +183,10 @@ class JpegFrameDecoder {
  * [onFrame] observes each presented frame on the decode thread — the glass
  * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
+ * [onPresentedFrame] observes the exact source [LiveFrame] and decoded bitmap
+ * accepted for display. The phone-mediated Wear relay uses this callback
+ * rather than collecting [source] itself, so it cannot keep camera live view
+ * running while the monitor is hidden or backgrounded.
  * [presentationState], when supplied, retains the same frame's camera
  * metadata and image dimensions for feed-aligned overlays.
  *
@@ -195,11 +200,13 @@ fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
+    onPresentedFrame: ((LiveFrame, Bitmap) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects = FeedEffectsState.current,
     lutLibrary: AndroidLutLibrary? = null,
 ) {
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
+    val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
     // Stored selections are prepared off the UI thread. Until the shared Swift parser has produced
     // a packed payload, the renderer remains fail-closed (plain feed), then rebuilds on generation.
     val lutRenderGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value ?: 0L
@@ -241,6 +248,7 @@ fun LiveFeedView(
                         fallbackFrame.value = bitmap.asImageBitmap()
                     }
                     onFrame?.invoke(bitmap)
+                    latestPresentedFrame.value?.invoke(sourceFrame, bitmap)
                 },
             )
         }

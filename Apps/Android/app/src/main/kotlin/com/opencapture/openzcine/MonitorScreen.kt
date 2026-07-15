@@ -78,6 +78,12 @@ import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
 import com.opencapture.openzcine.settings.OperatorSettings
+import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
+import com.opencapture.openzcine.wear.WearRecordCommandSafety
+import com.opencapture.openzcine.wear.androidWatchRelayState
+import com.opencapture.openzcine.wear.rejectedWearRecordResult
+import com.opencapture.openzcine.wear.wearRecordCommandRejection
+import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -204,6 +210,9 @@ fun MonitorScreen(
     onOpenMedia: () -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
+    // A monitor-scoped relay means the wearable never becomes an independent
+    // LiveFrameSource subscriber or a background camera owner.
+    val wearRelay = remember(appContext) { AndroidWearPhoneRelay(appContext) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val sessionState by session.state.collectAsState()
     val monitorAccessibilityState =
@@ -336,6 +345,64 @@ fun MonitorScreen(
             } else {
                 sendRecordCommand(target)
             }
+        }
+    }
+    // Match the iOS watch's intentional confirmation bypass only after all
+    // Android monitor/session/pending-command safety gates still hold. A watch
+    // never owns a camera path; this reaches the same CameraSession seam as
+    // the on-phone record control.
+    val latestWearRecordCommand =
+        rememberUpdatedState<suspend () -> WatchCommandResult>(
+            newValue = {
+                val liveFeedCanRun =
+                    liveViewEnabled &&
+                        dispIndex != 2 &&
+                        (frameSource != null || session is SwiftCoreCameraSession)
+                val safety =
+                    WearRecordCommandSafety(
+                        monitorFront = isMonitorFront,
+                        applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+                        cameraConnected = sessionState is CameraSessionState.Connected,
+                        liveFeedActive = liveFeedCanRun,
+                        recordCommandPending = recordCommandPending,
+                        recordConfirmationPending = pendingRecordTarget != null,
+                        cameraControlPending = pendingCommandControl != null,
+                    )
+                if (wearRecordCommandRejection(safety) != null) {
+                    rejectedWearRecordResult(safety, recording)
+                } else {
+                    val target = !recording
+                    try {
+                        session.setRecording(target)
+                        WatchCommandResult(accepted = true, isRecording = target, error = null)
+                    } catch (error: CameraRecordingException) {
+                        WatchCommandResult(
+                            accepted = false,
+                            isRecording = recording,
+                            error = error.message ?: "unavailable",
+                        )
+                    }
+                }
+            },
+        )
+    DisposableEffect(wearRelay) {
+        wearRelay.setCommandHandler { latestWearRecordCommand.value.invoke() }
+        onDispose {
+            wearRelay.publishDisconnected()
+            wearRelay.close()
+        }
+    }
+    // Data Layer listeners exist only while the foreground monitor is
+    // resumable. Backgrounding publishes one unavailable state before
+    // detaching, and no relay-owned callback retains a live-frame source.
+    val wearRelayForeground =
+        isMonitorFront && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    LaunchedEffect(wearRelay, wearRelayForeground) {
+        if (wearRelayForeground) {
+            wearRelay.activate()
+        } else {
+            wearRelay.publishDisconnected()
+            wearRelay.deactivate()
         }
     }
     val mediaRemoteShutterShouldArm =
@@ -605,6 +672,31 @@ fun MonitorScreen(
                                 lifecycleState.isAtLeast(Lifecycle.State.STARTED)
                         }
             }
+        val watchRelayState =
+            remember(
+                sessionState,
+                cameraProperties,
+                recording,
+                isMonitorFront,
+                lifecycleState,
+                activeFrameSource,
+                isCommand,
+            ) {
+                androidWatchRelayState(
+                    sessionState = sessionState,
+                    cameraProperties = cameraProperties,
+                    isRecording = recording,
+                    monitorFront = isMonitorFront,
+                    applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+                    // Command mode intentionally leaves camera live view under
+                    // its existing session policy, but the monitor is not
+                    // presenting a feed. The watch must show that honestly.
+                    liveFeedActive = activeFrameSource != null && !isCommand && isMonitorFront,
+                )
+            }
+        LaunchedEffect(wearRelay, watchRelayState) {
+            wearRelay.publishState(watchRelayState)
+        }
         val liveFeedPresentation =
             remember(activeFrameSource) { LiveFeedPresentationState() }
         val audioMetersEnabled = assist.audioMetersEnabled
@@ -663,6 +755,7 @@ fun MonitorScreen(
                             scaleX = localFraming.desqueezePresentation.horizontalPresentationScale
                         },
                         onFrame = glass::submit,
+                        onPresentedFrame = wearRelay::ingestPresentedFrame,
                         presentationState = liveFeedPresentation,
                         lutLibrary = lutLibrary,
                     )

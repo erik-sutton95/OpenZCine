@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@array/android_wear_capabilities">
+    <!-- Lets the watch distinguish an installed OpenZCine handheld from the
+      foreground relay state. The state wire still reports background/no-camera
+      explicitly, so this capability never implies a camera is connected. -->
+    <string-array name="android_wear_capabilities">
+        <item>openzcine_phone_relay_v1</item>
+    </string-array>
+</resources>

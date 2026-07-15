@@ -19,6 +19,28 @@ language as the iOS app icon. Its foreground stays inside Android's adaptive saf
 squircle, and themed launcher masks retain the mark rather than cropping it.
 
 - **Build:** `just android-build` from the repo root (or `just android-check` for build + tests + lint).
+- **Wear OS companion (OPE-67):** `wear-relay/` is a camera-free, pure Android wire module that
+  mirrors the canonical Swift `WatchRelayProtocol.swift` v1 `[kind byte] + JSON` envelope and its
+  golden fixtures. `wear/` is a non-standalone, foreground-only wrist monitor: it receives a
+  bounded downscaled JPEG, honest phone monitor state, and one guarded record-toggle result through
+  the Wear Data Layer. It declares no camera, network, Bluetooth, or storage permission. The
+  handheld relay (`app/.../wear/`) consumes only the existing `LiveFeedView` presentation callback;
+  it never creates a `LiveFrameSource`, calls the Swift core, touches pairing/saved cameras, or opens
+  a direct camera/network path. When the phone backgrounds, leaves the monitor, or has no presented
+  feed, it invalidates its latest-wins preview pump and publishes one disconnected/no-feed snapshot.
+  A resumed watch clears its frame/state cache, requires a fresh two-second phone heartbeat, and
+  expires state after six seconds. Capability reachability therefore means only that the companion
+  app is reachable, never that a camera or foreground monitor is live. Record commands use a v1
+  request-ID path suffix solely for reply correlation; their payload remains canonical and reaches
+  the same phone `CameraSession.setRecording` seam only after monitor/lifecycle/session/pending-work
+  gates pass. Both capability declarations are retained by dedicated raw `tools:keep` files (and
+  their `values/wear.xml` declarations), and the Wear manifest explicitly sets
+  `com.google.android.wearable.standalone=false`. Run `just android-check` for JVM wire/lifecycle
+  coverage and `just android-release-check` for the release artifact check.
+  **[VERIFY-ON-HW]** No Wear emulator or physical watch was used here: pair a signed phone/watch
+  build, open the phone monitor, confirm preview/state/record correlation, background or leave the
+  monitor to confirm the wrist UI becomes unavailable, resume to confirm it waits for a fresh
+  heartbeat, and inspect the tightest round/square watch layout for clipping.
 - **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
   startup flow (`ios/Runner/StartupDesign.swift`) in its design language: permissions → choose
   path → prepare → network (→ find and pair). Three hard-separated paths: **camera-AP** (the phone

@@ -141,6 +141,11 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   progressive preview; explicit thumbnail fallback for unsupported HEIF/RAW decoders).
 - **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
+- **Wear OS companion** (OPE-67, in progress) — foreground-only phone-mediated wrist monitor and
+  guarded record relay. It shares the canonical iOS watch v1 payload contract and actual Android
+  monitor/camera values, while intentionally showing unavailable timecode/live-FPS/read-time fields
+  until those camera readbacks land in the Android core seam; no direct Wear camera, pairing, Swift
+  core, or network path is in scope.
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
   preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and
   confirmed credentials enter encrypted storage only after a successful join.

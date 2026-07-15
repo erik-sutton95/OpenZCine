@@ -206,6 +206,7 @@ val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibr
 
 dependencies {
     implementation(project(":core-api"))
+    implementation(project(":wear-relay"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -217,6 +218,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui.compose)
+    // The phone relay is a foreground-only Data Layer endpoint. It carries
+    // preview/state messages to a same-signed Wear OS companion; it never
+    // opens a camera transport or routes a command directly to Nikon.
+    implementation(libs.play.services.wearable)
     // Bundled, on-device Latin OCR: the scanner must work without a Play
     // Services model download or sending the camera's Wi-Fi key off-device.
     implementation(libs.mlkit.text.recognition)
