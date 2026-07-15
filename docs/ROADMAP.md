@@ -275,6 +275,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Waveform/parade brightness calibration** (OPE-88, in progress) — a useful 0–200% trace-intensity
   range where 100% matches the former 25% appearance and saved iOS and Android settings migrate
   without a visual jump; vectorscope brightness retains its original gain contract.
+- **Classic-notch iPhone layout hardening** (in progress) — fit the 16:9 feed tightly beside the
+  notch and keep live-view chrome collision-free on compact landscape devices such as iPhone 11.
+- **Compact-Pro guide panel hardening** (in progress) — keep cinema aspect-ratio choices on one
+  line in the five-column Guides grid on non-Max iPhone 15 Pro, 16 Pro, and 17 Pro displays.
 - **Android beta-readiness parity** (OPE-90, in progress): retain only bounded, closed-category
   local breadcrumbs and privacy-reduced Android 11+ process-exit reasons; generate an
   operator-readable cache report behind its own narrow FileProvider; and expose native System
