@@ -173,8 +173,8 @@ internal object AndroidLinkPhase {
 
 /**
  * Collects real Android session/frame observations while leaving all scoring
- * and signal-bar hysteresis to Swift. There is deliberately no guessed RTT:
- * the current facade does not expose one yet, so this model sends `null`.
+ * and signal-bar hysteresis to Swift. RTT is accepted only from the active
+ * session's measured native command channel; unavailable remains null.
  */
 @Stable
 public class AndroidLinkHealthMonitor internal constructor(
@@ -197,6 +197,7 @@ public class AndroidLinkHealthMonitor internal constructor(
     private var isUsbTransport = false
     private var targetFramesPerSecond = 30.0
     private var recentCommandFailures = 0
+    private var roundTripMilliseconds: Double? = null
     private var resetBars = true
 
     /** Replaces connection truth from the real session state flow. */
@@ -216,11 +217,14 @@ public class AndroidLinkHealthMonitor internal constructor(
         streamingRequested = streamRequested
         isUsbTransport = transportIsUsb
         this.targetFramesPerSecond = max(1.0, targetFramesPerSecond)
-        if (!connected && !connecting) {
+        if (!connected) {
+            // Disconnected and replacement-connection states must both drop
+            // every observation owned by the former native session.
             recentFrameTimes.clear()
             lastGoodFrameNanos = null
             streamRequestedAtNanos = null
             recentCommandFailures = 0
+            roundTripMilliseconds = null
             resetBars = true
         } else if (!streamRequested) {
             // A clean/command/media surface has released the preview pump.
@@ -259,6 +263,12 @@ public class AndroidLinkHealthMonitor internal constructor(
         refresh()
     }
 
+    /** Replaces the latest native command RTT; null clears stale session data. */
+    internal fun reportRoundTripMilliseconds(value: Double?) {
+        roundTripMilliseconds = value?.takeIf { it.isFinite() && it > 0.0 }
+        refresh()
+    }
+
     /** Updates freshness while a stream is quiet; call at a bounded UI cadence. */
     internal fun refresh(nowNanos: Long = clockNanos()) {
         val phase = currentPhase(nowNanos)
@@ -281,7 +291,7 @@ public class AndroidLinkHealthMonitor internal constructor(
             bridge.score(
                 LinkHealthInput(
                     phase = phase,
-                    roundTripMilliseconds = null,
+                    roundTripMilliseconds = roundTripMilliseconds,
                     liveViewFramesPerSecond = fps,
                     targetLiveViewFramesPerSecond = targetFramesPerSecond,
                     secondsSinceLastGoodFrame = secondsSinceGood,

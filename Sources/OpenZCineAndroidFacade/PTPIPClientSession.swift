@@ -41,6 +41,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case appControlUnavailable
     case unsupportedProperty(UInt32)
     case unsupportedControl(PTPCameraControl, String)
+    case unsupportedAndroidControl(String, String)
+    case controlReadbackMismatch(String, String)
     case liveViewAlreadyActive
     case mediaModeActive
     case mediaModeRequired
@@ -72,6 +74,11 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
             return "Property 0x\(PTPIPClientSession.hexString(code)) is not known to the core."
         case .unsupportedControl(let control, let label):
             return "\(String(describing: control)) does not support the selection \"\(label)\"."
+        case .unsupportedAndroidControl(let control, let label):
+            return "\(control) is not advertised with the selection \"\(label)\" on this camera."
+        case .controlReadbackMismatch(let control, let label):
+            return
+                "The camera accepted \(control) \(label), but its readback did not change. Check the active camera mode and try again."
         case .liveViewAlreadyActive:
             return "Live view is already streaming on this session."
         case .mediaModeActive:
@@ -104,6 +111,59 @@ public struct PTPIPClientIdentity: Equatable, Sendable {
     }
 }
 
+private struct AndroidRawControlMode<Value: FixedWidthInteger & Sendable>: Sendable {
+    let label: String
+    let raw: Value
+}
+
+/// Exact camera-advertised values retained inside the Swift session.
+private struct AndroidRawControlCatalog: Sendable {
+    var screenSizes: [PTPCameraScreenSizeMode] = []
+    var fileTypes: [PTPCameraFileTypeMode] = []
+    var shutterAngles: [AndroidRawControlMode<UInt32>] = []
+    var shutterSpeeds: [AndroidRawControlMode<UInt32>] = []
+    var baseISO: [AndroidRawControlMode<UInt8>] = []
+    var shutterModes: [AndroidRawControlMode<UInt8>] = []
+    var shutterLocks: [AndroidRawControlMode<UInt8>] = []
+    var whiteBalanceTints: [(label: String, amberBlue: Int, greenMagenta: Int)] = []
+    var vibrationReduction: [AndroidRawControlMode<UInt8>] = []
+    var electronicVR: [AndroidRawControlMode<UInt8>] = []
+
+    func capabilities(
+        properties: PTPCameraPropertySnapshot,
+        whiteBalanceTint: String?
+    ) -> AndroidCameraControlCapabilities {
+        let activeShutterValues: [String] =
+            switch properties.shutterMode {
+            case .angle: shutterAngles.map(\.label)
+            case .speed: shutterSpeeds.map(\.label)
+            case nil: []
+            }
+        return AndroidCameraControlCapabilities(
+            resolutionFrameRate: MonitorTextFormat.resolutionLabel(
+                fromProperty: properties.resolution,
+                frameRate: properties.fps ?? 0,
+                fallback: ""
+            ).nilIfEmpty,
+            codec: properties.fileType.map(MonitorTextFormat.codecShortLabel),
+            whiteBalanceTint: whiteBalanceTint,
+            shutterValues: activeShutterValues,
+            baseISO: baseISO.map(\.label),
+            shutterModes: shutterModes.map(\.label),
+            shutterLocks: shutterLocks.map(\.label),
+            whiteBalanceTints: whiteBalanceTints.map(\.label),
+            resolutionFrameRates: screenSizes.map(\.label),
+            codecs: fileTypes.map(\.label),
+            vibrationReduction: vibrationReduction.map(\.label),
+            electronicVR: electronicVR.map(\.label)
+        )
+    }
+}
+
+extension String {
+    fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
 /// A synchronous PTP-IP camera session: two TCP sockets (command + event) to
 /// port 15740, the CIPA DC-005 Init handshake, and the Nikon open/pair/identify
 /// sequence — the Android twin of `NativeCameraSession.establish`.
@@ -132,10 +192,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// media ownership, or teardown.
     private var androidPropertySnapshot = PTPCameraPropertySnapshot()
     private var androidStorageInfo: PTPStorageInfo?
+    private var androidControlCatalog = AndroidRawControlCatalog()
+    private var androidWhiteBalanceTint: String?
     private var androidPropertyPollIndex = 0
     private var androidLastStorageRefreshAt: Date?
+    private var androidLastDescriptorRefreshAt: Date?
     private var nextTransactionID: UInt32 = 1
     private var isClosed = false
+
+    /// Latest completed command-channel request/response duration. This has a
+    /// dedicated lock because the live-view pump and UI commands may publish
+    /// measurements independently of `commandLifecycleLock`.
+    private let roundTripLock = NSLock()
+    private var latestRoundTripMillisecondsStorage: Double?
 
     /// Live-view pump state, guarded by `liveViewCondition` (never by
     /// `transactionLock` — the pump holds that per transaction, and stop/join
@@ -429,6 +498,26 @@ public final class PTPIPClientSession: @unchecked Sendable {
         ).data
     }
 
+    /// Reads one Nikon extended property descriptor. Callers decode it only
+    /// through shared-core descriptor policy.
+    private func readPropertyDescriptor(_ property: PTPPropertyCode) throws -> Data {
+        try transactExpectingOK(
+            .getDevicePropDescEx,
+            parameters: [property.rawValue],
+            dataPhase: .dataIn
+        ).data
+    }
+
+    private func descriptorEnumValues(
+        _ property: PTPPropertyCode,
+        valueByteCount: Int
+    ) throws -> [UInt32] {
+        PTPCameraPropertyDecoders.devicePropDescEnumValues(
+            data: try readPropertyDescriptor(property),
+            valueByteCount: valueByteCount
+        )
+    }
+
     /// Reads a property and decodes it through the core: battery level comes
     /// back as a percentage string (`"80"`), anything else as the raw
     /// little-endian value in hex (`"0x0"`) until its decoder is wired up.
@@ -480,6 +569,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
             if result != .transportFailed {
                 result = mergedAndroidPropertyRefreshResult(result, refreshAndroidStorage())
             }
+            if result != .transportFailed {
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidControlDescriptors())
+            }
             return androidPropertyReadback(result: result)
         case .next(let isRecording):
             let pollOrder = PTPPropertyCode.monitorPollOrder(isRecording: isRecording)
@@ -496,6 +589,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     interval: CameraMonitorPollPolicy.storageRefreshInterval)
             {
                 result = mergedAndroidPropertyRefreshResult(result, refreshAndroidStorage())
+            }
+            if result != .transportFailed, !isRecording,
+                CameraMonitorPollPolicy.isDue(
+                    lastRefreshAt: androidLastDescriptorRefreshAt,
+                    now: Date(),
+                    interval: CameraMonitorPollPolicy.descriptorRefreshInterval)
+            {
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidControlDescriptors())
             }
             return androidPropertyReadback(result: result)
         case .propertyChanged(let rawCode):
@@ -556,13 +658,250 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
+    /// Refreshes each Android control descriptor independently. A body may
+    /// advertise only a subset; one unsupported descriptor must not hide the
+    /// valid controls that follow it.
+    private func refreshAndroidControlDescriptors() -> AndroidCameraPropertyRefreshResult {
+        let refreshers: [() throws -> Void] = [
+            refreshAndroidScreenSizeDescriptor,
+            refreshAndroidFileTypeDescriptor,
+            refreshAndroidShutterAngleDescriptor,
+            refreshAndroidShutterSpeedDescriptor,
+            refreshAndroidBaseISODescriptor,
+            refreshAndroidShutterModeDescriptor,
+            refreshAndroidShutterLockDescriptor,
+            refreshAndroidWhiteBalanceTintDescriptor,
+            refreshAndroidVibrationReductionDescriptor,
+            refreshAndroidElectronicVRDescriptor,
+        ]
+        var result: AndroidCameraPropertyRefreshResult = .accepted
+        for refresh in refreshers {
+            do {
+                try refresh()
+            } catch let error as PTPIPClientSessionError {
+                result = mergedAndroidPropertyRefreshResult(
+                    result, androidDescriptorResult(for: error))
+            } catch {
+                result = .transportFailed
+            }
+            if result == .transportFailed { break }
+        }
+        if result != .transportFailed { androidLastDescriptorRefreshAt = Date() }
+        return result
+    }
+
+    private func refreshAndroidScreenSizeDescriptor() throws {
+        androidControlCatalog.screenSizes = []
+        androidControlCatalog.screenSizes = PTPCameraPropertyDecoders.screenSizeModes(
+            fromDescriptor: try readPropertyDescriptor(.movieRecordScreenSize))
+    }
+
+    private func refreshAndroidFileTypeDescriptor() throws {
+        androidControlCatalog.fileTypes = []
+        androidControlCatalog.fileTypes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: try descriptorEnumValues(.movieFileType, valueByteCount: 4))
+    }
+
+    private func refreshAndroidShutterAngleDescriptor() throws {
+        androidControlCatalog.shutterAngles = []
+        let raw = try descriptorEnumValues(.movieShutterAngle, valueByteCount: 4)
+        androidControlCatalog.shutterAngles = uniqueUInt32Modes(raw) {
+            PTPCameraPropertyDecoders.shutterAngle(Int32(bitPattern: $0))
+        }
+    }
+
+    private func refreshAndroidShutterSpeedDescriptor() throws {
+        androidControlCatalog.shutterSpeeds = []
+        let raw = try descriptorEnumValues(.movieShutterSpeed, valueByteCount: 4)
+        androidControlCatalog.shutterSpeeds = uniqueUInt32Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.shutterSpeed(value)
+            return label.contains("/") ? label : nil
+        }
+    }
+
+    private func refreshAndroidBaseISODescriptor() throws {
+        androidControlCatalog.baseISO = []
+        let raw = try descriptorEnumValues(.movieBaseISO, valueByteCount: 1)
+        androidControlCatalog.baseISO = uniqueUInt8Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.baseISO(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    private func refreshAndroidShutterModeDescriptor() throws {
+        androidControlCatalog.shutterModes = []
+        let raw = try descriptorEnumValues(.movieShutterMode, valueByteCount: 1)
+        androidControlCatalog.shutterModes = uniqueUInt8Modes(raw) { value in
+            guard value == 1 || value == 2 else { return nil }
+            return PTPCameraPropertyDecoders.shutterMode(value) == .speed ? "Speed" : "Angle"
+        }
+    }
+
+    private func refreshAndroidShutterLockDescriptor() throws {
+        androidControlCatalog.shutterLocks = []
+        let raw = try descriptorEnumValues(.movieTVLockSetting, valueByteCount: 1)
+        androidControlCatalog.shutterLocks = uniqueUInt8Modes(raw) { value in
+            switch value {
+            case 0: "Unlocked"
+            case 1: "Locked"
+            default: nil
+            }
+        }
+    }
+
+    private func refreshAndroidWhiteBalanceTintDescriptor() throws {
+        androidControlCatalog.whiteBalanceTints = []
+        androidWhiteBalanceTint = nil
+        guard
+            let mode = androidPropertySnapshot.wbMode,
+            let property = WhiteBalanceTint.tuneProperty(forWBModeLabel: mode)
+        else {
+            return
+        }
+        let descriptor = try readPropertyDescriptor(property)
+        androidControlCatalog.whiteBalanceTints = Self.whiteBalanceTintModes(
+            fromDescriptor: descriptor)
+        let data = try readProperty(property)
+        guard data.count >= 2 else { return }
+        let raw = UInt16(data[0]) | UInt16(data[1]) << 8
+        guard let cells = WhiteBalanceTint.cells(fromPropertyValue: raw) else { return }
+        androidWhiteBalanceTint = WhiteBalanceTint.label(
+            amberBlueCell: cells.amberBlue,
+            greenMagentaCell: cells.greenMagenta)
+    }
+
+    private func refreshAndroidVibrationReductionDescriptor() throws {
+        androidControlCatalog.vibrationReduction = []
+        let raw = try descriptorEnumValues(.movieVibrationReduction, valueByteCount: 1)
+        androidControlCatalog.vibrationReduction = uniqueUInt8Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.movieVibrationReduction(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    private func refreshAndroidElectronicVRDescriptor() throws {
+        androidControlCatalog.electronicVR = []
+        let raw = try descriptorEnumValues(.electronicVR, valueByteCount: 1)
+        androidControlCatalog.electronicVR = uniqueUInt8Modes(raw) { value in
+            guard value == 0 || value == 1 else { return nil }
+            return PTPCameraPropertyDecoders.onOffLabel(value)
+        }
+    }
+
+    private func androidDescriptorResult(
+        for error: PTPIPClientSessionError
+    ) -> AndroidCameraPropertyRefreshResult {
+        switch error {
+        case .mediaModeActive, .mediaModeRequired: .mediaBusy
+        case .operationRejected, .unsupportedProperty: .unsupported
+        default: .transportFailed
+        }
+    }
+
+    private func uniqueUInt32Modes(
+        _ rawValues: [UInt32],
+        label: (UInt32) -> String?
+    ) -> [AndroidRawControlMode<UInt32>] {
+        var seen = Set<String>()
+        return rawValues.compactMap { raw in
+            guard let label = label(raw), seen.insert(label).inserted else { return nil }
+            return AndroidRawControlMode(label: label, raw: raw)
+        }
+    }
+
+    private func uniqueUInt8Modes(
+        _ rawValues: [UInt32],
+        label: (UInt8) -> String?
+    ) -> [AndroidRawControlMode<UInt8>] {
+        var seen = Set<String>()
+        return rawValues.compactMap { raw in
+            guard let value = UInt8(exactly: raw), let label = label(value),
+                seen.insert(label).inserted
+            else { return nil }
+            return AndroidRawControlMode(label: label, raw: value)
+        }
+    }
+
+    private static let whiteBalanceTintGrid:
+        [(
+            label: String, amberBlue: Int, greenMagenta: Int
+        )] = {
+            WhiteBalanceTint.cellRange.flatMap { greenMagenta in
+                WhiteBalanceTint.cellRange.map { amberBlue in
+                    (
+                        WhiteBalanceTint.label(
+                            amberBlueCell: amberBlue,
+                            greenMagentaCell: greenMagenta),
+                        amberBlue,
+                        greenMagenta
+                    )
+                }
+            }
+        }()
+
+    /// Resolves only tint cells the active property descriptor advertises.
+    /// Enumeration descriptors retain their exact cells; range descriptors
+    /// constrain the shared Nikon grid by the camera's min/max/step tuple.
+    private static func whiteBalanceTintModes(
+        fromDescriptor descriptor: Data
+    ) -> [(label: String, amberBlue: Int, greenMagenta: Int)] {
+        let enumerated = PTPCameraPropertyDecoders.devicePropDescEnumValues(
+            data: descriptor, valueByteCount: 2)
+        if !enumerated.isEmpty {
+            return enumerated.compactMap { raw in
+                guard let value = UInt16(exactly: raw),
+                    let cells = WhiteBalanceTint.cells(fromPropertyValue: value)
+                else { return nil }
+                return (
+                    WhiteBalanceTint.label(
+                        amberBlueCell: cells.amberBlue,
+                        greenMagentaCell: cells.greenMagenta),
+                    cells.amberBlue,
+                    cells.greenMagenta
+                )
+            }
+        }
+        guard let range = uint16DescriptorRange(descriptor), range.step > 0 else { return [] }
+        return whiteBalanceTintGrid.filter { mode in
+            let value = WhiteBalanceTint.propertyValue(
+                amberBlueCell: mode.amberBlue,
+                greenMagentaCell: mode.greenMagenta)
+            return value >= range.minimum && value <= range.maximum
+                && (value - range.minimum).isMultiple(of: range.step)
+        }
+    }
+
+    /// DevicePropDesc range forms end in `flag + min + max + step` for a
+    /// UINT16 property. Exact tail anchoring avoids mistaking header bytes for
+    /// a range declaration.
+    private static func uint16DescriptorRange(
+        _ descriptor: Data
+    ) -> (minimum: UInt16, maximum: UInt16, step: UInt16)? {
+        let bytes = [UInt8](descriptor)
+        let byteCount = 7
+        guard bytes.count >= byteCount else { return nil }
+        let index = bytes.count - byteCount
+        guard bytes[index] == 1 else { return nil }
+        let minimum = ByteCoding.readUInt16LE(bytes, at: index + 1)
+        let maximum = ByteCoding.readUInt16LE(bytes, at: index + 3)
+        let step = ByteCoding.readUInt16LE(bytes, at: index + 5)
+        guard minimum <= maximum else { return nil }
+        return (minimum, maximum, step)
+    }
+
     /// Packages the accumulated snapshot without allowing a transient failed
     /// read to erase useful last-known camera state.
     private func androidPropertyReadback(
         result: AndroidCameraPropertyRefreshResult
     ) -> AndroidCameraPropertyReadback {
         AndroidCameraPropertyReadback(
-            result: result, properties: androidPropertySnapshot, storage: androidStorageInfo)
+            result: result,
+            properties: androidPropertySnapshot,
+            storage: androidStorageInfo,
+            controls: androidControlCatalog.capabilities(
+                properties: androidPropertySnapshot,
+                whiteBalanceTint: androidWhiteBalanceTint)
+        )
     }
 
     /// Preserves the most useful non-terminal reason while a bootstrap carries
@@ -677,33 +1016,153 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Camera controls
 
-    /// Applies one human-readable Android camera-control selection through the
-    /// shared core's Nikon write model.
-    ///
-    /// Kotlin supplies only a semantic selector and a label; the JNI wire mapper
-    /// resolves that selector to ``PTPCameraControl``. This layer validates the
-    /// label through `PTPCameraPropertyWrite`, keeps Kelvin white balance as the
-    /// required mode-then-temperature sequence, and sends each write through the
-    /// same serialized command channel as record control and live view. Codec /
-    /// resolution labels intentionally remain unsupported because only
-    /// camera-advertised raw descriptor values are safe for those controls.
+    /// Source-compatible entry for the portable shared-core control model.
     public func applyControl(_ control: PTPCameraControl, label: String) throws {
+        try applyAndroidControl(AndroidCameraControl(control), label: label)
+    }
+
+    /// Applies one semantic Android selection using either the shared core's
+    /// established label encoder or an exact camera-advertised descriptor value.
+    /// The write is not reported as accepted until bounded authoritative
+    /// property readback matches every payload.
+    func applyAndroidControl(_ control: AndroidCameraControl, label: String) throws {
         commandLifecycleLock.lock()
         defer { commandLifecycleLock.unlock() }
         guard !isMediaModeActive else {
             throw PTPIPClientSessionError.mediaModeActive
         }
 
-        let writes = PTPCameraPropertyWrite.requests(
-            control: control,
-            label: label,
-            snapshot: PTPCameraPropertySnapshot())
+        let writes = androidControlWrites(control, label: label)
         guard !writes.isEmpty else {
-            throw PTPIPClientSessionError.unsupportedControl(control, label)
+            throw PTPIPClientSessionError.unsupportedAndroidControl(
+                String(describing: control), label)
         }
         for write in writes {
             try writeCameraProperty(write)
         }
+        try confirmAndroidControlWrites(writes, control: control, label: label)
+        if control == .shutterMode {
+            // The ZR exposes the full value enum only for the active shutter
+            // circuit. Re-describe it immediately after the confirmed switch.
+            switch androidPropertySnapshot.shutterMode {
+            case .angle: try? refreshAndroidShutterAngleDescriptor()
+            case .speed: try? refreshAndroidShutterSpeedDescriptor()
+            case nil: break
+            }
+        } else if control == .whiteBalance {
+            // The selected preset chooses a different tune property. Rebuild
+            // that capability now or fail closed until the next descriptor pass.
+            try? refreshAndroidWhiteBalanceTintDescriptor()
+        }
+    }
+
+    private func androidControlWrites(
+        _ control: AndroidCameraControl,
+        label: String
+    ) -> [PTPCameraPropertyWrite] {
+        switch control {
+        case .shutter:
+            return shutterDescriptorWrite(label: label).map { [$0] } ?? []
+        case .baseISO:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.baseISO,
+                property: .movieBaseISO)
+        case .shutterMode:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.shutterModes,
+                property: .movieShutterMode)
+        case .shutterLock:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.shutterLocks,
+                property: .movieTVLockSetting)
+        case .whiteBalanceTint:
+            return whiteBalanceTintWrite(label: label).map { [$0] } ?? []
+        case .resolutionFrameRate:
+            return androidControlCatalog.screenSizes.first(where: { $0.label == label })
+                .map { [PTPCameraPropertyWrite.screenSize(raw: $0.raw)] } ?? []
+        case .codec:
+            return androidControlCatalog.fileTypes.first(where: { $0.label == label })
+                .map { [PTPCameraPropertyWrite.fileType(raw: $0.raw)] } ?? []
+        case .vibrationReduction:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.vibrationReduction,
+                property: .movieVibrationReduction)
+        case .electronicVR:
+            return uint8DescriptorWrite(
+                label: label,
+                modes: androidControlCatalog.electronicVR,
+                property: .electronicVR)
+        default:
+            guard let sharedControl = control.sharedControl else { return [] }
+            return PTPCameraPropertyWrite.requests(
+                control: sharedControl,
+                label: label,
+                snapshot: androidPropertySnapshot)
+        }
+    }
+
+    private func shutterDescriptorWrite(label: String) -> PTPCameraPropertyWrite? {
+        let property: PTPPropertyCode
+        let modes: [AndroidRawControlMode<UInt32>]
+        switch androidPropertySnapshot.shutterMode {
+        case .angle:
+            property = .movieShutterAngle
+            modes = androidControlCatalog.shutterAngles
+        case .speed:
+            property = .movieShutterSpeed
+            modes = androidControlCatalog.shutterSpeeds
+        case nil:
+            return nil
+        }
+        guard let raw = modes.first(where: { $0.label == label })?.raw else { return nil }
+        return PTPCameraPropertyWrite(property: property, data: Data(ByteCoding.uint32LE(raw)))
+    }
+
+    private func uint8DescriptorWrite(
+        label: String,
+        modes: [AndroidRawControlMode<UInt8>],
+        property: PTPPropertyCode
+    ) -> [PTPCameraPropertyWrite] {
+        guard let raw = modes.first(where: { $0.label == label })?.raw else { return [] }
+        return [PTPCameraPropertyWrite(property: property, data: Data([raw]))]
+    }
+
+    private func whiteBalanceTintWrite(label: String) -> PTPCameraPropertyWrite? {
+        guard let mode = androidPropertySnapshot.wbMode,
+            let tint = androidControlCatalog.whiteBalanceTints.first(where: { $0.label == label })
+        else { return nil }
+        return WhiteBalanceTint.write(
+            wbModeLabel: mode,
+            amberBlueCell: tint.amberBlue,
+            greenMagentaCell: tint.greenMagenta)
+    }
+
+    private func confirmAndroidControlWrites(
+        _ writes: [PTPCameraPropertyWrite],
+        control: AndroidCameraControl,
+        label: String,
+        maxAttempts: Int = 8
+    ) throws {
+        for attempt in 1...maxAttempts {
+            var allMatch = true
+            for write in writes {
+                let readback = try readProperty(write.property)
+                androidPropertySnapshot = androidPropertySnapshot.applying(
+                    property: write.property, data: readback)
+                if readback != write.data { allMatch = false }
+            }
+            if allMatch {
+                if control == .whiteBalanceTint { androidWhiteBalanceTint = label }
+                return
+            }
+            if attempt < maxAttempts { Thread.sleep(forTimeInterval: 0.2) }
+        }
+        throw PTPIPClientSessionError.controlReadbackMismatch(
+            String(describing: control), label)
     }
 
     /// Writes one shared-core-encoded camera property using the operation the
@@ -1522,6 +1981,29 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return UInt64(time.tv_sec) * 1_000_000_000 + UInt64(time.tv_nsec)
     }
 
+    /// Latest successful serialized PTP request/response duration, or nil
+    /// before any transaction and after disconnect.
+    public func latestCommandRoundTripMilliseconds() -> Double? {
+        roundTripLock.lock()
+        defer { roundTripLock.unlock() }
+        return latestRoundTripMillisecondsStorage
+    }
+
+    private func recordRoundTrip(startNanoseconds: UInt64, endNanoseconds: UInt64) {
+        guard endNanoseconds > startNanoseconds else { return }
+        let milliseconds = Double(endNanoseconds - startNanoseconds) / 1_000_000
+        guard milliseconds.isFinite, milliseconds > 0 else { return }
+        roundTripLock.lock()
+        latestRoundTripMillisecondsStorage = milliseconds
+        roundTripLock.unlock()
+    }
+
+    private func clearRoundTrip() {
+        roundTripLock.lock()
+        latestRoundTripMillisecondsStorage = nil
+        roundTripLock.unlock()
+    }
+
     // MARK: - Teardown
 
     /// Graceful teardown: best-effort `CloseSession` so the camera releases its
@@ -1552,6 +2034,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     deadline: .seconds(2)
                 )
                 usbTransport.close()
+                clearRoundTrip()
                 return
             }
         #endif
@@ -1559,6 +2042,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         _ = try? executeTransaction(.closeSession)
         command?.close()
         event?.close()
+        clearRoundTrip()
     }
 
     // MARK: - Transaction executor
@@ -1596,13 +2080,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) throws -> PTPIPTransactionResult {
         #if os(Android)
             if let usbTransport {
-                return try usbTransport.executeTransactionSynchronously(
+                let result = try usbTransport.executeTransactionSynchronously(
                     operationCode: operationCode,
                     transactionID: explicitTransactionID,
                     parameters: parameters,
                     dataPhase: dataPhase,
                     dataOut: dataOut
                 )
+                if let milliseconds = usbTransport.latestCommandRoundTripMilliseconds() {
+                    roundTripLock.lock()
+                    latestRoundTripMillisecondsStorage = milliseconds
+                    roundTripLock.unlock()
+                }
+                return result
             }
         #endif
         transactionLock.lock()
@@ -1611,6 +2101,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard let command else {
             throw PTPIPClientSessionError.connectionClosed
         }
+        let roundTripStart = Self.monotonicNanoseconds()
 
         let transactionID = explicitTransactionID ?? nextTransactionID
         if explicitTransactionID == nil {
@@ -1643,7 +2134,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
             let packet = try command.readPacket()
             packets.append(packet)
             if packet.type == .operationResponse {
-                return try PTPIPTransactionCollector().collect(from: packets)
+                let result = try PTPIPTransactionCollector().collect(from: packets)
+                recordRoundTrip(
+                    startNanoseconds: roundTripStart,
+                    endNanoseconds: Self.monotonicNanoseconds())
+                return result
             }
             // Same desync guard as the iOS transport: a stream that never sends
             // operationResponse must not grow `packets` forever.

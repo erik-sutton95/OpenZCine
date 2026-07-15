@@ -1119,6 +1119,21 @@
         return javaString(env, value)
     }
 
+    /// `SwiftCore.sessionLatestRoundTripMilliseconds(): Double` — latest
+    /// successful serialized PTP command RTT. NaN is the explicit unavailable
+    /// sentinel before a transaction and after session teardown.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionLatestRoundTripMilliseconds")
+    public func swiftCoreSessionLatestRoundTripMilliseconds(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jdouble {
+        guard
+            let value = ActiveSessionSlot.shared.current()?
+                .latestCommandRoundTripMilliseconds(),
+            value.isFinite, value > 0
+        else { return Double.nan }
+        return value
+    }
+
     /// `SwiftCore.sessionRefreshPropertySnapshot(request, recording, propertyCode): String?` —
     /// performs one bounded semantic Android monitor refresh. Kotlin supplies
     /// only a lifecycle selector, recording state, and a raw `DevicePropChanged`
@@ -1304,6 +1319,7 @@
         case unsupported = 3
         case rejected = 4
         case transportFailed = 5
+        case readbackMismatch = 6
     }
 
     /// Stable scalar results for direct AF-area moves and authoritative resets.
@@ -1366,14 +1382,16 @@
         }
         let selection = swiftString(env, label) ?? ""
         do {
-            try session.applyControl(cameraControl, label: selection)
+            try session.applyAndroidControl(cameraControl, label: selection)
             return ControlCommandResult.accepted.rawValue
         } catch let error as PTPIPClientSessionError {
             switch error {
             case .mediaModeActive, .mediaModeRequired:
                 return ControlCommandResult.mediaBusy.rawValue
-            case .unsupportedControl:
+            case .unsupportedControl, .unsupportedAndroidControl:
                 return ControlCommandResult.unsupported.rawValue
+            case .controlReadbackMismatch:
+                return ControlCommandResult.readbackMismatch.rawValue
             case .operationRejected:
                 return ControlCommandResult.rejected.rawValue
             default:

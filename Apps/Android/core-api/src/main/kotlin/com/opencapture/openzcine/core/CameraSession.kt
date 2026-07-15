@@ -14,6 +14,8 @@ private val noCameraProperties: StateFlow<CameraPropertySnapshot> =
 private val noCameraPropertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
     MutableStateFlow(CameraPropertyRefreshStatus.Idle)
 
+private val noCameraRoundTripMilliseconds: StateFlow<Double?> = MutableStateFlow(null)
+
 /**
  * Connection lifecycle of a [CameraSession].
  *
@@ -100,6 +102,30 @@ public enum class CameraControl {
 
     /** 32-bit float audio recording selection, `"ON"` or `"OFF"`. */
     AUDIO_32_BIT_FLOAT,
+
+    /** Camera-advertised dual-base ISO circuit, `"Low"` or `"High"`. */
+    BASE_ISO,
+
+    /** Camera-advertised shutter display circuit, `"Angle"` or `"Speed"`. */
+    SHUTTER_MODE,
+
+    /** Camera-advertised movie shutter lock state. */
+    SHUTTER_LOCK,
+
+    /** Fine-tune selection for the active camera white-balance mode. */
+    WHITE_BALANCE_TINT,
+
+    /** Exact camera-advertised recording resolution and frame-rate mode. */
+    RESOLUTION_FRAMERATE,
+
+    /** Exact camera-advertised recording codec mode. */
+    CODEC,
+
+    /** Camera-advertised movie vibration-reduction mode. */
+    VIBRATION_REDUCTION,
+
+    /** Camera-advertised electronic vibration-reduction state. */
+    ELECTRONIC_VR,
 }
 
 /** The camera's active movie-shutter display convention. */
@@ -130,6 +156,48 @@ public data class CameraStorageStatus(
     /** Currently free capacity in bytes. */
     val freeSpaceBytes: Long,
 )
+
+/**
+ * Camera-advertised control labels whose exact raw descriptor values remain in Swift.
+ *
+ * An empty list means the body did not advertise that control in its current mode.
+ * Kotlin must never synthesize fallback values for these fields.
+ */
+public data class CameraControlCapabilities(
+    /** Values from the active shutter angle/speed descriptor. */
+    val shutterValues: List<String> = emptyList(),
+    /** Dual-base ISO circuits advertised by the camera. */
+    val baseIso: List<String> = emptyList(),
+    /** Shutter display circuits advertised by the camera. */
+    val shutterModes: List<String> = emptyList(),
+    /** Shutter lock states advertised by the camera. */
+    val shutterLocks: List<String> = emptyList(),
+    /** Fine-tune grid values for the active advertised WB tune property. */
+    val whiteBalanceTints: List<String> = emptyList(),
+    /** Exact recording resolution/frame-rate modes advertised by the camera. */
+    val resolutionFrameRates: List<String> = emptyList(),
+    /** Exact codec modes advertised by the camera. */
+    val codecs: List<String> = emptyList(),
+    /** Movie VR modes advertised by the camera. */
+    val vibrationReduction: List<String> = emptyList(),
+    /** Electronic-VR states advertised by the camera. */
+    val electronicVr: List<String> = emptyList(),
+) {
+    /** Returns the advertised labels for one descriptor-dependent control. */
+    public fun options(control: CameraControl): List<String> =
+        when (control) {
+            CameraControl.SHUTTER -> shutterValues
+            CameraControl.BASE_ISO -> baseIso
+            CameraControl.SHUTTER_MODE -> shutterModes
+            CameraControl.SHUTTER_LOCK -> shutterLocks
+            CameraControl.WHITE_BALANCE_TINT -> whiteBalanceTints
+            CameraControl.RESOLUTION_FRAMERATE -> resolutionFrameRates
+            CameraControl.CODEC -> codecs
+            CameraControl.VIBRATION_REDUCTION -> vibrationReduction
+            CameraControl.ELECTRONIC_VR -> electronicVr
+            else -> emptyList()
+        }
+}
 
 /**
  * Real, progressively populated camera-property readback for the Android shell.
@@ -165,6 +233,12 @@ public data class CameraPropertySnapshot(
     val frameRate: Int? = null,
     /** Camera-reported recording codec label. */
     val codec: String? = null,
+    /** Shared-core resolution/frame-rate label matching the active advertised option. */
+    val resolutionFrameRate: String? = null,
+    /** Shared-core short codec label matching the active advertised option. */
+    val codecSelection: String? = null,
+    /** Active camera white-balance fine-tune label. */
+    val whiteBalanceTint: String? = null,
     /** Battery percentage. */
     val batteryPercent: Int? = null,
     /** Whether the body reports external or USB power. */
@@ -205,6 +279,8 @@ public data class CameraPropertySnapshot(
     val electronicVr: String? = null,
     /** Camera framing-grid label. */
     val cameraGrid: String? = null,
+    /** Current descriptor-dependent camera-control capabilities. */
+    val controlCapabilities: CameraControlCapabilities = CameraControlCapabilities(),
 )
 
 /** The non-terminal reason an Android property refresh could not update the snapshot. */
@@ -355,6 +431,12 @@ public sealed class CameraControlException(message: String) : Exception(message)
     public data object CommandRejected :
         CameraControlException("The camera rejected the control change.")
 
+    /** The camera accepted the write response but did not confirm the requested value. */
+    public data object ReadbackMismatch :
+        CameraControlException(
+            "The camera did not keep that control value. Check its recording mode and try again.",
+        )
+
     /** The command channel failed before the camera confirmed the write. */
     public data object TransportFailed :
         CameraControlException("The camera connection failed while changing a control.")
@@ -436,6 +518,15 @@ public interface CameraSession {
      */
     public val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus>
         get() = noCameraPropertyRefreshStatus
+
+    /**
+     * Latest real serialized PTP command round-trip duration.
+     *
+     * Null means unavailable and is restored on disconnect/session replacement;
+     * implementations must never synthesize a latency value.
+     */
+    public val latestCommandRoundTripMilliseconds: StateFlow<Double?>
+        get() = noCameraRoundTripMilliseconds
 
     /**
      * Camera-pushed PTP events from the active event channel.

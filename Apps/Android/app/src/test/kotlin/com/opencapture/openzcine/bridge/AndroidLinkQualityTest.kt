@@ -119,10 +119,24 @@ class AndroidLinkQualityTest {
         assertEquals(30.0, streaming.targetLiveViewFramesPerSecond)
         assertEquals(3, monitor.presentation.signalBars)
 
+        monitor.reportRoundTripMilliseconds(12.75)
+        assertEquals(12.75, assertNotNull(inputs.lastOrNull()).roundTripMilliseconds)
+
         monitor.reportPropertyRefresh(
             CameraPropertyRefreshStatus.Degraded(CameraPropertyRefreshFailure.TRANSPORT_FAILED),
         )
         assertEquals(1, assertNotNull(inputs.lastOrNull()).recentCommandFailures)
+
+        monitor.updateSession(
+            state = CameraSessionState.Connecting,
+            streamRequested = false,
+            transportIsUsb = false,
+            targetFramesPerSecond = 30.0,
+            isDemoSession = false,
+        )
+        val replacement = assertNotNull(inputs.lastOrNull())
+        assertEquals(AndroidLinkPhase.CONNECTING, replacement.phase)
+        assertNull(replacement.roundTripMilliseconds)
 
         monitor.updateSession(
             state = CameraSessionState.Disconnected,
@@ -133,6 +147,7 @@ class AndroidLinkQualityTest {
         )
         val disconnected = assertNotNull(inputs.lastOrNull())
         assertEquals(AndroidLinkPhase.DISCONNECTED, disconnected.phase)
+        assertNull(disconnected.roundTripMilliseconds)
         assertTrue(disconnected.resetSignalBars)
     }
 

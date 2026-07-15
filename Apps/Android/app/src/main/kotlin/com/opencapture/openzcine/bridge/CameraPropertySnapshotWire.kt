@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.bridge
 
+import com.opencapture.openzcine.core.CameraControlCapabilities
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.core.CameraStorageStatus
@@ -79,6 +80,9 @@ internal object CameraPropertySnapshotWire {
             resolution = value.optionalString("resolution"),
             frameRate = value.optionalInt("frameRate"),
             codec = value.optionalString("codec"),
+            resolutionFrameRate = value.optionalString("resolutionFrameRate"),
+            codecSelection = value.optionalString("codecSelection"),
+            whiteBalanceTint = value.optionalString("whiteBalanceTint"),
             batteryPercent = value.optionalInt("batteryPercent"),
             externalPower = value.optionalBoolean("externalPower"),
             warningRaw = value.optionalInt("warningRaw"),
@@ -99,6 +103,18 @@ internal object CameraPropertySnapshotWire {
             vibrationReduction = value.optionalString("vibrationReduction"),
             electronicVr = value.optionalString("electronicVr"),
             cameraGrid = value.optionalString("cameraGrid"),
+            controlCapabilities =
+                CameraControlCapabilities(
+                    shutterValues = value.options("options.shutter"),
+                    baseIso = value.options("options.baseIso"),
+                    shutterModes = value.options("options.shutterMode"),
+                    shutterLocks = value.options("options.shutterLock"),
+                    whiteBalanceTints = value.options("options.whiteBalanceTint"),
+                    resolutionFrameRates = value.options("options.resolutionFrameRate"),
+                    codecs = value.options("options.codec"),
+                    vibrationReduction = value.options("options.vibrationReduction"),
+                    electronicVr = value.options("options.electronicVr"),
+                ),
         )
     }
 
@@ -142,4 +158,13 @@ internal object CameraPropertySnapshotWire {
             "false" -> false
             else -> null
         }
+
+    private fun Map<String, String>.options(key: String): List<String> =
+        get(key)
+            ?.split(OPTION_SEPARATOR)
+            ?.filter(String::isNotBlank)
+            ?.distinct()
+            .orEmpty()
+
+    private const val OPTION_SEPARATOR: Char = '\u001F'
 }

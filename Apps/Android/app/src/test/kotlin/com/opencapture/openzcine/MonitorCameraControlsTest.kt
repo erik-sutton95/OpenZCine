@@ -3,13 +3,14 @@ package com.opencapture.openzcine
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.core.CameraControlCapabilities
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
-import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.openzcine.settings.PortraitFeedAspect
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -39,8 +40,20 @@ class MonitorCameraControlsTest {
         assertEquals("AF-C", settings[3].value)
         assertEquals("5600K", settings[4].value)
         assertEquals(
+            listOf(CameraControl.ISO, CameraControl.BASE_ISO),
+            settings[0].picker?.modes?.map { it.request.control },
+        )
+        assertEquals(
+            listOf(CameraControl.SHUTTER, CameraControl.SHUTTER_MODE, CameraControl.SHUTTER_LOCK),
+            settings[1].picker?.modes?.map { it.request.control },
+        )
+        assertEquals(
             listOf(CameraControl.FOCUS_MODE, CameraControl.FOCUS_AREA, CameraControl.FOCUS_SUBJECT),
             settings[3].picker?.modes?.map { it.request.control },
+        )
+        assertEquals(
+            listOf(CameraControl.WHITE_BALANCE, CameraControl.WHITE_BALANCE_TINT),
+            settings[4].picker?.modes?.map { it.request.control },
         )
         assertEquals(
             MonitorPickerKind.FOCUS,
@@ -63,8 +76,39 @@ class MonitorCameraControlsTest {
                     cameraSnapshot().copy(shutterLocked = true),
                 ),
             ).first { it.kind == MonitorPickerKind.SHUTTER }
-        assertNull(lockedShutter.picker)
+        val lockedModes = requireNotNull(lockedShutter.picker).modes.map { it.request.control }
+        assertTrue(CameraControl.SHUTTER !in lockedModes)
+        assertTrue(CameraControl.SHUTTER_LOCK in lockedModes)
         assertEquals("Shutter is locked on the camera.", lockedShutter.unavailableReason)
+    }
+
+    @Test
+    fun `descriptor backed live controls expose exactly the camera advertised labels`() {
+        val settings = monitorCaptureSettings(dashboard(cameraSnapshot()))
+
+        val shutter = requireNotNull(settings[1].picker)
+        assertEquals(
+            listOf("90°", "180°"),
+            shutter.modes.first { it.request.control == CameraControl.SHUTTER }.request.options,
+        )
+        assertEquals(
+            listOf("Angle", "Speed"),
+            shutter.modes.first { it.request.control == CameraControl.SHUTTER_MODE }.request.options,
+        )
+        assertEquals(
+            listOf("Unlocked", "Locked"),
+            shutter.modes.first { it.request.control == CameraControl.SHUTTER_LOCK }.request.options,
+        )
+        assertTrue(shutter.modes.none { "1/50" in it.request.options })
+
+        val whiteBalance = requireNotNull(settings[4].picker)
+        assertEquals(
+            listOf("A2 · G1", "B1 · G1"),
+            whiteBalance.modes
+                .first { it.request.control == CameraControl.WHITE_BALANCE_TINT }
+                .request
+                .options,
+        )
     }
 
     @Test
@@ -324,9 +368,19 @@ class MonitorCameraControlsTest {
             iris = "f/2.8",
             whiteBalanceMode = "Color temp",
             whiteBalanceKelvin = 5_600,
+            whiteBalanceTint = "A2 · G1",
             focusMode = "AF-C",
             focusArea = "Wide-L",
             focusSubject = "People",
+            baseIso = "Low",
+            controlCapabilities =
+                CameraControlCapabilities(
+                    shutterValues = listOf("90°", "180°"),
+                    baseIso = listOf("Low", "High"),
+                    shutterModes = listOf("Angle", "Speed"),
+                    shutterLocks = listOf("Unlocked", "Locked"),
+                    whiteBalanceTints = listOf("A2 · G1", "B1 · G1"),
+                ),
         )
 
     private fun portraitZones(captureStrip: ZoneFrame?): MonitorZones =

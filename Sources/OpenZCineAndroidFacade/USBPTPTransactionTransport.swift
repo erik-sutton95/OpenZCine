@@ -96,6 +96,16 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
         stateLock.unlock()
         guard !alreadyClosed else { return }
         rawIO.close()
+        metricLock.lock()
+        latestRoundTripMillisecondsStorage = nil
+        metricLock.unlock()
+    }
+
+    /// Latest successful USB command-container to response-container duration.
+    func latestCommandRoundTripMilliseconds() -> Double? {
+        metricLock.lock()
+        defer { metricLock.unlock() }
+        return latestRoundTripMillisecondsStorage
     }
 
     /// Blocking transaction entry used by the JNI facade's Swift-owned
@@ -117,6 +127,7 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
         let closed = isClosed
         stateLock.unlock()
         guard !closed else { throw AndroidUSBPTPTransportError.connectionClosed }
+        let roundTripStart = PTPIPClientSession.monotonicNanoseconds()
         let transactionID = explicitTransactionID ?? nextTransactionID
         if explicitTransactionID == nil { nextTransactionID += 1 }
         let timeout = timeoutMilliseconds(deadline: deadline)
@@ -169,6 +180,7 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
                 {
                     nextTransactionID = 1
                 }
+                recordRoundTrip(startNanoseconds: roundTripStart)
                 return result
             case .command, .event:
                 throw AndroidUSBPTPTransportError.unexpectedContainer(container.type)
@@ -193,10 +205,22 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
     private let transactionLock = NSLock()
     private let eventLock = NSLock()
     private let stateLock = NSLock()
+    private let metricLock = NSLock()
     private var nextTransactionID: UInt32 = 1
     private var isClosed = false
+    private var latestRoundTripMillisecondsStorage: Double?
     private var commandBuffer = PTPUSBReadBuffer()
     private var eventBuffer = PTPUSBReadBuffer()
+
+    private func recordRoundTrip(startNanoseconds: UInt64) {
+        let end = PTPIPClientSession.monotonicNanoseconds()
+        guard end > startNanoseconds else { return }
+        let milliseconds = Double(end - startNanoseconds) / 1_000_000
+        guard milliseconds.isFinite, milliseconds > 0 else { return }
+        metricLock.lock()
+        latestRoundTripMillisecondsStorage = milliseconds
+        metricLock.unlock()
+    }
 
     private func validateDataPhase(
         operationCode: PTPOperationCode,

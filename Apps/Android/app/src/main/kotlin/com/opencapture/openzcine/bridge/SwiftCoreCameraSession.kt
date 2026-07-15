@@ -1,10 +1,10 @@
 package com.opencapture.openzcine.bridge
 
-import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
+import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
 import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraPropertySnapshot
@@ -61,6 +61,9 @@ internal interface SwiftCoreSessionBridge {
 
     fun refreshPropertySnapshot(request: Int, recording: Boolean, propertyCode: Long): String?
 
+    /** Latest real native command RTT, or null when the active session has none. */
+    fun latestRoundTripMilliseconds(): Double? = null
+
     fun setRecording(recording: Boolean): Int
 
     fun applyControl(control: CameraControl, label: String): Int
@@ -105,6 +108,9 @@ internal interface SwiftCoreSessionBridge {
             propertyCode: Long,
         ): String? = SwiftCore.sessionRefreshPropertySnapshot(request, recording, propertyCode)
 
+        override fun latestRoundTripMilliseconds(): Double? =
+            SwiftCore.sessionLatestRoundTripMilliseconds().takeIf { it.isFinite() && it > 0.0 }
+
         override fun setRecording(recording: Boolean): Int =
             SwiftCore.sessionSetRecording(recording)
 
@@ -139,6 +145,14 @@ private val CameraControl.nativeSelector: Int
             CameraControl.WIND_FILTER -> 10
             CameraControl.ATTENUATOR -> 11
             CameraControl.AUDIO_32_BIT_FLOAT -> 12
+            CameraControl.BASE_ISO -> 13
+            CameraControl.SHUTTER_MODE -> 14
+            CameraControl.SHUTTER_LOCK -> 15
+            CameraControl.WHITE_BALANCE_TINT -> 16
+            CameraControl.RESOLUTION_FRAMERATE -> 17
+            CameraControl.CODEC -> 18
+            CameraControl.VIBRATION_REDUCTION -> 19
+            CameraControl.ELECTRONIC_VR -> 20
         }
 
 /**
@@ -205,6 +219,10 @@ class SwiftCoreCameraSession internal constructor(
     override val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
         _propertyRefreshStatus.asStateFlow()
 
+    private val _latestCommandRoundTripMilliseconds = MutableStateFlow<Double?>(null)
+    override val latestCommandRoundTripMilliseconds: StateFlow<Double?> =
+        _latestCommandRoundTripMilliseconds.asStateFlow()
+
     /** Serializes poll, manual, and event-triggered refresh work into one JNI call at a time. */
     private val propertyRefreshMutex = Mutex()
 
@@ -249,7 +267,10 @@ class SwiftCoreCameraSession internal constructor(
      * body streaming to a hidden feed — the heat-audit rule).
      */
     val liveFrames: LiveFrameSource =
-        SwiftCoreLiveFrameSource(onRecordingState = ::applyCameraRecordingState)
+        SwiftCoreLiveFrameSource(
+            onRecordingState = ::applyCameraRecordingState,
+            onCommandRoundTrip = ::updateRoundTripMeasurement,
+        )
 
     /**
      * Connects and suspends until the session is [CameraSessionState.Connected]
@@ -282,6 +303,7 @@ class SwiftCoreCameraSession internal constructor(
                             _recordingState.value = CameraRecordingState.STANDBY
                             _cameraProperties.value = CameraPropertySnapshot()
                             _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
+                            updateRoundTripMeasurement()
                             startEventStream(attempt)
                             if (automaticallyRefreshProperties) {
                                 startPropertyRefresh(attempt)
@@ -295,6 +317,7 @@ class SwiftCoreCameraSession internal constructor(
                             cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
                             stopPropertyRefresh(clearSnapshot = true)
+                            _latestCommandRoundTripMilliseconds.value = null
                             phaseLogger("failed", message)
                         }
                     }
@@ -383,6 +406,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.setRecording(recording)
                     }
+                updateRoundTripMeasurement()
                 nativeResult.throwIfRecordingCommandFailed()
                 if (
                     cameraRecordingEventVersion == eventVersionAtCommandStart &&
@@ -437,6 +461,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.applyControl(control, label)
                     }
+                updateRoundTripMeasurement()
                 nativeResult.throwIfControlCommandFailed()
             } catch (error: CameraControlException) {
                 throw error
@@ -467,6 +492,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.changeAfArea(point)
                     }
+                updateRoundTripMeasurement()
                 nativeResult.throwIfFocusCommandFailed()
                 true
             } catch (error: CameraFocusException) {
@@ -493,6 +519,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.resetFocusPoint()
                     }
+                updateRoundTripMeasurement()
                 nativeResult.throwIfFocusCommandFailed()
             } catch (error: CameraFocusException) {
                 throw error
@@ -521,6 +548,7 @@ class SwiftCoreCameraSession internal constructor(
                     _recordingState.value = CameraRecordingState.STANDBY
                     _cameraProperties.value = CameraPropertySnapshot()
                     _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
+                    _latestCommandRoundTripMilliseconds.value = null
                     _state.value = CameraSessionState.Disconnected
                 }
             }
@@ -754,6 +782,7 @@ class SwiftCoreCameraSession internal constructor(
             cameraCommandMutex.withLock {
                 if (!ownsConnectedAttempt(attempt)) return
                 val readback = readNativePropertySnapshot(request, propertyCode)
+                updateRoundTripMeasurement()
                 if (!ownsConnectedAttempt(attempt)) return
                 if (
                     readback.isValid &&
@@ -825,10 +854,20 @@ class SwiftCoreCameraSession internal constructor(
             SwiftCore.CONTROL_COMMAND_MEDIA_BUSY -> throw CameraControlException.MediaBusy
             SwiftCore.CONTROL_COMMAND_UNSUPPORTED -> throw CameraControlException.UnsupportedSelection
             SwiftCore.CONTROL_COMMAND_REJECTED -> throw CameraControlException.CommandRejected
+            SwiftCore.CONTROL_COMMAND_READBACK_MISMATCH ->
+                throw CameraControlException.ReadbackMismatch
             SwiftCore.CONTROL_COMMAND_TRANSPORT_FAILED ->
                 throw CameraControlException.TransportFailed
             else -> throw CameraControlException.TransportFailed
         }
+    }
+
+    private fun updateRoundTripMeasurement() {
+        if (_state.value !is CameraSessionState.Connected) {
+            _latestCommandRoundTripMilliseconds.value = null
+            return
+        }
+        _latestCommandRoundTripMilliseconds.value = core.latestRoundTripMilliseconds()
     }
 
     private fun Int.throwIfFocusCommandFailed() {
@@ -871,6 +910,7 @@ class SwiftCoreCameraSession internal constructor(
             }
         if (attempt != null) {
             stopPropertyRefresh(clearSnapshot = true)
+            _latestCommandRoundTripMilliseconds.value = null
         }
         return attempt
     }
