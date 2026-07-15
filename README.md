@@ -89,10 +89,10 @@ public today; Android and Google Play availability are coming soon.
   under hardware validation
 - USB-C tethered transport foundation alongside the primary Wi-Fi workflow
 
-The native Android phone and Wear OS implementations live in this repository and are being closed
-out in draft PR #125. They are not available through Google Play yet. Nikon ZR is the primary
-hardware target today; USB-C transport, both wearable companions, and wider phone/tablet coverage
-continue to be hardened with real-world testing.
+The native Android phone and Wear OS implementations live in this repository. They are not
+available through Google Play yet. Nikon ZR is the primary hardware target today; USB-C transport,
+both wearable companions, and wider phone/tablet coverage continue to be hardened with real-world
+testing.
 
 ## Roadmap shaped in the open
 
@@ -100,8 +100,9 @@ The roadmap lives in [GitHub Discussions](https://github.com/erik-sutton95/OpenZ
 where every proposed feature has its own thread. Browse the
 [Ideas category](https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas-feature-requests) to vote,
 add production context, or propose what OpenZCine should tackle next. Roadmap discussions describe
-direction, not promised dates or release commitments. Engineering-phase detail lives in
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+direction, not promised dates or release commitments. Current engineering status is visible on the
+read-only [OpenZCine Kaneo board](https://kaneo.opencapture.org/public-project/x8bqmvbho1am6f7ganbp72uq),
+while engineering-phase detail lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Free. Open source. Yours
 
