@@ -39,7 +39,7 @@ import Testing
     #expect(MonitorFeedLayout.leadingInset(for: safeArea) == 0)
 }
 
-@Test func feedLayoutUsesTheFullClassicNotchSafeLane() {
+@Test func feedLayoutTranslatesClassicNotchFeedTowardTheControlRail() {
     let safeArea = MonitorEdgeInsets(top: 0, leading: 44, bottom: 21, trailing: 44)
     let frame = MonitorFeedLayout.fullBleedFrame(
         viewportWidth: 896,
@@ -47,7 +47,7 @@ import Testing
         safeArea: safeArea
     )
 
-    #expect(frame.x == 44)
+    #expect(frame.x == 54)
     #expect(frame.x >= safeArea.leading)
     #expect(frame.x + frame.width <= 896 - safeArea.trailing)
 
@@ -57,8 +57,10 @@ import Testing
         safeArea: safeArea,
         horizontalDirection: .mirrored
     )
-    #expect(mirrored.x == 116)
-    #expect(mirrored.x + mirrored.width == 896 - safeArea.trailing)
+    #expect(mirrored.x == 106)
+    #expect(
+        mirrored.x + mirrored.width
+            == 896 - safeArea.trailing - MonitorFeedLayout.classicNotchRailwardShift)
 }
 
 @Test func horizontalLayoutDirectionUsesDeviceOrientationBeforeSafeAreaFallback() {
@@ -479,12 +481,17 @@ import Testing
     let deckCenter = layout.topInfoDeck.x + layout.topInfoDeck.width / 2
     let feedCenter = layout.feed.x + layout.feed.width / 2
 
-    #expect(layout.feed.x == 44)
+    #expect(layout.feed.x == 54)
     #expect(
         lockRight + MonitorLiveViewModuleLayout.topInfoDeckControlGap
             <= layout.topInfoDeck.x)
     #expect(abs(deckCenter - feedCenter) < 0.001)
     #expect(layout.topInfoDeck.x + layout.topInfoDeck.width <= 896)
+    let originalRailX =
+        safeArea.leading + layout.feed.width
+        + (896 - (safeArea.leading + layout.feed.width) - layout.rightRailControls.width) / 2
+    #expect(abs(layout.rightRailControls.x - originalRailX) < 0.001)
+    #expect(layout.rightRailControls.x - (layout.feed.x + layout.feed.width) < 10)
 
     let battery = MonitorBatteryRailLayout.fit(
         railHeight: layout.batteryRail.height,

@@ -184,6 +184,9 @@ public enum MonitorFeedLayout {
     /// Native monitor preview aspect ratio.
     public static let aspectRatio = 16.0 / 9.0
 
+    /// Classic-notch feed translation toward the opposite-side control rail.
+    public static let classicNotchRailwardShift = 10.0
+
     /// True for landscape viewports narrower than 16:9 (4:3-ish iPads), where the full-height
     /// feed would overflow the width. On these screens the side-rail chrome moves into the
     /// corners (battery inline beside the lock, settings/media top-trailing, record/DISP
@@ -248,12 +251,17 @@ public enum MonitorFeedLayout {
         let x: Double
         if MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) {
             // Classic iPhones report equal horizontal safe areas even though only one side has
-            // the notch. Use the physical orientation to spend the full notch-side safe lane
-            // without wasting an additional centered margin beside it.
+            // the notch. Use physical orientation to clear that side, then bias the feed slightly
+            // toward the opposite control rail to close its oversized black gap.
+            let availableShift = max(
+                0,
+                remainingWidth - max(0, safeArea.leading) - max(0, safeArea.trailing)
+            )
+            let railwardShift = min(classicNotchRailwardShift, availableShift)
             x =
                 horizontalDirection == .mirrored
-                ? max(0, remainingWidth - safeArea.trailing)
-                : min(remainingWidth, safeArea.leading)
+                ? max(0, remainingWidth - safeArea.trailing - railwardShift)
+                : min(remainingWidth, safeArea.leading + railwardShift)
         } else {
             x = min(remainingWidth, leadingInset)
         }
@@ -484,7 +492,28 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
             safeArea: feedSafeArea,
             horizontalDirection: horizontalDirection
         )
-        let rightRailLane = screen.trailingLane(after: feed)
+        let usesClassicSideNotch = MonitorBatteryRailLayout.usesClassicSideNotch(
+            safeArea: feedSafeArea
+        )
+        // The classic-notch feed moves toward the rail, but the rail itself stays on its
+        // established center line. Recover the pre-translation feed edge for lane placement.
+        let availableClassicShift = max(
+            0,
+            viewportWidth - feed.width - max(0, feedSafeArea.leading)
+                - max(0, feedSafeArea.trailing)
+        )
+        let classicShift =
+            usesClassicSideNotch
+            ? min(MonitorFeedLayout.classicNotchRailwardShift, availableClassicShift)
+            : 0
+        let railReferenceFeed = MonitorFeedFrame(
+            x: feed.x
+                + (horizontalDirection == .mirrored ? classicShift : -classicShift),
+            y: feed.y,
+            width: feed.width,
+            height: feed.height
+        )
+        let rightRailLane = screen.trailingLane(after: railReferenceFeed)
         let rightRailControls = Self.rightRailFrame(
             lane: rightRailLane,
             chrome: chrome,
@@ -504,9 +533,6 @@ public struct MonitorLiveViewModuleLayout: Equatable, Sendable {
         // classic-notch phones. Every other device retains the established deck inset.
         let minimumDeckInset =
             lockButton.x + lockButton.width + topInfoDeckControlGap - feed.x
-        let usesClassicSideNotch = MonitorBatteryRailLayout.usesClassicSideNotch(
-            safeArea: feedSafeArea
-        )
         let deckInset =
             constrained
             ? topInfoDeckSideInset
