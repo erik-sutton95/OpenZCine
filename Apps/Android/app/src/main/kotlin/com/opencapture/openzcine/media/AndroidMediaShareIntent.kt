@@ -25,19 +25,33 @@ internal object AndroidMediaShareIntent {
         )
 
     /**
-     * Builds the native chooser for [share]. The nested `ACTION_SEND` intent
-     * carries both `EXTRA_STREAM` and ClipData so Android grants its read URI
-     * permission to the selected recipient instead of exposing a `file://` URI.
+     * Builds the native chooser for one fully staged artifact.
      */
-    fun chooserIntent(context: Context, share: StagedMediaShare): Intent {
-        val uri = contentUri(context, share)
-        val spec = MediaShareIntentSpec.forShare(share)
+    fun chooserIntent(context: Context, share: StagedMediaShare): Intent =
+        chooserIntent(context, listOf(share))
+
+    /**
+     * Builds the native chooser for already-staged artifacts. The nested send
+     * intent carries both `EXTRA_STREAM` and ClipData so Android grants read
+     * access to each provider URI without exposing a `file://` path.
+     */
+    fun chooserIntent(context: Context, shares: List<StagedMediaShare>): Intent {
+        require(shares.isNotEmpty()) { "At least one staged media file is required." }
+        val uris = shares.map { share -> contentUri(context, share) }
+        val spec = MediaShareIntentSpec.forShares(shares)
+        val clipData = ClipData.newRawUri(spec.clipDataLabel, uris.first())
+        uris.drop(1).forEach { uri -> clipData.addItem(ClipData.Item(uri)) }
         val sendIntent =
             Intent(spec.action).apply {
                 type = spec.mimeType
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TITLE, share.displayName)
-                clipData = ClipData.newRawUri(spec.clipDataLabel, uri)
+                if (shares.size == 1) {
+                    putExtra(Intent.EXTRA_STREAM, uris.single())
+                    putExtra(Intent.EXTRA_TITLE, shares.single().displayName)
+                } else {
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+                    putExtra(Intent.EXTRA_TITLE, "OpenZCine media")
+                }
+                this.clipData = clipData
                 if (spec.grantsReadUriPermission) {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }

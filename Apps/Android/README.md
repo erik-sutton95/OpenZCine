@@ -107,8 +107,10 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForDevice` at the repo root, forward the
   port with `adb reverse tcp:15740 tcp:15740`, and use host `127.0.0.1`.
 - **Media browse + playback + stills:** the monitor's media button opens
-  `media/MediaBrowseScreen`, an iOS-look dark clip grid (thumbnails, size/codec badges,
-  listing/empty/error states) listed through the facade's bounded
+  `media/MediaBrowseScreen`, an iOS-look dark media library with Camera and On device sources,
+  All/Videos/Photos/Favorites filters, Newest/Oldest/Name sorting, persisted favorites, grid/list
+  arrangements, long-press selection, and a grid sweep gesture. The Camera source is listed through
+  the facade's bounded
   `sessionListMedia`/`sessionThumbnail` (`GetObjectHandles`/`GetObjectInfo`/`GetThumb`). MOV/MP4/M4V
   proxies open `MediaPlaybackScreen`; JPEG/PNG stills open `MediaStillViewer`, which shows the
   camera thumbnail first, progressively refreshes a decoded cache preview, and supports 1×–4×
@@ -123,10 +125,12 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   atomically. The still viewer uses the same generic cache and transfer seam; closing it invalidates
   late decode results and joins the active transfer before returning to the browser. Opening Media
   stops and excludes live view until the browser closes, so both pumps
-  never contend for the serialized camera command channel. A complete cache entry can be copied into app-scoped
-  `cacheDir/share/ready` and opened in the native Android share chooser through a narrowly scoped
-  `FileProvider`; the no-backup camera cache and growing `.part` files remain provider-invisible.
-  Frame.io/OAuth delivery remains a later, separate Android integration. The Nikon large-object operations still
+  never contend for the serialized camera command channel. The On device source reads only a
+  persisted shared-core listing and identity-validates each exact completed cache artifact; it never
+  scans arbitrary filesystem paths or exposes partial files. One or more selected completed entries
+  can be copied into app-scoped `cacheDir/share/ready` and opened through Android's native single or
+  multi-item share chooser via a narrowly scoped `FileProvider`; the no-backup camera cache and
+  growing `.part` files remain provider-invisible. Frame.io/OAuth delivery remains a later, separate Android integration. The Nikon large-object operations still
   require real-ZR verification. For an on-device fake-ZR playback run, set
   `ZC_FAKE_ZR_MEDIA=/absolute/path/to/a/playable.mp4` alongside `ZC_FAKE_ZR_PORT=15740` when running
   `swift test --filter servesFakeZRForMediaBrowse`, then `adb reverse tcp:15740 tcp:15740`, launch

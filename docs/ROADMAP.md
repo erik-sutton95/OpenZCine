@@ -103,8 +103,9 @@ Android.
 - Swift SDK for Android integration verified for the current core build and runtime path.
 - Saved-camera reconnect and Wi-Fi pairing, plus Compose monitor record/live-view control surfaces.
 - Camera-property readback, command dashboard, and monitor-assist controls (in progress).
-- Media browse, progressive playback, safe Android sharing, still viewing, and library workflows
-  (in progress).
+- Media browse, progressive playback, still viewing, and complete-cache-only Android sharing,
+  including Camera/On-device library sources, categories, sorting, favorites, grid/list layouts,
+  and batch selection (in progress).
 - Standalone Operator Setup and app-owned progressive-media cache management (in progress).
 
 **Status:** In progress. Android follows the same product shell while platform-specific USB-camera
@@ -119,9 +120,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
 - **Bluetooth shutter remote** — record start/stop from a BT remote.
-- **Media browser & playback** — on-camera clip browse, progressive proxy playback, and a
-  transfer-backed Android still-photo viewer (JPEG/PNG progressive preview; explicit thumbnail
-  fallback for unsupported HEIF/RAW decoders).
+- **Media browser & playback** — on-camera and validated-local clip browsing with categories,
+  sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;
+  progressive proxy playback; and a transfer-backed Android still-photo viewer (JPEG/PNG
+  progressive preview; explicit thumbnail fallback for unsupported HEIF/RAW decoders).
 - **Frame.io clip upload** — OAuth/Adobe IMS clip delivery.
 - **Apple Watch companion** (in progress) — live-view relay to the watch.
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow.
