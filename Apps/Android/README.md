@@ -274,8 +274,9 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   `media/MediaBrowseScreen`, an iOS-look dark media library with Camera and On device sources,
   All/Videos/Photos/Favorites filters, Newest/Oldest/Name sorting, persisted favorites, grid/list
   arrangements, long-press selection, and a grid sweep gesture. The Camera source is listed through
-  the facade's bounded
-  `sessionListMedia`/`sessionThumbnail` (`GetObjectHandles`/`GetObjectInfo`/`GetThumb`). MOV/MP4/M4V
+  the facade's latest-wins `sessionBeginMediaBrowse`/`sessionNextMediaBrowsePage` cursor plus
+  `sessionThumbnail`. Handle snapshots cover every usable card, while round-robin 32-object pages
+  bound `GetObjectInfo` work and update the grid incrementally. MOV/MP4/M4V
   proxies open `MediaPlaybackScreen`; within the current filtered result it provides previous/next
   playable-proxy navigation, persisted favorite state, complete-cache-only native delivery,
   play/pause/replay and ±15-second transport, throttled preview plus final precise seeking,

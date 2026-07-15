@@ -139,11 +139,23 @@ internal class SharedPreferencesMediaLibraryPreferences(context: Context) : Medi
  * item or share candidate.
  */
 internal class MediaLibraryIndex(private val preferences: MediaLibraryPreferences) {
-    /** Adds the latest camera listing while retaining metadata for prior cached objects. */
-    fun rememberCameraListing(cameraID: String, clips: List<MediaClipRecord>) {
+    /**
+     * Adds one incremental camera listing while retaining prior cached objects.
+     * [removedObjects] carries only authoritative page deltas such as an R3D
+     * master superseded by its newly discovered proxy.
+     */
+    fun rememberCameraListing(
+        cameraID: String,
+        clips: List<MediaClipRecord>,
+        removedObjects: Collection<MediaObjectIdentity> = emptyList(),
+    ) {
         val merged = LinkedHashMap<String, MediaClipRecord>()
         persistedClips(cameraID).forEach { merged[it.libraryKey(cameraID)] = it }
         clips.forEach { merged[it.libraryKey(cameraID)] = it }
+        val removedKeys = removedObjects.map { it.storageID to it.handle }.toSet()
+        if (removedKeys.isNotEmpty()) {
+            merged.entries.removeAll { (_, clip) -> clip.storageId to clip.handle in removedKeys }
+        }
         val bounded =
             MediaLibraryFiltering.sort(
                 merged.values.toList(),

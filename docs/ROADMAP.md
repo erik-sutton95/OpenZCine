@@ -108,8 +108,9 @@ Android.
   require a supported camera pass; this policy must never alter recording configuration or card writes.
 - Media browse, full progressive-proxy playback, still viewing, and complete-cache-only Android
   delivery, including Camera/On-device library sources, categories, sorting, favorites, grid/list
-  layouts, filtered playback navigation, transport/scrub/mute, batch selection, native Share, and
-  scoped-storage Save to Gallery for verified MOV/MP4/M4V videos (in progress). Gallery writes stay
+  layouts, cancellation-aware 32-object paging across every installed camera card, filtered playback
+  navigation, transport/scrub/mute, batch selection, native Share, and scoped-storage Save to Gallery
+  for verified MOV/MP4/M4V videos (in progress). Gallery writes stay
   hidden with `IS_PENDING` until their exact byte count is copied, clean up failed or cancelled rows,
   and report skipped non-video or incomplete selections without exposing camera paths or `.part`
   files.
@@ -225,7 +226,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   preference, lifecycle disarm, and duplicate-event debounce. **[VERIFY-ON-HW]** Confirm volume,
   Play/Pause, and headset variants on physical remotes and normal volume behavior after disarm.
 - **Media browser & playback** — on-camera and validated-local clip browsing with categories,
-  sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing;
+  sorting, persisted favorites, grid/list selection and complete-cache-only batch sharing. Camera
+  discovery snapshots all usable card slots, alternates their newest handles inside bounded pages,
+  publishes each page incrementally, and invalidates a stale cursor when a refresh or source change
+  wins; no 256-object ceiling can hide older media or a second card;
   progressive proxy playback with an independent assist toolbar, clean-source waveform and
   vectorscope analysis, decoded-audio metering, display LUT/false-colour/peaking/zebra effects,
   including the API 33 AGSL renderer and an SDR-only Media3 GLES fallback on API 29–32 with a

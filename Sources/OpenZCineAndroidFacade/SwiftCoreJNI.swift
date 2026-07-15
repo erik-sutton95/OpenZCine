@@ -1026,7 +1026,10 @@
                 session.disconnect()
                 return
             }
-            completion.displacedSession?.disconnect()
+            if let displaced = completion.displacedSession {
+                MediaBrowseCursorRegistry.shared.cancel(session: displaced)
+                displaced.disconnect()
+            }
             callStrings(
                 handle.onConnected,
                 [
@@ -1091,7 +1094,10 @@
                 session.disconnect()
                 return
             }
-            completion.displacedSession?.disconnect()
+            if let displaced = completion.displacedSession {
+                MediaBrowseCursorRegistry.shared.cancel(session: displaced)
+                displaced.disconnect()
+            }
             callStrings(
                 handle.onConnected,
                 [
@@ -1463,7 +1469,10 @@
     ) {
         let removed = ActiveSessionSlot.shared.takeOwnedConnection(owner: Int64(owner))
         removed.pendingUSBTransport?.close()
-        removed.session?.disconnect()
+        if let session = removed.session {
+            MediaBrowseCursorRegistry.shared.cancel(session: session)
+            session.disconnect()
+        }
     }
 
     // MARK: - Live view
@@ -1667,21 +1676,42 @@
 
     // MARK: - Media browse (OPE-34)
 
-    /// `SwiftCore.sessionListMedia(maxObjects): String?` — lists browsable
-    /// media on the active session's cards (bounded enumeration; see
-    /// `PTPIPClientSession.listMedia`), flattened per `MediaListWire`. Null
-    /// when disconnected or the listing failed; empty string for an empty
-    /// card. Blocking; Kotlin calls it from `Dispatchers.IO`.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionListMedia")
-    public func swiftCoreSessionListMedia(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, maxObjects: jint
-    ) -> jstring? {
-        guard let session = ActiveSessionSlot.shared.current() else { return nil }
+    /// `SwiftCore.sessionBeginMediaBrowse(): Long` — snapshots every usable
+    /// card's object handles and returns the latest process-local cursor. A
+    /// newer call cancels the prior cursor before taking its snapshot. Returns
+    /// -1 when disconnected or the snapshot failed. Blocking; call from IO.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionBeginMediaBrowse")
+    public func swiftCoreSessionBeginMediaBrowse(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jlong {
+        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
         session.enterMediaMode()
-        guard
-            let clips = try? session.listMedia(maxObjects: Int(maxObjects))
+        return (try? MediaBrowseCursorRegistry.shared.begin(session: session)) ?? -1
+    }
+
+    /// `SwiftCore.sessionNextMediaBrowsePage(cursor, maxObjects): String?` —
+    /// advances one cursor by a bounded number of `GetObjectInfo` commands and
+    /// returns `MediaBrowsePageWire`. Null means invalidated, cancelled, or
+    /// failed. Blocking; call from IO.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionNextMediaBrowsePage")
+    public func swiftCoreSessionNextMediaBrowsePage(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, cursor: jlong,
+        maxObjects: jint
+    ) -> jstring? {
+        guard cursor > 0,
+            let page = try? MediaBrowseCursorRegistry.shared.next(
+                handle: Int64(cursor), maxObjects: Int(maxObjects))
         else { return nil }
-        return javaString(env, MediaListWire.encode(clips))
+        return javaString(env, MediaBrowsePageWire.encode(page))
+    }
+
+    /// `SwiftCore.sessionCancelMediaBrowse(cursor)` — invalidates one opaque
+    /// cursor. Safe after completion and from cancellation cleanup.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionCancelMediaBrowse")
+    public func swiftCoreSessionCancelMediaBrowse(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, cursor: jlong
+    ) {
+        MediaBrowseCursorRegistry.shared.cancel(handle: Int64(cursor))
     }
 
     /// `SwiftCore.sessionThumbnail(handle): ByteArray?` — the camera's
@@ -1712,7 +1742,9 @@
     public func swiftCoreSessionExitMediaMode(
         env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
     ) {
-        ActiveSessionSlot.shared.current()?.exitMediaMode()
+        guard let session = ActiveSessionSlot.shared.current() else { return }
+        MediaBrowseCursorRegistry.shared.cancel(session: session)
+        session.exitMediaMode()
     }
 
     /// `SwiftCore.sessionResolveMediaSize(handle, reportedSize): Long` —

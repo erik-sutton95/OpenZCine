@@ -16,13 +16,30 @@ struct MediaBrowseTests {
             host: "127.0.0.1", port: server.port, timeoutMilliseconds: 2_000)
     }
 
+    private func collect(
+        _ cursor: FacadeMediaBrowseCursor,
+        pageSize: Int = 32
+    ) throws -> [FacadeMediaClip] {
+        var clips: [MediaObjectHandle: FacadeMediaClip] = [:]
+        while true {
+            let page = try cursor.nextPage(maxObjects: pageSize)
+            for clip in page.clips {
+                clips[MediaObjectHandle(storageID: clip.storageID, handle: clip.handle)] = clip
+            }
+            for object in page.removedObjects {
+                clips.removeValue(forKey: object)
+            }
+            if !page.hasMore { return Array(clips.values) }
+        }
+    }
+
     @Test func listsBrowsableMediaWithMetadata() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
 
-        let clips = try session.listMedia()
+        let clips = try collect(session.beginMediaBrowse())
 
         // 10 objects on card → 8 visible: the folder is not media, and the
         // proxy-paired R3D master is hidden (iOS browse parity).
@@ -53,21 +70,30 @@ struct MediaBrowseTests {
         #expect(operations.contains(.getObjectHandles))
     }
 
-    @Test func boundsEnumerationAtMaxObjects() throws {
+    @Test func boundsEachIncrementWithoutCappingTheCatalog() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
 
-        let clips = try session.listMedia(maxObjects: 3)
+        let cursor = try session.beginMediaBrowse()
+        let page = try cursor.nextPage(maxObjects: 3)
 
         // Exactly 3 GetObjectInfo round trips — a packed card cannot block
-        // the session thread past the cap.
+        // the session thread past one page, while the cursor remains live.
         let infoCount = server.receivedOperations().filter { $0 == .getObjectInfo }.count
         #expect(infoCount == 3)
+        #expect(page.inspectedObjectCount == 3)
+        #expect(page.hasMore)
         // Newest handles first: the inspected tail is 100NIKON (filtered),
         // C0008.MOV, DSC_0007.JPG.
-        #expect(clips.map(\.filename) == ["C0008.MOV", "DSC_0007.JPG"])
+        #expect(page.clips.map(\.filename) == ["C0008.MOV", "DSC_0007.JPG"])
+
+        let remaining = try collect(cursor, pageSize: 3)
+        #expect((page.clips + remaining).count == 8)
+        #expect(
+            server.receivedOperations().filter { $0 == .getObjectInfo }.count
+                == FakeZRMediaCard.objects.count)
     }
 
     @Test func servesEmptyCardAsEmptyList() throws {
@@ -78,7 +104,9 @@ struct MediaBrowseTests {
         let session = try connect(to: server)
         defer { session.disconnect() }
 
-        #expect(try session.listMedia().isEmpty)
+        let page = try session.beginMediaBrowse().nextPage(maxObjects: 32)
+        #expect(page.clips.isEmpty)
+        #expect(!page.hasMore)
     }
 
     @Test func fetchesPerObjectThumbnails() throws {
@@ -127,6 +155,106 @@ struct MediaBrowseTests {
                 4107\t65537\t50400000\t20260714T104030\t8256\t5504\t0\tstill\tthumbnail\tNikon RAW\tDSC_0009.NEF
                 """)
         #expect(MediaListWire.encode([]).isEmpty)
+    }
+
+    @Test func pagesEveryCardRoundRobinAndNewestFirst() throws {
+        let snapshots = [
+            MediaBrowseStorageSnapshot(storageID: 1, handles: [11, 12, 13, 14, 15]),
+            MediaBrowseStorageSnapshot(storageID: 2, handles: [21, 22]),
+        ]
+        var requested: [MediaObjectHandle] = []
+        let cursor = FacadeMediaBrowseCursor(snapshots: snapshots) { object in
+            requested.append(object)
+            return FacadeMediaClip(
+                handle: object.handle,
+                storageID: object.storageID,
+                sizeBytes: 1,
+                captureDate: "20260715T120000",
+                pixelWidth: 1,
+                pixelHeight: 1,
+                filename: "C\(object.handle).MOV")
+        }
+
+        var pages: [FacadeMediaBrowsePage] = []
+        repeat {
+            pages.append(try cursor.nextPage(maxObjects: 2))
+        } while pages.last?.hasMore == true
+
+        #expect(
+            pages.allSatisfy {
+                $0.inspectedObjectCount <= 2 && $0.clips.count + $0.removedObjects.count <= 2
+            })
+        #expect(
+            requested.prefix(4) == [
+                MediaObjectHandle(storageID: 1, handle: 15),
+                MediaObjectHandle(storageID: 2, handle: 22),
+                MediaObjectHandle(storageID: 1, handle: 14),
+                MediaObjectHandle(storageID: 2, handle: 21),
+            ])
+        #expect(Set(pages.flatMap(\.clips).map(\.storageID)) == [1, 2])
+        #expect(pages.flatMap(\.clips).count == 7)
+    }
+
+    @Test func appliesProxyPairingAcrossPageAndCardBoundaries() throws {
+        let master = FacadeMediaClip(
+            handle: 2, storageID: 1, sizeBytes: 2, captureDate: "", pixelWidth: 1,
+            pixelHeight: 1, filename: "A001_C001.R3D")
+        let proxy = FacadeMediaClip(
+            handle: 3, storageID: 2, sizeBytes: 1, captureDate: "", pixelWidth: 1,
+            pixelHeight: 1, filename: "A001_C001.MP4")
+        let clipsByHandle = [master.handle: master, proxy.handle: proxy]
+        let cursor = FacadeMediaBrowseCursor(
+            snapshots: [
+                MediaBrowseStorageSnapshot(storageID: 1, handles: [master.handle]),
+                MediaBrowseStorageSnapshot(storageID: 2, handles: [proxy.handle]),
+            ],
+            fetchClip: { clipsByHandle[$0.handle] })
+
+        let first = try cursor.nextPage(maxObjects: 1)
+        #expect(first.clips.map(\.filename) == [master.filename])
+        #expect(first.removedObjects.isEmpty)
+        #expect(first.hasMore)
+        let second = try cursor.nextPage(maxObjects: 1)
+        #expect(second.clips.isEmpty)
+        #expect(
+            second.removedObjects
+                == [MediaObjectHandle(storageID: master.storageID, handle: master.handle)])
+        #expect(second.hasMore)
+        let third = try cursor.nextPage(maxObjects: 1)
+        #expect(third.clips.map(\.filename) == [proxy.filename])
+        #expect(third.removedObjects.isEmpty)
+        #expect(!third.hasMore)
+    }
+
+    @Test func cancellationStopsTheNextPage() throws {
+        let cursor = FacadeMediaBrowseCursor(
+            snapshots: [MediaBrowseStorageSnapshot(storageID: 1, handles: [1])],
+            fetchClip: { _ in nil })
+        cursor.cancel()
+
+        #expect(throws: FacadeMediaBrowseCursorError.cancelled) {
+            try cursor.nextPage(maxObjects: 1)
+        }
+    }
+
+    @Test func serializesVersionedPageHeaderAndRecords() {
+        let clip = FacadeMediaClip(
+            handle: 1, storageID: 2, sizeBytes: 3, captureDate: "", pixelWidth: 4,
+            pixelHeight: 5, filename: "C0001.MOV")
+
+        #expect(
+            MediaBrowsePageWire.encode(
+                FacadeMediaBrowsePage(
+                    clips: [clip], inspectedObjectCount: 32, hasMore: true))
+                == "OZCMEDIA1\t1\t32\t0\n1\t2\t3\t\t4\t5\t1\tproxy\t\t\tC0001.MOV")
+        #expect(
+            MediaBrowsePageWire.encode(
+                FacadeMediaBrowsePage(
+                    clips: [],
+                    removedObjects: [MediaObjectHandle(storageID: 2, handle: 1)],
+                    inspectedObjectCount: 0,
+                    hasMore: false))
+                == "OZCMEDIA1\t0\t0\t1\n-\t2\t1")
     }
 
     /// Not a test: an opt-in dev server for the on-device end-to-end. Run
