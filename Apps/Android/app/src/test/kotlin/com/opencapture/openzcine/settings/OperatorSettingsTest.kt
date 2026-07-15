@@ -24,12 +24,18 @@ class OperatorSettingsTest {
         assertFalse(settings.mediaRemoteShutterEnabled.value)
         assertTrue(settings.hapticsEnabled.value)
         assertTrue(settings.keepScreenAwake.value)
+        assertFalse(settings.guidesVisible.value)
+        assertFalse(settings.localGridVisible.value)
         assertFalse(settings.ruleOfThirdsEnabled.value)
+        assertFalse(settings.phiGridEnabled.value)
+        assertFalse(settings.diagonalGridEnabled.value)
         assertFalse(settings.centerCrosshairEnabled.value)
         assertFalse(settings.levelAssistEnabled.value)
-        assertEquals(LocalFramingGuide.OFF, settings.framingGuide)
-        assertEquals(LocalDesqueezePresentation.OFF, settings.desqueezePresentation)
         assertEquals(LocalLevelStyle.HORIZON, settings.levelStyle)
+        assertTrue(settings.selectedGuideRatios.isEmpty())
+        assertFalse(settings.desqueezeEnabled.value)
+        assertEquals(LocalDesqueezeRatio.X100, settings.desqueezeRatio)
+        assertEquals(LocalDesqueezeOrientation.HORIZONTAL, settings.desqueezeOrientation)
         assertEquals(LiveViewStreamPreset.FAST, settings.streamPreset)
         assertEquals(LiveViewQualityBias.LATENCY, settings.qualityBias)
     }
@@ -104,13 +110,19 @@ class OperatorSettingsTest {
         val migrated = OperatorSettings(store)
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.LIGHTS))
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.AUDIO))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.GUIDES))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.GRID))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.CROSS))
+        assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.DESQ))
         assertTrue(migrated.isAssistToolbarToolVisible(AssistTool.PEAK))
         assertFalse(migrated.isAssistToolbarToolVisible(AssistTool.WAVE))
 
         migrated.toggleAssistToolbarToolVisibility(AssistTool.LIGHTS)
         migrated.toggleAssistToolbarToolVisibility(AssistTool.AUDIO)
+        migrated.toggleAssistToolbarToolVisibility(AssistTool.GUIDES)
         assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.LIGHTS))
         assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.AUDIO))
+        assertFalse(OperatorSettings(store).isAssistToolbarToolVisible(AssistTool.GUIDES))
     }
 
     @Test
@@ -151,24 +163,65 @@ class OperatorSettingsTest {
     }
 
     @Test
-    fun `local framing selection persists and remains separate from camera grid state`() {
+    fun `local framing selections persist and remain separate from camera grid state`() {
         OperatorSettings(store).apply {
+            guideFamily = LocalFramingGuideFamily.SOCIAL
+            toggleGuideRatio(LocalFramingAspectRatio.RATIO_9_16)
+            toggleGuideRatio(LocalFramingAspectRatio.RATIO_1_1)
+            guideMaskEnabled.value = true
+            localGridVisible.value = true
             ruleOfThirdsEnabled.value = true
+            phiGridEnabled.value = true
+            diagonalGridEnabled.value = true
             centerCrosshairEnabled.value = true
             levelAssistEnabled.value = true
-            framingGuide = LocalFramingGuide.CINEMA_239
-            desqueezePresentation = LocalDesqueezePresentation.X165
             levelStyle = LocalLevelStyle.GAUGE
+            desqueezeEnabled.value = true
+            desqueezeRatio = LocalDesqueezeRatio.X165
+            desqueezeOrientation = LocalDesqueezeOrientation.VERTICAL
         }
 
         val restored = OperatorSettings(store)
+        assertEquals(LocalFramingGuideFamily.SOCIAL, restored.guideFamily)
+        assertEquals(
+            setOf(LocalFramingAspectRatio.RATIO_9_16, LocalFramingAspectRatio.RATIO_1_1),
+            restored.selectedGuideRatios,
+        )
+        assertTrue(restored.guidesVisible.value)
+        assertTrue(restored.guideMaskEnabled.value)
+        assertTrue(restored.localGridVisible.value)
         assertTrue(restored.ruleOfThirdsEnabled.value)
+        assertTrue(restored.phiGridEnabled.value)
+        assertTrue(restored.diagonalGridEnabled.value)
         assertTrue(restored.centerCrosshairEnabled.value)
         assertTrue(restored.levelAssistEnabled.value)
-        assertEquals(LocalFramingGuide.CINEMA_239, restored.framingGuide)
-        assertEquals(LocalDesqueezePresentation.X165, restored.desqueezePresentation)
         assertEquals(LocalLevelStyle.GAUGE, restored.levelStyle)
+        assertTrue(restored.desqueezeEnabled.value)
+        assertEquals(LocalDesqueezeRatio.X165, restored.desqueezeRatio)
+        assertEquals(LocalDesqueezeOrientation.VERTICAL, restored.desqueezeOrientation)
         assertTrue(restored.localFramingAssistConfiguration.accessibilitySummary.contains("unchanged"))
+    }
+
+    @Test
+    fun `framing toolbar actions seed and toggle only local presentation controls`() {
+        val settings = OperatorSettings(store)
+
+        settings.toggleLocalFramingTool(AssistTool.GUIDES)
+        assertTrue(settings.localFramingAssistConfiguration.drawsGuides)
+        assertEquals(setOf(LocalFramingAspectRatio.RATIO_239), settings.selectedGuideRatios)
+
+        settings.toggleLocalFramingTool(AssistTool.GRID)
+        assertTrue(settings.localFramingAssistConfiguration.drawsGrid)
+        assertTrue(settings.ruleOfThirdsEnabled.value)
+
+        settings.toggleLocalFramingTool(AssistTool.CROSS)
+        settings.toggleLocalFramingTool(AssistTool.DESQ)
+        assertTrue(settings.centerCrosshairEnabled.value)
+        assertTrue(settings.desqueezeEnabled.value)
+
+        settings.toggleLocalFramingTool(AssistTool.GUIDES)
+        assertFalse(settings.localFramingAssistConfiguration.drawsGuides)
+        assertEquals(setOf(LocalFramingAspectRatio.RATIO_239), settings.selectedGuideRatios)
     }
 
     @Test
@@ -215,16 +268,44 @@ class OperatorSettingsTest {
     }
 
     @Test
-    fun `malformed local framing selections safely fall back to off`() {
+    fun `legacy single framing selections migrate without changing camera grid state`() {
         store.edit()
-            .putString("assist.local.framingGuide.v1", "NOT_A_GUIDE")
-            .putString("assist.local.desqueezePresentation.v1", "NOT_A_PRESENTATION")
+            .putBoolean("assist.local.ruleOfThirds", true)
+            .putString("assist.local.framingGuide.v1", "CINEMA_239")
+            .putString("assist.local.desqueezePresentation.v1", "X165")
+            .apply()
+
+        val restored = OperatorSettings(store)
+        assertTrue(restored.localGridVisible.value)
+        assertTrue(restored.guidesVisible.value)
+        assertEquals(setOf(LocalFramingAspectRatio.RATIO_239), restored.selectedGuideRatios)
+        assertTrue(restored.desqueezeEnabled.value)
+        assertEquals(LocalDesqueezeRatio.X165, restored.desqueezeRatio)
+        assertEquals(LocalDesqueezeOrientation.HORIZONTAL, restored.desqueezeOrientation)
+
+        val widescreenStore = TestSharedPreferences()
+        widescreenStore.edit()
+            .putString("assist.local.framingGuide.v1", "WIDESCREEN_16_9")
+            .apply()
+        assertEquals(
+            setOf(LocalFramingAspectRatio.RATIO_16_9),
+            OperatorSettings(widescreenStore).selectedGuideRatios,
+        )
+    }
+
+    @Test
+    fun `malformed local framing selections safely fall back to inactive defaults`() {
+        store.edit()
+            .putStringSet("assist.local.guides.ratios.v2", linkedSetOf("NOT_A_GUIDE"))
+            .putString("assist.local.desqueeze.ratio.v2", "NOT_A_PRESENTATION")
+            .putString("assist.local.desqueeze.orientation.v2", "NOT_AN_AXIS")
             .putString("assist.local.levelStyle.v1", "NOT_A_LEVEL_STYLE")
             .apply()
 
         val restored = OperatorSettings(store)
-        assertEquals(LocalFramingGuide.OFF, restored.framingGuide)
-        assertEquals(LocalDesqueezePresentation.OFF, restored.desqueezePresentation)
+        assertTrue(restored.selectedGuideRatios.isEmpty())
+        assertEquals(LocalDesqueezeRatio.X100, restored.desqueezeRatio)
+        assertEquals(LocalDesqueezeOrientation.HORIZONTAL, restored.desqueezeOrientation)
         assertEquals(LocalLevelStyle.HORIZON, restored.levelStyle)
     }
 

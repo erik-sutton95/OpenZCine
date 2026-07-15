@@ -755,7 +755,8 @@ fun MonitorScreen(
                     LiveFeedView(
                         monitorFrameSource,
                         Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = localFraming.desqueezePresentation.horizontalPresentationScale
+                            scaleX = localFraming.horizontalPresentationScale
+                            scaleY = localFraming.verticalPresentationScale
                         },
                         onFrame = glass::submit,
                         presentationState = liveFeedPresentation,
@@ -776,6 +777,7 @@ fun MonitorScreen(
                 LocalFramingAssistOverlay(
                     configuration = localFraming,
                     cleanMode = isClean,
+                    presentationState = liveFeedPresentation,
                 )
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,
@@ -877,6 +879,8 @@ fun MonitorScreen(
                                     assist,
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     visibleTools = operatorSettings.visibleAssistToolbarTools,
+                                    framingConfiguration = localFraming,
+                                    onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
                                 )
                             }
@@ -1097,6 +1101,8 @@ private fun PortraitChrome(
                     ZoneFrame(strip.x + 12f, strip.y + 4f, strip.width - 24f, strip.height - 8f),
                 ).alpha(if (locked) 0.4f else 1f),
                 visibleTools = operatorSettings.visibleAssistToolbarTools,
+                framingConfiguration = operatorSettings.localFramingAssistConfiguration,
+                onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                 hapticsEnabled = operatorSettings.hapticsEnabled.value,
             )
         }

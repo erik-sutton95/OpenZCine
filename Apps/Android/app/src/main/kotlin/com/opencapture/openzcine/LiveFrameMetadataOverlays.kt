@@ -178,22 +178,25 @@ internal fun liveGaugeSeats(
 }
 
 /**
- * Computes the visual feed rectangle after the monitor's horizontal
- * de-squeeze transform. The input is the same integer aspect-fit rectangle
+ * Computes the visual feed rectangle after the monitor's local de-squeeze
+ * transform. The input is the same integer aspect-fit rectangle
  * used by [LiveFeedView], never the broader monitor zone map.
  */
 internal fun liveOverlayFeedRect(
     content: LiveFeedContentRect,
     horizontalPresentationScale: Float,
+    verticalPresentationScale: Float = 1f,
 ): LiveOverlayRect? {
     if (horizontalPresentationScale <= 0f || !horizontalPresentationScale.isFinite()) return null
+    if (verticalPresentationScale <= 0f || !verticalPresentationScale.isFinite()) return null
     val scaledWidth = content.width * horizontalPresentationScale
-    if (scaledWidth <= 0f || content.height <= 0) return null
+    val scaledHeight = content.height * verticalPresentationScale
+    if (scaledWidth <= 0f || scaledHeight <= 0f) return null
     return LiveOverlayRect(
         left = content.left + (content.width - scaledWidth) / 2f,
-        top = content.top.toFloat(),
+        top = content.top + (content.height - scaledHeight) / 2f,
         width = scaledWidth,
-        height = content.height.toFloat(),
+        height = scaledHeight,
     )
 }
 
@@ -368,8 +371,8 @@ internal fun LiveFrameMetadataOverlay(
             content?.let {
                 liveOverlayFeedRect(
                     content = it,
-                    horizontalPresentationScale =
-                        configuration.desqueezePresentation.horizontalPresentationScale,
+                    horizontalPresentationScale = configuration.horizontalPresentationScale,
+                    verticalPresentationScale = configuration.verticalPresentationScale,
                 )
             }
         if (feed != null) {

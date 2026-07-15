@@ -176,11 +176,12 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   indicator stays explicitly `NO DATA`. The debug feed is the only synthetic source and expands
   the panel to visibly say `DEBUG FIXTURE — NOT CAMERA AUDIO`; release builds cannot enable that
   feed. This is camera-header metering, not a phone-audio or decoded-playback tap.
-- **Local framing assists:** Operator Setup → View Assist persists a monitor-only rule-of-thirds
-  grid, centre crosshair, 2.39:1 / 16:9 delivery-frame guide, and horizontal anamorphic
-  presentation choice. `FramingAssists.kt` composes them inside the existing shared-core feed
-  zone; clean output retains delivery framing and de-squeeze presentation while hiding the busier
-  grid and crosshair. These controls are explicitly local — they never write Nikon's camera-owned
+- **Local framing assists:** Operator Setup → View Assist persists monitor-only, multi-select
+  Film/Social delivery frames with optional outside masking; independent thirds, phi, and diagonal
+  grids; a centre crosshair; and 1×–2× horizontal or vertical de-squeeze. `FramingAssists.kt`
+  resolves the live overlay against the decoded image's exact aspect-fit content rectangle. Clean
+  output retains delivery framing, masking, and de-squeeze while hiding the busier grids and
+  crosshair. These controls are explicitly local; they never write Nikon's camera-owned
   `GridDisplay` property.
 - **Bluetooth / hardware media remote shutter:** Operator Setup → Controls has an **off by
   default** monitor-only media-remote switch. While a connected live monitor is frontmost and the
