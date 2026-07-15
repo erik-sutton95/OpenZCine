@@ -866,7 +866,7 @@ private fun ProgressivePlayer(
         when {
             !chromeVisible -> 0f
             assistMode -> 82f
-            else -> 104f
+            else -> 118f
         }
     val analysisViewport =
         ZoneFrame(
@@ -1022,6 +1022,9 @@ private fun ProgressivePlayer(
             placementStoreName = "playbackFalseColorReferencePlacement",
             // analysisViewport already excludes playback chrome.
             bottomChromeClearance = 0f,
+            // A trailing-biased default avoids the leading waveform/parade
+            // footprint on short landscape displays; the panel remains movable.
+            defaultHorizontalFraction = 0.72f,
         )
         if (playbackAssistState.assists.audioMetersEnabled) {
             AudioMetersOverlay(
@@ -1032,6 +1035,9 @@ private fun ProgressivePlayer(
                 placementStoreName = "playbackAudioMeterPlacement",
                 // analysisViewport already excludes playback chrome.
                 bottomChromeClearance = 0f,
+                // Keep the tall meter clear of the next-clip arrow in portrait.
+                trailingEdgeGap =
+                    if (viewportWidthDp < viewportHeightDp) 70f else 10f,
             )
         }
 
