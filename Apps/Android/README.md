@@ -129,7 +129,13 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   arrangements, long-press selection, and a grid sweep gesture. The Camera source is listed through
   the facade's bounded
   `sessionListMedia`/`sessionThumbnail` (`GetObjectHandles`/`GetObjectInfo`/`GetThumb`). MOV/MP4/M4V
-  proxies open `MediaPlaybackScreen`; JPEG/PNG stills open `MediaStillViewer`, which shows the
+  proxies open `MediaPlaybackScreen`; within the current filtered result it provides previous/next
+  playable-proxy navigation, persisted favorite state, complete-cache-only native sharing,
+  play/pause/replay and ±15-second transport, throttled preview plus final precise seeking,
+  player-local mute with Media3 movie-audio focus, and 1×–4× pinch/pan. Its View Assist switch
+  applies only the already-local framing/desqueeze overlay: the Media3 Surface does not expose
+  decoded pixels or an audio tap, so LUT/false-colour/peaking/zebra, scopes, and audio meters are
+  explicitly not represented as playback effects. JPEG/PNG stills open `MediaStillViewer`, which shows the
   camera thumbnail first, progressively refreshes a decoded cache preview, and supports 1×–4×
   pinch zoom/pan. HEIF/TIFF is attempted only after its complete cache publishes; unsupported
   HEIF decoders and Nikon RAW (`NEF`/`NRW`/`DNG`) remain an explicitly labelled camera-thumbnail
