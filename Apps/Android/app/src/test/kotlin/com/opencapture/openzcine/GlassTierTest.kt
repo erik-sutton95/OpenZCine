@@ -31,6 +31,17 @@ class GlassTierTest {
         assertEquals(GlassTier.FULL, resolveTier(33, null))
     }
 
+    @Test
+    fun backdropUsesTheFeedRenderersFitAndFillTransforms() {
+        val fit = requireNotNull(glassBackdropContentRect(400f, 600f, 1_920, 1_080, false))
+        val fill = requireNotNull(glassBackdropContentRect(400f, 600f, 1_920, 1_080, true))
+
+        assertTrue(fit.top > 0)
+        assertEquals(400, fit.width)
+        assertTrue(fill.left < 0)
+        assertEquals(600, fill.height)
+    }
+
     private fun window() =
         FrameBudgetWindow(budgetNanos = 48, window = 10, maxOverBudget = 1, warmup = 2)
 

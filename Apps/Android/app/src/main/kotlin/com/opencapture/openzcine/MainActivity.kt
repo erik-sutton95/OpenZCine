@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
         val demo = DemoHarness.demoLiveFeed(intent)
         val debugAssistEffects = DemoHarness.assistEffects(intent)
         val debugScopes = DemoHarness.scopeKinds(intent)
+        val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
@@ -129,7 +130,12 @@ class MainActivity : ComponentActivity() {
                 val connectionScope = rememberCoroutineScope()
                 val savedCameraStore =
                     remember { SharedPreferencesSavedCameraStore(applicationContext) }
-                val operatorSettings = remember { OperatorSettings(applicationContext) }
+                val operatorSettings =
+                    remember {
+                        OperatorSettings(applicationContext).also { settings ->
+                            debugPortraitAspect?.let { settings.portraitFeedAspect = it }
+                        }
+                    }
                 // The app-private LUT library owns transient SAF import and Swift-packed render
                 // payloads. It is deliberately process-local; only generated selections persist.
                 val lutLibrary = remember { AndroidLutLibrary(applicationContext) }

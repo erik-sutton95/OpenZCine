@@ -9,10 +9,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -590,6 +593,102 @@ fun AssistToolbar(
         }
         ScrollChevron(leading = true, visible = leadingFade, Modifier.align(Alignment.CenterStart))
         ScrollChevron(leading = false, visible = trailingFade, Modifier.align(Alignment.CenterEnd))
+    }
+}
+
+/**
+ * Collapsible vertical assist rail used only by portrait-fill monitor mode.
+ *
+ * The caller seats this component with [portraitFillAssistRailFrame], which
+ * derives exclusively from the shared Swift feed and capture-strip zones.
+ * Tool behavior is identical to [AssistToolbar]; expanding the rail changes
+ * only local chrome and never camera state.
+ */
+@Composable
+internal fun PortraitFillAssistRail(
+    state: AssistState,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    visibleTools: List<AssistTool> = AssistTool.entries.toList(),
+    framingConfiguration: LocalFramingAssistConfiguration? = null,
+    onToggleFramingTool: (AssistTool) -> Unit = {},
+    hapticsEnabled: Boolean = true,
+    enabled: Boolean = true,
+) {
+    if (!expanded) {
+        Box(
+            modifier
+                .glass(ChromeShape)
+                .chromeClickable(enabled) { onExpandedChange(true) }
+                .semantics {
+                    contentDescription = "Open view assist rail"
+                    stateDescription = "Collapsed"
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "VIEW",
+                style = chromeStyle(9f, FontWeight.Bold, mono = true),
+                color = LiveDesign.accent,
+            )
+        }
+        return
+    }
+
+    val supportedTools =
+        if (Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable) {
+            visibleTools
+        } else {
+            visibleTools.filterNot { it in imageEffectTools }
+        }
+    val scroll = rememberScrollState()
+    val view = LocalView.current
+    Column(
+        modifier
+            .glass(ChromeShape)
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(horizontal = 4.dp, vertical = 6.dp)
+            .semantics {
+                contentDescription = "View assist rail. Swipe up for more tools."
+                stateDescription = "Expanded"
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(38.dp)
+                .chromeClickable(enabled) { onExpandedChange(false) }
+                .semantics { contentDescription = "Close view assist rail" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "VIEW",
+                style = chromeStyle(9f, FontWeight.Bold, mono = true),
+                color = LiveDesign.accent,
+            )
+        }
+        supportedTools.forEach { tool ->
+            val isFramingTool = tool in AssistTool.framingTools
+            val isOn =
+                if (isFramingTool) {
+                    framingConfiguration?.isToolEnabled(tool) ?: false
+                } else {
+                    state.isOn(tool)
+                }
+            AssistToolCell(tool, isOn, enabled, onLongClick = null) {
+                if (isFramingTool) {
+                    onToggleFramingTool(tool)
+                } else {
+                    state.toggle(tool)
+                }
+                if (hapticsEnabled) {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                }
+            }
+        }
     }
 }
 

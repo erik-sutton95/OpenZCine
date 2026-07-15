@@ -5,6 +5,7 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
+import com.opencapture.openzcine.settings.PortraitFeedAspect
 
 /**
  * Release stub — the demo harness does not exist outside debug builds. The
@@ -17,6 +18,9 @@ object DemoHarness {
 
     /** Never matched in release: the extra is read only by the debug harness. */
     const val EXTRA_SCOPES = "zc.scopes"
+
+    /** Never matched in release: the extra is read only by the debug harness. */
+    const val EXTRA_PORTRAIT_ASPECT = "zc.portraitAspect"
 
     /** Never matched in release: the extra is read only by the debug harness. */
     const val EXTRA_SESSION_HOST = "zc.session.host"
@@ -60,4 +64,8 @@ object DemoHarness {
     /** Always null: release builds cannot activate debug scope selections. */
     @Suppress("UNUSED_PARAMETER")
     fun scopeKinds(intent: Intent): List<ScopeKind>? = null
+
+    /** Always null: release builds cannot override the persisted portrait aspect. */
+    @Suppress("UNUSED_PARAMETER")
+    fun portraitFeedAspect(intent: Intent): PortraitFeedAspect? = null
 }

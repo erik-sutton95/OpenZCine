@@ -49,6 +49,35 @@ class ScopeLayoutTest {
     }
 
     @Test
+    fun `portrait fill keeps every selected scope floating in canonical order`() {
+        val selected =
+            setOf(
+                ScopeKind.HISTOGRAM,
+                ScopeKind.WAVEFORM,
+                ScopeKind.VECTORSCOPE,
+            )
+
+        assertEquals(
+            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM, ScopeKind.VECTORSCOPE),
+            displayedScopeKinds(
+                selectedScopes = selected,
+                portraitScopes = listOf(ScopeKind.HISTOGRAM),
+                isPortrait = true,
+                portraitFloating = true,
+            ),
+        )
+        assertEquals(
+            listOf(ScopeKind.HISTOGRAM),
+            displayedScopeKinds(
+                selectedScopes = selected,
+                portraitScopes = listOf(ScopeKind.HISTOGRAM),
+                isPortrait = true,
+                portraitFloating = false,
+            ),
+        )
+    }
+
+    @Test
     fun `sampler demand avoids trace or vector work unless a visible scope needs it`() {
         val lights = scopeSamplingDemand(setOf(ScopeKind.TRAFFIC_LIGHTS))
         assertTrue(lights.traces)

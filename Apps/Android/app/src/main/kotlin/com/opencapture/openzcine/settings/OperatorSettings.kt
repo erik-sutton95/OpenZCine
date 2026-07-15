@@ -13,6 +13,30 @@ import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
 
 /**
+ * Operator-selected presentation of the live feed in the portrait monitor.
+ *
+ * The stable names mirror the shared core's `PortraitFeedAspect` cases. This
+ * preference changes only the shared zone-map input and the local image crop;
+ * it never changes the camera stream or recording format.
+ */
+public enum class PortraitFeedAspect(
+    /** Whether the shared zone map and feed renderer should use fill geometry. */
+    public val fillsViewport: Boolean,
+) {
+    /** Keep the whole 16:9 image visible. */
+    FIT_16_9(false),
+
+    /** Fill the shared portrait feed zone and centre-crop the image. */
+    FILL(true),
+    ;
+
+    internal companion object {
+        fun fromStoredName(value: String?): PortraitFeedAspect? =
+            entries.firstOrNull { it.name == value }
+    }
+}
+
+/**
  * The two operator-facing delivery families used by iOS framing guides.
  *
  * This is a local monitor preference only. It does not map to Nikon's
@@ -457,6 +481,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     private val scopeAssistConfigurationState = mutableStateOf(loadScopeAssistConfiguration())
     private val streamPresetState = mutableStateOf(loadStreamPreset())
     private val qualityBiasState = mutableStateOf(loadQualityBias())
+    private val portraitFeedAspectState = mutableStateOf(loadPortraitFeedAspect())
 
     /** Requested preview-size profile, resolved by Swift before live view starts. */
     public var streamPreset: LiveViewStreamPreset
@@ -472,6 +497,19 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         set(new) {
             qualityBiasState.value = new
             preferences.edit().putString(QUALITY_BIAS_KEY, new.name).apply()
+        }
+
+    /**
+     * Portrait feed fit/fill choice, persisted across monitor sessions.
+     *
+     * Compose forwards [PortraitFeedAspect.fillsViewport] to the shared Swift
+     * zone map and uses the same value for image and overlay crop resolution.
+     */
+    public var portraitFeedAspect: PortraitFeedAspect
+        get() = portraitFeedAspectState.value
+        set(new) {
+            portraitFeedAspectState.value = new
+            preferences.edit().putString(PORTRAIT_FEED_ASPECT_KEY, new.name).apply()
         }
 
     /** The family currently shown in Operator Setup; guide selection spans both families. */
@@ -1040,6 +1078,11 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         LiveViewQualityBias.fromStoredName(preferences.getString(QUALITY_BIAS_KEY, null))
             ?: LiveViewQualityBias.LATENCY
 
+    private fun loadPortraitFeedAspect(): PortraitFeedAspect =
+        PortraitFeedAspect.fromStoredName(
+            preferences.getString(PORTRAIT_FEED_ASPECT_KEY, null),
+        ) ?: PortraitFeedAspect.FIT_16_9
+
     private companion object {
         const val STORE_NAME = "openzcine.operator-settings"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
@@ -1088,6 +1131,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val SCOPE_TRAFFIC_LIGHTS_SCALE_KEY = "assist.scopes.trafficLights.scale.v1"
         const val STREAM_PRESET_KEY = "link.streamPreset.v1"
         const val QUALITY_BIAS_KEY = "link.qualityBias.v1"
+        const val PORTRAIT_FEED_ASPECT_KEY = "display.portraitFeedAspect.v1"
 
         private fun legacyScopeMeterPreference(): String =
             "assist.scopes." + "crushClipCompensation.v1"

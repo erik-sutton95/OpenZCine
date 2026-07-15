@@ -179,8 +179,8 @@ internal fun liveGaugeSeats(
 
 /**
  * Computes the visual feed rectangle after the monitor's local de-squeeze
- * transform. The input is the same integer aspect-fit rectangle
- * used by [LiveFeedView], never the broader monitor zone map.
+ * transform. The input is the same integer fit or centre-cropped fill
+ * rectangle used by [LiveFeedView], never the broader monitor zone map.
  */
 internal fun liveOverlayFeedRect(
     content: LiveFeedContentRect,
@@ -333,6 +333,7 @@ internal fun LiveFrameMetadataOverlay(
     configuration: LocalFramingAssistConfiguration,
     cleanMode: Boolean,
     isPortrait: Boolean,
+    aspectFill: Boolean = false,
     /** Local-pixel height of monitor chrome covering the feed's bottom edge. */
     gaugeBottomChromeInset: Float = 0f,
     modifier: Modifier = Modifier,
@@ -365,6 +366,7 @@ internal fun LiveFrameMetadataOverlay(
                     containerHeight = maxHeight.toPx(),
                     sourceWidth = presentationState.sourceWidth,
                     sourceHeight = presentationState.sourceHeight,
+                    aspectFill = aspectFill,
                 )
             }
         val feed =

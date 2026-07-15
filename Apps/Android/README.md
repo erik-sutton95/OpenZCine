@@ -6,13 +6,19 @@ chrome, laid out by the shared core's zone map (`SwiftCore.monitorZoneMap` →
 the live feed, top info deck, capture readout strip, the assist toolbar (wired to the
 feed-effects engine + scope panels, toggles persisted), lock/battery band, the
 record/DISP/media/settings controls with DISP 1→2→3 cycling (3 = the command dashboard),
-and the portrait fit layout (sensor rotation; the activity survives it). DISP 3 observes the
-real Swift-core property snapshot, persists its primary-tile order, and opens typed control
-pickers for ISO, shutter, iris, white balance, exposure mode, focus, and supported audio
-settings. Resolution, codec, and VR/e-VR remain read-only until camera descriptor options or
-write selectors are available. General monitor picker panels and the portrait fill aspect remain
-deferred. Without the staged Swift core the app falls back to the placeholder monitor ("No
-camera") and every unavailable command value is shown as an em dash rather than a demo value.
+and both persisted portrait feed layouts (sensor rotation; the activity survives it). A portrait
+pinch snaps between fit 16:9 and fill at the same thresholds as iOS. The selected value enters
+`SwiftCore.monitorZoneMap`, while the renderer, framing/focus/level overlays, capture-strip
+clearance, stacked scopes, and fill-only vertical assist rail all consume those returned zones and
+the same exact visible-image crop. DISP 3 observes the real Swift-core property snapshot, persists
+its primary-tile order, and opens typed control pickers for ISO, shutter, iris, white balance,
+exposure mode, focus, and supported audio settings. The same typed requests now drive anchored
+ISO/shutter/iris/focus/WB pickers from the live monitor capture surfaces. A locked, pending, or
+unreported control never becomes selectable. Resolution, codec, and VR/e-VR remain read-only until
+camera descriptor options or write selectors are available. Without the staged Swift core the app
+falls back to the placeholder monitor ("No camera") and every unavailable camera value is shown as
+an em dash rather than a demo value. Debug portrait verification can seed the persisted state with
+`--es zc.portraitAspect fit|fill`.
 
 Android branding is mechanically derived from the iOS asset catalog, which is the source of truth:
 `ios/Runner/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` supplies every normal, round, and
@@ -149,7 +155,8 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   soak with a supported Nikon camera; no generic `WARNING` bit is treated as overheating.
 - **Live focus + level metadata:** optional AF/subject boxes and virtual-horizon angles stay paired
   with the JPEG frame through the Swift/JNI `LiveFrameSource` seam, so Compose draws them against
-  the exact aspect-fit, locally de-squeezed feed rect rather than the larger monitor zone. View
+  the exact fit or centre-cropped fill, locally de-squeezed feed rect rather than the larger
+  monitor zone. View
   Assist offers Horizon and two-axis Gauge styles. A valid camera level always wins; only when it
   is absent does the monitor fall back to a visibly and accessibly labelled phone source:
   `DEVICE GRAVITY` for Android's fused gravity sensor or `DEVICE TILT` for a normalized low-pass
@@ -228,7 +235,7 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
 - **Local framing assists:** Operator Setup → View Assist persists monitor-only, multi-select
   Film/Social delivery frames with optional outside masking; independent thirds, phi, and diagonal
   grids; a centre crosshair; and 1×–2× horizontal or vertical de-squeeze. `FramingAssists.kt`
-  resolves the live overlay against the decoded image's exact aspect-fit content rectangle. Clean
+  resolves the live overlay against the decoded image's exact fit/fill content rectangle. Clean
   output retains delivery framing, masking, and de-squeeze while hiding the busier grids and
   crosshair. These controls are explicitly local; they never write Nikon's camera-owned
   `GridDisplay` property.

@@ -128,14 +128,22 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   false color, 3D monitor LUT display, live audio meters.
 - **Android live focus and virtual-horizon parity** (OPE-58, in review) — carry camera-origin
   AF/subject boxes and virtual-horizon angles through the Swift/JNI frame seam, render them over
-  the exact aspect-fit feed rect, and offer Horizon/Gauge level styles with an explicitly labelled
+  the exact rendered fit/fill feed rect, and offer Horizon/Gauge level styles with an explicitly labelled
   device-tilt fallback when a frame has no reliable camera level (direct gravity sensor
   where available; normalized low-pass accelerometer approximation otherwise). Physical Nikon validation
   remains required; debug-fixture metadata is never presented as camera data.
 - **Android advanced framing-assist parity** (OPE-59, in review): local multi-select Film/Social
   delivery frames with inverse-union masking, independent thirds/phi/diagonal grids, centre
   crosshair, and horizontal/vertical de-squeeze. Live-monitor assists resolve against the same
-  exact aspect-fit content rect as focus and horizon, and never change Nikon Grid Display.
+  exact rendered fit/fill content rect as focus and horizon, and never change Nikon Grid Display.
+- **Android monitor picker and portrait-fill parity** (OPE-62, in review): persist the iOS fit 16:9
+  versus fill portrait choice, forward it into the shared Swift zone map, centre-crop the feed and
+  every feed-aligned overlay through one content rectangle, and seat fill capture/assist chrome
+  from shared zones. Live ISO, shutter, iris, focus, and white-balance pickers reuse only typed
+  requests already accepted by the CameraSession/Swift command seam; descriptor-dependent
+  resolution and codec controls remain read-only. **[VERIFY-ON-HW]** Confirm picker writes and the
+  tightest fit/fill portrait plus landscape states against a supported Nikon body and inspect all
+  four screen edges on the Android hardware floor.
 - **Android monitor feed texture parity** (OPE-72, to do) — mirror iOS's feed-local vignette and
   deterministic static grain after the camera frame/effect pipeline, clipped to the visible image
   without affecting clean-source analysis, framing/focus/horizon geometry, or monitor chrome.
