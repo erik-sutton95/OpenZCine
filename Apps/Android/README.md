@@ -224,6 +224,11 @@ squircle, and themed launcher masks retain the mark rather than cropping it.
   from the live monitor and applies LUT, false colour, peaking, zebra, framing/desqueeze, and
   false-colour reference overlays to Media3's `TextureView`. Waveform and vectorscope panels
   sample the decoded texture before those display effects, preserving clean-source analysis.
+  Tapping a toolbar tool still toggles only playback visibility. Long-pressing a configurable tool
+  opens a compact panel anchored above that toolbar, with outside-tap and Back dismissal plus
+  TalkBack long-click semantics. The panels reuse the live operator's LUT, false-colour, peaking,
+  zebra, scope, and framing configuration without copying persistence; audio remains tap-only
+  because the iOS playback meter has no operator options.
   A passthrough Media3 PCM processor meters decoded movie audio through the shared Swift dBFS
   ballistics and continues metering when only player output is muted. JPEG/PNG stills open
   `MediaStillViewer`, which shows the
