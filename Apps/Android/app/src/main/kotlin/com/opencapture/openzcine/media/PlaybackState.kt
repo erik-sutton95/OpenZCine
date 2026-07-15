@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import androidx.media3.common.Player
 import kotlin.math.max
 
 /**
@@ -76,6 +77,10 @@ internal fun playbackShareState(
         state == MediaCacheState.ACTIVE -> PlaybackShareState.BUFFERING
         else -> PlaybackShareState.UNAVAILABLE
     }
+
+/** Projects Media3's current state into the replay affordance without latching old end events. */
+internal fun requiresPlaybackReplay(playbackState: Int): Boolean =
+    playbackState == Player.STATE_ENDED
 
 /** Screen-space pan used for playback zoom without leaking Compose geometry into tests. */
 internal data class PlaybackPan(

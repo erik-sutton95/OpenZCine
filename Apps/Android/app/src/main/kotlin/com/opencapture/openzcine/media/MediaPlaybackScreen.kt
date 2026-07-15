@@ -45,7 +45,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -73,13 +72,16 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.compose.PlayerSurface
+import androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.LocalFramingAssistOverlay
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.settings.LocalDesqueezePresentation
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
+import com.opencapture.openzcine.settings.LocalFramingGuide
 import kotlin.math.max
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -122,7 +124,7 @@ fun MediaPlaybackScreen(
     framingConfiguration: LocalFramingAssistConfiguration,
     onToggleFavorite: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
-) {
+): Unit {
     var activeClip by remember(initialClip.libraryKey(cameraID)) { mutableStateOf(initialClip) }
     val playableClips = remember(filteredClips) { PlaybackNavigation.playableClips(filteredClips) }
     val previous = PlaybackNavigation.adjacent(playableClips, activeClip, direction = -1)
@@ -528,7 +530,10 @@ private fun ProgressivePlayer(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
                     playbackState = state
-                    if (state == Player.STATE_ENDED) reachedEnd = true
+                    // Seeking away from the end may emit a delayed non-ended state after the
+                    // slider has already reset this flag. Mirror Media3 rather than latching the
+                    // old end event so the primary button is Play again at a real seek position.
+                    reachedEnd = requiresPlaybackReplay(state)
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -562,24 +567,37 @@ private fun ProgressivePlayer(
     Box(
         Modifier.fillMaxSize()
             .clipToBounds()
-            .onSizeChanged { viewport = it }
-            .transformable(transformState)
-            .pointerInput(zoom, scrubbing, reachedEnd) {
-                detectTapGestures(
-                    onTap = { if (!scrubbing) togglePlayback() },
-                    onDoubleTap = { resetZoom() },
-                )
-            },
+            .onSizeChanged { viewport = it },
         contentAlignment = Alignment.Center,
     ) {
         PlayerSurface(
             player = player,
+            // TextureView is required here: SurfaceView escapes Compose's layer ordering when
+            // transformed, which can put a zoomed frame above playback chrome on real devices.
+            // TextureView remains composited beneath the overlay while preserving Media3 playback.
+            surfaceType = SURFACE_TYPE_TEXTURE_VIEW,
             modifier =
-                Modifier.fillMaxSize().graphicsLayer {
-                    scaleX = zoom * horizontalPresentationScale
-                    scaleY = zoom
-                    translationX = pan.x
-                    translationY = pan.y
+                Modifier.fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = zoom * horizontalPresentationScale
+                        scaleY = zoom
+                        translationX = pan.x
+                        translationY = pan.y
+                    },
+        )
+        // Only the unobstructed video region owns frame gestures. Media3's surface and Compose
+        // chrome overlap visually, so attaching a pointer handler to either full-screen layer can
+        // still share a stream with a button beneath the same touch coordinate. The later-drawn
+        // chrome owns its hit targets; these insets keep the recognizer away from their edges.
+        Box(
+            Modifier.fillMaxSize()
+                .padding(start = 76.dp, top = 64.dp, end = 76.dp, bottom = 128.dp)
+                .transformable(transformState)
+                .pointerInput(zoom, scrubbing, reachedEnd) {
+                    detectTapGestures(
+                        onTap = { if (!scrubbing) togglePlayback() },
+                        onDoubleTap = { resetZoom() },
+                    )
                 },
         )
         if (framingAssistsVisible) {
@@ -621,6 +639,7 @@ private fun ProgressivePlayer(
                         if (!scrubbing) {
                             wasPlayingBeforeScrub = player.isPlaying
                             player.pause()
+                            player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
                             scrubbing = true
                         }
                         val target = clampScrub(value)
@@ -632,6 +651,7 @@ private fun ProgressivePlayer(
                     },
                     onValueChangeFinished = {
                         val target = clampScrub(scrubPosition)
+                        player.setSeekParameters(SeekParameters.EXACT)
                         player.seekTo(target)
                         position = target
                         scrubbing = false
@@ -697,7 +717,11 @@ private fun ProgressivePlayer(
             }
             if (framingAssistsVisible) {
                 Text(
-                    "Playback framing only. Color looks, scopes, and meters require decoded playback inputs.",
+                    if (framingConfiguration.hasPlaybackFramingOverlay) {
+                        "Playback framing only. Color looks, scopes, and meters require decoded playback inputs."
+                    } else {
+                        "No local framing aids selected. Configure grid, guide, or de-squeeze in Operator Setup."
+                    },
                     style = chromeStyle(9.5f, FontWeight.Medium),
                     color = LiveDesign.muted,
                     maxLines = 2,
@@ -707,6 +731,13 @@ private fun ProgressivePlayer(
         }
     }
 }
+
+private val LocalFramingAssistConfiguration.hasPlaybackFramingOverlay: Boolean
+    get() =
+        ruleOfThirdsEnabled ||
+            centerCrosshairEnabled ||
+            guide != LocalFramingGuide.OFF ||
+            desqueezePresentation != LocalDesqueezePresentation.OFF
 
 private fun playbackFailureMessage(
     error: PlaybackException?,

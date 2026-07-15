@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import androidx.media3.common.Player
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -63,6 +64,13 @@ class PlaybackStateTest {
             PlaybackShareState.UNAVAILABLE,
             playbackShareState(MediaCacheState.FAILED, downloadedBytes = 10L, expectedLength = 10L),
         )
+    }
+
+    @Test
+    fun `end then seek-back state removes the replay affordance`() {
+        assertEquals(true, requiresPlaybackReplay(Player.STATE_ENDED))
+        assertEquals(false, requiresPlaybackReplay(Player.STATE_BUFFERING))
+        assertEquals(false, requiresPlaybackReplay(Player.STATE_READY))
     }
 
     @Test
