@@ -53,6 +53,18 @@ class PtpIpInitiatorIdentityTest {
     }
 
     @Test
+    fun `saved profiles seed the prior Android initiator identity exactly once during upgrade`() {
+        val preferences = TestSharedPreferences()
+        val expected = "OpenZCineAndroid".encodeToByteArray()
+
+        val migrated = PtpIpInitiatorIdentity(preferences).guid(preferLegacyStaticIdentity = true)
+        val afterRelaunch = PtpIpInitiatorIdentity(preferences).guid()
+
+        assertContentEquals(expected, migrated)
+        assertContentEquals(expected, afterRelaunch)
+    }
+
+    @Test
     fun `malformed persisted GUID is replaced and then reused`() {
         val preferences = TestSharedPreferences()
         preferences.edit().putString(PtpIpInitiatorIdentity.GUID_KEY, "not-a-guid").commit()

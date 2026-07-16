@@ -22,7 +22,7 @@ public enum class PairingPath {
 
 /**
  * Guided wizard steps, mirroring iOS `FirstPairWizardStep`: permissions →
- * choose path → prepare the camera → set up the network → (hotspot only)
+ * choose path → prepare the camera → set up the network → (hotspot and USB-C)
  * find and pair. Camera-AP pairing ends at [NETWORK] — joining the camera's
  * Wi-Fi is the last operator action; connect runs against the fixed AP host.
  */
@@ -62,7 +62,7 @@ public data class PairingFlowState(
             if (!skipsPermissions) add(PairingStep.PERMISSIONS)
             add(PairingStep.CHOOSE_PATH)
             add(PairingStep.PREPARE)
-            if (path != PairingPath.USB_C) add(PairingStep.NETWORK)
+            add(PairingStep.NETWORK)
             if (path == PairingPath.PHONE_HOTSPOT || path == PairingPath.USB_C) {
                 add(PairingStep.DISCOVER)
             }

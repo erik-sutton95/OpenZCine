@@ -29,23 +29,33 @@ public class PtpIpInitiatorIdentity internal constructor(
      * Returns the stable 16-byte PTP-IP initiator GUID for this app install.
      *
      * A missing or malformed stored value is replaced atomically for this
-     * process with a new cryptographically strong GUID. Persistence uses
-     * [SharedPreferences.Editor.commit], so this function never returns a
-     * newly generated identity unless it was synchronously written first.
+     * process with a new cryptographically strong GUID, unless
+     * [preferLegacyStaticIdentity] is true for a one-time upgrade carrying
+     * already-saved Android camera profiles. That migration preserves profiles
+     * created by the prior static Android initiator instead of silently
+     * stranding them. Persistence uses [SharedPreferences.Editor.commit], so
+     * this function never returns a newly generated or migrated identity unless
+     * it was synchronously written first.
      *
      * @throws PtpIpInitiatorIdentityPersistenceException when a replacement
      * GUID could not be committed.
      */
-    public fun guid(): ByteArray =
+    public fun guid(preferLegacyStaticIdentity: Boolean = false): ByteArray =
         synchronized(PERSISTENCE_LOCK) {
-            PtpIpInitiatorGuidCodec.decode(readStoredGuid())?.copyOf() ?: persistNewGuid()
+            PtpIpInitiatorGuidCodec.decode(readStoredGuid())?.copyOf()
+                ?: persistGuid(
+                    if (preferLegacyStaticIdentity) {
+                        LEGACY_STATIC_ANDROID_GUID
+                    } else {
+                        PtpIpInitiatorGuidCodec.generate()
+                    },
+                )
         }
 
     private fun readStoredGuid(): String? =
         runCatching { preferences.getString(GUID_KEY, null) }.getOrNull()
 
-    private fun persistNewGuid(): ByteArray {
-        val guid = PtpIpInitiatorGuidCodec.generate()
+    private fun persistGuid(guid: ByteArray): ByteArray {
         val persisted =
             preferences.edit().putString(GUID_KEY, PtpIpInitiatorGuidCodec.encode(guid)).commit()
         if (!persisted) {
@@ -61,6 +71,7 @@ public class PtpIpInitiatorIdentity internal constructor(
         const val GUID_KEY = "guid-v1"
 
         private val PERSISTENCE_LOCK = Any()
+        private val LEGACY_STATIC_ANDROID_GUID: ByteArray = "OpenZCineAndroid".encodeToByteArray()
     }
 }
 

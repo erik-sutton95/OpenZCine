@@ -2,6 +2,8 @@ package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraConnectionPhase
+import com.opencapture.openzcine.core.CameraConnectionProgress
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraIdentity
@@ -38,11 +40,42 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 
+private val legacyPtpIpInitiatorGuid: ByteArray = "OpenZCineAndroid".encodeToByteArray()
+
+/**
+ * The Nikon connection sequence selected by the Android startup flow.
+ *
+ * An unknown Wi-Fi camera must use [FIRST_TIME_PAIRING] directly. A saved
+ * profile may use [SAVED_PROFILE]; [RESTORE_PROFILE_THEN_PAIRING] is reserved
+ * for USB-C, where an app-control probe cannot disturb a Wi-Fi pairing wizard.
+ */
+public enum class PtpIpConnectionStrategy(internal val nativeValue: Int) {
+    /** Reopen a camera-side profile that already knows this Android install. */
+    SAVED_PROFILE(0),
+
+    /** Create a Nikon profile without an app-control preflight probe. */
+    FIRST_TIME_PAIRING(1),
+
+    /** Restore a profile first, then pair only when it was specifically rejected. */
+    RESTORE_PROFILE_THEN_PAIRING(2),
+}
+
 /** Injectable JNI seam for deterministic Android session lifecycle tests. */
 internal interface SwiftCoreSessionBridge {
     val isAvailable: Boolean
 
     fun connect(host: String, connectionOwner: Long, listener: SwiftCore.SessionListener)
+
+    /** Starts PTP-IP with an explicit core-owned pairing strategy and initiator GUID. */
+    fun connect(
+        host: String,
+        connectionOwner: Long,
+        connectionStrategy: PtpIpConnectionStrategy,
+        initiatorGuid: ByteArray,
+        listener: SwiftCore.SessionListener,
+    ) {
+        connect(host, connectionOwner, listener)
+    }
 
     /** Starts the same Swift session layer over a platform-owned USB byte transport. */
     fun connectUsb(
@@ -53,6 +86,18 @@ internal interface SwiftCoreSessionBridge {
         listener: SwiftCore.SessionListener,
     ) {
         listener.onFailed("USB-C camera support is unavailable in this core build.")
+    }
+
+    /** Starts USB PTP using the same strategy vocabulary as Wi-Fi PTP-IP. */
+    fun connectUsb(
+        transport: UsbPtpTransport,
+        host: String,
+        cameraNameHint: String,
+        connectionOwner: Long,
+        connectionStrategy: PtpIpConnectionStrategy,
+        listener: SwiftCore.SessionListener,
+    ) {
+        connectUsb(transport, host, cameraNameHint, connectionOwner, listener)
     }
 
     fun startEventStream(listener: SwiftCore.SessionEventListener)
@@ -83,7 +128,29 @@ internal interface SwiftCoreSessionBridge {
             connectionOwner: Long,
             listener: SwiftCore.SessionListener,
         ) {
-            SwiftCore.sessionConnect(host, connectionOwner, listener)
+            connect(
+                host = host,
+                connectionOwner = connectionOwner,
+                connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
+                initiatorGuid = legacyPtpIpInitiatorGuid,
+                listener = listener,
+            )
+        }
+
+        override fun connect(
+            host: String,
+            connectionOwner: Long,
+            connectionStrategy: PtpIpConnectionStrategy,
+            initiatorGuid: ByteArray,
+            listener: SwiftCore.SessionListener,
+        ) {
+            SwiftCore.sessionConnect(
+                host,
+                connectionOwner,
+                connectionStrategy.nativeValue,
+                initiatorGuid,
+                listener,
+            )
         }
 
         override fun connectUsb(
@@ -93,7 +160,32 @@ internal interface SwiftCoreSessionBridge {
             connectionOwner: Long,
             listener: SwiftCore.SessionListener,
         ) {
-            SwiftCore.sessionConnectUsb(transport, host, cameraNameHint, connectionOwner, listener)
+            connectUsb(
+                transport = transport,
+                host = host,
+                cameraNameHint = cameraNameHint,
+                connectionOwner = connectionOwner,
+                connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
+                listener = listener,
+            )
+        }
+
+        override fun connectUsb(
+            transport: UsbPtpTransport,
+            host: String,
+            cameraNameHint: String,
+            connectionOwner: Long,
+            connectionStrategy: PtpIpConnectionStrategy,
+            listener: SwiftCore.SessionListener,
+        ) {
+            SwiftCore.sessionConnectUsb(
+                transport,
+                host,
+                cameraNameHint,
+                connectionOwner,
+                connectionStrategy.nativeValue,
+                listener,
+            )
         }
 
         override fun startEventStream(listener: SwiftCore.SessionEventListener) {
@@ -179,12 +271,37 @@ class SwiftCoreCameraSession internal constructor(
     private val automaticallyRefreshProperties: Boolean = true,
     private val usbTransport: UsbPtpTransport? = null,
     private val cameraNameHint: String? = null,
+    private val connectionStrategy: PtpIpConnectionStrategy =
+        PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
+    initiatorGuid: ByteArray = legacyPtpIpInitiatorGuid,
 ) : CameraSession {
+    private val initiatorGuid: ByteArray = initiatorGuid.copyOf()
+
+    init {
+        require(initiatorGuid.size == INITIATOR_GUID_BYTE_COUNT) {
+            "A PTP-IP initiator GUID must contain exactly $INITIATOR_GUID_BYTE_COUNT bytes."
+        }
+    }
+
     /** Production session binding the Kotlin shell to the shared Swift facade. */
     public constructor(
         host: String,
         phaseLogger: (String, String) -> Unit = { _, _ -> },
     ) : this(host, phaseLogger, SwiftCoreSessionBridge.Production)
+
+    /** Production Wi-Fi session with an explicit Android pairing strategy and initiator GUID. */
+    public constructor(
+        host: String,
+        connectionStrategy: PtpIpConnectionStrategy,
+        initiatorGuid: ByteArray,
+        phaseLogger: (String, String) -> Unit = { _, _ -> },
+    ) : this(
+        host = host,
+        phaseLogger = phaseLogger,
+        core = SwiftCoreSessionBridge.Production,
+        connectionStrategy = connectionStrategy,
+        initiatorGuid = initiatorGuid,
+    )
 
     /** Production USB-C session using a claimed Android PTP byte transport. */
     public constructor(
@@ -200,8 +317,29 @@ class SwiftCoreCameraSession internal constructor(
         cameraNameHint = cameraNameHint,
     )
 
+    /** Production USB-C session with an explicit profile-restoration strategy. */
+    public constructor(
+        host: String,
+        cameraNameHint: String,
+        usbTransport: UsbPtpTransport,
+        connectionStrategy: PtpIpConnectionStrategy,
+        phaseLogger: (String, String) -> Unit = { _, _ -> },
+    ) : this(
+        host = host,
+        phaseLogger = phaseLogger,
+        core = SwiftCoreSessionBridge.Production,
+        usbTransport = usbTransport,
+        cameraNameHint = cameraNameHint,
+        connectionStrategy = connectionStrategy,
+    )
+
     private val _state = MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
     override val state: StateFlow<CameraSessionState> = _state.asStateFlow()
+
+    private val _connectionProgress = MutableStateFlow(CameraConnectionProgress())
+    override val connectionProgress: StateFlow<CameraConnectionProgress> =
+        _connectionProgress.asStateFlow()
+
     private val attemptLock = Any()
     private var nextAttempt = 0L
     private var activeAttempt: Long? = null
@@ -286,7 +424,9 @@ class SwiftCoreCameraSession internal constructor(
             val listener =
                 object : SwiftCore.SessionListener {
                     override fun onPhase(phase: String, detail: String) {
-                        if (isCurrentAttempt(attempt)) phaseLogger(phase, detail)
+                        if (isCurrentAttempt(attempt)) {
+                            publishNativeConnectionPhase(phase, detail)
+                        }
                     }
 
                     override fun onConnected(name: String, model: String, serialNumber: String) {
@@ -298,6 +438,8 @@ class SwiftCoreCameraSession internal constructor(
                                 ),
                             )
                         ) {
+                            _connectionProgress.value =
+                                CameraConnectionProgress(CameraConnectionPhase.CONNECTED, name)
                             ignoreLiveRecordingStateUntilNanos = 0L
                             cameraRecordingEventVersion = 0L
                             _recordingState.value = CameraRecordingState.STANDBY
@@ -318,18 +460,21 @@ class SwiftCoreCameraSession internal constructor(
                             _recordingState.value = CameraRecordingState.STANDBY
                             stopPropertyRefresh(clearSnapshot = true)
                             _latestCommandRoundTripMilliseconds.value = null
+                            _connectionProgress.value =
+                                CameraConnectionProgress(CameraConnectionPhase.FAILED, message)
                             phaseLogger("failed", message)
                         }
                     }
             }
             if (usbTransport == null) {
-                core.connect(host, connectionOwner, listener)
+                core.connect(host, connectionOwner, connectionStrategy, initiatorGuid, listener)
             } else {
                 core.connectUsb(
                     transport = usbTransport,
                     host = host,
                     cameraNameHint = cameraNameHint.orEmpty(),
                     connectionOwner = connectionOwner,
+                    connectionStrategy = connectionStrategy,
                     listener = listener,
                 )
             }
@@ -339,7 +484,9 @@ class SwiftCoreCameraSession internal constructor(
             cancelAttempt(attempt)
             throw error
         } catch (error: Exception) {
-            phaseLogger("failed", error.message ?: "Camera connection failed.")
+            val message = error.message ?: "Camera connection failed."
+            _connectionProgress.value = CameraConnectionProgress(CameraConnectionPhase.FAILED, message)
+            phaseLogger("failed", message)
             cancelAttempt(attempt)
         }
     }
@@ -550,6 +697,7 @@ class SwiftCoreCameraSession internal constructor(
                     _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
                     _latestCommandRoundTripMilliseconds.value = null
                     _state.value = CameraSessionState.Disconnected
+                    _connectionProgress.value = CameraConnectionProgress()
                 }
             }
         }
@@ -607,6 +755,7 @@ class SwiftCoreCameraSession internal constructor(
         cameraRecordingEventVersion = 0L
         _recordingState.value = CameraRecordingState.STANDBY
         stopPropertyRefresh(clearSnapshot = true)
+        _connectionProgress.value = CameraConnectionProgress(CameraConnectionPhase.FAILED, message)
         phaseLogger("eventChannelEnded", message)
     }
 
@@ -896,6 +1045,7 @@ class SwiftCoreCameraSession internal constructor(
         const val MOVIE_RECORD_INTERRUPTED: Int = 0xC105
         const val MOVIE_RECORD_COMPLETE: Int = 0xC108
         const val MOVIE_RECORD_STARTED: Int = 0xC10A
+        const val INITIATOR_GUID_BYTE_COUNT: Int = 16
     }
 
     private fun beginAttempt(): Long? {
@@ -906,6 +1056,8 @@ class SwiftCoreCameraSession internal constructor(
                 activeAttempt = nextAttempt
                 activeConnectionOwner = nextConnectionOwner.incrementAndGet()
                 _state.value = CameraSessionState.Connecting
+                _connectionProgress.value =
+                    CameraConnectionProgress(CameraConnectionPhase.HANDSHAKING)
                 nextAttempt
             }
         if (attempt != null) {
@@ -961,6 +1113,7 @@ class SwiftCoreCameraSession internal constructor(
             activeAttempt = null
             activeConnectionOwner = null
             _state.value = CameraSessionState.Disconnected
+            _connectionProgress.value = CameraConnectionProgress()
             connectionOwner
         }
 
@@ -972,6 +1125,7 @@ class SwiftCoreCameraSession internal constructor(
                 activeAttempt = null
                 activeConnectionOwner = null
                 _state.value = CameraSessionState.Disconnected
+                _connectionProgress.value = CameraConnectionProgress()
                 owner
             }
         if (connectionOwner != null) {
@@ -984,5 +1138,22 @@ class SwiftCoreCameraSession internal constructor(
                 }
             }
         }
+    }
+
+    /** Publishes only stable facade phase names across the Kotlin/Swift boundary. */
+    private fun publishNativeConnectionPhase(phase: String, detail: String) {
+        val mapped =
+            when (phase) {
+                "handshaking" -> CameraConnectionPhase.HANDSHAKING
+                "pairing" -> CameraConnectionPhase.PAIRING
+                "confirmOnCamera" -> CameraConnectionPhase.CONFIRM_ON_CAMERA
+                "connected" -> CameraConnectionPhase.CONNECTED
+                "failed" -> CameraConnectionPhase.FAILED
+                else -> null
+            }
+        if (mapped != null) {
+            _connectionProgress.value = CameraConnectionProgress(mapped, detail)
+        }
+        phaseLogger(phase, detail)
     }
 }
