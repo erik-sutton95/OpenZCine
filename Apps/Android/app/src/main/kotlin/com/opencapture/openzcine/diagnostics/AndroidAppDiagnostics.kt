@@ -102,6 +102,15 @@ internal class AndroidAppDiagnostics private constructor(
         runCatching { store.record(event) }
     }
 
+    /**
+     * The opt-in anonymous-report activity log, reduced to closed event names.
+     *
+     * This is intentionally not [createReport]: it has no timestamps, Android
+     * exit summaries, device details, or free-form local diagnostics content.
+     */
+    fun privacyFilteredActivityLog(): List<String> =
+        runCatching { store.privacyFilteredActivityLog() }.getOrDefault(emptyList())
+
     fun createReport(): File? =
         runCatching {
             val readyDirectory = File(context.cacheDir, DIAGNOSTICS_READY_RELATIVE_PATH)

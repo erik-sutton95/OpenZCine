@@ -19,6 +19,7 @@ import com.opencapture.openzcine.pairing.PairingPath
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -52,6 +53,13 @@ import kotlinx.coroutines.flow.flow
  *   --es zc.demo.usbState empty|needs-permission|denied|ready
  * ```
  *
+ * Open standalone System settings for a short, deterministic route into the
+ * anonymous bug-report form:
+ * ```
+ * adb shell am start -n com.opencapture.openzcine/.MainActivity \
+ *   --es zc.demo.settings system
+ * ```
+ *
  * Feed effects (needs API 33 + the staged Swift core; combine freely):
  * ```
  * --es zc.assist lut,falsecolor,peaking,zebra   which effects are on
@@ -83,6 +91,9 @@ object DemoHarness {
 
     /** String intent extra selecting the pairing wizard state to script. */
     const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
+
+    /** String intent extra selecting a standalone settings tab for visual verification. */
+    private const val EXTRA_SETTINGS_TAB = "zc.demo.settings"
 
     /** String intent extra selecting the scripted pairing path (`ap`, `hotspot`, or `usb`). */
     const val EXTRA_PAIRING_PATH = "zc.demo.pairingPath"
@@ -169,6 +180,13 @@ object DemoHarness {
 
     internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? =
         LiveViewGuideStep.debugValue(intent.getStringExtra(EXTRA_LIVE_GUIDE_STEP))
+
+    /** Debug-only standalone settings selector; release builds always return null. */
+    internal fun settingsTab(intent: Intent): OperatorSettingsTab? =
+        when (intent.getStringExtra(EXTRA_SETTINGS_TAB)) {
+            "system" -> OperatorSettingsTab.SYSTEM
+            else -> null
+        }
 
     /**
      * Fails the first Gallery write after MediaStore insertion, then permits a

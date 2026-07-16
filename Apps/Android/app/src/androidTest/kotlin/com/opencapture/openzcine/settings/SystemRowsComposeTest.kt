@@ -27,14 +27,16 @@ class SystemRowsComposeTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
-    fun systemLinksAndDiagnosticsInvokeOnlyTheirTypedNativeActions() {
+    fun reportProblemUsesTheNativeCallbackWhileFeatureRemainsAnExternalAction() {
         val actions = RecordingSystemSettingsActions()
         val controller = freshController("system-links")
+        var report = 0
         compose.setContent {
             OpenZCineTheme {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     SystemRows(
                         actions = actions,
+                        onReportProblem = { report += 1 },
                         guideController = controller,
                         onShowGuideNow = null,
                         onShowGuideOnNextRealFrame = controller::replayOnNextRealFrame,
@@ -62,7 +64,7 @@ class SystemRowsComposeTest {
 
         compose.runOnIdle {
             assertEquals(1, actions.support)
-            assertEquals(1, actions.bug)
+            assertEquals(1, report)
             assertEquals(1, actions.feature)
             assertEquals(1, actions.diagnostics)
             assertEquals(1, actions.source)
@@ -80,6 +82,7 @@ class SystemRowsComposeTest {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     SystemRows(
                         actions = RecordingSystemSettingsActions(),
+                        onReportProblem = {},
                         guideController = controller,
                         onShowGuideNow = { replayNow += 1 },
                         onShowGuideOnNextRealFrame = controller::replayOnNextRealFrame,
@@ -88,7 +91,7 @@ class SystemRowsComposeTest {
             }
         }
 
-        compose.onNodeWithText("Will show on the first real frame").assertIsDisplayed()
+        compose.onNodeWithText("Will show on the first real frame").performScrollTo().assertIsDisplayed()
         assertTrue(
             compose.onAllNodesWithContentDescription("Show Live View Guide Now")
                 .fetchSemanticsNodes()
@@ -115,8 +118,8 @@ class SystemRowsComposeTest {
 
     private class RecordingSystemSettingsActions : SystemSettingsActions {
         var support = 0
-        var bug = 0
         var feature = 0
+        var security = 0
         var source = 0
         var privacy = 0
         var terms = 0
@@ -124,9 +127,11 @@ class SystemRowsComposeTest {
 
         override fun openSupport(): Boolean = true.also { support += 1 }
 
-        override fun reportBug(): Boolean = true.also { bug += 1 }
-
         override fun requestFeature(): Boolean = true.also { feature += 1 }
+
+        override fun openGitHubBugReport(): Boolean = true
+
+        override fun openSecurityAdvisory(): Boolean = true.also { security += 1 }
 
         override fun openSource(): Boolean = true.also { source += 1 }
 

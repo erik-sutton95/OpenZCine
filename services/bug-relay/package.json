@@ -1,0 +1,14 @@
+{
+  "name": "@openzcine/bug-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Anonymous OpenZCine bug-report relay for GitHub Issues.",
+  "scripts": {
+    "test": "node --test",
+    "check": "npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

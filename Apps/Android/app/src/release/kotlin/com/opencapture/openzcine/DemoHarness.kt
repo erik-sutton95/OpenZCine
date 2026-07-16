@@ -6,6 +6,7 @@ import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.OperatorSettingsTab
 
 /**
  * Release stub — the demo harness does not exist outside debug builds. The
@@ -34,6 +35,10 @@ object DemoHarness {
     /** Release builds cannot force a guide over synthetic content. */
     @Suppress("UNUSED_PARAMETER")
     internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? = null
+
+    /** Release builds cannot force a standalone settings surface. */
+    @Suppress("UNUSED_PARAMETER")
+    internal fun settingsTab(intent: Intent): OperatorSettingsTab? = null
 
     /** Release builds cannot auto-open debug surfaces. */
     @Suppress("UNUSED_PARAMETER")

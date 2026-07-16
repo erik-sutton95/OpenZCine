@@ -122,6 +122,9 @@ import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioNetworkState
+import com.opencapture.openzcine.diagnostics.BugReportPathChooser
+import com.opencapture.openzcine.diagnostics.BugReportScreen
+import com.opencapture.openzcine.diagnostics.BugReportSubmitter
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
@@ -162,6 +165,11 @@ public enum class OperatorSettingsTab(
     SYSTEM(R.string.settings_tab_system, R.string.settings_tab_system, R.string.settings_rail_system, R.string.settings_subtitle_system, R.string.settings_pill_app),
 }
 
+private enum class BugReportDestination {
+    CHOOSER,
+    ANONYMOUS,
+}
+
 /**
  * The full-screen Operator Settings surface — a 1:1 structural port of the
  * iOS `OperatorSettingsPanel` (ios/Runner/MonitorPanels.swift): floating close
@@ -188,6 +196,8 @@ internal fun OperatorSettingsScreen(
     onDisconnect: (() -> Unit)? = null,
     onReconnect: (() -> Unit)? = null,
     systemSettingsActions: SystemSettingsActions,
+    bugReportSubmitter: BugReportSubmitter,
+    bugReportActivityLogProvider: () -> List<String> = { emptyList() },
     liveViewGuideController: LiveViewGuideController,
     onShowGuideNow: (() -> Unit)? = null,
     onShowGuideOnNextRealFrame: () -> Unit,
@@ -235,61 +245,46 @@ internal fun OperatorSettingsScreen(
         }
     }
     var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
+    var bugReportDestination by remember { mutableStateOf<BugReportDestination?>(null) }
 
-    BoxWithConstraints(
-        Modifier.fillMaxSize()
-            .background(LiveDesign.background)
-            // A hit-testable node at the root keeps every pointer event on
-            // this surface — without it, taps between rows would fall through
-            // to the monitor chrome's buttons underneath (Compose siblings
-            // below stay hit-testable wherever the overlay itself has no
-            // pointer node).
-            .pointerInput(Unit) { detectTapGestures {} }
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-    ) {
-        val compact = maxWidth < 600.dp
-        Column(
+    when (bugReportDestination) {
+        BugReportDestination.CHOOSER ->
+            BugReportPathChooser(
+                onChooseAnonymous = { bugReportDestination = BugReportDestination.ANONYMOUS },
+                onContinueWithGitHub = systemSettingsActions::openGitHubBugReport,
+                onClose = { bugReportDestination = null },
+            )
+        BugReportDestination.ANONYMOUS ->
+            BugReportScreen(
+                submitter = bugReportSubmitter,
+                activityLogProvider = bugReportActivityLogProvider,
+                onOpenSecurityAdvisory = systemSettingsActions::openSecurityAdvisory,
+                onClose = { bugReportDestination = null },
+            )
+        null ->
+            BoxWithConstraints(
             Modifier.fillMaxSize()
-                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .background(LiveDesign.background)
+                // A hit-testable node at the root keeps every pointer event on
+                // this surface — without it, taps between rows would fall through
+                // to the monitor chrome's buttons underneath (Compose siblings
+                // below stay hit-testable wherever the overlay itself has no
+                // pointer node).
+                .pointerInput(Unit) { detectTapGestures {} }
+                .windowInsetsPadding(WindowInsets.safeDrawing)
         ) {
-            // The floating PanelCloseButton overlays this row's leading corner
-            // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
-            // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
-            SettingsHeader(session, linkHealth, compact)
-            if (compact) {
-                SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
-                SettingsContentPane(
-                    selectedTab,
-                    session,
-                    settings,
-                    assistState,
-                    mediaCacheStore,
-                    frameioController,
-                    lutLibrary,
-                    cameraInput,
-                    linkHealth,
-                    liveViewSource,
-                    activeTransportLabel,
-                    onDisconnect,
-                    onReconnect,
-                    systemSettingsActions,
-                    liveViewGuideController,
-                    onShowGuideNow,
-                    onShowGuideOnNextRealFrame,
-                    onCompletedMediaCacheCleared,
-                    onSettingToggle = toggleSetting,
-                    onAssistToggle = toggleAssist,
-                    onInteraction = emitHaptic,
-                    compact = true,
-                    modifier = Modifier.weight(1f),
-                )
-            } else {
-                Row(
-                    Modifier.fillMaxWidth().weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
+            val compact = maxWidth < 600.dp
+            Column(
+                Modifier.fillMaxSize()
+                    .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // The floating PanelCloseButton overlays this row's leading corner
+                // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
+                // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
+                SettingsHeader(session, linkHealth, compact)
+                if (compact) {
+                    SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
                     SettingsContentPane(
                         selectedTab,
                         session,
@@ -312,15 +307,49 @@ internal fun OperatorSettingsScreen(
                         onSettingToggle = toggleSetting,
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
-                        compact = false,
+                        compact = true,
+                        onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
                         modifier = Modifier.weight(1f),
                     )
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth().weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
+                        SettingsContentPane(
+                            selectedTab,
+                            session,
+                            settings,
+                            assistState,
+                            mediaCacheStore,
+                            frameioController,
+                            lutLibrary,
+                            cameraInput,
+                            linkHealth,
+                            liveViewSource,
+                            activeTransportLabel,
+                            onDisconnect,
+                            onReconnect,
+                            systemSettingsActions,
+                            liveViewGuideController,
+                            onShowGuideNow,
+                            onShowGuideOnNextRealFrame,
+                            onCompletedMediaCacheCleared,
+                            onSettingToggle = toggleSetting,
+                            onAssistToggle = toggleAssist,
+                            onInteraction = emitHaptic,
+                            compact = false,
+                            onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
+            // Floats in the very top-left corner, outside the layout flow, at the
+            // iOS metrics (leading 16, top 22).
+            Box(Modifier.padding(start = 16.dp, top = 22.dp)) { PanelCloseButton(onClick = onClose) }
         }
-        // Floats in the very top-left corner, outside the layout flow, at the
-        // iOS metrics (leading 16, top 22).
-        Box(Modifier.padding(start = 16.dp, top = 22.dp)) { PanelCloseButton(onClick = onClose) }
     }
 }
 
@@ -568,6 +597,7 @@ private fun SettingsContentPane(
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
     compact: Boolean,
+    onReportProblem: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(
@@ -669,6 +699,7 @@ private fun SettingsContentPane(
                             OperatorSettingsTab.SYSTEM ->
                                 SystemRows(
                                     actions = systemSettingsActions,
+                                    onReportProblem = onReportProblem,
                                     guideController = liveViewGuideController,
                                     onShowGuideNow = onShowGuideNow,
                                     onShowGuideOnNextRealFrame = onShowGuideOnNextRealFrame,
@@ -3187,6 +3218,7 @@ private fun clearResultLabel(context: Context, result: MediaCacheClearResult): S
 @Composable
 internal fun SystemRows(
     actions: SystemSettingsActions,
+    onReportProblem: () -> Unit,
     guideController: LiveViewGuideController,
     onShowGuideNow: (() -> Unit)?,
     onShowGuideOnNextRealFrame: () -> Unit,
@@ -3217,9 +3249,8 @@ internal fun SystemRows(
             SettingsLinkAction(
                 stringResource(R.string.action_report),
                 stringResource(R.string.system_report_android_problem),
-            ) {
-                runAction(actions::reportBug)
-            }
+                onReportProblem,
+            )
         }
         SettingsInlineRow(stringResource(R.string.system_request_feature)) {
             SettingsLinkAction(

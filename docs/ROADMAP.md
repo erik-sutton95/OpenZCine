@@ -281,9 +281,18 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
   preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and
   confirmed credentials enter encrypted storage only after a successful join.
+- **In-app bug reporting paths** (OPE-102, in progress) — iOS and Android offer an anonymous
+  report through a small GitHub-App relay or a
+  [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) for richer
+  optional details. Both create labelled public GitHub issues. The anonymous path has optional,
+  user-selected screenshots re-rendered without embedded file metadata and a closed,
+  privacy-filtered app-activity snapshot; it never uploads raw diagnostics, arbitrary logs, device
+  names, camera/device identifiers, network identifiers, or original image bytes. Visible screenshot
+  content remains the reporter's responsibility to review. Feature requests remain account-backed
+  GitHub Discussions.
 - **External beta diagnostics & support** (in progress) — Apple-native crash diagnostics,
-  privacy-safe support reports, and direct System links for help, bugs, feature requests, source,
-  privacy, and terms.
+  a user-reviewed local diagnostics share flow, and direct System links for help, feature requests,
+  source, privacy, and terms.
 - **First-live-view control guide** (in progress) — a replayable three-step introduction to camera
   controls, View Assist tap and press-and-hold behavior, and monitor system controls on iOS.
 - **Android monitor-preference parity** (OPE-88, in progress) — expose the camera-first LEVEL overlay
@@ -302,9 +311,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Android beta-readiness parity** (OPE-90, in progress): retain only bounded, closed-category
   local breadcrumbs and privacy-reduced Android 11+ process-exit reasons; generate an
   operator-readable cache report behind its own narrow FileProvider; and expose native System
-  actions for support, Android-prefilled bugs, feature requests, diagnostics, source, privacy, and
-  terms without telemetry. The persisted three-step live-view guide is armed only by the first
-  successfully decoded real Swift-camera frame, never a disconnected or synthetic fixture, and
+  actions for support, account-free native bug reporting, account-backed feature requests,
+  diagnostics, source, privacy, and terms without telemetry. The persisted three-step live-view
+  guide is armed only by the first successfully decoded real Swift-camera frame, never a
+  disconnected or synthetic fixture, and
   blocks phone, remote, and Wear camera commands while visible. Settings can replay it now when a
   real frame is available or schedule the next real frame.
 - **Public launch landing actions**: the repository went public on 2026-07-15, so the landing page

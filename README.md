@@ -166,6 +166,7 @@ just native-check # run Swift tests and build the native iOS app
 just android-build # build the Android app and staged Swift runtime
 just android-check # build, test, compile device tests, and lint Android
 just android-release-check # verify the signed phone/Wear release pair
+just bug-relay-check # test the standalone anonymous bug-report relay
 ```
 
 ## Contributing
@@ -173,6 +174,13 @@ just android-release-check # verify the signed phone/Wear release pair
 Contributions are welcome!
 
 - See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflow, code standards, and how to report bugs vs. request features.
+- **Report a Problem** offers two public-issue paths: an anonymous in-app report with no GitHub
+  account (optional privacy-filtered activity events and user-selected, metadata-stripped
+  screenshots), or a [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
+  with richer optional details. Both paths are public; feature requests stay in GitHub Discussions
+  and require an account.
+- Before enabling that flow in a release, follow the secret-free GitHub App and Cloudflare
+  provisioning steps in [`services/bug-relay/README.md`](services/bug-relay/README.md).
 - We use **GitHub Discussions** (Ideas category) for feature requests.
 - Standardized labels help triage work — see [`.github/labels.yml`](.github/labels.yml).
 

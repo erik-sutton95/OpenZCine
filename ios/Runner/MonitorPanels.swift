@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -2898,6 +2899,7 @@ struct OperatorSettingsPanel: View {
     @State private var diagnosticsShareItem: DiagnosticsShareItem?
     @State private var diagnosticsErrorMessage: String?
     @State private var isPreparingDiagnostics = false
+    @State private var bugReportPresented = DemoHarness.openBugReport
 
     private var selectedTab: OperatorSettingsTab {
         get { model.operatorSettingsTab }
@@ -2968,6 +2970,9 @@ struct OperatorSettingsPanel: View {
         .ignoresSafeArea()
         .sheet(item: $diagnosticsShareItem) { item in
             DiagnosticsShareSheet(url: item.url)
+        }
+        .fullScreenCover(isPresented: $bugReportPresented) {
+            BugReportFlowView(onDismiss: { bugReportPresented = false })
         }
         .alert(
             "Couldn’t Share Diagnostics",
@@ -3323,10 +3328,12 @@ struct OperatorSettingsPanel: View {
             SettingsInlineRow(
                 title: "Report a Problem",
                 help:
-                    "Open a structured GitHub report with this app version, device class, and iOS version filled in."
+                    "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue."
             ) {
-                systemLinkButton(
-                    "Report", url: SupportLinkCatalog.bugReport(), label: "Report a Problem")
+                SettingsActionPill(title: "Report") {
+                    bugReportPresented = true
+                }
+                .accessibilityLabel("Report a Problem")
             }
             SettingsInlineRow(
                 title: "Request a Feature",
@@ -3612,6 +3619,866 @@ struct OperatorSettingsPanel: View {
                     action: items[index].action)
             }
         }
+    }
+}
+
+/// Coordinates the two explicit routes for reporting a public GitHub issue.
+///
+/// The chooser deliberately keeps the account-free report separate from the signed-in GitHub
+/// form: the former stays privacy-minimal while the latter opens the canonical web form in the
+/// person's browser.
+@MainActor
+private struct BugReportFlowView: View {
+    private enum Destination {
+        case chooser
+        case anonymous
+    }
+
+    @State private var destination: Destination = .chooser
+
+    private let onDismiss: () -> Void
+
+    init(onDismiss: @escaping () -> Void) {
+        self.onDismiss = onDismiss
+    }
+
+    var body: some View {
+        switch destination {
+        case .chooser:
+            BugReportPathChooserView(
+                onDismiss: onDismiss,
+                onAnonymous: { destination = .anonymous }
+            )
+        case .anonymous:
+            BugReportFormView(onDismiss: onDismiss)
+        }
+    }
+}
+
+/// Lets a person choose between a minimal anonymous report and GitHub's signed-in bug form.
+///
+/// Both choices produce public GitHub issues. The in-app route is intentionally limited to a
+/// small, privacy-minimal payload; the browser route is for people who want to add richer details.
+@MainActor
+private struct BugReportPathChooserView: View {
+    @Environment(\.openURL) private var openURL
+
+    private let onDismiss: () -> Void
+    private let onAnonymous: () -> Void
+
+    init(
+        onDismiss: @escaping () -> Void,
+        onAnonymous: @escaping () -> Void
+    ) {
+        self.onDismiss = onDismiss
+        self.onAnonymous = onAnonymous
+    }
+
+    var body: some View {
+        ZStack {
+            LiveDesign.background.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                header
+                Rectangle()
+                    .fill(LiveDesign.hairline)
+                    .frame(height: 1)
+
+                GeometryReader { proxy in
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(
+                                "Both choices create a public GitHub issue. Choose the route that fits the detail you want to share."
+                            )
+                            .font(.system(size: 13))
+                            .foregroundStyle(LiveDesign.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                            reportPaths(useTwoColumns: proxy.size.width >= 680)
+
+                            safetyNotice
+                        }
+                        .frame(maxWidth: 760, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 16)
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button(action: onDismiss) {
+                Label("Close", systemImage: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+            }
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel("Close report options")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Report a Problem")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                Text("Choose a public GitHub issue route")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+    }
+
+    @ViewBuilder private func reportPaths(useTwoColumns: Bool) -> some View {
+        if useTwoColumns {
+            HStack(alignment: .top, spacing: 12) {
+                anonymousPath
+                githubPath
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                anonymousPath
+                githubPath
+            }
+        }
+    }
+
+    private var anonymousPath: some View {
+        BugReportPathCard(
+            icon: "eye.slash",
+            title: "Report anonymously",
+            detail:
+                "No GitHub account is required. Send a short, privacy-minimal report from the app. It becomes a public GitHub issue, and we cannot reply privately.",
+            actionTitle: "Report Anonymously",
+            action: onAnonymous,
+            accessibilityLabel: "Report anonymously",
+            accessibilityHint:
+                "Creates a public GitHub issue without requiring a GitHub account."
+        )
+    }
+
+    private var githubPath: some View {
+        BugReportPathCard(
+            icon: "person.crop.circle.badge.checkmark",
+            title: "Continue with GitHub",
+            detail:
+                "Sign in in your browser to use the full GitHub bug form. It also becomes a public GitHub issue and supports richer details and attachments.",
+            actionTitle: "Continue with GitHub",
+            action: {
+                openURL(SupportLinkCatalog.githubBugReport) { accepted in
+                    BugReportGitHubHandoff.dismissAfterAcceptedBrowserOpen(
+                        accepted,
+                        dismiss: onDismiss
+                    )
+                }
+            },
+            accessibilityLabel: "Continue with GitHub",
+            accessibilityHint:
+                "Opens the signed-in GitHub bug report form in your browser."
+        )
+    }
+
+    private var safetyNotice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("Keep reports public-safe", systemImage: "eye")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Text(
+                "Do not include passwords, pairing codes, private media, camera serial numbers, or security details in either public route."
+            )
+            .font(.system(size: 11.5))
+            .foregroundStyle(LiveDesign.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            Button("Open private security advisory") {
+                openURL(SupportLinkCatalog.securityAdvisory)
+            }
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(LiveDesign.accent)
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel("Open private GitHub security advisory")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
+    }
+}
+
+/// Keeps the report chooser open when the system declines the GitHub browser handoff.
+enum BugReportGitHubHandoff {
+    static func dismissAfterAcceptedBrowserOpen(
+        _ accepted: Bool,
+        dismiss: () -> Void
+    ) {
+        guard accepted else { return }
+        dismiss()
+    }
+}
+
+/// A large, accessible report-route control that keeps its route's privacy contract visible.
+private struct BugReportPathCard: View {
+    let icon: String
+    let title: String
+    let detail: String
+    let actionTitle: String
+    let action: () -> Void
+    let accessibilityLabel: String
+    let accessibilityHint: String
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(LiveDesign.accent)
+                        .frame(width: 24, height: 24)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(LiveDesign.text)
+                        Text(detail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(LiveDesign.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Label(actionTitle, systemImage: "arrow.right")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(LiveDesign.accent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(14)
+            .background(
+                LiveDesign.surface,
+                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                    .stroke(LiveDesign.hairline, lineWidth: 1)
+            )
+            .contentShape(
+                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
+    }
+}
+
+/// A private, in-app form that sends an anonymous report to the public GitHub issue relay.
+///
+/// Optional attachments are strictly opt-in: a closed-vocabulary app activity snapshot and freshly
+/// re-rendered PNG copies selected through the system photo picker. The form has no automatic
+/// screenshot capture, raw diagnostics attachment, retry queue, or persistent draft storage.
+@MainActor
+struct BugReportFormView: View {
+    @Environment(\.openURL) private var openURL
+    @State private var model: BugReportFormModel
+    @State private var selectedScreenshotItems: [PhotosPickerItem] = []
+
+    private let onDismiss: () -> Void
+
+    init(
+        onDismiss: @escaping () -> Void,
+        model: BugReportFormModel = BugReportFormModel()
+    ) {
+        self.onDismiss = onDismiss
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        @Bindable var form = model
+
+        ZStack {
+            LiveDesign.background.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                header
+                Rectangle()
+                    .fill(LiveDesign.hairline)
+                    .frame(height: 1)
+
+                if let receipt = model.receipt {
+                    submittedContent(receipt: receipt)
+                } else {
+                    formContent(
+                        draft: $form.draft,
+                        includeActivityLog: $form.includeActivityLog,
+                        includeScreenshots: $form.includeScreenshots
+                    )
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onChange(of: selectedScreenshotItems) { _, items in
+            Task { await importSelectedScreenshots(items) }
+        }
+        .onChange(of: model.includeScreenshots) { _, includesScreenshots in
+            if !includesScreenshots {
+                selectedScreenshotItems = []
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button(action: onDismiss) {
+                Label("Close", systemImage: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+            }
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel("Close bug report")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Report a Problem")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                Text("Anonymous bug report")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+    }
+
+    private func formContent(
+        draft: Binding<BugReportDraft>,
+        includeActivityLog: Binding<Bool>,
+        includeScreenshots: Binding<Bool>
+    ) -> some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 12) {
+                BugReportTextField(
+                    title: "Short summary",
+                    hint: "What went wrong?",
+                    text: draft.summary,
+                    maximum: 120
+                )
+
+                BugReportTextEditor(
+                    title: "What happened",
+                    hint: "Describe the problem and what you expected instead.",
+                    text: draft.whatHappened,
+                    maximum: 4_000,
+                    minimumHeight: 84
+                )
+
+                BugReportTextEditor(
+                    title: "Steps to reproduce (optional)",
+                    hint: "List the steps that make the problem happen.",
+                    text: draft.stepsToReproduce,
+                    maximum: 4_000,
+                    minimumHeight: 72
+                )
+
+                BugReportChoiceRow(
+                    title: "How often did it happen?",
+                    selection: draft.frequency,
+                    displayName: { $0.displayName }
+                )
+
+                BugReportChoiceRow(
+                    title: "How was the camera connected?",
+                    selection: draft.connection,
+                    displayName: { $0.displayName }
+                )
+
+                attachmentControls(
+                    includeActivityLog: includeActivityLog,
+                    includeScreenshots: includeScreenshots
+                )
+
+                privacyNotice
+
+                if let errorMessage = model.errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color(.systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            Color(.systemOrange).opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
+                        )
+                        .accessibilityLabel("Report error: \(errorMessage)")
+                }
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            submissionFooter
+        }
+    }
+
+    private func attachmentControls(
+        includeActivityLog: Binding<Bool>,
+        includeScreenshots: Binding<Bool>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Optional attachments", systemImage: "paperclip")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+
+            BugReportAttachmentCheckbox(
+                title: "Include privacy-filtered app activity log",
+                detail:
+                    "Up to 200 closed event names only; no timestamps, device name, MetricKit, or raw diagnostics.",
+                isOn: includeActivityLog
+            )
+
+            BugReportAttachmentCheckbox(
+                title: "Include selected screenshots",
+                detail:
+                    "Choose up to three images. OpenZCine creates fresh PNG copies without embedded file metadata.",
+                isOn: includeScreenshots
+            )
+
+            if includeScreenshots.wrappedValue {
+                screenshotPicker
+            }
+
+            Text(
+                "Attachments are public. We remove embedded file metadata and use a privacy-filtered app activity log, but screenshots can still show names, locations, notifications, or other sensitive details. Review them carefully before sending."
+            )
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(Color(.systemOrange))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(.systemOrange).opacity(0.12),
+                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+            )
+            .accessibilityLabel(
+                "Public attachment warning. Review screenshots for sensitive details before sending."
+            )
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var screenshotPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if model.screenshots.count < BugReportAttachmentLimits.maximumScreenshotCount {
+                PhotosPicker(
+                    selection: $selectedScreenshotItems,
+                    maxSelectionCount: BugReportAttachmentLimits.maximumScreenshotCount
+                        - model.screenshots.count,
+                    matching: .images
+                ) {
+                    Label("Choose screenshots", systemImage: "photo.on.rectangle.angled")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LiveDesign.accent)
+                }
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Choose screenshots to attach")
+                .accessibilityHint(
+                    "Selected images are re-rendered without embedded file metadata.")
+            } else {
+                Text("Three screenshots selected.")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+
+            if !model.screenshots.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(model.screenshots.enumerated()), id: \.element.id) {
+                            index,
+                            screenshot in
+                            screenshotPreview(screenshot, index: index)
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+                .accessibilityLabel("Selected screenshots")
+            }
+
+            if let attachmentErrorMessage = model.attachmentErrorMessage {
+                Label(attachmentErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Color(.systemOrange))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Screenshot error: \(attachmentErrorMessage)")
+            }
+        }
+    }
+
+    private func screenshotPreview(_ screenshot: BugReportScreenshot, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Group {
+                if let image = UIImage(data: screenshot.pngData) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 22))
+                        .foregroundStyle(LiveDesign.muted)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(width: 118, height: 76)
+            .clipped()
+            .background(LiveDesign.background)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            HStack(spacing: 5) {
+                Text("Screenshot \(index + 1)")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+                Button("Remove") {
+                    model.removeScreenshot(id: screenshot.id)
+                }
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Remove screenshot \(index + 1)")
+            }
+        }
+        .frame(width: 118, alignment: .leading)
+    }
+
+    private func importSelectedScreenshots(_ items: [PhotosPickerItem]) async {
+        defer { selectedScreenshotItems = [] }
+        guard model.includeScreenshots else { return }
+
+        for item in items {
+            guard model.screenshots.count < BugReportAttachmentLimits.maximumScreenshotCount else {
+                return
+            }
+            do {
+                guard let sourceData = try await item.loadTransferable(type: Data.self) else {
+                    model.recordScreenshotImportFailure()
+                    continue
+                }
+                model.addScreenshotData(sourceData)
+            } catch {
+                model.recordScreenshotImportFailure()
+            }
+        }
+    }
+
+    private var privacyNotice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("Before you send", systemImage: "eye.slash")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Text(
+                "This creates a public GitHub issue. No GitHub account is required, the report is anonymous, and we cannot reply privately. Optional attachments are only the privacy-filtered app activity log and fresh PNG copies you select. Do not include passwords, pairing codes, private media, camera serial numbers, or anything sensitive."
+            )
+            .font(.system(size: 11.5))
+            .foregroundStyle(LiveDesign.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(
+                    "Security issue? Use SECURITY.md and send a private GitHub security advisory instead."
+                )
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(LiveDesign.text)
+                .fixedSize(horizontal: false, vertical: true)
+                Button("Open private security advisory") {
+                    openURL(SupportLinkCatalog.securityAdvisory)
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Open private GitHub security advisory")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
+    }
+
+    private var submissionFooter: some View {
+        VStack(spacing: 7) {
+            if model.isSubmitting {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(LiveDesign.accent)
+                    Text("Sending anonymous report…")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(LiveDesign.muted)
+                }
+                .accessibilityLabel("Sending anonymous bug report")
+            }
+
+            Button {
+                Task { await model.submit() }
+            } label: {
+                Text(model.isSubmitting ? "Sending…" : "Submit Anonymous Report")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(LiveDesign.background)
+                    .background(
+                        model.isSubmitting ? LiveDesign.muted : LiveDesign.accent,
+                        in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
+                    )
+            }
+            .buttonStyle(.zcTapTarget)
+            .disabled(model.isSubmitting)
+            .accessibilityLabel("Submit anonymous bug report")
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 9)
+        .padding(.bottom, 10)
+        .background(LiveDesign.background.opacity(0.98))
+        .overlay(alignment: .top) {
+            Rectangle().fill(LiveDesign.hairline).frame(height: 1)
+        }
+    }
+
+    private func submittedContent(receipt: BugReportSubmissionReceipt) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 42, weight: .medium))
+                .foregroundStyle(LiveDesign.accent)
+                .accessibilityHidden(true)
+            Text("Report sent")
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Text(submissionConfirmation(receipt: receipt))
+                .font(.system(size: 13))
+                .foregroundStyle(LiveDesign.muted)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 470)
+
+            if let issueURL = receipt.issueURL {
+                Button("Open Public Issue") {
+                    openURL(issueURL)
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Open public GitHub issue")
+            }
+
+            HStack(spacing: 16) {
+                Button("Report Another") {
+                    model.startAnotherReport()
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+
+                Button("Done", action: onDismiss)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                    .buttonStyle(.zcTapTarget)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func submissionConfirmation(receipt: BugReportSubmissionReceipt) -> String {
+        if let number = receipt.issueNumber {
+            "Your anonymous report is now public as GitHub issue #\(number). We cannot reply privately."
+        } else {
+            "Your anonymous report is now public on GitHub. We cannot reply privately."
+        }
+    }
+}
+
+/// A checkbox-style attachment control so public sharing remains an explicit, reversible choice.
+private struct BugReportAttachmentCheckbox: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LiveDesign.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(LiveDesign.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "Included" : "Not included")
+        .accessibilityHint("Double tap to \(isOn ? "exclude" : "include") this public attachment.")
+    }
+}
+
+/// A labelled, character-limited single-line input for the anonymous bug-report form.
+private struct BugReportTextField: View {
+    let title: String
+    let hint: String
+    @Binding var text: String
+    let maximum: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            BugReportFieldLabel(title: title, count: text.count, maximum: maximum)
+            TextField(hint, text: $text, axis: .vertical)
+                .font(.system(size: 14))
+                .foregroundStyle(LiveDesign.text)
+                .lineLimit(1...3)
+                .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled(false)
+                .padding(10)
+                .background(
+                    LiveDesign.background,
+                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                        .stroke(LiveDesign.hairline, lineWidth: 1)
+                )
+                .accessibilityLabel(title)
+                .accessibilityHint(hint)
+        }
+    }
+}
+
+/// A labelled, character-limited multi-line input for the anonymous bug-report form.
+private struct BugReportTextEditor: View {
+    let title: String
+    let hint: String
+    @Binding var text: String
+    let maximum: Int
+    let minimumHeight: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            BugReportFieldLabel(title: title, count: text.count, maximum: maximum)
+            TextEditor(text: $text)
+                .font(.system(size: 14))
+                .foregroundStyle(LiveDesign.text)
+                .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled(false)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(minHeight: minimumHeight)
+                .background(
+                    LiveDesign.background,
+                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                        .stroke(LiveDesign.hairline, lineWidth: 1)
+                )
+                .accessibilityLabel(title)
+                .accessibilityHint(hint)
+        }
+    }
+}
+
+/// A shared title and character count for a bug-report input.
+private struct BugReportFieldLabel: View {
+    let title: String
+    let count: Int
+    let maximum: Int
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Spacer(minLength: 8)
+            Text("\(count)/\(maximum)")
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(count > maximum ? Color(.systemOrange) : LiveDesign.faint)
+                .accessibilityLabel("\(count) of \(maximum) characters")
+        }
+    }
+}
+
+/// A compact, typed picker row for one coarse bug-report field.
+private struct BugReportChoiceRow<Value: CaseIterable & RawRepresentable & Hashable>: View
+where Value.RawValue == String {
+    let title: String
+    @Binding var selection: Value
+    let displayName: (Value) -> String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Picker(title, selection: $selection) {
+                ForEach(Array(Value.allCases), id: \.self) { value in
+                    Text(displayName(value)).tag(value)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .tint(LiveDesign.accent)
+            .accessibilityLabel(title)
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
     }
 }
 
