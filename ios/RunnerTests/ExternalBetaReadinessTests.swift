@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import Testing
+import UniformTypeIdentifiers
 
 @testable import Runner
 
@@ -28,6 +30,10 @@ struct ExternalBetaDiagnosticsTests {
                 == "https://reports.openzcine.app/v1/bug-reports")
         #expect(SupportLinkCatalog.bugReportEndpoint.scheme == "https")
         #expect(!SupportLinkCatalog.bugReportEndpoint.absoluteString.contains("github.com"))
+        #expect(
+            SupportLinkCatalog.bugReportAttachmentsEndpoint.absoluteString
+                == "https://reports.openzcine.app/v2/bug-reports"
+        )
     }
 
     @Test("GitHub report handoff dismisses the chooser only after a browser accepts it")
@@ -141,6 +147,87 @@ struct AnonymousBugReportTests {
         ] {
             #expect(!encoded.contains(prohibitedKey))
         }
+    }
+
+    @Test("Anonymous activity logs retain only closed event values and no device-name text")
+    func anonymousActivityLogSnapshot() {
+        let events = [
+            DiagnosticBreadcrumb(
+                timestamp: Date(timeIntervalSince1970: 1_700_000_001),
+                event: AppDiagnosticEvent.connectionConnected.rawValue
+            ),
+            DiagnosticBreadcrumb(
+                timestamp: Date(timeIntervalSince1970: 1_700_000_002),
+                event: "Bob’s iPhone"
+            ),
+            DiagnosticBreadcrumb(
+                timestamp: Date(timeIntervalSince1970: 1_700_000_003),
+                event: AppDiagnosticEvent.liveViewStarted.rawValue
+            ),
+        ]
+
+        let snapshot = DiagnosticEventStore.anonymousActivityLog(events: events)
+
+        #expect(snapshot == ["connection.connected", "live-view.started"])
+        #expect(!snapshot.joined(separator: " ").contains("Bob"))
+        #expect(snapshot.allSatisfy { AppDiagnosticEvent(rawValue: $0) != nil })
+    }
+
+    @Test("Screenshot sanitizer re-renders a metadata-bearing image as a clean bounded PNG")
+    func screenshotSanitizer() throws {
+        let source = try pngWithDescription("Bob’s iPhone")
+        let screenshot = try BugReportScreenshot(
+            pngData: BugReportScreenshotSanitizer.sanitizedPNG(from: source)
+        )
+
+        #expect(screenshot.pngData.count <= BugReportAttachmentLimits.maximumScreenshotBytes)
+        #expect(!String(decoding: screenshot.pngData, as: UTF8.self).contains("Bob’s iPhone"))
+
+        let imageSource = try #require(
+            CGImageSourceCreateWithData(screenshot.pngData as CFData, nil))
+        let properties = try #require(
+            CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any]
+        )
+        #expect(properties[kCGImagePropertyExifDictionary] == nil)
+        #expect(properties[kCGImagePropertyGPSDictionary] == nil)
+        #expect(properties[kCGImagePropertyTIFFDictionary] == nil)
+    }
+
+    @Test("Attachment reports use a fixed-length v2 multipart body with generic screenshot names")
+    func attachmentRelayRequestContract() throws {
+        let report = try validDraft().attachmentPayload(
+            baseContext: context,
+            activityLog: [AppDiagnosticEvent.connectionConnected.rawValue]
+        )
+        let screenshot = try BugReportScreenshot(
+            pngData: BugReportScreenshotSanitizer.sanitizedPNG(
+                from: try pngWithDescription("Bob’s iPhone")
+            )
+        )
+        let submission = try BugReportSubmission(report: report, screenshots: [screenshot])
+        let key = try #require(UUID(uuidString: "D7F1D858-ACFA-4AC2-9EA7-4D9E6A4CB7B6"))
+        let request = try URLSessionBugReportSubmitter.makeMultipartRequest(
+            submission,
+            idempotencyKey: key,
+            boundary: "OpenZCine-Test-Boundary"
+        )
+
+        #expect(request.url == SupportLinkCatalog.bugReportAttachmentsEndpoint)
+        #expect(request.httpMethod == "POST")
+        #expect(
+            request.value(forHTTPHeaderField: "Content-Type")
+                == "multipart/form-data; boundary=OpenZCine-Test-Boundary"
+        )
+        #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == key.uuidString)
+
+        let body = try #require(request.httpBody)
+        #expect(request.value(forHTTPHeaderField: "Content-Length") == String(body.count))
+        #expect(body.count <= BugReportAttachmentLimits.maximumV2MultipartBodyBytes)
+        let renderedBody = String(decoding: body, as: UTF8.self)
+        #expect(renderedBody.contains("name=\"report\""))
+        #expect(renderedBody.contains("filename=\"screenshot-1.png\""))
+        #expect(!renderedBody.contains("Bob’s iPhone"))
+        #expect(renderedBody.contains("connection.connected"))
     }
 
     @Test("Draft validation rejects blank and overlong fields without creating a payload")
@@ -326,6 +413,41 @@ struct AnonymousBugReportTests {
         #expect(firstChangedPayloadKey != secondChangedPayloadKey)
     }
 
+    @MainActor
+    @Test("Retries retain attachment idempotency while attachment choices rotate it")
+    func attachmentIdempotency() async throws {
+        let submitter = AttachmentRecordingBugReportSubmitter()
+        let form = BugReportFormModel(
+            baseContext: context,
+            submitter: submitter,
+            activityLogProvider: TestActivityLogProvider(
+                events: [AppDiagnosticEvent.connectionConnected.rawValue]
+            )
+        )
+        form.draft = validDraft()
+        form.includeActivityLog = true
+
+        await form.submit()
+        await form.submit()
+
+        form.includeActivityLog = false
+        await form.submit()
+
+        form.includeScreenshots = true
+        form.addScreenshotData(try pngWithDescription("Bob’s iPhone"))
+        await form.submit()
+
+        let keys = await submitter.receivedKeys()
+        let submissions = await submitter.receivedSubmissions()
+        #expect(keys.count == 4)
+        #expect(keys[0] == keys[1])
+        #expect(keys[1] != keys[2])
+        #expect(keys[2] != keys[3])
+        #expect(submissions.map(\.report.schemaVersion) == [2, 2, 1, 2])
+        #expect(submissions[0].report.activityLog == ["connection.connected"])
+        #expect(submissions[3].screenshots.count == 1)
+    }
+
     private func validDraft() -> BugReportDraft {
         BugReportDraft(
             summary: "Live view stopped",
@@ -335,6 +457,52 @@ struct AnonymousBugReportTests {
             connection: .usb
         )
     }
+
+    private func pngWithDescription(_ description: String) throws -> Data {
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+            throw TestImageError.unavailable
+        }
+        let bitmapInfo =
+            CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        guard
+            let context = CGContext(
+                data: nil,
+                width: 80,
+                height: 40,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            )
+        else {
+            throw TestImageError.unavailable
+        }
+        context.setFillColor(red: 0.15, green: 0.5, blue: 0.85, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
+        guard let image = context.makeImage() else { throw TestImageError.unavailable }
+
+        let output = NSMutableData()
+        guard
+            let destination = CGImageDestinationCreateWithData(
+                output,
+                UTType.png.identifier as CFString,
+                1,
+                nil
+            )
+        else {
+            throw TestImageError.unavailable
+        }
+        let metadata: [CFString: Any] = [
+            kCGImagePropertyPNGDictionary: [kCGImagePropertyPNGDescription: description]
+        ]
+        CGImageDestinationAddImage(destination, image, metadata as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw TestImageError.unavailable }
+        return output as Data
+    }
+}
+
+private enum TestImageError: Error {
+    case unavailable
 }
 
 private struct TestBugReportSubmitter: BugReportSubmitting {
@@ -345,6 +513,43 @@ private struct TestBugReportSubmitter: BugReportSubmitting {
         idempotencyKey _: UUID
     ) async throws -> BugReportSubmissionReceipt {
         try result.get()
+    }
+}
+
+private struct TestActivityLogProvider: BugReportActivityLogProviding {
+    let events: [String]
+
+    func activityLog() async -> [String] {
+        events
+    }
+}
+
+private actor AttachmentRecordingBugReportSubmitter: BugReportSubmitting {
+    private var keys: [UUID] = []
+    private var submissions: [BugReportSubmission] = []
+
+    func submit(
+        _ report: BugReportPayload,
+        idempotencyKey: UUID
+    ) async throws -> BugReportSubmissionReceipt {
+        try await submit(BugReportSubmission(report: report), idempotencyKey: idempotencyKey)
+    }
+
+    func submit(
+        _ submission: BugReportSubmission,
+        idempotencyKey: UUID
+    ) async throws -> BugReportSubmissionReceipt {
+        keys.append(idempotencyKey)
+        submissions.append(submission)
+        return .empty
+    }
+
+    func receivedKeys() -> [UUID] {
+        keys
+    }
+
+    func receivedSubmissions() -> [BugReportSubmission] {
+        submissions
     }
 }
 

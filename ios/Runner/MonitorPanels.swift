@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -3879,14 +3880,16 @@ private struct BugReportPathCard: View {
     }
 }
 
-/// A private, in-app form that sends a small anonymous report to the public GitHub issue relay.
+/// A private, in-app form that sends an anonymous report to the public GitHub issue relay.
 ///
-/// It intentionally has no diagnostics attachment, screenshot capture, media picker, retry queue,
-/// or persistent draft storage. The only automatic context is constructed by ``BugReportContext``.
+/// Optional attachments are strictly opt-in: a closed-vocabulary app activity snapshot and freshly
+/// re-rendered PNG copies selected through the system photo picker. The form has no automatic
+/// screenshot capture, raw diagnostics attachment, retry queue, or persistent draft storage.
 @MainActor
 struct BugReportFormView: View {
     @Environment(\.openURL) private var openURL
     @State private var model: BugReportFormModel
+    @State private var selectedScreenshotItems: [PhotosPickerItem] = []
 
     private let onDismiss: () -> Void
 
@@ -3913,11 +3916,23 @@ struct BugReportFormView: View {
                 if let receipt = model.receipt {
                     submittedContent(receipt: receipt)
                 } else {
-                    formContent(draft: $form.draft)
+                    formContent(
+                        draft: $form.draft,
+                        includeActivityLog: $form.includeActivityLog,
+                        includeScreenshots: $form.includeScreenshots
+                    )
                 }
             }
         }
         .preferredColorScheme(.dark)
+        .onChange(of: selectedScreenshotItems) { _, items in
+            Task { await importSelectedScreenshots(items) }
+        }
+        .onChange(of: model.includeScreenshots) { _, includesScreenshots in
+            if !includesScreenshots {
+                selectedScreenshotItems = []
+            }
+        }
     }
 
     private var header: some View {
@@ -3945,7 +3960,11 @@ struct BugReportFormView: View {
         .padding(.vertical, 11)
     }
 
-    private func formContent(draft: Binding<BugReportDraft>) -> some View {
+    private func formContent(
+        draft: Binding<BugReportDraft>,
+        includeActivityLog: Binding<Bool>,
+        includeScreenshots: Binding<Bool>
+    ) -> some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 12) {
                 BugReportTextField(
@@ -3983,6 +4002,11 @@ struct BugReportFormView: View {
                     displayName: { $0.displayName }
                 )
 
+                attachmentControls(
+                    includeActivityLog: includeActivityLog,
+                    includeScreenshots: includeScreenshots
+                )
+
                 privacyNotice
 
                 if let errorMessage = model.errorMessage {
@@ -4010,13 +4034,171 @@ struct BugReportFormView: View {
         }
     }
 
+    private func attachmentControls(
+        includeActivityLog: Binding<Bool>,
+        includeScreenshots: Binding<Bool>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Optional attachments", systemImage: "paperclip")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+
+            BugReportAttachmentCheckbox(
+                title: "Include privacy-filtered app activity log",
+                detail:
+                    "Up to 200 closed event names only; no timestamps, device name, MetricKit, or raw diagnostics.",
+                isOn: includeActivityLog
+            )
+
+            BugReportAttachmentCheckbox(
+                title: "Include selected screenshots",
+                detail:
+                    "Choose up to three images. OpenZCine creates fresh PNG copies without embedded file metadata.",
+                isOn: includeScreenshots
+            )
+
+            if includeScreenshots.wrappedValue {
+                screenshotPicker
+            }
+
+            Text(
+                "Attachments are public. We remove embedded file metadata and use a privacy-filtered app activity log, but screenshots can still show names, locations, notifications, or other sensitive details. Review them carefully before sending."
+            )
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(Color(.systemOrange))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(.systemOrange).opacity(0.12),
+                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+            )
+            .accessibilityLabel(
+                "Public attachment warning. Review screenshots for sensitive details before sending."
+            )
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var screenshotPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if model.screenshots.count < BugReportAttachmentLimits.maximumScreenshotCount {
+                PhotosPicker(
+                    selection: $selectedScreenshotItems,
+                    maxSelectionCount: BugReportAttachmentLimits.maximumScreenshotCount
+                        - model.screenshots.count,
+                    matching: .images
+                ) {
+                    Label("Choose screenshots", systemImage: "photo.on.rectangle.angled")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LiveDesign.accent)
+                }
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Choose screenshots to attach")
+                .accessibilityHint(
+                    "Selected images are re-rendered without embedded file metadata.")
+            } else {
+                Text("Three screenshots selected.")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+
+            if !model.screenshots.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(model.screenshots.enumerated()), id: \.element.id) {
+                            index,
+                            screenshot in
+                            screenshotPreview(screenshot, index: index)
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+                .accessibilityLabel("Selected screenshots")
+            }
+
+            if let attachmentErrorMessage = model.attachmentErrorMessage {
+                Label(attachmentErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Color(.systemOrange))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Screenshot error: \(attachmentErrorMessage)")
+            }
+        }
+    }
+
+    private func screenshotPreview(_ screenshot: BugReportScreenshot, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Group {
+                if let image = UIImage(data: screenshot.pngData) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 22))
+                        .foregroundStyle(LiveDesign.muted)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(width: 118, height: 76)
+            .clipped()
+            .background(LiveDesign.background)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            HStack(spacing: 5) {
+                Text("Screenshot \(index + 1)")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+                Button("Remove") {
+                    model.removeScreenshot(id: screenshot.id)
+                }
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Remove screenshot \(index + 1)")
+            }
+        }
+        .frame(width: 118, alignment: .leading)
+    }
+
+    private func importSelectedScreenshots(_ items: [PhotosPickerItem]) async {
+        defer { selectedScreenshotItems = [] }
+        guard model.includeScreenshots else { return }
+
+        for item in items {
+            guard model.screenshots.count < BugReportAttachmentLimits.maximumScreenshotCount else {
+                return
+            }
+            do {
+                guard let sourceData = try await item.loadTransferable(type: Data.self) else {
+                    model.recordScreenshotImportFailure()
+                    continue
+                }
+                model.addScreenshotData(sourceData)
+            } catch {
+                model.recordScreenshotImportFailure()
+            }
+        }
+    }
+
     private var privacyNotice: some View {
         VStack(alignment: .leading, spacing: 7) {
             Label("Before you send", systemImage: "eye.slash")
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(LiveDesign.text)
             Text(
-                "This creates a public GitHub issue. No GitHub account is required, the report is anonymous, and we cannot reply privately. Do not include passwords, pairing codes, private media, camera serial numbers, or anything sensitive."
+                "This creates a public GitHub issue. No GitHub account is required, the report is anonymous, and we cannot reply privately. Optional attachments are only the privacy-filtered app activity log and fresh PNG copies you select. Do not include passwords, pairing codes, private media, camera serial numbers, or anything sensitive."
             )
             .font(.system(size: 11.5))
             .foregroundStyle(LiveDesign.muted)
@@ -4140,6 +4322,42 @@ struct BugReportFormView: View {
         } else {
             "Your anonymous report is now public on GitHub. We cannot reply privately."
         }
+    }
+}
+
+/// A checkbox-style attachment control so public sharing remains an explicit, reversible choice.
+private struct BugReportAttachmentCheckbox: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LiveDesign.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(LiveDesign.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "Included" : "Not included")
+        .accessibilityHint("Double tap to \(isOn ? "exclude" : "include") this public attachment.")
     }
 }
 
