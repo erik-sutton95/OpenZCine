@@ -28,5 +28,11 @@
         "period": 60
       }
     }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUG_REPORT_MEDIA",
+      "bucket_name": "openzcine-bug-report-media"
+    }
   ]
 }

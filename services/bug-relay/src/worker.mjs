@@ -1,11 +1,20 @@
-const API_PATH = "/v1/bug-reports";
+const V1_API_PATH = "/v1/bug-reports";
+const V2_API_PATH = "/v2/bug-reports";
+const V2_MEDIA_PATH_PREFIX = "/v2/bug-report-media/";
 const MAX_BODY_BYTES = 12 * 1024;
+const MAX_V2_REPORT_BYTES = 16 * 1024;
+const MAX_V2_SCREENSHOT_BYTES = 1_048_576;
+const MAX_V2_SCREENSHOT_COUNT = 3;
+const MAX_V2_SCREENSHOT_TOTAL_BYTES = MAX_V2_SCREENSHOT_BYTES * MAX_V2_SCREENSHOT_COUNT;
+const MAX_V2_REQUEST_BYTES = MAX_V2_SCREENSHOT_TOTAL_BYTES + 64 * 1024;
 const RECEIPT_KEY = "receipt";
+const PENDING_SUBMISSION_KEY = "pending-submission";
 const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const GITHUB_OWNER = "erik-sutton95";
 const GITHUB_REPOSITORY = "OpenZCine";
 const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/issues`;
 const GITHUB_ISSUE_URL_PREFIX = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/issues/`;
+const MEDIA_PUBLIC_ORIGIN = "https://reports.openzcine.app";
 
 const ROOT_REQUIRED_KEYS = ["schemaVersion", "summary", "whatHappened", "frequency", "context"];
 const ROOT_ALLOWED_KEYS = [...ROOT_REQUIRED_KEYS, "stepsToReproduce"];
@@ -23,6 +32,53 @@ const DEVICE_CLASSES = new Set(["phone", "tablet", "unknown"]);
 const CONNECTIONS = new Set(["wifi", "usb", "unknown"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DISALLOWED_CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u;
+const ACTIVITY_EVENTS = new Set([
+  "app.launched",
+  "scene.connected",
+  "app.background",
+  "app.foreground",
+  "connection.disconnected",
+  "connection.scanning",
+  "connection.pairing",
+  "connection.reconnecting",
+  "connection.preparing-live-view",
+  "connection.connected",
+  "connection.connecting",
+  "monitor.presented",
+  "monitor.dismissed",
+  "live-view.started",
+  "live-view.failed",
+  "recording.started",
+  "recording.stopped",
+  // The currently shipped native event uses the live-guide prefix. The plain guide aliases
+  // remain accepted for a short, closed compatibility surface used by early clients.
+  "live-guide.presented",
+  "live-guide.completed",
+  "live-guide.skipped",
+  "guide.presented",
+  "guide.completed",
+  "guide.skipped",
+  "diagnostics.exported",
+]);
+const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+const PNG_IHDR = Uint8Array.of(0x49, 0x48, 0x44, 0x52);
+const PNG_IDAT = Uint8Array.of(0x49, 0x44, 0x41, 0x54);
+const PNG_IEND = Uint8Array.of(0x49, 0x45, 0x4e, 0x44);
+const STRIPPABLE_PNG_METADATA_TYPES = new Set([
+  "cHRM",
+  "eXIf",
+  "gAMA",
+  "iCCP",
+  "iTXt",
+  "pHYs",
+  "sBIT",
+  "sPLT",
+  "sRGB",
+  "tEXt",
+  "tIME",
+  "zTXt",
+]);
+const CRC32_TABLE = createCRC32Table();
 const textEncoder = new TextEncoder();
 
 let installationTokenCache = null;
@@ -52,7 +108,13 @@ export function createWorker() {
     async fetch(request, env) {
       const url = new URL(request.url);
 
-      if (url.pathname !== API_PATH) {
+      if (url.pathname.startsWith(V2_MEDIA_PATH_PREFIX)) {
+        return fetchV2Media(request, env, url.pathname);
+      }
+
+      const isV1 = url.pathname === V1_API_PATH;
+      const isV2 = url.pathname === V2_API_PATH;
+      if (!isV1 && !isV2) {
         return errorResponse("invalid_request", 404);
       }
 
@@ -60,7 +122,8 @@ export function createWorker() {
         return errorResponse("invalid_request", 405, { Allow: "POST" });
       }
 
-      if (!isJsonContentType(request.headers.get("Content-Type"))) {
+      const contentType = request.headers.get("Content-Type");
+      if ((isV1 && !isJsonContentType(contentType)) || (isV2 && !isMultipartContentType(contentType))) {
         return errorResponse("invalid_request", 415);
       }
 
@@ -69,10 +132,12 @@ export function createWorker() {
       }
 
       let idempotencyKey;
-      let report;
+      let submission;
       try {
         idempotencyKey = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
-        report = await parseReportBody(request);
+        submission = isV1
+          ? await parseReportBody(request)
+          : await parseV2Submission(request, idempotencyKey);
       } catch (error) {
         if (error instanceof InvalidRequestError) {
           return errorResponse("invalid_request", 400);
@@ -103,7 +168,7 @@ export function createWorker() {
         const response = await stub.fetch("https://bug-report-idempotency.internal/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=utf-8" },
-          body: JSON.stringify(report),
+          body: JSON.stringify(submission),
         });
 
         if (response.status === 400) {
@@ -135,7 +200,7 @@ export class BugReportIdempotency {
     this.ctx = ctx;
     this.coordinator = new ReceiptCoordinator({
       storage: ctx.storage,
-      createIssue: (report) => createGitHubIssue(env, report),
+      createIssue: (submission) => createIssueForSubmission(env, submission),
     });
   }
 
@@ -146,8 +211,11 @@ export class BugReportIdempotency {
     }
 
     try {
-      const report = validateReport(await request.json());
-      const result = await this.coordinator.submit(report);
+      const rawSubmission = await request.json();
+      const submission = isV2Submission(rawSubmission)
+        ? validateV2Submission(rawSubmission)
+        : validateReport(rawSubmission);
+      const result = await this.coordinator.submit(submission);
 
       if (result.status === 400) {
         return errorResponse("invalid_request", 400);
@@ -165,12 +233,26 @@ export class BugReportIdempotency {
 
   async alarm() {
     const receipt = await this.ctx.storage.get(RECEIPT_KEY);
-    if (!isStoredReceipt(receipt) || receipt.expiresAt <= Date.now()) {
+    const pendingSubmission = await this.ctx.storage.get(PENDING_SUBMISSION_KEY);
+    const now = Date.now();
+    const receiptIsCurrent = isStoredReceipt(receipt) && receipt.expiresAt > now;
+    const pendingIsCurrent = isStoredPendingSubmission(pendingSubmission) && pendingSubmission.expiresAt > now;
+
+    if (!receiptIsCurrent) {
       await this.ctx.storage.delete(RECEIPT_KEY);
-      return;
     }
 
-    await this.ctx.storage.setAlarm(receipt.expiresAt);
+    if (!pendingIsCurrent) {
+      await this.ctx.storage.delete(PENDING_SUBMISSION_KEY);
+    }
+
+    const nextExpiry = Math.min(
+      receiptIsCurrent ? receipt.expiresAt : Number.POSITIVE_INFINITY,
+      pendingIsCurrent ? pendingSubmission.expiresAt : Number.POSITIVE_INFINITY,
+    );
+    if (Number.isFinite(nextExpiry)) {
+      await this.ctx.storage.setAlarm(nextExpiry);
+    }
   }
 }
 
@@ -178,20 +260,35 @@ export class BugReportIdempotency {
  * Storage-backed idempotency state machine used by the Durable Object and unit tests.
  */
 export class ReceiptCoordinator {
-  constructor({ storage, createIssue, now = () => Date.now(), fingerprint = fingerprintReport }) {
+  constructor({
+    storage,
+    createIssue,
+    now = () => Date.now(),
+    fingerprint = fingerprintReport,
+    requiresReservation = isV2Submission,
+  }) {
     this.storage = storage;
     this.createIssue = createIssue;
     this.now = now;
     this.fingerprint = fingerprint;
+    this.requiresReservation = requiresReservation;
     this.inFlight = null;
   }
 
-  async submit(report) {
-    const payloadHash = await this.fingerprint(report);
+  async submit(submission) {
+    const payloadHash = await this.fingerprint(submission);
     const current = await this.currentReceipt();
 
     if (current) {
       return receiptResultFor(current, payloadHash);
+    }
+
+    const requiresReservation = this.requiresReservation(submission);
+    if (requiresReservation) {
+      const pendingSubmission = await this.currentPendingSubmission();
+      if (pendingSubmission && pendingSubmission.payloadHash !== payloadHash) {
+        return { status: 400 };
+      }
     }
 
     if (this.inFlight) {
@@ -201,7 +298,7 @@ export class ReceiptCoordinator {
         : { status: 400 };
     }
 
-    const operation = this.createAndStore(report, payloadHash);
+    const operation = this.createAndStore(submission, payloadHash, requiresReservation);
     this.inFlight = operation;
 
     try {
@@ -214,7 +311,7 @@ export class ReceiptCoordinator {
     }
   }
 
-  async createAndStore(report, payloadHash) {
+  async createAndStore(submission, payloadHash, requiresReservation) {
     const current = await this.currentReceipt();
     if (current) {
       const result = receiptResultFor(current, payloadHash);
@@ -225,7 +322,20 @@ export class ReceiptCoordinator {
       return { payloadHash, issue: result.issue };
     }
 
-    const issue = await this.createIssue(report);
+    if (requiresReservation) {
+      const pendingSubmission = await this.currentPendingSubmission();
+      if (pendingSubmission && pendingSubmission.payloadHash !== payloadHash) {
+        throw new InvalidRequestError();
+      }
+
+      if (!pendingSubmission) {
+        const expiresAt = this.now() + RECEIPT_TTL_MS;
+        await this.storage.put(PENDING_SUBMISSION_KEY, { expiresAt, payloadHash });
+        await this.storage.setAlarm(expiresAt);
+      }
+    }
+
+    const issue = await this.createIssue(submission);
     const receipt = {
       expiresAt: this.now() + RECEIPT_TTL_MS,
       issue,
@@ -233,6 +343,9 @@ export class ReceiptCoordinator {
     };
 
     await this.storage.put(RECEIPT_KEY, receipt);
+    if (requiresReservation) {
+      await this.storage.delete(PENDING_SUBMISSION_KEY);
+    }
     await this.storage.setAlarm(receipt.expiresAt);
     return { payloadHash, issue };
   }
@@ -254,17 +367,54 @@ export class ReceiptCoordinator {
 
     return value;
   }
+
+  async currentPendingSubmission() {
+    const value = await this.storage.get(PENDING_SUBMISSION_KEY);
+    if (!isStoredPendingSubmission(value)) {
+      if (value !== undefined && value !== null) {
+        await this.storage.delete(PENDING_SUBMISSION_KEY);
+      }
+
+      return null;
+    }
+
+    if (value.expiresAt <= this.now()) {
+      await this.storage.delete(PENDING_SUBMISSION_KEY);
+      return null;
+    }
+
+    return value;
+  }
 }
 
 /**
  * Validate and normalize the intentionally narrow public report schema.
  */
 export function validateReport(value) {
-  if (!isPlainObject(value) || !hasExactKeys(value, ROOT_REQUIRED_KEYS, ROOT_ALLOWED_KEYS)) {
+  return validateReportVersion(value, 1, ROOT_ALLOWED_KEYS);
+}
+
+/** Validate the attachment-capable report schema without accepting arbitrary diagnostics text. */
+export function validateV2Report(value) {
+  const report = validateReportVersion(value, 2, [...ROOT_ALLOWED_KEYS, "activityLog"]);
+
+  if (Object.hasOwn(value, "activityLog")) {
+    if (!Array.isArray(value.activityLog) || value.activityLog.length > 200) {
+      throw new InvalidRequestError();
+    }
+
+    report.activityLog = value.activityLog.map((event) => enumValue(event, ACTIVITY_EVENTS));
+  }
+
+  return report;
+}
+
+function validateReportVersion(value, schemaVersion, allowedKeys) {
+  if (!isPlainObject(value) || !hasExactKeys(value, ROOT_REQUIRED_KEYS, allowedKeys)) {
     throw new InvalidRequestError();
   }
 
-  if (value.schemaVersion !== 1) {
+  if (value.schemaVersion !== schemaVersion) {
     throw new InvalidRequestError();
   }
 
@@ -282,7 +432,7 @@ export function validateReport(value) {
   };
 
   const report = {
-    schemaVersion: 1,
+    schemaVersion,
     summary: normalizedText(value.summary, 120, true, { compact: true }),
     whatHappened: normalizedText(value.whatHappened, 4000, true),
     frequency: enumValue(value.frequency, FREQUENCIES),
@@ -300,7 +450,19 @@ export function validateReport(value) {
  * Render report content so user input cannot escape a Markdown code fence or create a mention.
  */
 export function renderIssue(report) {
-  const safeReport = validateReport(report);
+  return renderNormalizedIssue(validateReport(report));
+}
+
+/** Render a v2 issue with only server-derived media URLs and closed activity events. */
+export function renderV2Issue(submission) {
+  const safeSubmission = validateV2Submission(submission);
+  const screenshotURLs = safeSubmission.screenshots.map((screenshot) =>
+    publicMediaURL(safeSubmission.idempotencyKey, screenshot.slot),
+  );
+  return renderNormalizedIssue(safeSubmission.report, { screenshotURLs });
+}
+
+function renderNormalizedIssue(safeReport, { screenshotURLs = [] } = {}) {
   const platform = safeReport.context.platform === "ios" ? "iOS" : "Android";
   const title = `[${platform}] ${safeIssueTitle(safeReport.summary)}`;
   const context = [
@@ -314,29 +476,49 @@ export function renderIssue(report) {
   ].join("\n");
   const steps = safeReport.stepsToReproduce;
 
+  const sections = [
+    "## Anonymous in-app bug report",
+    "",
+    "This report was submitted without an account and is public in this repository.",
+    "",
+    "## Summary",
+    "",
+    fencedText(safeReport.summary),
+    "",
+    "## What happened",
+    "",
+    fencedText(safeReport.whatHappened),
+    "",
+    "## Steps to reproduce",
+    "",
+    steps ? fencedText(steps) : "Not provided.",
+    "",
+    "## App and device context",
+    "",
+    fencedText(context),
+  ];
+
+  if (safeReport.activityLog?.length) {
+    sections.push(
+      "",
+      "## Privacy-filtered app activity log",
+      "",
+      "This list contains only closed app event names; it has no timestamps or free-form log text.",
+      "",
+      fencedText(safeReport.activityLog.join("\n")),
+    );
+  }
+
+  if (screenshotURLs.length) {
+    sections.push("", "## Screenshots", "");
+    for (const [index, screenshotURL] of screenshotURLs.entries()) {
+      sections.push(`![Screenshot ${index + 1}](${screenshotURL})`, "");
+    }
+  }
+
   return {
     title,
-    body: [
-      "## Anonymous in-app bug report",
-      "",
-      "This report was submitted without an account and is public in this repository.",
-      "",
-      "## Summary",
-      "",
-      fencedText(safeReport.summary),
-      "",
-      "## What happened",
-      "",
-      fencedText(safeReport.whatHappened),
-      "",
-      "## Steps to reproduce",
-      "",
-      steps ? fencedText(steps) : "Not provided.",
-      "",
-      "## App and device context",
-      "",
-      fencedText(context),
-    ].join("\n"),
+    body: sections.join("\n"),
   };
 }
 
@@ -348,7 +530,32 @@ export async function createGitHubIssue(
   report,
   { fetchImpl = fetch, getToken = getInstallationToken } = {},
 ) {
-  const rendered = renderIssue(report);
+  return createGitHubIssueFromRendered(env, renderIssue(report), { fetchImpl, getToken });
+}
+
+/** Store only canonical screenshots before creating the public issue that references them. */
+export async function createV2GitHubIssue(
+  env,
+  submission,
+  { fetchImpl = fetch, getToken = getInstallationToken } = {},
+) {
+  const safeSubmission = validateV2Submission(submission);
+  const createdMediaKeys = await storeV2Screenshots(env, safeSubmission);
+  try {
+    return await createGitHubIssueFromRendered(env, renderV2Issue(safeSubmission), { fetchImpl, getToken });
+  } catch (error) {
+    await deleteV2Media(env?.BUG_REPORT_MEDIA, createdMediaKeys);
+    throw error;
+  }
+}
+
+async function createIssueForSubmission(env, submission) {
+  return isV2Submission(submission)
+    ? createV2GitHubIssue(env, submission)
+    : createGitHubIssue(env, submission);
+}
+
+async function createGitHubIssueFromRendered(env, rendered, { fetchImpl, getToken }) {
   const token = await getToken(env, { fetchImpl });
 
   let response;
@@ -388,6 +595,79 @@ export async function createGitHubIssue(
   }
 
   return canonicalIssueReceipt(issue.number);
+}
+
+async function storeV2Screenshots(env, submission) {
+  if (submission.screenshots.length === 0) {
+    return [];
+  }
+
+  const bucket = env?.BUG_REPORT_MEDIA;
+  if (
+    !bucket ||
+    typeof bucket.get !== "function" ||
+    typeof bucket.put !== "function" ||
+    typeof bucket.delete !== "function"
+  ) {
+    throw new ServiceUnavailableError();
+  }
+
+  const createdKeys = [];
+  try {
+    for (const screenshot of submission.screenshots) {
+      const key = v2MediaKey(submission.idempotencyKey, screenshot.slot);
+      const bytes = base64UrlToBytes(screenshot.data);
+      const existing = await bucket.get(key);
+      if (existing) {
+        if (!bytesEqual(await r2ObjectBytes(existing), bytes)) {
+          throw new InvalidRequestError();
+        }
+        continue;
+      }
+
+      await bucket.put(key, bytes, { httpMetadata: { contentType: "image/png" } });
+      createdKeys.push(key);
+    }
+  } catch (error) {
+    await deleteV2Media(bucket, createdKeys);
+    if (error instanceof InvalidRequestError) {
+      throw error;
+    }
+    throw new ServiceUnavailableError();
+  }
+
+  return createdKeys;
+}
+
+async function deleteV2Media(bucket, keys) {
+  if (!bucket || typeof bucket.delete !== "function") {
+    return;
+  }
+
+  for (const key of keys) {
+    try {
+      await bucket.delete(key);
+    } catch {
+      // The Durable Object reservation prevents a changed retry from overwriting a leftover key.
+      // R2 lifecycle expiry is the operational backstop when a deletion itself is unavailable.
+    }
+  }
+}
+
+async function r2ObjectBytes(object) {
+  if (object instanceof Uint8Array) {
+    return object;
+  }
+
+  if (object && typeof object.arrayBuffer === "function") {
+    return new Uint8Array(await object.arrayBuffer());
+  }
+
+  if (object && typeof object === "object" && object.body) {
+    return new Uint8Array(await new Response(object.body).arrayBuffer());
+  }
+
+  throw new ServiceUnavailableError();
 }
 
 /**
@@ -527,7 +807,308 @@ async function parseReportBody(request) {
   }
 }
 
-async function readBoundedBody(request) {
+async function parseV2Submission(request, idempotencyKey) {
+  const expectedLength = requiredV2ContentLength(request.headers.get("Content-Length"));
+  const bytes = await readBoundedBody(request, MAX_V2_REQUEST_BYTES);
+  if (bytes.byteLength !== expectedLength) {
+    throw new InvalidRequestError();
+  }
+
+  let formData;
+  try {
+    formData = await new Response(bytes, {
+      headers: { "Content-Type": request.headers.get("Content-Type") },
+    }).formData();
+  } catch {
+    throw new InvalidRequestError();
+  }
+
+  const reports = [];
+  const files = [];
+  for (const [name, value] of formData.entries()) {
+    if (name === "report") {
+      reports.push(value);
+    } else if (name === "screenshot") {
+      files.push(value);
+    } else {
+      throw new InvalidRequestError();
+    }
+  }
+
+  if (reports.length !== 1 || typeof reports[0] !== "string" || files.length > MAX_V2_SCREENSHOT_COUNT) {
+    throw new InvalidRequestError();
+  }
+
+  const reportText = reports[0];
+  if (textEncoder.encode(reportText).byteLength > MAX_V2_REPORT_BYTES) {
+    throw new InvalidRequestError();
+  }
+
+  let report;
+  try {
+    report = validateV2Report(JSON.parse(reportText));
+  } catch {
+    throw new InvalidRequestError();
+  }
+
+  let aggregateSize = 0;
+  const screenshots = [];
+  for (const [index, file] of files.entries()) {
+    if (!isMultipartFile(file) || file.type.toLowerCase() !== "image/png") {
+      throw new InvalidRequestError();
+    }
+
+    if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > MAX_V2_SCREENSHOT_BYTES) {
+      throw new InvalidRequestError();
+    }
+
+    let sourceBytes;
+    try {
+      sourceBytes = new Uint8Array(await file.arrayBuffer());
+    } catch {
+      throw new InvalidRequestError();
+    }
+
+    if (sourceBytes.byteLength !== file.size || sourceBytes.byteLength > MAX_V2_SCREENSHOT_BYTES) {
+      throw new InvalidRequestError();
+    }
+
+    aggregateSize += sourceBytes.byteLength;
+    if (aggregateSize > MAX_V2_SCREENSHOT_TOTAL_BYTES) {
+      throw new InvalidRequestError();
+    }
+
+    const canonical = canonicalizePng(sourceBytes);
+    screenshots.push({ data: base64Url(canonical), slot: index + 1 });
+  }
+
+  return validateV2Submission({ kind: "v2", idempotencyKey, report, screenshots });
+}
+
+/** Validate a JSON-serializable v2 submission before it reaches R2 or GitHub. */
+export function validateV2Submission(value) {
+  if (
+    !isV2Submission(value) ||
+    !hasExactKeys(value, ["kind", "idempotencyKey", "report", "screenshots"], [
+      "kind",
+      "idempotencyKey",
+      "report",
+      "screenshots",
+    ]) ||
+    !Array.isArray(value.screenshots) ||
+    value.screenshots.length > MAX_V2_SCREENSHOT_COUNT
+  ) {
+    throw new InvalidRequestError();
+  }
+
+  const report = validateV2Report(value.report);
+  const idempotencyKey = validateIdempotencyKey(value.idempotencyKey);
+  let aggregateSize = 0;
+  const screenshots = value.screenshots.map((screenshot, index) => {
+    if (
+      !isPlainObject(screenshot) ||
+      !hasExactKeys(screenshot, ["data", "slot"], ["data", "slot"]) ||
+      screenshot.slot !== index + 1 ||
+      typeof screenshot.data !== "string" ||
+      screenshot.data.length > maximumBase64UrlLength(MAX_V2_SCREENSHOT_BYTES)
+    ) {
+      throw new InvalidRequestError();
+    }
+
+    const canonical = canonicalizePng(base64UrlToBytes(screenshot.data));
+    if (canonical.byteLength > MAX_V2_SCREENSHOT_BYTES) {
+      throw new InvalidRequestError();
+    }
+
+    aggregateSize += canonical.byteLength;
+    if (aggregateSize > MAX_V2_SCREENSHOT_TOTAL_BYTES) {
+      throw new InvalidRequestError();
+    }
+
+    return { data: base64Url(canonical), slot: screenshot.slot };
+  });
+
+  return { kind: "v2", idempotencyKey, report, screenshots };
+}
+
+/**
+ * Keep just the image-defining PNG chunks, dropping validated metadata while rejecting malformed
+ * or unsupported chunks. Native apps already re-encode picked images; this is the server-side
+ * trust boundary before any public object is stored.
+ */
+export function canonicalizePng(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+  if (bytes.byteLength < PNG_SIGNATURE.byteLength || !bytesEqual(bytes.subarray(0, 8), PNG_SIGNATURE)) {
+    throw new InvalidRequestError();
+  }
+
+  let offset = PNG_SIGNATURE.byteLength;
+  let ihdr = null;
+  const idatChunks = [];
+  let idatLength = 0;
+  let sawIDAT = false;
+  let closedIDAT = false;
+
+  while (offset < bytes.byteLength) {
+    if (bytes.byteLength - offset < 12) {
+      throw new InvalidRequestError();
+    }
+
+    const length = readUint32(bytes, offset);
+    const typeBytes = bytes.subarray(offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const crcOffset = dataEnd;
+    if (dataEnd > bytes.byteLength - 4 || crcOffset + 4 > bytes.byteLength) {
+      throw new InvalidRequestError();
+    }
+
+    const data = bytes.subarray(dataStart, dataEnd);
+    const expectedCRC = readUint32(bytes, crcOffset);
+    if (crc32(typeBytes, data) !== expectedCRC) {
+      throw new InvalidRequestError();
+    }
+
+    const type = latin1(typeBytes);
+    if (!ihdr && type !== "IHDR") {
+      throw new InvalidRequestError();
+    }
+
+    if (type === "IHDR") {
+      if (ihdr || length !== 13 || offset !== PNG_SIGNATURE.byteLength) {
+        throw new InvalidRequestError();
+      }
+      validatePngIHDR(data);
+      ihdr = new Uint8Array(data);
+    } else if (type === "IDAT") {
+      if (!ihdr || closedIDAT || length === 0) {
+        throw new InvalidRequestError();
+      }
+      sawIDAT = true;
+      idatLength += data.byteLength;
+      if (idatLength > MAX_V2_SCREENSHOT_BYTES) {
+        throw new InvalidRequestError();
+      }
+      idatChunks.push(new Uint8Array(data));
+    } else if (type === "IEND") {
+      if (!ihdr || !sawIDAT || length !== 0 || crcOffset + 4 !== bytes.byteLength) {
+        throw new InvalidRequestError();
+      }
+      return concatenateBytes(
+        PNG_SIGNATURE,
+        pngChunk(PNG_IHDR, ihdr),
+        pngChunk(PNG_IDAT, concatenateBytes(...idatChunks)),
+        pngChunk(PNG_IEND, new Uint8Array()),
+      );
+    } else if (!STRIPPABLE_PNG_METADATA_TYPES.has(type)) {
+      throw new InvalidRequestError();
+    } else if (sawIDAT) {
+      closedIDAT = true;
+    }
+
+    offset = crcOffset + 4;
+  }
+
+  throw new InvalidRequestError();
+}
+
+function validatePngIHDR(data) {
+  const width = readUint32(data, 0);
+  const height = readUint32(data, 4);
+  if (
+    width < 1 ||
+    width > 2560 ||
+    height < 1 ||
+    height > 2560 ||
+    data[8] !== 8 ||
+    data[9] !== 6 ||
+    data[10] !== 0 ||
+    data[11] !== 0 ||
+    data[12] !== 0
+  ) {
+    throw new InvalidRequestError();
+  }
+}
+
+function pngChunk(type, data) {
+  return concatenateBytes(uint32Bytes(data.byteLength), type, data, uint32Bytes(crc32(type, data)));
+}
+
+function readUint32(bytes, offset) {
+  if (offset < 0 || offset + 4 > bytes.byteLength) {
+    throw new InvalidRequestError();
+  }
+
+  return bytes[offset] * 0x1000000 + bytes[offset + 1] * 0x10000 + bytes[offset + 2] * 0x100 + bytes[offset + 3];
+}
+
+function uint32Bytes(value) {
+  return Uint8Array.of((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+}
+
+function latin1(bytes) {
+  return String.fromCharCode(...bytes);
+}
+
+function crc32(...values) {
+  let crc = 0xffffffff;
+  for (const value of values) {
+    for (const byte of value) {
+      crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+    }
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createCRC32Table() {
+  const table = new Uint32Array(256);
+  for (let value = 0; value < table.length; value += 1) {
+    let crc = value;
+    for (let index = 0; index < 8; index += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    table[value] = crc >>> 0;
+  }
+
+  return table;
+}
+
+function bytesEqual(left, right) {
+  return left.byteLength === right.byteLength && left.every((value, index) => value === right[index]);
+}
+
+function maximumBase64UrlLength(byteLength) {
+  return Math.ceil((byteLength * 4) / 3);
+}
+
+function base64UrlToBytes(value) {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new InvalidRequestError();
+  }
+
+  try {
+    const padded = `${value}${"=".repeat((4 - (value.length % 4)) % 4)}`.replace(/-/gu, "+").replace(/_/gu, "/");
+    return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+  } catch {
+    throw new InvalidRequestError();
+  }
+}
+
+function requiredV2ContentLength(value) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/u.test(value)) {
+    throw new InvalidRequestError();
+  }
+
+  const length = Number(value);
+  if (!Number.isSafeInteger(length) || length < 1 || length > MAX_V2_REQUEST_BYTES) {
+    throw new InvalidRequestError();
+  }
+
+  return length;
+}
+
+async function readBoundedBody(request, maximumLength = MAX_BODY_BYTES) {
   if (!request.body) {
     return new Uint8Array();
   }
@@ -548,7 +1129,7 @@ async function readBoundedBody(request) {
       }
 
       totalLength += value.byteLength;
-      if (totalLength > MAX_BODY_BYTES) {
+      if (totalLength > maximumLength) {
         await reader.cancel();
         throw new InvalidRequestError();
       }
@@ -606,8 +1187,92 @@ function isJsonContentType(value) {
   });
 }
 
+function isMultipartContentType(value) {
+  if (typeof value !== "string" || !value) {
+    return false;
+  }
+
+  const [mediaType, ...parameters] = value.split(";");
+  if (mediaType.trim().toLowerCase() !== "multipart/form-data") {
+    return false;
+  }
+
+  return parameters.some((parameter) => {
+    const separator = parameter.indexOf("=");
+    if (separator === -1) {
+      return false;
+    }
+
+    const name = parameter.slice(0, separator).trim().toLowerCase();
+    const boundary = parameter.slice(separator + 1).trim().replace(/^"|"$/gu, "");
+    return name === "boundary" && boundary.length > 0;
+  });
+}
+
 function isIdentityContentEncoding(value) {
   return !value || value.trim().toLowerCase() === "identity";
+}
+
+function isMultipartFile(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof value.arrayBuffer === "function" &&
+    typeof value.type === "string" &&
+    Number.isSafeInteger(value.size)
+  );
+}
+
+function isV2Submission(value) {
+  return isPlainObject(value) && value.kind === "v2";
+}
+
+async function fetchV2Media(request, env, pathname) {
+  const match = pathname.match(
+    new RegExp(`^${V2_MEDIA_PATH_PREFIX}(${UUID_PATTERN.source.slice(1, -1)})/([1-3])$`, "i"),
+  );
+  if (!match) {
+    return mediaNotFoundResponse();
+  }
+
+  if (request.method !== "GET") {
+    return errorResponse("invalid_request", 405, { Allow: "GET" });
+  }
+
+  const bucket = env?.BUG_REPORT_MEDIA;
+  if (!bucket || typeof bucket.get !== "function") {
+    return errorResponse("unavailable", 503);
+  }
+
+  try {
+    const object = await bucket.get(v2MediaKey(match[1].toLowerCase(), Number(match[2])));
+    const body = object && typeof object === "object" && "body" in object ? object.body : object;
+    if (!body) {
+      return mediaNotFoundResponse();
+    }
+
+    return new Response(body, {
+      headers: {
+        "Cache-Control": "public, max-age=300",
+        "Content-Type": "image/png",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  } catch {
+    return errorResponse("unavailable", 503);
+  }
+}
+
+function mediaNotFoundResponse() {
+  return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
+}
+
+function v2MediaKey(idempotencyKey, slot) {
+  return `bug-report-media/${idempotencyKey}/screenshot-${slot}.png`;
+}
+
+function publicMediaURL(idempotencyKey, slot) {
+  return `${MEDIA_PUBLIC_ORIGIN}${V2_MEDIA_PATH_PREFIX}${idempotencyKey}/${slot}`;
 }
 
 function isPlainObject(value) {
@@ -718,8 +1383,16 @@ function isStoredReceipt(value) {
   );
 }
 
-async function fingerprintReport(report) {
-  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(JSON.stringify(report)));
+function isStoredPendingSubmission(value) {
+  return (
+    isPlainObject(value) &&
+    typeof value.payloadHash === "string" &&
+    Number.isFinite(value.expiresAt)
+  );
+}
+
+async function fingerprintReport(submission) {
+  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(JSON.stringify(submission)));
   return base64Url(new Uint8Array(digest));
 }
 
