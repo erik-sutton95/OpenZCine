@@ -90,6 +90,7 @@ struct AnonymousBugReportTests {
         #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == key.uuidString)
 
         let body = try #require(request.httpBody)
+        #expect(body.count <= BugReportPayload.maximumJSONBodyBytes)
         let object = try JSONSerialization.jsonObject(with: body)
         let root = try #require(object as? [String: Any])
         #expect(root["schemaVersion"] as? Int == 1)
@@ -154,6 +155,19 @@ struct AnonymousBugReportTests {
         #expect(throws: BugReportValidationError.stepsTooLong) {
             try draft.payload(baseContext: context)
         }
+
+        let oversizedDetails = String(repeating: "🧪", count: 3_500)
+        #expect(oversizedDetails.count <= 4_000)
+        #expect(Data(oversizedDetails.utf8).count > BugReportPayload.maximumJSONBodyBytes)
+        draft = validDraft()
+        draft.whatHappened = oversizedDetails
+        #expect(throws: BugReportValidationError.bodyTooLarge) {
+            try draft.payload(baseContext: context)
+        }
+        #expect(
+            BugReportValidationError.bodyTooLarge.errorDescription
+                == "This report is too large. Shorten what happened or the reproduction steps and try again."
+        )
     }
 
     @Test("Nested worker response exposes the optional public issue link")
@@ -218,6 +232,40 @@ struct AnonymousBugReportTests {
                 retryAfterHeader: "45"
             ) == .unavailable
         )
+    }
+
+    @MainActor
+    @Test("Form blocks an oversized aggregate JSON body before contacting the relay")
+    func formAggregateSizeValidation() async throws {
+        let submitter = RetryRecordingBugReportSubmitter()
+        let form = BugReportFormModel(
+            baseContext: context,
+            submitter: submitter
+        )
+        form.draft = validDraft()
+        await form.submit()
+        let firstKey = try #require((await submitter.receivedKeys()).first)
+
+        var draft = validDraft()
+        draft.whatHappened = String(repeating: "🧪", count: 3_500)
+        form.draft = draft
+
+        await form.submit()
+
+        #expect(form.receipt == nil)
+        #expect(
+            form.errorMessage
+                == "This report is too large. Shorten what happened or the reproduction steps and try again."
+        )
+        let keysAfterOversizedDraft = await submitter.receivedKeys()
+        #expect(keysAfterOversizedDraft.count == 1)
+
+        form.draft = validDraft()
+        await form.submit()
+
+        let keys = await submitter.receivedKeys()
+        #expect(keys.count == 2)
+        #expect(keys.last == firstKey)
     }
 
     @MainActor
