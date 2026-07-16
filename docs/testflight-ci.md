@@ -103,10 +103,12 @@ report intentionally excludes camera frames, media names, camera identities, net
 Wi-Fi details, pairing data, credentials, and account identifiers. OpenZCine does not add a
 third-party analytics or crash-reporting SDK.
 
-**Report a Problem** is a separate, explicit flow. It sends only the report text a tester enters
-plus coarse app/platform context to create a public GitHub issue without requiring a GitHub account;
-it never uploads the local MetricKit report, breadcrumbs, logs, screenshots, or media. Testers must
-not include passwords, pairing codes, private media, or security vulnerabilities.
+**Report a Problem** is a separate, explicit flow. A tester can choose an anonymous in-app report
+that sends only entered text plus coarse app/platform context, or a
+[signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new/choose) with richer
+optional details. Both create public GitHub issues. The anonymous route never uploads the local
+MetricKit report, breadcrumbs, logs, screenshots, or media. Testers must not include passwords,
+pairing codes, private media, or security vulnerabilities in either route.
 
 ## GitHub Actions (fallback)
 
