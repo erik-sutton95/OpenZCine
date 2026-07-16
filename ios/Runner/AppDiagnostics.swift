@@ -417,6 +417,9 @@ struct BugReportContext: Codable, Equatable, Sendable {
 
 /// The report body accepted by the public bug-report relay.
 struct BugReportPayload: Codable, Equatable, Sendable {
+    /// Maximum encoded UTF-8 JSON request body accepted by the public relay.
+    static let maximumJSONBodyBytes = 12 * 1_024
+
     let schemaVersion: Int
     let summary: String
     let whatHappened: String
@@ -438,6 +441,20 @@ struct BugReportPayload: Codable, Equatable, Sendable {
         self.frequency = frequency
         self.context = context
     }
+
+    /// Encodes the exact UTF-8 JSON body sent to the public relay after enforcing its size limit.
+    func validatedJSONBody() throws -> Data {
+        let body: Data
+        do {
+            body = try JSONEncoder().encode(self)
+        } catch {
+            throw BugReportValidationError.bodyEncodingFailed
+        }
+        guard body.count <= Self.maximumJSONBodyBytes else {
+            throw BugReportValidationError.bodyTooLarge
+        }
+        return body
+    }
 }
 
 /// User-facing validation failures for an anonymous bug-report draft.
@@ -447,6 +464,8 @@ enum BugReportValidationError: LocalizedError, Equatable, Sendable {
     case whatHappenedRequired
     case whatHappenedTooLong
     case stepsTooLong
+    case bodyTooLarge
+    case bodyEncodingFailed
 
     var errorDescription: String? {
         switch self {
@@ -460,6 +479,10 @@ enum BugReportValidationError: LocalizedError, Equatable, Sendable {
             "Keep what happened to 4,000 characters or fewer."
         case .stepsTooLong:
             "Keep reproduction steps to 4,000 characters or fewer."
+        case .bodyTooLarge:
+            "This report is too large. Shorten what happened or the reproduction steps and try again."
+        case .bodyEncodingFailed:
+            "OpenZCine couldn’t prepare this report. Please try again."
         }
     }
 }
@@ -491,7 +514,7 @@ struct BugReportDraft: Equatable, Sendable {
         let trimmedSteps = stepsToReproduce.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedSteps.count <= 4_000 else { throw BugReportValidationError.stepsTooLong }
 
-        return BugReportPayload(
+        let report = BugReportPayload(
             summary: trimmedSummary,
             whatHappened: trimmedWhatHappened,
             stepsToReproduce: trimmedSteps.isEmpty ? nil : trimmedSteps,
@@ -505,6 +528,8 @@ struct BugReportDraft: Equatable, Sendable {
                 connection: connection
             )
         )
+        _ = try report.validatedJSONBody()
+        return report
     }
 }
 
@@ -595,6 +620,8 @@ struct URLSessionBugReportSubmitter: BugReportSubmitting {
                     retryAfterHeader: response.value(forHTTPHeaderField: "Retry-After")
                 )
             }
+        } catch let error as BugReportValidationError {
+            throw error
         } catch let error as BugReportSubmissionError {
             throw error
         } catch {
@@ -610,7 +637,7 @@ struct URLSessionBugReportSubmitter: BugReportSubmitting {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(idempotencyKey.uuidString, forHTTPHeaderField: "Idempotency-Key")
-        request.httpBody = try JSONEncoder().encode(report)
+        request.httpBody = try report.validatedJSONBody()
         return request
     }
 
