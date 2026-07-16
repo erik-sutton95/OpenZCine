@@ -2,6 +2,7 @@ package com.opencapture.openzcine.diagnostics
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -73,6 +74,71 @@ class BugReportScreenComposeTest {
                 submitter.submissions[1].idempotencyKey,
                 submitter.submissions[2].idempotencyKey,
             )
+        }
+    }
+
+    @Test
+    fun activityLogSelectionKeepsRetryKeyUntilTheSelectedAttachmentChanges() {
+        val submitter = RecordingSubmitter(BugReportSubmissionResult.Failed(BugReportSubmissionFailure.NETWORK))
+        compose.setContent {
+            OpenZCineTheme {
+                BugReportScreen(
+                    submitter = submitter,
+                    activityLogProvider = { listOf("app.launched") },
+                    onOpenSecurityAdvisory = { true },
+                    onClose = {},
+                )
+            }
+        }
+
+        compose
+            .onNodeWithContentDescription("Bug report summary")
+            .performScrollTo()
+            .performTextInput("Live view freezes")
+        compose
+            .onNodeWithContentDescription("What happened")
+            .performScrollTo()
+            .performTextInput("Preview stopped after reconnecting.")
+        compose
+            .onNodeWithContentDescription("Include privacy-filtered app activity log")
+            .performScrollTo()
+            .performClick()
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose
+                .onAllNodesWithText("1 app events ready. Timestamps and device information are excluded.")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose
+            .onNodeWithContentDescription("Send anonymous bug report")
+            .performScrollTo()
+            .performClick()
+        compose.waitUntil(timeoutMillis = 5_000) { submitter.submissions.size == 1 }
+        compose
+            .onNodeWithContentDescription("Send anonymous bug report")
+            .performScrollTo()
+            .performClick()
+        compose.waitUntil(timeoutMillis = 5_000) { submitter.submissions.size == 2 }
+
+        compose
+            .onNodeWithContentDescription("Include privacy-filtered app activity log")
+            .performScrollTo()
+            .performClick()
+        compose
+            .onNodeWithContentDescription("Send anonymous bug report")
+            .performScrollTo()
+            .performClick()
+        compose.waitUntil(timeoutMillis = 5_000) { submitter.submissions.size == 3 }
+        compose.runOnIdle {
+            assertEquals(listOf("app.launched"), submitter.submissions[0].activityLog)
+            assertEquals(
+                submitter.submissions[0].idempotencyKey,
+                submitter.submissions[1].idempotencyKey,
+            )
+            assertNotEquals(
+                submitter.submissions[1].idempotencyKey,
+                submitter.submissions[2].idempotencyKey,
+            )
+            assertEquals(false, submitter.submissions[2].includeActivityLog)
         }
     }
 
@@ -151,7 +217,7 @@ class BugReportScreenComposeTest {
         compose.waitUntil(timeoutMillis = 5_000) { submitter.submissions.size == 1 }
         compose
             .onNodeWithText(
-                "This report is too large to send. Shorten what happened or the reproduction steps.",
+                "This report or its attachments are too large to send. Shorten the text or remove an attachment.",
             ).assertIsDisplayed()
         compose
             .onNodeWithContentDescription("Bug report summary")

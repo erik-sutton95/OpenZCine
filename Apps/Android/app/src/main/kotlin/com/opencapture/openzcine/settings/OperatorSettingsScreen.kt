@@ -197,6 +197,7 @@ internal fun OperatorSettingsScreen(
     onReconnect: (() -> Unit)? = null,
     systemSettingsActions: SystemSettingsActions,
     bugReportSubmitter: BugReportSubmitter,
+    bugReportActivityLogProvider: () -> List<String> = { emptyList() },
     liveViewGuideController: LiveViewGuideController,
     onShowGuideNow: (() -> Unit)? = null,
     onShowGuideOnNextRealFrame: () -> Unit,
@@ -256,6 +257,7 @@ internal fun OperatorSettingsScreen(
         BugReportDestination.ANONYMOUS ->
             BugReportScreen(
                 submitter = bugReportSubmitter,
+                activityLogProvider = bugReportActivityLogProvider,
                 onOpenSecurityAdvisory = systemSettingsActions::openSecurityAdvisory,
                 onClose = { bugReportDestination = null },
             )

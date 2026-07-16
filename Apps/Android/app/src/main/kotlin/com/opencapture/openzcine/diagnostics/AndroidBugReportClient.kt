@@ -3,6 +3,7 @@ package com.opencapture.openzcine.diagnostics
 import android.content.Context
 import android.os.Build
 import com.opencapture.openzcine.BuildConfig
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URI
 import java.util.UUID
@@ -81,21 +82,31 @@ internal class AndroidBugReportClient(
         if (!context.isValid() || !isValidBugReportEndpoint(endpoint)) {
             return BugReportSubmissionResult.Failed(BugReportSubmissionFailure.CONFIGURATION)
         }
-        val payload = BugReportPayload.from(draft, context).utf8Bytes()
-        if (payload.size > BugReportPayload.MAXIMUM_UTF8_BYTES) {
-            return BugReportSubmissionResult.Invalid(
-                validation.copy(payload = BugReportPayloadError.TOO_LARGE),
-            )
-        }
         if (runCatching { UUID.fromString(submission.idempotencyKey) }.isFailure) {
             return BugReportSubmissionResult.Failed(BugReportSubmissionFailure.CONFIGURATION)
         }
+        val request =
+            withContext(Dispatchers.Default) {
+                buildRequest(submission, context)
+            }
+                ?: return BugReportSubmissionResult.Invalid(
+                    validation.copy(payload = BugReportPayloadError.TOO_LARGE),
+                )
+        if (request.invalidAttachments) {
+            return BugReportSubmissionResult.Invalid(
+                validation.copy(payload = BugReportPayloadError.INVALID_ATTACHMENTS),
+            )
+        }
+        val httpRequest = request.value
+            ?: return BugReportSubmissionResult.Invalid(
+                validation.copy(payload = BugReportPayloadError.TOO_LARGE),
+            )
 
         return withContext(Dispatchers.IO) {
             currentCoroutineContext().ensureActive()
             val connection =
                 try {
-                    connectionFactory(endpoint)
+                    connectionFactory(httpRequest.endpoint)
                 } catch (_: IOException) {
                     return@withContext BugReportSubmissionResult.Failed(
                         BugReportSubmissionFailure.NETWORK,
@@ -116,12 +127,12 @@ internal class AndroidBugReportClient(
                         connection.requestMethod = "POST"
                         connection.doOutput = true
                         connection.setRequestProperty("Accept", "application/json")
-                        connection.setRequestProperty("Content-Type", "application/json")
+                        connection.setRequestProperty("Content-Type", httpRequest.contentType)
                         connection.setRequestProperty("Idempotency-Key", submission.idempotencyKey)
                         connection.connectTimeout = REQUEST_TIMEOUT_MILLIS
                         connection.readTimeout = REQUEST_TIMEOUT_MILLIS
-                        connection.setFixedLengthStreamingMode(payload.size)
-                        connection.outputStream.use { output -> output.write(payload) }
+                        connection.setFixedLengthStreamingMode(httpRequest.body.size)
+                        connection.outputStream.use { output -> output.write(httpRequest.body) }
                         currentCoroutineContext().ensureActive()
                         val statusCode = connection.responseCode
                         connection.readBoundedBody(statusCode)
@@ -149,6 +160,63 @@ internal class AndroidBugReportClient(
                 connection.disconnect()
             }
         }
+    }
+
+    /** Builds a bounded v1 JSON or v2 multipart request without opening a connection. */
+    private fun buildRequest(
+        submission: BugReportSubmission,
+        context: BugReportContext,
+    ): BugReportRequestBuildResult? {
+        if (!submission.usesAttachments()) {
+            val payload = BugReportPayload.from(submission.draft, context).utf8Bytes()
+            return if (payload.size <= BugReportPayload.MAXIMUM_UTF8_BYTES) {
+                BugReportRequestBuildResult(
+                    value =
+                        BugReportHttpRequest(
+                            endpoint = endpoint,
+                            contentType = "application/json",
+                            body = payload,
+                        ),
+                )
+            } else {
+                null
+            }
+        }
+
+        val hasActivityLog = submission.includeActivityLog || submission.activityLog.isNotEmpty()
+        if (
+            !isPrivacyFilteredActivityLog(submission.activityLog) ||
+                submission.screenshots.size > BugReportAttachmentLimits.MAXIMUM_SCREENSHOTS ||
+                submission.screenshots.any { screenshot -> !isPng(screenshot.copyPngBytes()) }
+        ) {
+            return BugReportRequestBuildResult(invalidAttachments = true)
+        }
+        if (
+            submission.screenshots.any { screenshot ->
+                screenshot.byteCount > BugReportAttachmentLimits.MAXIMUM_SCREENSHOT_BYTES
+            }
+        ) {
+            return null
+        }
+
+        val report =
+            BugReportAttachmentPayload.from(
+                draft = submission.draft,
+                context = context,
+                activityLog = submission.activityLog.takeIf { hasActivityLog },
+            ).utf8Bytes()
+        if (report.size > BugReportAttachmentLimits.MAXIMUM_V2_REPORT_BYTES) return null
+
+        val multipart = createMultipartBody(report, submission.screenshots, submission.idempotencyKey)
+        if (multipart.body.size > BugReportAttachmentLimits.MAXIMUM_MULTIPART_BYTES) return null
+        return BugReportRequestBuildResult(
+            value =
+                BugReportHttpRequest(
+                    endpoint = v2BugReportEndpoint(endpoint),
+                    contentType = "multipart/form-data; boundary=${multipart.boundary}",
+                    body = multipart.body,
+                ),
+        )
     }
 
     private fun HttpsURLConnection.readBoundedBody(statusCode: Int) {
@@ -185,22 +253,86 @@ internal class AndroidBugReportClient(
     }
 }
 
-/** The relay endpoint must be an absolute HTTPS URL without credentials, query, or fragments. */
+private data class BugReportHttpRequest(
+    val endpoint: String,
+    val contentType: String,
+    val body: ByteArray,
+)
+
+private data class BugReportRequestBuildResult(
+    val value: BugReportHttpRequest? = null,
+    val invalidAttachments: Boolean = false,
+)
+
+private data class BugReportMultipartBody(
+    val boundary: String,
+    val body: ByteArray,
+)
+
+/**
+ * Creates a complete fixed-length multipart body. The only attachment names
+ * emitted here are generated public-safe names; picker URIs and display names
+ * cannot cross this boundary.
+ */
+private fun createMultipartBody(
+    report: ByteArray,
+    screenshots: List<BugReportScreenshot>,
+    idempotencyKey: String,
+): BugReportMultipartBody {
+    val boundary =
+        "OpenZCineBugReport${idempotencyKey.filter { character -> character.isLetterOrDigit() }}"
+    val output = ByteArrayOutputStream()
+    fun writeText(value: String) = output.write(value.toByteArray(Charsets.UTF_8))
+
+    writeText("--$boundary\r\n")
+    writeText("Content-Disposition: form-data; name=\"report\"\r\n")
+    writeText("Content-Type: application/json; charset=utf-8\r\n\r\n")
+    output.write(report)
+    writeText("\r\n")
+    screenshots.forEachIndexed { index, screenshot ->
+        writeText("--$boundary\r\n")
+        writeText(
+            "Content-Disposition: form-data; name=\"screenshot\"; " +
+                "filename=\"screenshot-${index + 1}.png\"\r\n",
+        )
+        writeText("Content-Type: image/png\r\n\r\n")
+        output.write(screenshot.copyPngBytes())
+        writeText("\r\n")
+    }
+    writeText("--$boundary--\r\n")
+    return BugReportMultipartBody(boundary = boundary, body = output.toByteArray())
+}
+
+/** The v1 relay endpoint must be an absolute HTTPS URL without credentials, query, or fragments. */
 internal fun isValidBugReportEndpoint(value: String): Boolean =
+    isValidBugReportEndpointAtPath(value, "/v1/bug-reports")
+
+/** The v2 multipart relay endpoint is derived only from a valid v1 relay endpoint. */
+internal fun v2BugReportEndpoint(v1Endpoint: String): String {
+    require(isValidBugReportEndpoint(v1Endpoint)) {
+        "The v2 relay endpoint can only be derived from a valid v1 relay endpoint."
+    }
+    return v1Endpoint.removeSuffix("/v1/bug-reports") + "/v2/bug-reports"
+}
+
+private fun isValidV2BugReportEndpoint(value: String): Boolean =
+    isValidBugReportEndpointAtPath(value, "/v2/bug-reports")
+
+private fun isValidBugReportEndpointAtPath(value: String, expectedPath: String): Boolean =
     runCatching {
         val uri = URI(value)
         uri.isAbsolute &&
             uri.scheme.equals("https", ignoreCase = true) &&
             !uri.host.isNullOrBlank() &&
-            uri.path == "/v1/bug-reports" &&
+            uri.path == expectedPath &&
             uri.userInfo == null &&
             uri.query == null &&
             uri.fragment == null
     }.getOrDefault(false)
 
 private fun openBugReportConnection(value: String): HttpsURLConnection {
-    require(isValidBugReportEndpoint(value)) {
-        "Bug-report endpoint must be an absolute HTTPS URL without credentials, query, or fragments."
+    require(isValidBugReportEndpoint(value) || isValidV2BugReportEndpoint(value)) {
+        "Bug-report endpoint must be an absolute HTTPS v1 or v2 URL without credentials, query, or fragments."
     }
     return (URI(value).toURL().openConnection() as? HttpsURLConnection)
         ?.apply {

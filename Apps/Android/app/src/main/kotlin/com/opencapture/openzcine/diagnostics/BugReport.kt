@@ -90,6 +90,18 @@ internal data class BugReportValidation(
 /** A relay-wide validation error that does not belong to one text field. */
 internal enum class BugReportPayloadError {
     TOO_LARGE,
+    INVALID_ATTACHMENTS,
+}
+
+/** Shared bounds for the deliberately narrow anonymous-attachment contract. */
+internal object BugReportAttachmentLimits {
+    const val MAXIMUM_ACTIVITY_EVENTS: Int = 200
+    const val MAXIMUM_SCREENSHOTS: Int = 3
+    const val MAXIMUM_SCREENSHOT_BYTES: Int = 1_024 * 1_024
+    const val MAXIMUM_V2_REPORT_BYTES: Int = 16 * 1_024
+    const val MAXIMUM_MULTIPART_BYTES: Int =
+        MAXIMUM_SCREENSHOTS * MAXIMUM_SCREENSHOT_BYTES + 64 * 1_024
+    const val MAXIMUM_IMAGE_DIMENSION: Int = 2_560
 }
 
 /**
@@ -190,6 +202,81 @@ internal data class BugReportPayload(
     }
 }
 
+/**
+ * Exact v2 JSON part for an anonymous report with optional attachments.
+ *
+ * The activity log is intentionally only a closed list of event names. It
+ * never includes the timestamped local diagnostics report, free-form values,
+ * device names, or Android process metadata.
+ */
+internal data class BugReportAttachmentPayload(
+    val summary: String,
+    val whatHappened: String,
+    val stepsToReproduce: String?,
+    val frequency: BugReportFrequency,
+    val context: BugReportContext,
+    val activityLog: List<String>?,
+) {
+    fun toJson(): String =
+        buildString {
+            append('{')
+            appendJsonNumberField("schemaVersion", SCHEMA_VERSION)
+            append(',')
+            appendJsonStringField("summary", summary)
+            append(',')
+            appendJsonStringField("whatHappened", whatHappened)
+            stepsToReproduce?.let { value ->
+                append(',')
+                appendJsonStringField("stepsToReproduce", value)
+            }
+            append(',')
+            appendJsonStringField("frequency", frequency.wireValue)
+            append(",\"context\":{")
+            appendJsonStringField("platform", PLATFORM)
+            append(',')
+            appendJsonStringField("appVersion", context.appVersion)
+            append(',')
+            appendJsonStringField("buildNumber", context.buildNumber)
+            append(',')
+            appendJsonStringField("osVersion", context.osVersion)
+            append(',')
+            appendJsonStringField("deviceClass", context.deviceClass.wireValue)
+            append(',')
+            appendJsonStringField("connection", context.connection.wireValue)
+            append('}')
+            activityLog?.let { events ->
+                append(',')
+                appendJsonStringArrayField("activityLog", events)
+            }
+            append('}')
+        }
+
+    /** UTF-8 report-part bytes used for the v2 body-size guard. */
+    internal fun utf8Bytes(): ByteArray = toJson().toByteArray(Charsets.UTF_8)
+
+    internal companion object {
+        const val SCHEMA_VERSION: Int = 2
+        const val PLATFORM: String = "android"
+
+        fun from(
+            draft: BugReportDraft,
+            context: BugReportContext,
+            activityLog: List<String>?,
+        ): BugReportAttachmentPayload {
+            val normalizedDraft = draft.normalized()
+            val normalizedContext = context.normalized()
+            return BugReportAttachmentPayload(
+                summary = normalizedDraft.summary,
+                whatHappened = normalizedDraft.whatHappened,
+                stepsToReproduce = normalizedDraft.stepsToReproduce.ifBlank { null },
+                frequency = normalizedDraft.frequency,
+                context = normalizedContext,
+                activityLog = activityLog,
+            )
+        }
+    }
+}
+
 private fun StringBuilder.appendJsonNumberField(name: String, value: Int) {
     append(bugReportJsonString(name))
     append(':')
@@ -200,6 +287,16 @@ private fun StringBuilder.appendJsonStringField(name: String, value: String) {
     append(bugReportJsonString(name))
     append(':')
     append(bugReportJsonString(value))
+}
+
+private fun StringBuilder.appendJsonStringArrayField(name: String, values: List<String>) {
+    append(bugReportJsonString(name))
+    append(":[")
+    values.forEachIndexed { index, value ->
+        if (index > 0) append(',')
+        append(bugReportJsonString(value))
+    }
+    append(']')
 }
 
 /** Escapes an operator string without pulling Android-only JSON stubs into JVM tests. */
@@ -234,7 +331,52 @@ private fun bugReportJsonString(value: String): String =
 internal data class BugReportSubmission(
     val draft: BugReportDraft,
     val idempotencyKey: String,
-)
+    val includeActivityLog: Boolean = false,
+    val activityLog: List<String> = emptyList(),
+    val screenshots: List<BugReportScreenshot> = emptyList(),
+) {
+    /** Whether this submission must use the v2 multipart relay endpoint. */
+    internal fun usesAttachments(): Boolean =
+        includeActivityLog || activityLog.isNotEmpty() || screenshots.isNotEmpty()
+}
+
+/**
+ * A freshly re-rendered screenshot held only in memory for one send attempt.
+ * The type deliberately owns a copy of PNG bytes and exposes no source URI or
+ * original filename.
+ */
+internal class BugReportScreenshot private constructor(private val pngBytes: ByteArray) {
+    val byteCount: Int
+        get() = pngBytes.size
+
+    internal fun copyPngBytes(): ByteArray = pngBytes.copyOf()
+
+    internal companion object {
+        fun fromSanitizedPng(bytes: ByteArray): BugReportScreenshot? =
+            if (isPng(bytes)) BugReportScreenshot(bytes.copyOf()) else null
+    }
+}
+
+/** A lightweight client-side guard; the relay performs full PNG validation. */
+internal fun isPng(bytes: ByteArray): Boolean =
+    bytes.size >= PNG_SIGNATURE.size && PNG_SIGNATURE.indices.all { bytes[it] == PNG_SIGNATURE[it] }
+
+private val PNG_SIGNATURE: ByteArray =
+    byteArrayOf(
+        0x89.toByte(),
+        0x50,
+        0x4E,
+        0x47,
+        0x0D,
+        0x0A,
+        0x1A,
+        0x0A,
+    )
+
+/** Only closed event names can be placed in a public anonymous attachment. */
+internal fun isPrivacyFilteredActivityLog(events: List<String>): Boolean =
+    events.size <= BugReportAttachmentLimits.MAXIMUM_ACTIVITY_EVENTS &&
+        events.all { event -> AndroidDiagnosticEvent.fromWireValue(event) != null }
 
 /** Sends one explicitly initiated anonymous bug report without persistence or automatic retries. */
 internal fun interface BugReportSubmitter {

@@ -117,6 +117,20 @@ internal class DiagnosticEventStore(
         }
     }
 
+    /**
+     * Returns the sole activity-log shape allowed in an anonymous report.
+     *
+     * Timestamps, raw local file lines, and every diagnostic-report field are
+     * deliberately left behind. A hand-edited value such as "Bob's iPhone"
+     * cannot enter because [recentEvents] accepts only [AndroidDiagnosticEvent]
+     * wire values.
+     */
+    @Synchronized
+    fun privacyFilteredActivityLog(): List<String> =
+        recentEvents()
+            .takeLast(BugReportAttachmentLimits.MAXIMUM_ACTIVITY_EVENTS)
+            .map { event -> event.event.wireValue }
+
     private fun bounded(events: List<DiagnosticBreadcrumb>): List<DiagnosticBreadcrumb> {
         val countBounded = events.takeLast(maximumEventCount)
         val retained = ArrayDeque<DiagnosticBreadcrumb>()
@@ -177,7 +191,8 @@ internal object DiagnosticReportRenderer {
                 "This local report intentionally excludes camera identities and serials, Wi-Fi",
                 "names and network addresses, media names and paths, account identities and tokens,",
                 "credentials, camera frames, arbitrary exception text, and user-entered text.",
-                "No diagnostics are uploaded by OpenZCine.",
+                "No diagnostics are uploaded automatically by OpenZCine.",
+                "Anonymous reports can include only a separately selected privacy-filtered list of app-event names.",
                 "",
                 "Generated: ${isoTimestamp(metadata.generatedAtMillis)}",
                 "App: OpenZCine $version (build ${metadata.buildNumber.coerceAtLeast(0)})",

@@ -42,6 +42,75 @@ class AndroidBugReportClientTest {
     }
 
     @Test
+    fun `v2 multipart uses only generated screenshot names and preserves an unchanged key`() = runBlocking {
+        val first = FakeHttpsConnection(statusCode = 429, headers = mapOf("Retry-After" to "30"))
+        val second = FakeHttpsConnection(statusCode = 201)
+        val connections = ArrayDeque(listOf(first, second))
+        val requestedEndpoints = mutableListOf<String>()
+        val client =
+            client { requestedEndpoint ->
+                requestedEndpoints += requestedEndpoint
+                connections.removeFirst()
+            }
+        val screenshot = requireNotNull(BugReportScreenshot.fromSanitizedPng(tinyPng()))
+        val submission =
+            sampleSubmission().copy(
+                includeActivityLog = true,
+                activityLog = listOf("app.launched", "live-view.started"),
+                screenshots = listOf(screenshot),
+            )
+
+        assertEquals(
+            BugReportSubmissionResult.Failed(
+                reason = BugReportSubmissionFailure.RATE_LIMITED,
+                retryAfterSeconds = 30,
+            ),
+            client.submit(submission),
+        )
+        assertEquals(BugReportSubmissionResult.Submitted, client.submit(submission))
+
+        assertEquals(
+            listOf(
+                "https://reports.openzcine.app/v2/bug-reports",
+                "https://reports.openzcine.app/v2/bug-reports",
+            ),
+            requestedEndpoints,
+        )
+        assertTrue(first.header("Content-Type").orEmpty().startsWith("multipart/form-data; boundary="))
+        assertEquals(submission.idempotencyKey, first.header("Idempotency-Key"))
+        assertEquals(submission.idempotencyKey, second.header("Idempotency-Key"))
+        val body = first.requestBody()
+        assertTrue(body.contains("name=\"report\""))
+        assertTrue(body.contains("\"schemaVersion\":2"))
+        assertTrue(body.contains("\"activityLog\":[\"app.launched\",\"live-view.started\"]"))
+        assertTrue(body.contains("name=\"screenshot\"; filename=\"screenshot-1.png\""))
+        assertFalse(body.contains("original-screenshot", ignoreCase = true))
+        assertFalse(body.contains("Bob's iPhone"))
+    }
+
+    @Test
+    fun `untrusted activity text is rejected before a v2 connection opens`() = runBlocking {
+        var factoryCalls = 0
+        val client =
+            client {
+                factoryCalls += 1
+                FakeHttpsConnection(statusCode = 201)
+            }
+
+        val result =
+            client.submit(
+                sampleSubmission().copy(
+                    includeActivityLog = true,
+                    activityLog = listOf("Bob's iPhone"),
+                ),
+            )
+
+        val invalid = assertIs<BugReportSubmissionResult.Invalid>(result)
+        assertEquals(BugReportPayloadError.INVALID_ATTACHMENTS, invalid.validation.payload)
+        assertEquals(0, factoryCalls)
+    }
+
+    @Test
     fun `200 and 201 are the only successful relay response contracts`() = runBlocking {
         listOf(200, 201).forEach { statusCode ->
             assertEquals(
@@ -175,6 +244,18 @@ class AndroidBugReportClientTest {
             osVersion = "Android 16 (API 36)",
             deviceClass = BugReportDeviceClass.PHONE,
             connection = connection,
+        )
+
+    private fun tinyPng(): ByteArray =
+        byteArrayOf(
+            0x89.toByte(),
+            0x50,
+            0x4E,
+            0x47,
+            0x0D,
+            0x0A,
+            0x1A,
+            0x0A,
         )
 
     private class FakeHttpsConnection(
