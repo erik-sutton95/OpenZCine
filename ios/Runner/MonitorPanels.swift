@@ -2971,7 +2971,7 @@ struct OperatorSettingsPanel: View {
             DiagnosticsShareSheet(url: item.url)
         }
         .fullScreenCover(isPresented: $bugReportPresented) {
-            BugReportFormView(onDismiss: { bugReportPresented = false })
+            BugReportFlowView(onDismiss: { bugReportPresented = false })
         }
         .alert(
             "Couldn’t Share Diagnostics",
@@ -3327,7 +3327,7 @@ struct OperatorSettingsPanel: View {
             SettingsInlineRow(
                 title: "Report a Problem",
                 help:
-                    "Send an anonymous report from OpenZCine. It creates a public GitHub issue without uploading diagnostics."
+                    "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue."
             ) {
                 SettingsActionPill(title: "Report") {
                     bugReportPresented = true
@@ -3618,6 +3618,264 @@ struct OperatorSettingsPanel: View {
                     action: items[index].action)
             }
         }
+    }
+}
+
+/// Coordinates the two explicit routes for reporting a public GitHub issue.
+///
+/// The chooser deliberately keeps the account-free report separate from the signed-in GitHub
+/// form: the former stays privacy-minimal while the latter opens the canonical web form in the
+/// person's browser.
+@MainActor
+private struct BugReportFlowView: View {
+    private enum Destination {
+        case chooser
+        case anonymous
+    }
+
+    @State private var destination: Destination = .chooser
+
+    private let onDismiss: () -> Void
+
+    init(onDismiss: @escaping () -> Void) {
+        self.onDismiss = onDismiss
+    }
+
+    var body: some View {
+        switch destination {
+        case .chooser:
+            BugReportPathChooserView(
+                onDismiss: onDismiss,
+                onAnonymous: { destination = .anonymous }
+            )
+        case .anonymous:
+            BugReportFormView(onDismiss: onDismiss)
+        }
+    }
+}
+
+/// Lets a person choose between a minimal anonymous report and GitHub's signed-in bug form.
+///
+/// Both choices produce public GitHub issues. The in-app route is intentionally limited to a
+/// small, privacy-minimal payload; the browser route is for people who want to add richer details.
+@MainActor
+private struct BugReportPathChooserView: View {
+    @Environment(\.openURL) private var openURL
+
+    private let onDismiss: () -> Void
+    private let onAnonymous: () -> Void
+
+    init(
+        onDismiss: @escaping () -> Void,
+        onAnonymous: @escaping () -> Void
+    ) {
+        self.onDismiss = onDismiss
+        self.onAnonymous = onAnonymous
+    }
+
+    var body: some View {
+        ZStack {
+            LiveDesign.background.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                header
+                Rectangle()
+                    .fill(LiveDesign.hairline)
+                    .frame(height: 1)
+
+                GeometryReader { proxy in
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(
+                                "Both choices create a public GitHub issue. Choose the route that fits the detail you want to share."
+                            )
+                            .font(.system(size: 13))
+                            .foregroundStyle(LiveDesign.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                            reportPaths(useTwoColumns: proxy.size.width >= 680)
+
+                            safetyNotice
+                        }
+                        .frame(maxWidth: 760, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 16)
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button(action: onDismiss) {
+                Label("Close", systemImage: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+            }
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel("Close report options")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Report a Problem")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                Text("Choose a public GitHub issue route")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+    }
+
+    @ViewBuilder private func reportPaths(useTwoColumns: Bool) -> some View {
+        if useTwoColumns {
+            HStack(alignment: .top, spacing: 12) {
+                anonymousPath
+                githubPath
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                anonymousPath
+                githubPath
+            }
+        }
+    }
+
+    private var anonymousPath: some View {
+        BugReportPathCard(
+            icon: "eye.slash",
+            title: "Report anonymously",
+            detail:
+                "No GitHub account is required. Send a short, privacy-minimal report from the app. It becomes a public GitHub issue, and we cannot reply privately.",
+            actionTitle: "Report Anonymously",
+            action: onAnonymous,
+            accessibilityLabel: "Report anonymously",
+            accessibilityHint:
+                "Creates a public GitHub issue without requiring a GitHub account."
+        )
+    }
+
+    private var githubPath: some View {
+        BugReportPathCard(
+            icon: "person.crop.circle.badge.checkmark",
+            title: "Continue with GitHub",
+            detail:
+                "Sign in in your browser to use the full GitHub bug form. It also becomes a public GitHub issue and supports richer details and attachments.",
+            actionTitle: "Continue with GitHub",
+            action: {
+                openURL(SupportLinkCatalog.githubBugReport) { accepted in
+                    BugReportGitHubHandoff.dismissAfterAcceptedBrowserOpen(
+                        accepted,
+                        dismiss: onDismiss
+                    )
+                }
+            },
+            accessibilityLabel: "Continue with GitHub",
+            accessibilityHint:
+                "Opens the signed-in GitHub bug report form in your browser."
+        )
+    }
+
+    private var safetyNotice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("Keep reports public-safe", systemImage: "eye")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Text(
+                "Do not include passwords, pairing codes, private media, camera serial numbers, or security details in either public route."
+            )
+            .font(.system(size: 11.5))
+            .foregroundStyle(LiveDesign.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            Button("Open private security advisory") {
+                openURL(SupportLinkCatalog.securityAdvisory)
+            }
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(LiveDesign.accent)
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel("Open private GitHub security advisory")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
+    }
+}
+
+/// Keeps the report chooser open when the system declines the GitHub browser handoff.
+enum BugReportGitHubHandoff {
+    static func dismissAfterAcceptedBrowserOpen(
+        _ accepted: Bool,
+        dismiss: () -> Void
+    ) {
+        guard accepted else { return }
+        dismiss()
+    }
+}
+
+/// A large, accessible report-route control that keeps its route's privacy contract visible.
+private struct BugReportPathCard: View {
+    let icon: String
+    let title: String
+    let detail: String
+    let actionTitle: String
+    let action: () -> Void
+    let accessibilityLabel: String
+    let accessibilityHint: String
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(LiveDesign.accent)
+                        .frame(width: 24, height: 24)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(LiveDesign.text)
+                        Text(detail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(LiveDesign.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Label(actionTitle, systemImage: "arrow.right")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(LiveDesign.accent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(14)
+            .background(
+                LiveDesign.surface,
+                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                    .stroke(LiveDesign.hairline, lineWidth: 1)
+            )
+            .contentShape(
+                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
     }
 }
 

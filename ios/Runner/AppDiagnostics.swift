@@ -775,6 +775,9 @@ enum SupportLinkCatalog {
     static let featureRequest = requiredURL(
         "https://github.com/erik-sutton95/OpenZCine/discussions/new?category=ideas-feature-requests"
     )
+    static let githubBugReport = requiredURL(
+        "https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml"
+    )
     static let bugReportEndpoint = requiredURL("https://reports.openzcine.app/v1/bug-reports")
 
     private static func requiredURL(_ string: String) -> URL {
