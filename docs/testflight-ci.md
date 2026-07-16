@@ -105,7 +105,7 @@ third-party analytics or crash-reporting SDK.
 
 **Report a Problem** is a separate, explicit flow. A tester can choose an anonymous in-app report
 that sends only entered text plus coarse app/platform context, or a
-[signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new/choose) with richer
+[signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) with richer
 optional details. Both create public GitHub issues. The anonymous route never uploads the local
 MetricKit report, breadcrumbs, logs, screenshots, or media. Testers must not include passwords,
 pairing codes, private media, or security vulnerabilities in either route.

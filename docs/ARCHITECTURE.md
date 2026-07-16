@@ -221,7 +221,7 @@ bodies and reconnect them silently on plug-in.
 
 Bug reports are intentionally a platform-shell concern, not a portable-core feature. **Report a
 Problem** offers two public GitHub-issue paths: an anonymous in-app form and the signed-in
-[GitHub issue chooser](https://github.com/erik-sutton95/OpenZCine/issues/new/choose). The anonymous
+[GitHub bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml). The anonymous
 form sends only the report text the operator supplies plus a small, closed set of app/platform
 fields; it never ships a GitHub credential, installation identifier, diagnostics, logs,
 screenshots, media, camera identity, or network identifier. The signed-in route hands richer

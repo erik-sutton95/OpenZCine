@@ -66,7 +66,7 @@ committed to this repo**.
   GitHub-issue paths:
   - **Anonymous in-app report** — A minimal report with no GitHub account. It cannot include
     attachments or receive a private reply.
-  - **Signed-in GitHub issue** — Open [GitHub's issue chooser](https://github.com/erik-sutton95/OpenZCine/issues/new/choose)
+  - **Signed-in GitHub issue** — Open [GitHub's bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
     for richer optional details and attachments. A GitHub account is required.
   New bugs are automatically labeled `needs-triage`; issues are strictly for bugs. Never put
   sensitive information in either public path.

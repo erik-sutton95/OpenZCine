@@ -283,7 +283,7 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   confirmed credentials enter encrypted storage only after a successful join.
 - **In-app bug reporting paths** (OPE-102, in progress) — iOS and Android offer an anonymous,
   minimal report through a small GitHub-App relay or a
-  [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new/choose) for richer
+  [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) for richer
   optional details. Both create labelled public GitHub issues. The anonymous path excludes
   diagnostics, logs, attachments, screenshots, camera/device identifiers, and network identifiers;
   feature requests remain account-backed GitHub Discussions.
