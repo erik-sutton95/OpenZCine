@@ -22,12 +22,14 @@ import Testing
 struct PTPIPClientSessionTests {
     private func connect(
         to server: FakeZRServer,
+        strategy: PTPIPClientSession.ConnectionStrategy = .restoreProfileThenPairing,
         onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
     ) throws -> PTPIPClientSession {
         try PTPIPClientSession.connect(
             host: "127.0.0.1",
             port: server.port,
             timeoutMilliseconds: 2_000,
+            strategy: strategy,
             onPhase: onPhase)
     }
 
@@ -47,12 +49,14 @@ struct PTPIPClientSessionTests {
         }
     }
 
-    @Test func connectsWithSavedProfileAndIdentifies() throws {
+    @Test func connectsWithExplicitSavedProfileAndIdentifies() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
 
         var phases: [CameraConnectionPhase] = []
-        let session = try connect(to: server) { phase, _ in phases.append(phase) }
+        let session = try connect(to: server, strategy: .savedProfile) { phase, _ in
+            phases.append(phase)
+        }
         defer { session.disconnect() }
 
         #expect(phases == [.handshaking, .connected])
@@ -68,7 +72,7 @@ struct PTPIPClientSessionTests {
         #expect(operations.prefix(2) == [.openSession, .changeApplicationMode])
     }
 
-    @Test func fallsBackToFirstTimePairingWhenAppControlIsRefused() throws {
+    @Test func compatibilityStrategyFallsBackToFirstTimePairingWhenAppControlIsRefused() throws {
         var options = FakeZRServer.Options()
         options.acceptsAppControlImmediately = false
         let server = try FakeZRServer(options: options)
@@ -93,6 +97,90 @@ struct PTPIPClientSessionTests {
                     .openSession, .getPairingInfo, .confirmPairing, .changeApplicationMode,
                     .getDeviceInfo,
                 ])
+    }
+
+    @Test func firstTimePairingSkipsSavedProfileProbeAndConfirmsAfterPairingSucceeds() throws {
+        var options = FakeZRServer.Options()
+        options.acceptsAppControlImmediately = false
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [(CameraConnectionPhase, String)] = []
+        var confirmPhaseFollowedSuccessfulConfirm = false
+        let session = try connect(to: server, strategy: .firstTimePairing) { phase, detail in
+            phases.append((phase, detail))
+            if phase == .confirmOnCamera {
+                confirmPhaseFollowedSuccessfulConfirm = server.receivedOperations().contains(
+                    .confirmPairing)
+            }
+        }
+        defer { session.disconnect() }
+
+        #expect(phases.map(\.0) == [.handshaking, .pairing, .confirmOnCamera, .connected])
+        #expect(phases.first(where: { $0.0 == .confirmOnCamera })?.1 == "1234")
+        #expect(confirmPhaseFollowedSuccessfulConfirm)
+        // Unknown Wi-Fi cameras must never probe `ChangeApplicationMode`: that
+        // ejects the ZR from its pairing wizard before it yields a challenge.
+        #expect(
+            server.receivedOperations()
+                == [
+                    .openSession, .getPairingInfo, .confirmPairing, .changeApplicationMode,
+                    .getDeviceInfo,
+                ])
+    }
+
+    @Test func savedProfileRejectsWithoutStartingFirstTimePairing() throws {
+        var options = FakeZRServer.Options()
+        options.acceptsAppControlImmediately = false
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [CameraConnectionPhase] = []
+        #expect(throws: PTPIPClientSessionError.savedProfileRequired) {
+            try connect(to: server, strategy: .savedProfile) { phase, _ in
+                phases.append(phase)
+            }
+        }
+
+        #expect(phases == [.handshaking])
+        #expect(
+            server.receivedOperations()
+                == [.openSession, .changeApplicationMode, .closeSession])
+    }
+
+    @Test func restoreStrategyDoesNotPairAfterTransportFailure() throws {
+        var options = FakeZRServer.Options()
+        options.disconnectsOnChangeApplicationMode = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        #expect(throws: PTPIPClientSessionError.self) {
+            try connect(to: server, strategy: .restoreProfileThenPairing)
+        }
+
+        let operations = server.receivedOperations()
+        #expect(operations.prefix(2) == [.openSession, .changeApplicationMode])
+        #expect(!operations.contains(.getPairingInfo))
+        #expect(!operations.contains(.confirmPairing))
+    }
+
+    @Test func firstTimePairingDoesNotReportCameraConfirmationWhenConfirmIsRejected() throws {
+        var options = FakeZRServer.Options()
+        options.confirmPairingResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [CameraConnectionPhase] = []
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(.confirmPairing, .deviceBusy)
+        ) {
+            try connect(to: server, strategy: .firstTimePairing) { phase, _ in
+                phases.append(phase)
+            }
+        }
+
+        #expect(phases == [.handshaking, .pairing])
+        #expect(!server.receivedOperations().contains(.changeApplicationMode))
     }
 
     @Test func readsBatteryAndRecordingStateProperties() throws {

@@ -59,6 +59,9 @@ final class FakeZRServer: @unchecked Sendable {
         /// sequence (`GetPairingInfo` + `ConfirmPairing`) completes — the
         /// first-time-pairing camera behavior.
         var acceptsAppControlImmediately = true
+        /// Closes the command channel when app control is probed, simulating a
+        /// transport failure rather than a recoverable saved-profile rejection.
+        var disconnectsOnChangeApplicationMode = false
         /// Reply `Init_Fail` to every `Init_Command_Request`.
         var refusesInit = false
         /// TCP port to listen on; 0 picks an ephemeral port. The on-device
@@ -82,6 +85,9 @@ final class FakeZRServer: @unchecked Sendable {
         var traceOperations = ProcessInfo.processInfo.environment["ZC_FAKE_ZR_TRACE"] == "1"
         var cameraName = "ZR_6001234"
         var pairingPIN = "1234"
+        /// Response sent for `ConfirmPairing`; a non-OK response keeps the
+        /// fake unpaired and verifies the app does not claim body confirmation.
+        var confirmPairingResponseCode: UInt16 = PTPResponseCode.ok.rawValue
         var batteryPercent: UInt8 = 80
         /// Properties the fake rejects as unsupported for readback tests.
         var unsupportedPropertyCodes: Set<UInt32> = []
@@ -492,6 +498,10 @@ final class FakeZRServer: @unchecked Sendable {
         case .openSession, .closeSession:
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .changeApplicationMode:
+            if options.disconnectsOnChangeApplicationMode {
+                close(connection)
+                return
+            }
             lock.lock()
             let accepted = options.acceptsAppControlImmediately || pairingConfirmed
             lock.unlock()
@@ -501,10 +511,13 @@ final class FakeZRServer: @unchecked Sendable {
             sendDataIn(
                 connection, data: Data(options.pairingPIN.utf8), transactionID: transactionID)
         case .confirmPairing:
+            let response = options.confirmPairingResponseCode
             lock.lock()
-            pairingConfirmed = true
+            if response == PTPResponseCode.ok.rawValue {
+                pairingConfirmed = true
+            }
             lock.unlock()
-            sendResponse(connection, code: 0x2001, transactionID: transactionID)
+            sendResponse(connection, code: response, transactionID: transactionID)
         case .getDeviceInfo:
             sendDataIn(connection, data: deviceInfoDataset(), transactionID: transactionID)
         case .startLiveView:
