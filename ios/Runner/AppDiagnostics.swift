@@ -1217,6 +1217,13 @@ final class BugReportFormModel {
         submissionState = .editing
     }
 
+    /// Surfaces a route failure without attempting a report over the camera's local-only network.
+    func recordInternetRouteFailure() {
+        submissionState = .failed(
+            "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+        )
+    }
+
     private func makeSubmission() async throws -> BugReportSubmission {
         let activityLog: [String]?
         if includeActivityLog {

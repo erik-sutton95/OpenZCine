@@ -2898,8 +2898,11 @@ struct OperatorSettingsPanel: View {
     @State private var cacheSizeBytes: UInt64?
     @State private var diagnosticsShareItem: DiagnosticsShareItem?
     @State private var diagnosticsErrorMessage: String?
+    @State private var externalLinkErrorMessage: String?
     @State private var isPreparingDiagnostics = false
-    @State private var bugReportPresented = DemoHarness.openBugReport
+    /// Standalone setup is already a root cover, so its report flow is presented above that cover.
+    /// Camera-backed setup uses the root-owned presentation instead, which survives an AP hop.
+    @State private var standaloneBugReportPresented = false
 
     private var selectedTab: OperatorSettingsTab {
         get { model.operatorSettingsTab }
@@ -2971,8 +2974,9 @@ struct OperatorSettingsPanel: View {
         .sheet(item: $diagnosticsShareItem) { item in
             DiagnosticsShareSheet(url: item.url)
         }
-        .fullScreenCover(isPresented: $bugReportPresented) {
-            BugReportFlowView(onDismiss: { bugReportPresented = false })
+        .fullScreenCover(isPresented: $standaloneBugReportPresented) {
+            BugReportFlowView(onDismiss: { standaloneBugReportPresented = false })
+                .environment(model)
         }
         .alert(
             "Couldn’t Share Diagnostics",
@@ -2984,6 +2988,23 @@ struct OperatorSettingsPanel: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(diagnosticsErrorMessage ?? "Please try again.")
+        }
+        .alert(
+            "Couldn’t Reach the Internet",
+            isPresented: Binding(
+                get: { externalLinkErrorMessage != nil },
+                set: { if !$0 { externalLinkErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(
+                externalLinkErrorMessage
+                    ?? "Check cellular or another Wi-Fi network and try again."
+            )
+        }
+        .onAppear {
+            if DemoHarness.openBugReport { presentBugReport() }
         }
     }
 
@@ -3331,7 +3352,7 @@ struct OperatorSettingsPanel: View {
                     "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue."
             ) {
                 SettingsActionPill(title: "Report") {
-                    bugReportPresented = true
+                    presentBugReport()
                 }
                 .accessibilityLabel("Report a Problem")
             }
@@ -3410,12 +3431,34 @@ struct OperatorSettingsPanel: View {
         }
     }
 
+    private func presentBugReport() {
+        if model.isStandaloneSettingsPresented {
+            model.isBugReportPresented = false
+            standaloneBugReportPresented = true
+        } else {
+            model.isBugReportPresented = true
+        }
+    }
+
     private func systemLinkButton(_ title: String, url: URL, label: String) -> some View {
-        Button(title) { openURL(url) }
+        Button(title) { openExternalURL(url) }
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(LiveDesign.accent)
             .buttonStyle(.zcTapTarget)
             .accessibilityLabel(label)
+    }
+
+    private func openExternalURL(_ url: URL) {
+        Task {
+            guard await model.prepareExternalInternetLinkHandoff() else {
+                externalLinkErrorMessage =
+                    "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+                return
+            }
+            openURL(url) { accepted in
+                model.completeExternalInternetLinkHandoff(browserAccepted: accepted)
+            }
+        }
     }
 
     private func prepareDiagnosticsReport() {
@@ -3628,7 +3671,7 @@ struct OperatorSettingsPanel: View {
 /// form: the former stays privacy-minimal while the latter opens the canonical web form in the
 /// person's browser.
 @MainActor
-private struct BugReportFlowView: View {
+struct BugReportFlowView: View {
     private enum Destination {
         case chooser
         case anonymous
@@ -3661,7 +3704,10 @@ private struct BugReportFlowView: View {
 /// small, privacy-minimal payload; the browser route is for people who want to add richer details.
 @MainActor
 private struct BugReportPathChooserView: View {
+    @Environment(NativeAppModel.self) private var appModel
     @Environment(\.openURL) private var openURL
+
+    @State private var externalLinkErrorMessage: String?
 
     private let onDismiss: () -> Void
     private let onAnonymous: () -> Void
@@ -3707,6 +3753,20 @@ private struct BugReportPathChooserView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .alert(
+            "Couldn’t Reach the Internet",
+            isPresented: Binding(
+                get: { externalLinkErrorMessage != nil },
+                set: { if !$0 { externalLinkErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(
+                externalLinkErrorMessage
+                    ?? "Check cellular or another Wi-Fi network and try again."
+            )
+        }
     }
 
     private var header: some View {
@@ -3770,12 +3830,7 @@ private struct BugReportPathChooserView: View {
                 "Sign in in your browser to use the full GitHub bug form. It also becomes a public GitHub issue and supports richer details and attachments.",
             actionTitle: "Continue with GitHub",
             action: {
-                openURL(SupportLinkCatalog.githubBugReport) { accepted in
-                    BugReportGitHubHandoff.dismissAfterAcceptedBrowserOpen(
-                        accepted,
-                        dismiss: onDismiss
-                    )
-                }
+                openExternalURL(SupportLinkCatalog.githubBugReport, dismissWhenAccepted: true)
             },
             accessibilityLabel: "Continue with GitHub",
             accessibilityHint:
@@ -3795,7 +3850,7 @@ private struct BugReportPathChooserView: View {
             .foregroundStyle(LiveDesign.muted)
             .fixedSize(horizontal: false, vertical: true)
             Button("Open private security advisory") {
-                openURL(SupportLinkCatalog.securityAdvisory)
+                openExternalURL(SupportLinkCatalog.securityAdvisory)
             }
             .font(.system(size: 11.5, weight: .semibold))
             .foregroundStyle(LiveDesign.accent)
@@ -3812,6 +3867,25 @@ private struct BugReportPathChooserView: View {
             RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
                 .stroke(LiveDesign.hairline, lineWidth: 1)
         )
+    }
+
+    private func openExternalURL(_ url: URL, dismissWhenAccepted: Bool = false) {
+        Task {
+            guard await appModel.prepareExternalInternetLinkHandoff() else {
+                externalLinkErrorMessage =
+                    "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+                return
+            }
+            openURL(url) { accepted in
+                appModel.completeExternalInternetLinkHandoff(browserAccepted: accepted)
+                if dismissWhenAccepted {
+                    BugReportGitHubHandoff.dismissAfterAcceptedBrowserOpen(
+                        accepted,
+                        dismiss: onDismiss
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -3887,6 +3961,7 @@ private struct BugReportPathCard: View {
 /// screenshot capture, raw diagnostics attachment, retry queue, or persistent draft storage.
 @MainActor
 struct BugReportFormView: View {
+    @Environment(NativeAppModel.self) private var appModel
     @Environment(\.openURL) private var openURL
     @State private var model: BugReportFormModel
     @State private var selectedScreenshotItems: [PhotosPickerItem] = []
@@ -4211,7 +4286,7 @@ struct BugReportFormView: View {
                 .foregroundStyle(LiveDesign.text)
                 .fixedSize(horizontal: false, vertical: true)
                 Button("Open private security advisory") {
-                    openURL(SupportLinkCatalog.securityAdvisory)
+                    openExternalURL(SupportLinkCatalog.securityAdvisory)
                 }
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
@@ -4246,7 +4321,7 @@ struct BugReportFormView: View {
             }
 
             Button {
-                Task { await model.submit() }
+                Task { await submitReport() }
             } label: {
                 Text(model.isSubmitting ? "Sending…" : "Submit Anonymous Report")
                     .font(.system(size: 13, weight: .bold))
@@ -4289,7 +4364,7 @@ struct BugReportFormView: View {
 
             if let issueURL = receipt.issueURL {
                 Button("Open Public Issue") {
-                    openURL(issueURL)
+                    openExternalURL(issueURL)
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(LiveDesign.accent)
@@ -4314,6 +4389,30 @@ struct BugReportFormView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
         .accessibilityElement(children: .contain)
+    }
+
+    private func submitReport() async {
+        let usedInternetHop = appModel.isOnCameraAccessPoint
+        guard await appModel.prepareExternalInternetLinkHandoff() else {
+            model.recordInternetRouteFailure()
+            return
+        }
+        await model.submit()
+        if usedInternetHop {
+            appModel.resumeExternalInternetLinkHandoffIfNeeded()
+        }
+    }
+
+    private func openExternalURL(_ url: URL) {
+        Task {
+            guard await appModel.prepareExternalInternetLinkHandoff() else {
+                model.recordInternetRouteFailure()
+                return
+            }
+            openURL(url) { accepted in
+                appModel.completeExternalInternetLinkHandoff(browserAccepted: accepted)
+            }
+        }
     }
 
     private func submissionConfirmation(receipt: BugReportSubmissionReceipt) -> String {
