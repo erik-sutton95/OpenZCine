@@ -104,11 +104,14 @@ Wi-Fi details, pairing data, credentials, and account identifiers. OpenZCine doe
 third-party analytics or crash-reporting SDK.
 
 **Report a Problem** is a separate, explicit flow. A tester can choose an anonymous in-app report
-that sends only entered text plus coarse app/platform context, or a
+that sends entered text plus coarse app/platform context, and may opt into a closed
+privacy-filtered activity-event snapshot or selected screenshots, or choose a
 [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) with richer
 optional details. Both create public GitHub issues. The anonymous route never uploads the local
-MetricKit report, breadcrumbs, logs, screenshots, or media. Testers must not include passwords,
-pairing codes, private media, or security vulnerabilities in either route.
+MetricKit report, raw breadcrumbs, arbitrary logs, original image bytes, or media. Its optional
+snapshot contains only closed event names; selected screenshots are re-rendered to remove embedded
+file metadata but their visible content remains public. Testers must not include passwords, pairing
+codes, private media, or security vulnerabilities in either route.
 
 ## GitHub Actions (fallback)
 

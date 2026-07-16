@@ -281,12 +281,15 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
   preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and
   confirmed credentials enter encrypted storage only after a successful join.
-- **In-app bug reporting paths** (OPE-102, in progress) — iOS and Android offer an anonymous,
-  minimal report through a small GitHub-App relay or a
+- **In-app bug reporting paths** (OPE-102, in progress) — iOS and Android offer an anonymous
+  report through a small GitHub-App relay or a
   [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) for richer
-  optional details. Both create labelled public GitHub issues. The anonymous path excludes
-  diagnostics, logs, attachments, screenshots, camera/device identifiers, and network identifiers;
-  feature requests remain account-backed GitHub Discussions.
+  optional details. Both create labelled public GitHub issues. The anonymous path has optional,
+  user-selected screenshots re-rendered without embedded file metadata and a closed,
+  privacy-filtered app-activity snapshot; it never uploads raw diagnostics, arbitrary logs, device
+  names, camera/device identifiers, network identifiers, or original image bytes. Visible screenshot
+  content remains the reporter's responsibility to review. Feature requests remain account-backed
+  GitHub Discussions.
 - **External beta diagnostics & support** (in progress) — Apple-native crash diagnostics,
   a user-reviewed local diagnostics share flow, and direct System links for help, feature requests,
   source, privacy, and terms.
