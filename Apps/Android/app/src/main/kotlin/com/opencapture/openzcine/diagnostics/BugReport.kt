@@ -1,0 +1,262 @@
+package com.opencapture.openzcine.diagnostics
+
+/** The intentionally small set of report-frequency values accepted by the public endpoint. */
+internal enum class BugReportFrequency(val wireValue: String) {
+    ALWAYS("always"),
+    SOMETIMES("sometimes"),
+    ONCE("once"),
+    UNKNOWN("unknown"),
+}
+
+/** The connection category an operator deliberately selects for a report. */
+internal enum class BugReportConnection(val wireValue: String) {
+    WIFI("wifi"),
+    USB("usb"),
+    UNKNOWN("unknown"),
+}
+
+/** Coarse screen-size category that never identifies the operator's device. */
+internal enum class BugReportDeviceClass(val wireValue: String) {
+    PHONE("phone"),
+    TABLET("tablet"),
+    UNKNOWN("unknown"),
+}
+
+/**
+ * Operator-entered report fields. This value is never persisted or queued by
+ * OpenZCine; it exists only while the report screen is visible and sending.
+ */
+internal data class BugReportDraft(
+    val summary: String,
+    val whatHappened: String,
+    val stepsToReproduce: String,
+    val frequency: BugReportFrequency,
+    val connection: BugReportConnection,
+) {
+    fun validation(): BugReportValidation =
+        BugReportValidation(
+            summary = validationError(summary, MAXIMUM_SUMMARY_LENGTH),
+            whatHappened = validationError(whatHappened, MAXIMUM_DESCRIPTION_LENGTH),
+            stepsToReproduce = optionalValidationError(stepsToReproduce, MAXIMUM_STEPS_LENGTH),
+        )
+
+    internal fun normalized(): BugReportDraft =
+        copy(
+            summary = summary.trim(),
+            whatHappened = whatHappened.trim(),
+            stepsToReproduce = stepsToReproduce.trim(),
+        )
+
+    private fun validationError(value: String, maximumLength: Int): BugReportFieldError? {
+        val normalized = value.trim()
+        return when {
+            normalized.isEmpty() -> BugReportFieldError.REQUIRED
+            normalized.length > maximumLength -> BugReportFieldError.TOO_LONG
+            else -> null
+        }
+    }
+
+    private fun optionalValidationError(value: String, maximumLength: Int): BugReportFieldError? =
+        if (value.trim().length > maximumLength) BugReportFieldError.TOO_LONG else null
+
+    internal companion object {
+        const val MAXIMUM_SUMMARY_LENGTH: Int = 120
+        const val MAXIMUM_DESCRIPTION_LENGTH: Int = 4_000
+        const val MAXIMUM_STEPS_LENGTH: Int = 4_000
+    }
+}
+
+/** One field-level validation state suitable for accessible UI feedback. */
+internal enum class BugReportFieldError {
+    REQUIRED,
+    TOO_LONG,
+}
+
+/** Validation results for a [BugReportDraft]. */
+internal data class BugReportValidation(
+    val summary: BugReportFieldError?,
+    val whatHappened: BugReportFieldError?,
+    val stepsToReproduce: BugReportFieldError?,
+    val payload: BugReportPayloadError? = null,
+) {
+    val isValid: Boolean
+        get() =
+            summary == null &&
+                whatHappened == null &&
+                stepsToReproduce == null &&
+                payload == null
+}
+
+/** A relay-wide validation error that does not belong to one text field. */
+internal enum class BugReportPayloadError {
+    TOO_LARGE,
+}
+
+/**
+ * Closed, non-identifying technical context appended to every Android report.
+ * It deliberately contains no device, camera, network, media, account, or
+ * persistent-install identity.
+ */
+internal data class BugReportContext(
+    val appVersion: String,
+    val buildNumber: String,
+    val osVersion: String,
+    val deviceClass: BugReportDeviceClass,
+    val connection: BugReportConnection,
+) {
+    internal fun isValid(): Boolean =
+        appVersion.trim().length in 1..MAXIMUM_APP_VERSION_LENGTH &&
+            buildNumber.trim().length in 1..MAXIMUM_BUILD_NUMBER_LENGTH &&
+            osVersion.trim().length in 1..MAXIMUM_OS_VERSION_LENGTH
+
+    internal fun normalized(): BugReportContext =
+        copy(
+            appVersion = appVersion.trim(),
+            buildNumber = buildNumber.trim(),
+            osVersion = osVersion.trim(),
+        )
+
+    internal companion object {
+        const val MAXIMUM_APP_VERSION_LENGTH: Int = 64
+        const val MAXIMUM_BUILD_NUMBER_LENGTH: Int = 64
+        const val MAXIMUM_OS_VERSION_LENGTH: Int = 128
+    }
+}
+
+/** Supplies the closed Android context at the moment an operator sends a report. */
+internal fun interface BugReportContextProvider {
+    fun context(connection: BugReportConnection): BugReportContext
+}
+
+/**
+ * Exact v1 payload for the anonymous-report relay. The relay, not the app,
+ * owns GitHub credentials and issue creation.
+ */
+internal data class BugReportPayload(
+    val summary: String,
+    val whatHappened: String,
+    val stepsToReproduce: String?,
+    val frequency: BugReportFrequency,
+    val context: BugReportContext,
+) {
+    fun toJson(): String =
+        buildString {
+            append('{')
+            appendJsonNumberField("schemaVersion", SCHEMA_VERSION)
+            append(',')
+            appendJsonStringField("summary", summary)
+            append(',')
+            appendJsonStringField("whatHappened", whatHappened)
+            stepsToReproduce?.let { value ->
+                append(',')
+                appendJsonStringField("stepsToReproduce", value)
+            }
+            append(',')
+            appendJsonStringField("frequency", frequency.wireValue)
+            append(",\"context\":{")
+            appendJsonStringField("platform", PLATFORM)
+            append(',')
+            appendJsonStringField("appVersion", context.appVersion)
+            append(',')
+            appendJsonStringField("buildNumber", context.buildNumber)
+            append(',')
+            appendJsonStringField("osVersion", context.osVersion)
+            append(',')
+            appendJsonStringField("deviceClass", context.deviceClass.wireValue)
+            append(',')
+            appendJsonStringField("connection", context.connection.wireValue)
+            append("}}")
+        }
+
+    /** UTF-8 request bytes used for the relay's aggregate body-size guard. */
+    internal fun utf8Bytes(): ByteArray = toJson().toByteArray(Charsets.UTF_8)
+
+    internal companion object {
+        const val SCHEMA_VERSION: Int = 1
+        const val PLATFORM: String = "android"
+        const val MAXIMUM_UTF8_BYTES: Int = 12 * 1_024
+
+        fun from(draft: BugReportDraft, context: BugReportContext): BugReportPayload {
+            val normalizedDraft = draft.normalized()
+            val normalizedContext = context.normalized()
+            return BugReportPayload(
+                summary = normalizedDraft.summary,
+                whatHappened = normalizedDraft.whatHappened,
+                stepsToReproduce = normalizedDraft.stepsToReproduce.ifBlank { null },
+                frequency = normalizedDraft.frequency,
+                context = normalizedContext,
+            )
+        }
+    }
+}
+
+private fun StringBuilder.appendJsonNumberField(name: String, value: Int) {
+    append(bugReportJsonString(name))
+    append(':')
+    append(value)
+}
+
+private fun StringBuilder.appendJsonStringField(name: String, value: String) {
+    append(bugReportJsonString(name))
+    append(':')
+    append(bugReportJsonString(value))
+}
+
+/** Escapes an operator string without pulling Android-only JSON stubs into JVM tests. */
+private fun bugReportJsonString(value: String): String =
+    buildString {
+        append('"')
+        value.forEach { character ->
+            when (character) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else ->
+                    if (character.code < 0x20) {
+                        append("\\u")
+                        append(character.code.toString(16).padStart(4, '0'))
+                    } else {
+                        append(character)
+                    }
+            }
+        }
+        append('"')
+    }
+
+/**
+ * One explicitly initiated anonymous report and its caller-owned idempotency
+ * key. The form retains the key only while an unchanged draft can be retried.
+ */
+internal data class BugReportSubmission(
+    val draft: BugReportDraft,
+    val idempotencyKey: String,
+)
+
+/** Sends one explicitly initiated anonymous bug report without persistence or automatic retries. */
+internal fun interface BugReportSubmitter {
+    suspend fun submit(submission: BugReportSubmission): BugReportSubmissionResult
+}
+
+/** Non-sensitive result states exposed to the report screen. */
+internal sealed interface BugReportSubmissionResult {
+    data object Submitted : BugReportSubmissionResult
+
+    data class Invalid(val validation: BugReportValidation) : BugReportSubmissionResult
+
+    data class Failed(
+        val reason: BugReportSubmissionFailure,
+        val retryAfterSeconds: Long? = null,
+    ) : BugReportSubmissionResult
+}
+
+/** Generic failure categories that never include a request, response, or endpoint body. */
+internal enum class BugReportSubmissionFailure {
+    CONFIGURATION,
+    NETWORK,
+    SERVICE,
+    RATE_LIMITED,
+}
