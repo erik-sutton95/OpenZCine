@@ -75,6 +75,7 @@ Thumbs.db
 .pub/
 .build/
 build/
+.wrangler/
 
 # Xcode / SwiftPM per-user state (generated when the package is opened in Xcode)
 .swiftpm/

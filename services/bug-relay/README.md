@@ -92,8 +92,9 @@ repository, mobile builds, CI variables visible to untrusted pull requests, or i
    gh label list --repo erik-sutton95/OpenZCine
    ```
 
-4. Authenticate Wrangler to the production Cloudflare account. In `wrangler.jsonc`, replace the
-   sample `namespace_id` `2001` with an account-unique Worker Rate Limit namespace ID. Keep the
+4. Authenticate Wrangler to the production Cloudflare account. `namespace_id` is a positive integer
+   chosen by the account owner, not a separately created Cloudflare resource. This deployment uses
+   `73910481`; do not reuse an ID already used by another Worker in the same account. Keep the
    binding name and its 3 requests per 60 second policy unchanged.
 5. Create the private R2 bucket named `openzcine-bug-report-media` in the same Cloudflare account.
    Keep the `BUG_REPORT_MEDIA` binding name unchanged. Configure a **30-day** R2 lifecycle
@@ -116,14 +117,14 @@ repository, mobile builds, CI variables visible to untrusted pull requests, or i
    npx wrangler@4 deploy --config wrangler.jsonc
    ```
 
-8. In Cloudflare Dashboard, add the custom domain `reports.openzcine.app` to this Worker under
-   **Workers & Pages → openzcine-bug-relay → Settings → Domains & Routes**. The `openzcine.app`
-   zone must be managed by Cloudflare. Verify that a `POST` to the path above reaches the Worker
-   and that a `GET` returns a small `405` JSON response.
-9. Before production launch, create a Cloudflare WAF rate-limiting rule for host
-   `reports.openzcine.app` and both report paths (`/v1/bug-reports` and `/v2/bug-reports`), keyed
-   by IP, with a daily threshold (for example, 20 requests per 24 hours) and a Block or Managed
-   Challenge action. This is a second abuse control; it does not replace the Worker binding's 3 per
+8. `wrangler.jsonc` declares `reports.openzcine.app` as a Worker Custom Domain. Deploying creates
+   its DNS record and certificate when the `openzcine.app` zone is managed by Cloudflare. Do not add
+   a separate DNS record. Verify with a safe `GET`, which must return a small `405` JSON response.
+9. Before production launch, create a Cloudflare WAF rate-limiting rule for both report paths
+   (`/v1/bug-reports` and `/v2/bug-reports`), keyed by IP. On plans that support a daily period,
+   use a threshold such as 20 requests per 24 hours and a Block or Managed Challenge action. The
+   Free plan supports only a 10-second period, so use 3 requests per 10 seconds and Block for
+   10 seconds. This is a second abuse control; it does not replace the Worker binding's 3 per
    60 seconds limit.
 10. Update and publish the app privacy notice before enabling the client-side endpoint. It must say
    that submission is optional, the issue is public, and no report body or client IP is logged by
