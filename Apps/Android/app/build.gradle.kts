@@ -37,6 +37,12 @@ fun frameioValue(property: String, environment: String): String =
 
 val frameioClientID = frameioValue("frameio.clientId", "FRAMEIO_CLIENT_ID")
 val frameioRedirectURI = frameioValue("frameio.redirectUri", "FRAMEIO_REDIRECT_URI")
+// The anonymous-report relay is public by design: GitHub App credentials stay
+// server-side. Builds may override the URL for a reviewed staging relay, but a
+// fresh clone always targets the production endpoint.
+val bugReportEndpoint =
+    (findProperty("bugReport.endpoint") as? String)
+        ?: "https://reports.openzcine.app/v1/bug-reports"
 val frameioRedirect = runCatching { URI(frameioRedirectURI) }.getOrNull()
 val configuredFrameioScheme = frameioRedirect?.scheme?.takeIf { scheme ->
     scheme.matches(Regex("[A-Za-z][A-Za-z0-9+.-]*"))
@@ -91,6 +97,7 @@ android {
             "FRAMEIO_REDIRECT_SCHEME",
             quotedBuildConfig(frameioRedirectScheme),
         )
+        buildConfigField("String", "BUG_REPORT_ENDPOINT", quotedBuildConfig(bugReportEndpoint))
 
         ndk {
             abiFilters += supportedAndroidAbi

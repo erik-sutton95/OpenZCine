@@ -46,6 +46,7 @@ import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
+import com.opencapture.openzcine.diagnostics.AndroidBugReportClient
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 import com.opencapture.openzcine.media.MediaBrowseScreen
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
         val debugScopes = DemoHarness.scopeKinds(intent)
         val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
         val debugLiveGuideStep = DemoHarness.liveGuideStep(intent)
+        val debugInitialSettingsTab = DemoHarness.settingsTab(intent)
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
@@ -176,6 +178,10 @@ class MainActivity : ComponentActivity() {
                 val systemSettingsActions =
                     remember {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
+                    }
+                val bugReportSubmitter =
+                    remember {
+                        AndroidBugReportClient(applicationContext)
                     }
                 LaunchedEffect(debugLiveGuideStep) {
                     debugLiveGuideStep?.let(liveViewGuide::forceForDebug)
@@ -232,7 +238,8 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
-                var standaloneSettingsPresented by rememberSaveable { mutableStateOf(false) }
+                var standaloneSettingsPresented by
+                    rememberSaveable { mutableStateOf(debugInitialSettingsTab != null) }
                 fun acceptPairedCamera(paired: PairedCamera) {
                     val saved = paired.savedCamera
                     val updated =
@@ -366,8 +373,9 @@ class MainActivity : ComponentActivity() {
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
                                 lutLibrary = lutLibrary,
-                                initialTab = OperatorSettingsTab.STORAGE,
+                                initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.STORAGE,
                                 systemSettingsActions = systemSettingsActions,
+                                bugReportSubmitter = bugReportSubmitter,
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =
                                     liveViewGuide::replayOnNextRealFrame,
@@ -558,6 +566,7 @@ class MainActivity : ComponentActivity() {
                                                 { disconnectToSavedCameraHome(true) }
                                             },
                                         systemSettingsActions = systemSettingsActions,
+                                        bugReportSubmitter = bugReportSubmitter,
                                         liveViewGuideController = liveViewGuide,
                                         onShowGuideNow = {
                                             liveViewGuide.replayNow()

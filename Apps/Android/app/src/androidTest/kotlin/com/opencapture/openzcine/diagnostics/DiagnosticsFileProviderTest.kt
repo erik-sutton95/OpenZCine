@@ -87,11 +87,11 @@ class DiagnosticsFileProviderTest {
                 context = context,
                 diagnostics = diagnostics,
                 intentLauncher = { false },
-            )
+        )
 
         assertFalse(actions.openSupport())
-        assertFalse(actions.reportBug())
         assertFalse(actions.requestFeature())
+        assertFalse(actions.openSecurityAdvisory())
         assertFalse(actions.openSource())
         assertFalse(actions.openPrivacy())
         assertFalse(actions.openTerms())
