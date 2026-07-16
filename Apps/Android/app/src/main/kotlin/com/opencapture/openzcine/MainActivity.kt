@@ -376,6 +376,7 @@ class MainActivity : ComponentActivity() {
                                 initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.STORAGE,
                                 systemSettingsActions = systemSettingsActions,
                                 bugReportSubmitter = bugReportSubmitter,
+                                bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =
                                     liveViewGuide::replayOnNextRealFrame,
@@ -567,6 +568,7 @@ class MainActivity : ComponentActivity() {
                                             },
                                         systemSettingsActions = systemSettingsActions,
                                         bugReportSubmitter = bugReportSubmitter,
+                                        bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
                                         liveViewGuideController = liveViewGuide,
                                         onShowGuideNow = {
                                             liveViewGuide.replayNow()

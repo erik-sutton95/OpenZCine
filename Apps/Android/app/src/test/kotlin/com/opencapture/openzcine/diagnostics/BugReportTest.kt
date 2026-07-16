@@ -87,6 +87,38 @@ class BugReportTest {
         )
     }
 
+    @Test
+    fun `v2 activity log contains only closed event names and no device text`() {
+        val activityLog = listOf("app.launched", "live-view.started")
+        val payload =
+            BugReportAttachmentPayload.from(
+                draft =
+                    BugReportDraft(
+                        summary = "Preview freezes",
+                        whatHappened = "The preview stops after reconnecting.",
+                        stepsToReproduce = "",
+                        frequency = BugReportFrequency.ONCE,
+                        connection = BugReportConnection.USB,
+                    ),
+                context = sampleContext(),
+                activityLog = activityLog,
+            )
+
+        assertTrue(isPrivacyFilteredActivityLog(activityLog))
+        assertFalse(isPrivacyFilteredActivityLog(listOf("Bob's iPhone")))
+        assertEquals(
+            "{\"schemaVersion\":2,\"summary\":\"Preview freezes\"," +
+                "\"whatHappened\":\"The preview stops after reconnecting.\"," +
+                "\"frequency\":\"once\",\"context\":{\"platform\":\"android\"," +
+                "\"appVersion\":\"0.1.117\",\"buildNumber\":\"117\"," +
+                "\"osVersion\":\"Android 16 (API 36)\",\"deviceClass\":\"phone\"," +
+                "\"connection\":\"usb\"},\"activityLog\":[\"app.launched\"," +
+                "\"live-view.started\"]}",
+            payload.toJson(),
+        )
+        assertFalse(payload.toJson().contains("Bob's iPhone"))
+    }
+
     private fun sampleContext(): BugReportContext =
         BugReportContext(
             appVersion = "0.1.117",

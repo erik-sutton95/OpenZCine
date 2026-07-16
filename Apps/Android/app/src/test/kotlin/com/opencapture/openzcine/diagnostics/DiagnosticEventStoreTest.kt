@@ -101,6 +101,26 @@ class DiagnosticEventStoreTest {
     }
 
     @Test
+    fun `anonymous activity log retains only closed event names without timestamps or device text`() {
+        val file = temporaryEventFile()
+        file.parentFile?.mkdirs()
+        file.writeText(
+            "1|app.launched\n" +
+                "2|Bob's iPhone\n" +
+                "3|app.foreground|name=Bob's iPhone\n" +
+                "4|live-view.started\n",
+        )
+        val store = DiagnosticEventStore(file)
+
+        val activityLog = store.privacyFilteredActivityLog()
+
+        assertEquals(listOf("app.launched", "live-view.started"), activityLog)
+        assertFalse(activityLog.joinToString().contains("Bob's iPhone"))
+        assertFalse(activityLog.any { it.contains('|') || it.any(Char::isDigit) })
+        assertTrue(isPrivacyFilteredActivityLog(activityLog))
+    }
+
+    @Test
     fun `report includes only coarse process exits and explicit privacy notice`() {
         val report =
             DiagnosticReportRenderer.render(
