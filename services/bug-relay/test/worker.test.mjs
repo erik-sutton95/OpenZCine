@@ -12,7 +12,7 @@ import {
   validateReport,
 } from "../src/worker.mjs";
 
-const IDEMPOTENCY_KEY = "123e4567-e89b-12d3-a456-426614174000";
+const REPORT_RETRY_UUID = "123e4567-e89b-12d3-a456-426614174000";
 
 function validReport(overrides = {}) {
   const context = {
@@ -39,7 +39,7 @@ function reportRequest({ method = "POST", body = validReport(), headers = {} } =
   const requestHeaders = new Headers({
     "CF-Connecting-IP": "203.0.113.50",
     "Content-Type": "application/json; charset=utf-8",
-    "Idempotency-Key": IDEMPOTENCY_KEY,
+    "Idempotency-Key": REPORT_RETRY_UUID,
     ...headers,
   });
 

@@ -11,7 +11,7 @@
   <link rel="canonical" href="https://openzcine.app/privacy/">
   <meta property="og:type" content="website">
   <meta property="og:title" content="OpenZCine Privacy Policy">
-  <meta property="og:description" content="No personal data collected, no servers operated. Everything stays between your device and your camera.">
+  <meta property="og:description" content="No telemetry or automatic uploads. An optional bug report sends only the information you choose to a public GitHub issue.">
   <meta property="og:url" content="https://openzcine.app/privacy/">
   <link rel="icon" href="../assets/icon.png">
   <link rel="apple-touch-icon" href="../assets/icon.png">
@@ -61,15 +61,15 @@
       <div class="container legal-article">
         <span class="section-label"><span class="rec-dot"></span> Privacy Policy</span>
         <h1>Your footage is nobody's business.</h1>
-        <p class="legal-updated">Last updated: July 15, 2026</p>
+        <p class="legal-updated">Last updated: July 16, 2026</p>
       </div>
     </section>
 
     <div class="container legal-article">
       <p>
         OpenZCine is an open-source camera monitor and remote control for Nikon Z cinema-line
-        cameras. <strong>The app collects no personal data, and the project operates no servers
-        that receive data from the app.</strong>
+        cameras. <strong>The app has no account, telemetry, or automatic data upload.</strong> A
+        bug report leaves your device only when you explicitly choose to send one.
       </p>
 
       <h2>What the app does with data</h2>
@@ -95,6 +95,29 @@
           &ldquo;Share Diagnostics&rdquo; and select a destination.
         </li>
       </ul>
+
+      <h2>Optional anonymous bug reports</h2>
+      <p>
+        When you choose <strong>System &gt; Report a Problem</strong>, the app sends the report
+        text you enter, its frequency and connection choices, and coarse app context: platform,
+        app version and build, operating-system version, and phone/tablet class. No GitHub account
+        is required.
+      </p>
+      <p>
+        The app does not include diagnostics, logs, screenshots, media, camera or device
+        identifiers, Wi-Fi names or addresses, pairing data, credentials, contact details, or a
+        persistent installation identifier. Do not enter passwords, pairing codes, private media,
+        or security vulnerabilities.
+      </p>
+      <p>
+        A narrowly scoped OpenZCine relay hosted by Cloudflare receives the request and creates a
+        <strong>public GitHub issue</strong>. Cloudflare processes connection metadata, including
+        an IP address, to deliver the request and enforce abuse limits. The relay is configured not
+        to log report bodies or IP addresses; it keeps the resulting GitHub issue number and URL
+        plus a one-way request fingerprint for up to 24 hours to prevent duplicate submissions.
+        GitHub then stores the public issue under its own policies. Anonymous reports cannot
+        receive a private reply.
+      </p>
 
       <h2>Optional third-party services</h2>
       <ul>

@@ -62,8 +62,8 @@ committed to this repo**.
 
 ## Reporting bugs & requesting features
 
-- **Bugs only** — Use the **Bug report** issue template. New bugs are automatically labeled `needs-triage`. There is **no feature request template** — issues are strictly for bugs.
-- **Feature ideas, enhancements & discussions** — Use **GitHub Discussions** (the "Discussions" tab). Start a new discussion in the **Ideas** category. This keeps Issues focused on actionable bugs.
+- **Bugs only** — In the app, use **Operator Setup &gt; System &gt; Report a Problem** to send an account-free report that becomes a public GitHub issue. The web **Bug report** issue template remains available for signed-in GitHub users. New bugs are automatically labeled `needs-triage`; issues are strictly for bugs.
+- **Feature ideas, enhancements & discussions** — Use **GitHub Discussions** (the "Discussions" tab). Start a new discussion in the **Ideas** category. A GitHub account is required, which keeps feature conversations attributable and Issues focused on actionable bugs.
 - **Security vulnerabilities** — Follow [`SECURITY.md`](SECURITY.md). Do **not** open a public issue.
 
 ## Labels & triage

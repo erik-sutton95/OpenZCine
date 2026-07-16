@@ -10,12 +10,12 @@ default:
 # Install the meta-check tools used by `just check` (macOS / Homebrew),
 # and enable the repo's git hooks (pre-commit secret scan + proprietary guard).
 setup:
-    brew install typos-cli editorconfig-checker lychee markdownlint-cli2 actionlint gitleaks swift-format
+    brew install node typos-cli editorconfig-checker lychee markdownlint-cli2 actionlint gitleaks swift-format
     git config core.hooksPath .githooks
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check testflight-notes-check typos lint-md check-links check-editorconfig lint-actions secrets check-demo-isolation swift-lint swift-test
+check: hygiene site-check testflight-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -63,6 +63,10 @@ secrets:
         echo "gitleaks not installed — run 'just setup'." >&2
         exit 1
     fi
+
+# Validate the independently deployable, secret-free anonymous bug-report relay.
+bug-relay-check:
+    cd services/bug-relay && npm run check
 
 # ── Native production stack ─────────────────────────────────────────────────
 # Format shared Swift and iOS app sources.

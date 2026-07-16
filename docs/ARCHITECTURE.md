@@ -217,6 +217,21 @@ USB cameras are identified by stable `usb:<device-id>` host keys in discovery re
 camera records (`transport: "USB-C"`), so startup policies can skip network probing for tethered
 bodies and reconnect them silently on plug-in.
 
+### ADR-006 — Anonymous Bug-Report Relay
+
+Bug reports are intentionally a platform-shell concern, not a portable-core feature. The iOS and
+Android shells present native forms and send only the report text the operator supplies plus a
+small, closed set of app/platform fields. They never ship a GitHub credential, installation
+identifier, diagnostics, logs, screenshots, media, camera identity, or network identifier. Local
+diagnostics remain a separate user-reviewed share flow.
+
+`services/bug-relay` is an independently deployable Cloudflare Worker. It validates the narrow
+wire contract, rate-limits anonymous submissions, makes retries idempotent, and uses a private
+GitHub App installation with only Issues access to create a labelled public issue. The GitHub App
+private key remains a Worker secret; neither mobile binary can create an issue directly. The
+separate feature-request links continue to open GitHub Discussions, where accounts remain required
+for attributable conversation.
+
 ## Deviations from the iOS Dev Guide
 
 > **Directory-rename deviation:** The iOS dev guide's `MyApp/App/Features/Core/Resources`
