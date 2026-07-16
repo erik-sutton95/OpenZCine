@@ -183,14 +183,9 @@ struct AnonymousBugReportTests {
         #expect(screenshot.pngData.count <= BugReportAttachmentLimits.maximumScreenshotBytes)
         #expect(!String(decoding: screenshot.pngData, as: UTF8.self).contains("Bob’s iPhone"))
 
-        let imageSource = try #require(
-            CGImageSourceCreateWithData(screenshot.pngData as CFData, nil))
-        let properties = try #require(
-            CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any]
-        )
-        #expect(properties[kCGImagePropertyExifDictionary] == nil)
-        #expect(properties[kCGImagePropertyGPSDictionary] == nil)
-        #expect(properties[kCGImagePropertyTIFFDictionary] == nil)
+        let privacyMetadataChunkTypes: Set<String> = ["eXIf", "iTXt", "tEXt", "tIME", "zTXt"]
+        let sanitizedChunkTypes = try pngChunkTypes(in: screenshot.pngData)
+        #expect(sanitizedChunkTypes.isDisjoint(with: privacyMetadataChunkTypes))
     }
 
     @Test("Attachment reports use a fixed-length v2 multipart body with generic screenshot names")
@@ -499,10 +494,39 @@ struct AnonymousBugReportTests {
         guard CGImageDestinationFinalize(destination) else { throw TestImageError.unavailable }
         return output as Data
     }
+
+    private func pngChunkTypes(in data: Data) throws -> Set<String> {
+        let signature = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        guard data.starts(with: signature) else { throw TestImageError.invalidPNG }
+
+        var chunkTypes = Set<String>()
+        var offset = signature.count
+        while offset < data.count {
+            guard data.count - offset >= 12 else { throw TestImageError.invalidPNG }
+
+            let payloadLength = (0..<4).reduce(0) { partialResult, index in
+                (partialResult << 8) | Int(data[offset + index])
+            }
+            let typeStart = offset + 4
+            let payloadStart = offset + 8
+            let nextChunkOffset = payloadStart + payloadLength + 4
+            guard
+                nextChunkOffset <= data.count,
+                let chunkType = String(data: data[typeStart..<payloadStart], encoding: .ascii)
+            else {
+                throw TestImageError.invalidPNG
+            }
+
+            chunkTypes.insert(chunkType)
+            offset = nextChunkOffset
+        }
+        return chunkTypes
+    }
 }
 
 private enum TestImageError: Error {
     case unavailable
+    case invalidPNG
 }
 
 private struct TestBugReportSubmitter: BugReportSubmitting {

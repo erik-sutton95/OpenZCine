@@ -13,6 +13,8 @@ regexes = [
   '''WTU-iPhone''',
   # Fixed RFC 4122 UUID used only as an idempotency fixture in the relay test history.
   '''123e4567-e89b-12d3-a456-426614174000''',
+  # Second fixed RFC 4122 UUID used only to test a distinct retry history.
+  '''223e4567-e89b-12d3-a456-426614174000''',
 ]
 paths = [
   # This config talks about secret patterns on purpose.

@@ -593,7 +593,8 @@ enum BugReportScreenshotSanitizer {
     /// Decodes, orientation-bakes, down-samples, and re-renders a selected image as 8-bit RGBA PNG.
     ///
     /// Only the newly drawn bitmap is encoded. Source EXIF, GPS, TIFF, IPTC, XMP, file names, and
-    /// maker information are not copied into the returned data.
+    /// maker information are not copied into the returned data. Metadata chunks emitted by the
+    /// platform encoder are stripped before the image enters the report draft.
     static func sanitizedPNG(from sourceData: Data) throws -> Data {
         guard !sourceData.isEmpty, sourceData.count <= maximumSourceBytes,
             let source = CGImageSourceCreateWithData(sourceData as CFData, nil)
@@ -670,7 +671,74 @@ enum BugReportScreenshotSanitizer {
         guard CGImageDestinationFinalize(destination) else {
             throw BugReportValidationError.screenshotInvalid
         }
-        return output as Data
+        return try metadataStrippedPNG(from: output as Data)
+    }
+
+    private static func metadataStrippedPNG(from encodedPNG: Data) throws -> Data {
+        let signature = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        guard encodedPNG.starts(with: signature) else {
+            throw BugReportValidationError.screenshotInvalid
+        }
+
+        let essentialChunkTypes: Set<String> = ["IHDR", "PLTE", "IDAT", "IEND"]
+        var strippedPNG = signature
+        var offset = signature.count
+        var sawHeader = false
+        var sawImageData = false
+        var sawEnd = false
+
+        while offset < encodedPNG.count {
+            guard encodedPNG.count - offset >= 12 else {
+                throw BugReportValidationError.screenshotInvalid
+            }
+
+            let payloadLength = (0..<4).reduce(0) { partialResult, index in
+                (partialResult << 8) | Int(encodedPNG[offset + index])
+            }
+            let typeStart = offset + 4
+            let payloadStart = offset + 8
+            let nextChunkOffset = payloadStart + payloadLength + 4
+            guard
+                nextChunkOffset <= encodedPNG.count,
+                let chunkType = String(data: encodedPNG[typeStart..<payloadStart], encoding: .ascii)
+            else {
+                throw BugReportValidationError.screenshotInvalid
+            }
+
+            switch chunkType {
+            case "IHDR":
+                guard !sawHeader, !sawImageData, !sawEnd else {
+                    throw BugReportValidationError.screenshotInvalid
+                }
+                sawHeader = true
+            case "PLTE":
+                guard sawHeader, !sawImageData, !sawEnd else {
+                    throw BugReportValidationError.screenshotInvalid
+                }
+            case "IDAT":
+                guard sawHeader, !sawEnd else {
+                    throw BugReportValidationError.screenshotInvalid
+                }
+                sawImageData = true
+            case "IEND":
+                guard sawHeader, sawImageData, !sawEnd, nextChunkOffset == encodedPNG.count else {
+                    throw BugReportValidationError.screenshotInvalid
+                }
+                sawEnd = true
+            default:
+                break
+            }
+
+            if essentialChunkTypes.contains(chunkType) {
+                strippedPNG.append(contentsOf: encodedPNG[offset..<nextChunkOffset])
+            }
+            offset = nextChunkOffset
+        }
+
+        guard sawHeader, sawImageData, sawEnd else {
+            throw BugReportValidationError.screenshotInvalid
+        }
+        return strippedPNG
     }
 }
 
