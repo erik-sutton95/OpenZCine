@@ -10,5 +10,4 @@ Please test
 - In Operator Setup > System, open Report a Problem and confirm both choices say that reports become public GitHub issues.
 - Choose Report Anonymously, enter a non-sensitive real bug, and confirm it completes without a GitHub sign-in screen before you return to System.
 - In the anonymous form, toggle each optional attachment control. Confirm the warning explains that screenshot pixels can still contain sensitive information even after file metadata is removed.
-- Reopen Report a Problem, choose Continue with GitHub, and confirm the browser opens OpenZCine's GitHub bug-report form.
-- Open Request a Feature and confirm it still opens the community discussion.
+- Reopen Report a Problem and choose Continue with GitHub, then open Request a Feature. Confirm each opens the appropriate GitHub page in your browser.

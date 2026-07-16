@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deflateSync } from "node:zlib";
+import { deflateSync, inflateSync } from "node:zlib";
 
 import {
+  AmbiguousIssueCreationError,
   canonicalizePng,
   createAppJwt,
   createGitHubIssue,
@@ -108,13 +109,34 @@ async function v2ReportRequest({
   });
 }
 
-function v2Submission({ report = validV2Report(), screenshots = [] } = {}) {
+async function v2Submission({ report = validV2Report(), screenshots = [] } = {}) {
+  const canonicalScreenshots = [];
+  for (const [index, bytes] of screenshots.entries()) {
+    canonicalScreenshots.push({
+      data: Buffer.from(await canonicalizePng(bytes)).toString("base64url"),
+      slot: index + 1,
+    });
+  }
+
   return {
     kind: "v2",
     idempotencyKey: REPORT_RETRY_UUID,
     report,
+    screenshots: canonicalScreenshots,
+  };
+}
+
+function rawV2Submission({
+  report = validV2Report(),
+  screenshots = [],
+  idempotencyKey = REPORT_RETRY_UUID,
+} = {}) {
+  return {
+    kind: "v2",
+    idempotencyKey,
+    report,
     screenshots: screenshots.map((bytes, index) => ({
-      data: Buffer.from(canonicalizePng(bytes)).toString("base64url"),
+      data: Buffer.from(bytes).toString("base64url"),
       slot: index + 1,
     })),
   };
@@ -185,7 +207,14 @@ class MemoryStorage {
   }
 }
 
-function png({ width = 1, height = 1, metadata = [], color = [0x44, 0x88, 0xcc, 0xff], corruptCRC = false } = {}) {
+function png({
+  width = 1,
+  height = 1,
+  metadata = [],
+  color = [0x44, 0x88, 0xcc, 0xff],
+  idat = null,
+  corruptCRC = false,
+} = {}) {
   const scanlines = Buffer.alloc((width * 4 + 1) * Math.max(height, 1));
   for (let row = 0; row < height; row += 1) {
     scanlines[row * (width * 4 + 1)] = 0;
@@ -201,7 +230,12 @@ function png({ width = 1, height = 1, metadata = [], color = [0x44, 0x88, 0xcc, 
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr.set([8, 6, 0, 0, 0], 8);
-  const chunks = [pngChunk("IHDR", ihdr), ...metadata, pngChunk("IDAT", deflateSync(scanlines)), pngChunk("IEND", Buffer.alloc(0))];
+  const chunks = [
+    pngChunk("IHDR", ihdr),
+    ...metadata,
+    pngChunk("IDAT", idat ?? deflateSync(scanlines)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ];
   const result = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ...chunks]);
   if (corruptCRC) result[result.length - 1] ^= 0xff;
   return new Uint8Array(result);
@@ -239,6 +273,20 @@ function pngChunkTypes(bytes) {
     offset += length + 12;
   }
   return types;
+}
+
+function pngIDAT(bytes) {
+  const chunks = [];
+  let offset = 8;
+  while (offset < bytes.byteLength) {
+    const length = Buffer.from(bytes).readUInt32BE(offset);
+    const type = Buffer.from(bytes.subarray(offset + 4, offset + 8)).toString("ascii");
+    if (type === "IDAT") {
+      chunks.push(Buffer.from(bytes.subarray(offset + 8, offset + 8 + length)));
+    }
+    offset += length + 12;
+  }
+  return Buffer.concat(chunks);
 }
 
 test("strictly validates required fields, unknown fields, and character lengths", () => {
@@ -314,7 +362,7 @@ test("rejects non-POST methods and non-JSON media types", async () => {
   assert.deepEqual(await mediaTypeResponse.json(), { error: "invalid_request" });
 });
 
-test("rejects malformed UTF-8 and bodies larger than 12 KiB before relaying", async () => {
+test("rate limits malformed v1 bodies before rejecting them without relaying", async () => {
   const worker = createWorker();
   const { env, state } = fakeEnvironment();
   const invalidUtf8 = reportRequest({ body: new Uint8Array([0xc3, 0x28]) });
@@ -327,7 +375,8 @@ test("rejects malformed UTF-8 and bodies larger than 12 KiB before relaying", as
   const tooLargeResponse = await worker.fetch(tooLarge, env);
   assert.equal(tooLargeResponse.status, 400);
   assert.deepEqual(await tooLargeResponse.json(), { error: "invalid_request" });
-  assert.equal(state.limitCalls, 0);
+  assert.equal(state.limitCalls, 2);
+  assert.equal(state.relayCalls, 0);
 });
 
 test("returns a bounded response when the Cloudflare rate limiter rejects a report", async () => {
@@ -444,7 +493,7 @@ test("uses the exact labels and maps GitHub failures to an unavailable response"
   assert.deepEqual(await response.json(), { error: "unavailable" });
 });
 
-test("v2 requires a fixed-length multipart body before rate limiting or relaying", async () => {
+test("v2 requires a fixed-length multipart body after rate limiting and before relaying", async () => {
   const worker = createWorker();
   const { env, state } = fakeEnvironment();
   const screenshot = png();
@@ -469,11 +518,35 @@ test("v2 requires a fixed-length multipart body before rate limiting or relaying
     env,
   );
   assert.equal(tooLarge.status, 400);
-  assert.equal(state.limitCalls, 0);
+  assert.equal(state.limitCalls, 2);
   assert.equal(state.relayCalls, 0);
 });
 
-test("v2 strips validated PNG metadata and relays only canonical pixels with closed activity events", async () => {
+test("rate limits a malformed v2 upload before parsing its multipart body", async () => {
+  const worker = createWorker();
+  const { env, state } = fakeEnvironment({ limiterResult: { success: false } });
+
+  const response = await worker.fetch(
+    new Request("https://reports.openzcine.app/v2/bug-reports", {
+      method: "POST",
+      headers: {
+        "CF-Connecting-IP": "203.0.113.50",
+        "Content-Length": "1",
+        "Content-Type": "multipart/form-data; boundary=bounded",
+        "Idempotency-Key": REPORT_RETRY_UUID,
+      },
+      body: new Uint8Array([1]),
+    }),
+    env,
+  );
+
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "rate_limited" });
+  assert.equal(state.limitCalls, 1);
+  assert.equal(state.relayCalls, 0);
+});
+
+test("v2 relays only closed activity events with an opaque attachment contract", async () => {
   const worker = createWorker();
   let receivedSubmission;
   const { env, state } = fakeEnvironment({
@@ -481,11 +554,10 @@ test("v2 strips validated PNG metadata and relays only canonical pixels with clo
       receivedSubmission = JSON.parse(options.body);
     },
   });
-  const metadata = pngChunk("tEXt", Buffer.from("device=Bob's iPhone", "utf8"));
   const response = await worker.fetch(
     await v2ReportRequest({
       report: validV2Report({ activityLog: ["app.launched", "live-view.started"] }),
-      screenshots: [{ bytes: png({ metadata: [metadata] }), name: "Bob's iPhone.png" }],
+      screenshots: [{ bytes: png(), name: "Bob's iPhone.png" }],
     }),
     env,
   );
@@ -495,26 +567,39 @@ test("v2 strips validated PNG metadata and relays only canonical pixels with clo
   assert.equal(receivedSubmission.kind, "v2");
   assert.equal(receivedSubmission.idempotencyKey, REPORT_RETRY_UUID);
   assert.deepEqual(receivedSubmission.report.activityLog, ["app.launched", "live-view.started"]);
-  const canonical = new Uint8Array(Buffer.from(receivedSubmission.screenshots[0].data, "base64url"));
-  assert.deepEqual(pngChunkTypes(canonical), ["IHDR", "IDAT", "IEND"]);
-  assert.equal(Buffer.from(canonical).includes(Buffer.from("Bob's iPhone")), false);
+  assert.equal(receivedSubmission.screenshots.length, 1);
+  assert.equal(receivedSubmission.screenshots[0].slot, 1);
 });
 
-test("v2 rejects malformed PNGs and arbitrary activity text before the limiter", async () => {
+test("canonicalizes only a zlib-decoded RGBA image plane", async () => {
+  const valid = await canonicalizePng(png());
+  assert.deepEqual(pngChunkTypes(valid), ["IHDR", "IDAT", "IEND"]);
+  assert.deepEqual([...inflateSync(pngIDAT(valid))], [0, 0x44, 0x88, 0xcc, 0xff]);
+
+  await assert.rejects(
+    () => canonicalizePng(png({ idat: Buffer.from("Bob's iPhone", "utf8") })),
+    InvalidRequestError,
+  );
+});
+
+test("rejects malformed PNGs at the R2 storage boundary", async () => {
+  const malformedImages = [
+    png({ corruptCRC: true }),
+    png({ width: 2561 }),
+    png({ idat: Buffer.from("Bob's iPhone", "utf8") }),
+  ];
+
+  for (const image of malformedImages) {
+    await assert.rejects(
+      () => createV2GitHubIssue({}, rawV2Submission({ screenshots: [image] })),
+      InvalidRequestError,
+    );
+  }
+});
+
+test("v2 rejects arbitrary activity text and oversized uploads after rate limiting", async () => {
   const worker = createWorker();
   const { env, state } = fakeEnvironment();
-
-  const invalidCRC = await worker.fetch(
-    await v2ReportRequest({ screenshots: [{ bytes: png({ corruptCRC: true }) }] }),
-    env,
-  );
-  assert.equal(invalidCRC.status, 400);
-
-  const invalidDimensions = await worker.fetch(
-    await v2ReportRequest({ screenshots: [{ bytes: png({ width: 2561 }) }] }),
-    env,
-  );
-  assert.equal(invalidDimensions.status, 400);
 
   const arbitraryLog = await worker.fetch(
     await v2ReportRequest({ report: validV2Report({ activityLog: ["Bob's iPhone"] }) }),
@@ -527,7 +612,7 @@ test("v2 rejects malformed PNGs and arbitrary activity text before the limiter",
     env,
   );
   assert.equal(oversizedScreenshot.status, 400);
-  assert.equal(state.limitCalls, 0);
+  assert.equal(state.limitCalls, 2);
   assert.equal(state.relayCalls, 0);
   assert.throws(
     () => validateV2Report(validV2Report({ activityLog: ["not-a-closed-event"] })),
@@ -535,9 +620,9 @@ test("v2 rejects malformed PNGs and arbitrary activity text before the limiter",
   );
 });
 
-test("v2 issue rendering uses opaque fixed media URLs and a privacy-filtered activity section", () => {
-  const rendered = renderV2Issue(
-    v2Submission({
+test("v2 issue rendering uses opaque fixed media URLs and a privacy-filtered activity section", async () => {
+  const rendered = await renderV2Issue(
+    await v2Submission({
       report: validV2Report({ activityLog: ["app.launched", "connection.connected"] }),
       screenshots: [png()],
     }),
@@ -566,8 +651,8 @@ test("v2 idempotency fingerprint includes canonical attachment bytes", async () 
       return { number: 101, url: "https://github.com/erik-sutton95/OpenZCine/issues/101" };
     },
   });
-  const initial = v2Submission({ screenshots: [png()] });
-  const changed = v2Submission({ screenshots: [png({ color: [0x11, 0x22, 0x33, 0xff] })] });
+  const initial = await v2Submission({ screenshots: [png()] });
+  const changed = await v2Submission({ screenshots: [png({ color: [0x11, 0x22, 0x33, 0xff] })] });
 
   const created = await coordinator.submit(initial);
   const retried = await coordinator.submit(initial);
@@ -596,7 +681,10 @@ test("v2 writes canonical PNGs to private R2 and serves hardened opaque media", 
       objects.delete(key);
     },
   };
-  const submission = v2Submission({ screenshots: [png()] });
+  const source = png({
+    metadata: [pngChunk("tEXt", Buffer.from("device=Bob's iPhone", "utf8"))],
+  });
+  const submission = rawV2Submission({ screenshots: [source] });
   let postedIssue;
   const receipt = await createV2GitHubIssue(
     { BUG_REPORT_MEDIA: media },
@@ -623,6 +711,8 @@ test("v2 writes canonical PNGs to private R2 and serves hardened opaque media", 
     },
   ]);
   assert.match(postedIssue.body, /https:\/\/reports\.openzcine\.app\/v2\/bug-report-media\//u);
+  assert.deepEqual(pngChunkTypes(puts[0].value), ["IHDR", "IDAT", "IEND"]);
+  assert.equal(Buffer.from(puts[0].value).includes(Buffer.from("Bob's iPhone")), false);
 
   const worker = createWorker();
   const response = await worker.fetch(
@@ -644,7 +734,7 @@ test("v2 writes canonical PNGs to private R2 and serves hardened opaque media", 
   assert.equal(missing.status, 404);
 });
 
-test("v2 removes newly written media when GitHub issue creation fails", async () => {
+test("v2 removes newly written media when GitHub definitively rejects issue creation", async () => {
   const objects = new Map();
   const deleted = [];
   const media = {
@@ -661,17 +751,18 @@ test("v2 removes newly written media when GitHub issue creation fails", async ()
     },
   };
 
+  const submission = await v2Submission({ screenshots: [png()] });
   await assert.rejects(
     () =>
       createV2GitHubIssue(
         { BUG_REPORT_MEDIA: media },
-        v2Submission({ screenshots: [png()] }),
+        submission,
         {
           async getToken() {
             return "installation-token";
           },
           async fetchImpl() {
-            return new Response(JSON.stringify({ message: "never expose" }), { status: 500 });
+            return new Response(JSON.stringify({ message: "never expose" }), { status: 422 });
           },
         },
       ),
@@ -680,6 +771,88 @@ test("v2 removes newly written media when GitHub issue creation fails", async ()
 
   assert.deepEqual(deleted, [`bug-report-media/${REPORT_RETRY_UUID}/screenshot-1.png`]);
   assert.equal(objects.size, 0);
+});
+
+test("uncertain v2 issue creation blocks matching retries without losing its reservation", async () => {
+  const storage = new MemoryStorage();
+  let issueCreations = 0;
+  const coordinator = new ReceiptCoordinator({
+    storage,
+    now: () => 10_000,
+    async createIssue() {
+      issueCreations += 1;
+      throw new AmbiguousIssueCreationError();
+    },
+  });
+  const submission = await v2Submission({ screenshots: [png()] });
+  const changedSubmission = await v2Submission({
+    screenshots: [png({ color: [0x11, 0x22, 0x33, 0xff] })],
+  });
+
+  await assert.rejects(() => coordinator.submit(submission), AmbiguousIssueCreationError);
+  assert.deepEqual(await coordinator.submit(submission), { status: 503 });
+  assert.deepEqual(await coordinator.submit(changedSubmission), { status: 400 });
+  assert.equal(issueCreations, 1);
+  assert.equal(storage.values.get("pending-submission")?.outcome, "uncertain");
+});
+
+test("v2 retains canonical media when the GitHub issue outcome is ambiguous", async () => {
+  const objects = new Map();
+  const deleted = [];
+  const media = {
+    async get(key) {
+      const value = objects.get(key);
+      return value ? { body: value } : null;
+    },
+    async put(key, value) {
+      objects.set(key, new Uint8Array(value));
+    },
+    async delete(key) {
+      deleted.push(key);
+      objects.delete(key);
+    },
+  };
+  const options = {
+    async getToken() {
+      return "installation-token";
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      createV2GitHubIssue(
+        { BUG_REPORT_MEDIA: media },
+        rawV2Submission({ screenshots: [png()] }),
+        {
+          ...options,
+          async fetchImpl() {
+            throw new Error("connection ended after request dispatch");
+          },
+        },
+      ),
+    AmbiguousIssueCreationError,
+  );
+
+  await assert.rejects(
+    () =>
+      createV2GitHubIssue(
+        { BUG_REPORT_MEDIA: media },
+        rawV2Submission({
+          idempotencyKey: "223e4567-e89b-12d3-a456-426614174000",
+          screenshots: [png()],
+        }),
+        {
+          ...options,
+          async fetchImpl() {
+            return new Response("not a JSON receipt", { status: 201 });
+          },
+        },
+      ),
+    AmbiguousIssueCreationError,
+  );
+
+  assert.equal(objects.size, 2);
+  assert.deepEqual(deleted, []);
 });
 
 test("signs a short GitHub App RS256 JWT with Web Crypto", async () => {

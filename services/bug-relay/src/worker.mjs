@@ -10,6 +10,7 @@ const MAX_V2_REQUEST_BYTES = MAX_V2_SCREENSHOT_TOTAL_BYTES + 64 * 1024;
 const RECEIPT_KEY = "receipt";
 const PENDING_SUBMISSION_KEY = "pending-submission";
 const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
+const UNCERTAIN_SUBMISSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const GITHUB_OWNER = "erik-sutton95";
 const GITHUB_REPOSITORY = "OpenZCine";
 const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/issues`;
@@ -97,6 +98,13 @@ export class ServiceUnavailableError extends Error {
   }
 }
 
+/** A GitHub create may have succeeded even though the relay cannot safely recover its receipt. */
+export class AmbiguousIssueCreationError extends ServiceUnavailableError {
+  constructor() {
+    super();
+  }
+}
+
 /**
  * Build the Worker entry point. Exporting a factory makes request behavior testable without a
  * Cloudflare runtime or network access.
@@ -132,12 +140,8 @@ export function createWorker() {
       }
 
       let idempotencyKey;
-      let submission;
       try {
         idempotencyKey = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
-        submission = isV1
-          ? await parseReportBody(request)
-          : await parseV2Submission(request, idempotencyKey);
       } catch (error) {
         if (error instanceof InvalidRequestError) {
           return errorResponse("invalid_request", 400);
@@ -160,6 +164,19 @@ export function createWorker() {
 
       if (!limitResult?.success) {
         return errorResponse("rate_limited", 429, { "Retry-After": "60" });
+      }
+
+      let submission;
+      try {
+        submission = isV1
+          ? await parseReportBody(request)
+          : await parseV2Submission(request, idempotencyKey);
+      } catch (error) {
+        if (error instanceof InvalidRequestError) {
+          return errorResponse("invalid_request", 400);
+        }
+
+        return errorResponse("unavailable", 503);
       }
 
       try {
@@ -193,7 +210,8 @@ export function createWorker() {
 }
 
 /**
- * Cloudflare Durable Object that serializes an idempotency key and persists a receipt for 24 hours.
+ * Cloudflare Durable Object that serializes an idempotency key, retaining receipts for 24 hours and
+ * an outcome-uncertain fingerprint marker for 30 days to prevent a duplicate public issue.
  */
 export class BugReportIdempotency {
   constructor(ctx, env) {
@@ -219,6 +237,10 @@ export class BugReportIdempotency {
 
       if (result.status === 400) {
         return errorResponse("invalid_request", 400);
+      }
+
+      if (result.status === 503) {
+        return errorResponse("unavailable", 503);
       }
 
       return jsonResponse({ issue: result.issue }, result.status);
@@ -283,13 +305,18 @@ export class ReceiptCoordinator {
       return receiptResultFor(current, payloadHash);
     }
 
-    const requiresReservation = this.requiresReservation(submission);
-    if (requiresReservation) {
-      const pendingSubmission = await this.currentPendingSubmission();
-      if (pendingSubmission && pendingSubmission.payloadHash !== payloadHash) {
+    const pendingSubmission = await this.currentPendingSubmission();
+    if (pendingSubmission) {
+      if (pendingSubmission.payloadHash !== payloadHash) {
         return { status: 400 };
       }
+
+      if (pendingSubmission.outcome === "uncertain") {
+        return { status: 503 };
+      }
     }
+
+    const requiresReservation = this.requiresReservation(submission);
 
     if (this.inFlight) {
       const result = await this.inFlight;
@@ -335,7 +362,21 @@ export class ReceiptCoordinator {
       }
     }
 
-    const issue = await this.createIssue(submission);
+    let issue;
+    try {
+      issue = await this.createIssue(submission);
+    } catch (error) {
+      if (error instanceof AmbiguousIssueCreationError) {
+        const expiresAt = this.now() + UNCERTAIN_SUBMISSION_TTL_MS;
+        await this.storage.put(PENDING_SUBMISSION_KEY, {
+          expiresAt,
+          outcome: "uncertain",
+          payloadHash,
+        });
+        await this.storage.setAlarm(expiresAt);
+      }
+      throw error;
+    }
     const receipt = {
       expiresAt: this.now() + RECEIPT_TTL_MS,
       issue,
@@ -539,12 +580,17 @@ export async function createV2GitHubIssue(
   submission,
   { fetchImpl = fetch, getToken = getInstallationToken } = {},
 ) {
-  const safeSubmission = validateV2Submission(submission);
+  const safeSubmission = await canonicalizeV2Submission(submission);
   const createdMediaKeys = await storeV2Screenshots(env, safeSubmission);
   try {
-    return await createGitHubIssueFromRendered(env, renderV2Issue(safeSubmission), { fetchImpl, getToken });
+    return await createGitHubIssueFromRendered(env, renderV2Issue(safeSubmission), {
+      fetchImpl,
+      getToken,
+    });
   } catch (error) {
-    await deleteV2Media(env?.BUG_REPORT_MEDIA, createdMediaKeys);
+    if (!(error instanceof AmbiguousIssueCreationError)) {
+      await deleteV2Media(env?.BUG_REPORT_MEDIA, createdMediaKeys);
+    }
     throw error;
   }
 }
@@ -576,10 +622,13 @@ async function createGitHubIssueFromRendered(env, rendered, { fetchImpl, getToke
       }),
     });
   } catch {
-    throw new ServiceUnavailableError();
+    throw new AmbiguousIssueCreationError();
   }
 
   if (!response.ok) {
+    if (response.status >= 500) {
+      throw new AmbiguousIssueCreationError();
+    }
     throw new ServiceUnavailableError();
   }
 
@@ -587,11 +636,11 @@ async function createGitHubIssueFromRendered(env, rendered, { fetchImpl, getToke
   try {
     issue = await response.json();
   } catch {
-    throw new ServiceUnavailableError();
+    throw new AmbiguousIssueCreationError();
   }
 
   if (!Number.isSafeInteger(issue?.number) || issue.number < 1) {
-    throw new ServiceUnavailableError();
+    throw new AmbiguousIssueCreationError();
   }
 
   return canonicalIssueReceipt(issue.number);
@@ -878,8 +927,7 @@ async function parseV2Submission(request, idempotencyKey) {
       throw new InvalidRequestError();
     }
 
-    const canonical = canonicalizePng(sourceBytes);
-    screenshots.push({ data: base64Url(canonical), slot: index + 1 });
+    screenshots.push({ data: base64Url(sourceBytes), slot: index + 1 });
   }
 
   return validateV2Submission({ kind: "v2", idempotencyKey, report, screenshots });
@@ -904,7 +952,8 @@ export function validateV2Submission(value) {
   const report = validateV2Report(value.report);
   const idempotencyKey = validateIdempotencyKey(value.idempotencyKey);
   let aggregateSize = 0;
-  const screenshots = value.screenshots.map((screenshot, index) => {
+  const screenshots = [];
+  for (const [index, screenshot] of value.screenshots.entries()) {
     if (
       !isPlainObject(screenshot) ||
       !hasExactKeys(screenshot, ["data", "slot"], ["data", "slot"]) ||
@@ -915,7 +964,30 @@ export function validateV2Submission(value) {
       throw new InvalidRequestError();
     }
 
-    const canonical = canonicalizePng(base64UrlToBytes(screenshot.data));
+    const bytes = base64UrlToBytes(screenshot.data);
+    if (bytes.byteLength > MAX_V2_SCREENSHOT_BYTES) {
+      throw new InvalidRequestError();
+    }
+
+    aggregateSize += bytes.byteLength;
+    if (aggregateSize > MAX_V2_SCREENSHOT_TOTAL_BYTES) {
+      throw new InvalidRequestError();
+    }
+
+    screenshots.push({ data: base64Url(bytes), slot: screenshot.slot });
+  }
+
+  return { kind: "v2", idempotencyKey, report, screenshots };
+}
+
+/** Canonicalize every attachment immediately before R2 receives it. */
+async function canonicalizeV2Submission(value) {
+  const validatedSubmission = validateV2Submission(value);
+  const screenshots = [];
+  let aggregateSize = 0;
+
+  for (const screenshot of validatedSubmission.screenshots) {
+    const canonical = await canonicalizePng(base64UrlToBytes(screenshot.data));
     if (canonical.byteLength > MAX_V2_SCREENSHOT_BYTES) {
       throw new InvalidRequestError();
     }
@@ -925,10 +997,10 @@ export function validateV2Submission(value) {
       throw new InvalidRequestError();
     }
 
-    return { data: base64Url(canonical), slot: screenshot.slot };
-  });
+    screenshots.push({ data: base64Url(canonical), slot: screenshot.slot });
+  }
 
-  return { kind: "v2", idempotencyKey, report, screenshots };
+  return { ...validatedSubmission, screenshots };
 }
 
 /**
@@ -936,7 +1008,7 @@ export function validateV2Submission(value) {
  * or unsupported chunks. Native apps already re-encode picked images; this is the server-side
  * trust boundary before any public object is stored.
  */
-export function canonicalizePng(value) {
+export async function canonicalizePng(value) {
   const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
   if (bytes.byteLength < PNG_SIGNATURE.byteLength || !bytesEqual(bytes.subarray(0, 8), PNG_SIGNATURE)) {
     throw new InvalidRequestError();
@@ -944,6 +1016,7 @@ export function canonicalizePng(value) {
 
   let offset = PNG_SIGNATURE.byteLength;
   let ihdr = null;
+  let imageInfo = null;
   const idatChunks = [];
   let idatLength = 0;
   let sawIDAT = false;
@@ -978,7 +1051,7 @@ export function canonicalizePng(value) {
       if (ihdr || length !== 13 || offset !== PNG_SIGNATURE.byteLength) {
         throw new InvalidRequestError();
       }
-      validatePngIHDR(data);
+      imageInfo = validatePngIHDR(data);
       ihdr = new Uint8Array(data);
     } else if (type === "IDAT") {
       if (!ihdr || closedIDAT || length === 0) {
@@ -994,10 +1067,13 @@ export function canonicalizePng(value) {
       if (!ihdr || !sawIDAT || length !== 0 || crcOffset + 4 !== bytes.byteLength) {
         throw new InvalidRequestError();
       }
+
+      const scanlines = await decodedPngScanlines(concatenateBytes(...idatChunks), imageInfo);
+      const canonicalIDAT = await deflatePngScanlines(scanlines);
       return concatenateBytes(
         PNG_SIGNATURE,
         pngChunk(PNG_IHDR, ihdr),
-        pngChunk(PNG_IDAT, concatenateBytes(...idatChunks)),
+        pngChunk(PNG_IDAT, canonicalIDAT),
         pngChunk(PNG_IEND, new Uint8Array()),
       );
     } else if (!STRIPPABLE_PNG_METADATA_TYPES.has(type)) {
@@ -1028,6 +1104,80 @@ function validatePngIHDR(data) {
   ) {
     throw new InvalidRequestError();
   }
+
+  return { width, height };
+}
+
+/** Decode a PNG's single RGBA scanline plane without allowing a compressed-data expansion. */
+async function decodedPngScanlines(idat, imageInfo) {
+  if (!imageInfo) {
+    throw new InvalidRequestError();
+  }
+
+  const rowLength = 1 + imageInfo.width * 4;
+  const expectedLength = imageInfo.height * rowLength;
+  const stream = new Blob([idat]).stream().pipeThrough(new DecompressionStream("deflate"));
+  const scanlines = await readBoundedStream(stream, expectedLength, expectedLength);
+
+  for (let offset = 0; offset < scanlines.byteLength; offset += rowLength) {
+    if (scanlines[offset] > 4) {
+      throw new InvalidRequestError();
+    }
+  }
+
+  return scanlines;
+}
+
+/** Recompress validated scanlines so no source compressed bytes reach private R2. */
+async function deflatePngScanlines(scanlines) {
+  const stream = new Blob([scanlines]).stream().pipeThrough(new CompressionStream("deflate"));
+  return readBoundedStream(stream, MAX_V2_SCREENSHOT_BYTES);
+}
+
+/** Read a web stream within an exact or maximum byte budget. */
+async function readBoundedStream(stream, maximumLength, expectedLength = null) {
+  if (!stream || typeof stream.getReader !== "function") {
+    throw new InvalidRequestError();
+  }
+
+  const reader = stream.getReader();
+  const chunks = [];
+  let totalLength = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (!(value instanceof Uint8Array)) {
+        throw new InvalidRequestError();
+      }
+
+      totalLength += value.byteLength;
+      if (totalLength > maximumLength) {
+        await reader.cancel();
+        throw new InvalidRequestError();
+      }
+
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof InvalidRequestError) {
+      throw error;
+    }
+
+    throw new InvalidRequestError();
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (expectedLength !== null && totalLength !== expectedLength) {
+    throw new InvalidRequestError();
+  }
+
+  return concatenateBytes(...chunks);
 }
 
 function pngChunk(type, data) {
@@ -1387,7 +1537,8 @@ function isStoredPendingSubmission(value) {
   return (
     isPlainObject(value) &&
     typeof value.payloadHash === "string" &&
-    Number.isFinite(value.expiresAt)
+    Number.isFinite(value.expiresAt) &&
+    (value.outcome === undefined || value.outcome === "uncertain")
   );
 }
 

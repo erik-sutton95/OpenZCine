@@ -125,12 +125,15 @@
         <strong>public GitHub issue</strong>. Cloudflare processes connection metadata, including
         an IP address, to deliver the request and enforce abuse limits. The relay is configured not
         to log report bodies or IP addresses; it keeps the resulting GitHub issue number and URL
-        plus a one-way request fingerprint for up to 24 hours to prevent duplicate submissions.
+        plus a one-way request fingerprint for up to 24 hours to prevent duplicate submissions. If
+        the relay cannot determine whether GitHub created an issue, it keeps only the fingerprint
+        and an outcome marker for up to 30 days so retrying cannot create a duplicate public issue.
         Sanitized screenshot copies are held in the relay's private object storage for up to 30
-        days and served by opaque links in the public issue; they can be removed through the project
-        maintainers, and the public issue will show a broken image after the retention period.
-        GitHub then stores the public issue under its own policies. Anonymous reports cannot receive
-        a private reply.
+        days and served by opaque links in the public issue. After that, the relay stops serving its
+        copy. Because the issue is public, GitHub, browsers, search engines, or other people may
+        retain, cache, download, or copy an image independently; OpenZCine cannot guarantee its
+        removal from those places. GitHub stores the public issue under its own policies. Anonymous
+        reports cannot receive a private reply.
       </p>
       <p>
         You can instead choose a signed-in GitHub issue with richer optional details. That route

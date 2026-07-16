@@ -98,8 +98,9 @@ repository, mobile builds, CI variables visible to untrusted pull requests, or i
 5. Create the private R2 bucket named `openzcine-bug-report-media` in the same Cloudflare account.
    Keep the `BUG_REPORT_MEDIA` binding name unchanged. Configure a **30-day** R2 lifecycle
    expiration as a backstop for a failed deletion, and state that public-attachment retention
-   period explicitly in the app privacy notice. Expiry removes the image from the public issue as
-   well, so do not configure the lifecycle policy without that documented retention choice.
+   period explicitly in the app privacy notice. When the relay copy expires, its public link stops
+   serving the image; GitHub, browser, search-engine, downloaded, or copied versions may persist.
+   Do not configure the lifecycle policy without that documented retention choice.
 6. Set all credentials as Worker secrets from this directory. Paste each value only into the
    Wrangler prompt; commands and shell history must not contain a secret value.
 
@@ -124,10 +125,12 @@ repository, mobile builds, CI variables visible to untrusted pull requests, or i
    by IP, with a daily threshold (for example, 20 requests per 24 hours) and a Block or Managed
    Challenge action. This is a second abuse control; it does not replace the Worker binding's 3 per
    60 seconds limit.
-9. Update and publish the app privacy notice before enabling the client-side endpoint. It must say
+10. Update and publish the app privacy notice before enabling the client-side endpoint. It must say
    that submission is optional, the issue is public, and no report body or client IP is logged by
-   this service. The Durable Object retains only an issue receipt and a cryptographic request
-   fingerprint for at most 24 hours to make retries idempotent.
+   this service. The Durable Object retains an issue receipt and a cryptographic request fingerprint
+   for at most 24 hours to make retries idempotent. If it cannot determine whether GitHub created
+   an issue, it retains only the fingerprint and an outcome marker for up to 30 days to prevent a
+   duplicate public issue.
 
 If a secret is rotated, update it with the same `wrangler secret put` command and deploy again.
 The GitHub App remains server-side: neither its private key nor an installation token may be
@@ -139,10 +142,14 @@ shipped in the iOS or Android application.
 - `CF-Connecting-IP` is passed only to the Cloudflare rate-limit binding and is never stored.
 - A Durable Object keyed by the UUID serializes same-key submissions and saves an issue receipt for
   24 hours. The first completed request returns `201`; a same-payload retry returns `200` with the
-  same issue receipt. Failed issue creation is not cached.
-- Before a v2 request can write to R2, the Durable Object reserves its canonical payload hash. A
-  changed attachment for the same UUID is rejected before it can overwrite media. Newly created R2
-  objects are deleted if the GitHub issue call fails; the configured lifecycle rule is a backstop
-  for the rare case where that deletion cannot complete.
+  same issue receipt. If the GitHub create outcome is uncertain, it retains only the request hash
+  and an outcome marker for 30 days, blocks same-key retries, and returns `unavailable` rather than
+  risk a duplicate public issue.
+- Before a v2 request can write to R2, the Durable Object reserves its payload hash. At the R2
+  write boundary, the Worker decodes and re-encodes each valid RGBA PNG before storing it. A changed
+  attachment for the same UUID is rejected before it can overwrite media. Newly created R2 objects
+  are deleted only after a definite GitHub rejection; they are retained for an uncertain create so
+  a possibly-created public issue does not receive broken image links. The lifecycle rule is the
+  operational backstop.
 - Errors are intentionally generic: `invalid_request`, `rate_limited`, or `unavailable`. The
   Worker never returns GitHub error bodies to an app.
