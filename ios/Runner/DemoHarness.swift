@@ -25,6 +25,8 @@ enum DemoHarness {
     static let liveGuideStep = value("ZC_DEMO_LIVE_GUIDE_STEP")
     /// `ZC_DEMO_RED_BLOCKED=ap|off` forces the RED download blocked state for screenshots.
     static let forcedRedAvailability = value("ZC_DEMO_RED_BLOCKED")
+    /// `ZC_DEMO_OPEN_BUG_REPORT=1` opens the anonymous bug-report form for screenshot checks.
+    static let openBugReport = flag("ZC_DEMO_OPEN_BUG_REPORT")
     /// `ZC_METAL_FEED=1` opts into the experimental GPU-native feed renderer.
     static let metalFeed = flag("ZC_METAL_FEED")
     /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
@@ -335,6 +337,12 @@ enum DemoHarness {
                 if let rawTab = env["ZC_DEMO_PANEL_TAB"] {
                     model.operatorSettingsTab = OperatorSettingsTab.demoLaunchTab(rawTab)
                 }
+            }
+            if openBugReport {
+                // The form lives above standalone Operator Setup. Selecting System keeps the
+                // normal presentation path visible beneath it if a screenshot closes the form.
+                model.openStandaloneSettings()
+                model.operatorSettingsTab = .system
             }
             if let raw = env["ZC_DEMO_ORIENTATION"] {
                 // Demo/screenshot affordance: force the interface orientation so headless

@@ -329,30 +329,426 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
     }
 }
 
-/// Stable support and public-project links shared by Settings and tests.
+/// The frequency selected by a person submitting an anonymous bug report.
+enum BugReportFrequency: String, CaseIterable, Codable, Equatable, Sendable {
+    case always
+    case sometimes
+    case once
+    case unknown
+
+    var displayName: String {
+        switch self {
+        case .always:
+            "Always"
+        case .sometimes:
+            "Sometimes"
+        case .once:
+            "Once"
+        case .unknown:
+            "Not sure"
+        }
+    }
+}
+
+/// The connection selected by a person submitting an anonymous bug report.
+///
+/// This is intentionally an explicit, coarse choice. OpenZCine does not inspect or include a
+/// network name, address, camera identity, or connection history in a bug report.
+enum BugReportConnection: String, CaseIterable, Codable, Equatable, Sendable {
+    case wifi
+    case usb
+    case unknown
+
+    var displayName: String {
+        switch self {
+        case .wifi:
+            "Wi-Fi"
+        case .usb:
+            "USB"
+        case .unknown:
+            "Not sure"
+        }
+    }
+}
+
+/// The only device grouping included with an anonymous bug report.
+enum BugReportDeviceClass: String, Codable, Equatable, Sendable {
+    case phone
+    case tablet
+    case unknown
+}
+
+/// Coarse, privacy-safe execution context attached to an anonymous bug report.
+struct BugReportContext: Codable, Equatable, Sendable {
+    let platform: String
+    let appVersion: String
+    let buildNumber: String
+    let osVersion: String
+    let deviceClass: BugReportDeviceClass
+    let connection: BugReportConnection
+
+    /// Reads only the app version, build number, operating-system version, and device class.
+    ///
+    /// This deliberately never reads a model name, serial number, camera identity, Wi-Fi name,
+    /// network address, diagnostic event, MetricKit payload, or persistent identifier.
+    @MainActor static func current(connection: BugReportConnection = .unknown) -> BugReportContext {
+        let info = Bundle.main.infoDictionary
+        let appVersion = info?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let buildNumber = info?["CFBundleVersion"] as? String ?? "unknown"
+        let deviceClass: BugReportDeviceClass
+        switch UIDevice.current.userInterfaceIdiom {
+        case .phone:
+            deviceClass = .phone
+        case .pad:
+            deviceClass = .tablet
+        default:
+            deviceClass = .unknown
+        }
+        return BugReportContext(
+            platform: "ios",
+            appVersion: appVersion,
+            buildNumber: buildNumber,
+            osVersion: UIDevice.current.systemVersion,
+            deviceClass: deviceClass,
+            connection: connection
+        )
+    }
+}
+
+/// The report body accepted by the public bug-report relay.
+struct BugReportPayload: Codable, Equatable, Sendable {
+    let schemaVersion: Int
+    let summary: String
+    let whatHappened: String
+    let stepsToReproduce: String?
+    let frequency: BugReportFrequency
+    let context: BugReportContext
+
+    init(
+        summary: String,
+        whatHappened: String,
+        stepsToReproduce: String?,
+        frequency: BugReportFrequency,
+        context: BugReportContext
+    ) {
+        self.schemaVersion = 1
+        self.summary = summary
+        self.whatHappened = whatHappened
+        self.stepsToReproduce = stepsToReproduce
+        self.frequency = frequency
+        self.context = context
+    }
+}
+
+/// User-facing validation failures for an anonymous bug-report draft.
+enum BugReportValidationError: LocalizedError, Equatable, Sendable {
+    case summaryRequired
+    case summaryTooLong
+    case whatHappenedRequired
+    case whatHappenedTooLong
+    case stepsTooLong
+
+    var errorDescription: String? {
+        switch self {
+        case .summaryRequired:
+            "Add a short summary before submitting."
+        case .summaryTooLong:
+            "Keep the summary to 120 characters or fewer."
+        case .whatHappenedRequired:
+            "Describe what happened before submitting."
+        case .whatHappenedTooLong:
+            "Keep what happened to 4,000 characters or fewer."
+        case .stepsTooLong:
+            "Keep reproduction steps to 4,000 characters or fewer."
+        }
+    }
+}
+
+/// Editable, in-memory fields for an anonymous bug report.
+///
+/// The draft is deliberately not persisted. A failed submission remains visible so it can be
+/// corrected and submitted again, but OpenZCine never creates an offline report queue.
+struct BugReportDraft: Equatable, Sendable {
+    var summary = ""
+    var whatHappened = ""
+    var stepsToReproduce = ""
+    var frequency: BugReportFrequency = .unknown
+    var connection: BugReportConnection = .unknown
+
+    func payload(baseContext: BugReportContext) throws -> BugReportPayload {
+        let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSummary.isEmpty else { throw BugReportValidationError.summaryRequired }
+        guard trimmedSummary.count <= 120 else { throw BugReportValidationError.summaryTooLong }
+
+        let trimmedWhatHappened = whatHappened.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedWhatHappened.isEmpty else {
+            throw BugReportValidationError.whatHappenedRequired
+        }
+        guard trimmedWhatHappened.count <= 4_000 else {
+            throw BugReportValidationError.whatHappenedTooLong
+        }
+
+        let trimmedSteps = stepsToReproduce.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedSteps.count <= 4_000 else { throw BugReportValidationError.stepsTooLong }
+
+        return BugReportPayload(
+            summary: trimmedSummary,
+            whatHappened: trimmedWhatHappened,
+            stepsToReproduce: trimmedSteps.isEmpty ? nil : trimmedSteps,
+            frequency: frequency,
+            context: BugReportContext(
+                platform: baseContext.platform,
+                appVersion: baseContext.appVersion,
+                buildNumber: baseContext.buildNumber,
+                osVersion: baseContext.osVersion,
+                deviceClass: baseContext.deviceClass,
+                connection: connection
+            )
+        )
+    }
+}
+
+/// The public GitHub issue created by a successful anonymous bug report, when the relay returns it.
+struct BugReportSubmissionReceipt: Equatable, Sendable {
+    let issueNumber: Int?
+    let issueURL: URL?
+
+    static let empty = BugReportSubmissionReceipt(issueNumber: nil, issueURL: nil)
+}
+
+/// A submission failure deliberately expressed without exposing transport or server internals.
+enum BugReportSubmissionError: LocalizedError, Equatable, Sendable {
+    case rateLimited(retryAfter: Int?)
+    case unavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .rateLimited(let retryAfter):
+            if let retryAfter {
+                "Too many reports were sent. Try again in about \(retryAfter) seconds."
+            } else {
+                "Too many reports were sent. Please try again later."
+            }
+        case .unavailable:
+            "The report service is unavailable. Please try again later."
+        }
+    }
+}
+
+/// Boundary used by the SwiftUI form so tests can submit through an in-memory fake.
+protocol BugReportSubmitting: Sendable {
+    func submit(
+        _ report: BugReportPayload,
+        idempotencyKey: UUID
+    ) async throws -> BugReportSubmissionReceipt
+}
+
+/// URLSession client for the public, HTTPS-only anonymous bug-report relay.
+struct URLSessionBugReportSubmitter: BugReportSubmitting {
+    private let session: URLSession
+    /// Retained alongside the session so its no-redirect policy stays alive for this client.
+    private let redirectDelegate: BugReportRedirectDelegate?
+
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+            redirectDelegate = nil
+        } else {
+            let redirectDelegate = BugReportRedirectDelegate()
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 12
+            configuration.timeoutIntervalForResource = 12
+            configuration.waitsForConnectivity = false
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            configuration.urlCache = nil
+            configuration.httpCookieStorage = nil
+            configuration.httpShouldSetCookies = false
+            self.session = URLSession(
+                configuration: configuration,
+                delegate: redirectDelegate,
+                delegateQueue: nil
+            )
+            self.redirectDelegate = redirectDelegate
+        }
+    }
+
+    func submit(
+        _ report: BugReportPayload,
+        idempotencyKey: UUID
+    ) async throws -> BugReportSubmissionReceipt {
+        do {
+            let request = try Self.makeRequest(report, idempotencyKey: idempotencyKey)
+            let (data, response) = try await session.data(for: request)
+            guard let response = response as? HTTPURLResponse else {
+                throw BugReportSubmissionError.unavailable
+            }
+            guard response.url?.scheme?.lowercased() == "https" else {
+                throw BugReportSubmissionError.unavailable
+            }
+
+            switch response.statusCode {
+            case 200, 201:
+                return Self.decodeReceipt(data)
+            default:
+                throw Self.submissionError(
+                    statusCode: response.statusCode,
+                    retryAfterHeader: response.value(forHTTPHeaderField: "Retry-After")
+                )
+            }
+        } catch let error as BugReportSubmissionError {
+            throw error
+        } catch {
+            throw BugReportSubmissionError.unavailable
+        }
+    }
+
+    static func makeRequest(
+        _ report: BugReportPayload,
+        idempotencyKey: UUID
+    ) throws -> URLRequest {
+        var request = URLRequest(url: SupportLinkCatalog.bugReportEndpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(idempotencyKey.uuidString, forHTTPHeaderField: "Idempotency-Key")
+        request.httpBody = try JSONEncoder().encode(report)
+        return request
+    }
+
+    static func decodeReceipt(_ data: Data) -> BugReportSubmissionReceipt {
+        guard !data.isEmpty,
+            let response = try? JSONDecoder().decode(BugReportRelayResponse.self, from: data)
+        else {
+            return .empty
+        }
+        return BugReportSubmissionReceipt(
+            issueNumber: response.issue?.number,
+            issueURL: response.issue?.url
+        )
+    }
+
+    static func retryAfterSeconds(_ value: String?) -> Int? {
+        guard let value, let seconds = Int(value), seconds > 0 else { return nil }
+        return seconds
+    }
+
+    static func submissionError(
+        statusCode: Int,
+        retryAfterHeader: String?
+    ) -> BugReportSubmissionError {
+        guard statusCode == 429 else { return .unavailable }
+        return .rateLimited(retryAfter: retryAfterSeconds(retryAfterHeader))
+    }
+}
+
+private struct BugReportRelayResponse: Decodable {
+    struct Issue: Decodable {
+        let number: Int?
+        let url: URL?
+    }
+
+    let issue: Issue?
+}
+
+/// Refuses redirects so reports never follow a changed or unexpected destination.
+private final class BugReportRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable
+{
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest _: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
+/// Main-actor state for the in-app bug-report form.
+@MainActor @Observable
+final class BugReportFormModel {
+    var draft = BugReportDraft()
+    private(set) var submissionState: BugReportSubmissionState = .editing
+
+    private let baseContext: BugReportContext
+    private let submitter: any BugReportSubmitting
+    private var idempotencyKey = UUID()
+    private var lastSubmittedPayload: BugReportPayload?
+
+    init(
+        baseContext: BugReportContext = .current(),
+        submitter: any BugReportSubmitting = URLSessionBugReportSubmitter()
+    ) {
+        self.baseContext = baseContext
+        self.submitter = submitter
+    }
+
+    var isSubmitting: Bool {
+        if case .submitting = submissionState { return true }
+        return false
+    }
+
+    var errorMessage: String? {
+        if case .failed(let message) = submissionState { return message }
+        return nil
+    }
+
+    var receipt: BugReportSubmissionReceipt? {
+        if case .submitted(let receipt) = submissionState { return receipt }
+        return nil
+    }
+
+    func submit() async {
+        guard !isSubmitting else { return }
+        do {
+            let report = try draft.payload(baseContext: baseContext)
+            // An uncertain transport result may have created an issue. Reusing the key for this
+            // exact body makes that retry safe; editing the draft starts a distinct request.
+            if lastSubmittedPayload != report {
+                idempotencyKey = UUID()
+            }
+            lastSubmittedPayload = report
+            submissionState = .submitting
+            submissionState = .submitted(
+                try await submitter.submit(report, idempotencyKey: idempotencyKey)
+            )
+        } catch let error as BugReportValidationError {
+            submissionState = .failed(error.errorDescription ?? "Check the report and try again.")
+        } catch let error as BugReportSubmissionError {
+            submissionState = .failed(error.errorDescription ?? "Please try again later.")
+        } catch {
+            submissionState = .failed("The report service is unavailable. Please try again later.")
+        }
+    }
+
+    func startAnotherReport() {
+        draft = BugReportDraft()
+        idempotencyKey = UUID()
+        lastSubmittedPayload = nil
+        submissionState = .editing
+    }
+}
+
+/// UI state for an anonymous bug-report submission.
+enum BugReportSubmissionState: Equatable {
+    case editing
+    case submitting
+    case submitted(BugReportSubmissionReceipt)
+    case failed(String)
+}
+
+/// Stable support, public-project, and feedback endpoints shared by Settings and tests.
 enum SupportLinkCatalog {
     static let support = requiredURL("https://openzcine.app/support/")
     static let privacy = requiredURL("https://openzcine.app/privacy/")
     static let terms = requiredURL("https://openzcine.app/terms/")
     static let source = requiredURL("https://github.com/erik-sutton95/OpenZCine")
+    static let securityAdvisory = requiredURL(
+        "https://github.com/erik-sutton95/OpenZCine/security/advisories/new"
+    )
     static let featureRequest = requiredURL(
         "https://github.com/erik-sutton95/OpenZCine/discussions/new?category=ideas-feature-requests"
     )
-
-    @MainActor
-    static func bugReport(metadata: DiagnosticReportMetadata = .current) -> URL {
-        var components = URLComponents(
-            url: requiredURL("https://github.com/erik-sutton95/OpenZCine/issues/new"),
-            resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "template", value: "bug_report.yml"),
-            URLQueryItem(name: "title", value: "[iOS] "),
-            URLQueryItem(name: "platform", value: metadata.platformSummary),
-        ]
-        return components?.url
-            ?? requiredURL(
-                "https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml")
-    }
+    static let bugReportEndpoint = requiredURL("https://reports.openzcine.app/v1/bug-reports")
 
     private static func requiredURL(_ string: String) -> URL {
         guard let url = URL(string: string) else {
