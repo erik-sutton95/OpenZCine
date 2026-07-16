@@ -784,7 +784,7 @@
     <!-- System settings. -->
     <string name="system_action_unavailable">No app is available for that action.</string>
     <string name="system_help_feedback">Help &amp; Feedback</string>
-    <string name="system_help_caption">Open project support, submit an anonymous Android problem report, or share a local report you can review first.</string>
+    <string name="system_help_caption">Open project support, choose a problem-report path, or share a local report you can review first.</string>
     <string name="system_support">Support</string>
     <string name="action_open">Open</string>
     <string name="system_open_support">Open Support</string>
@@ -796,6 +796,16 @@
     <string name="system_share_diagnostics">Share Diagnostics</string>
     <string name="action_share">Share</string>
     <string name="bug_report_title">Report a Problem</string>
+    <string name="bug_report_path_subtitle">Choose how to submit a report.</string>
+    <string name="bug_report_path_public_notice">Both choices create a public GitHub issue. Never include passwords, pairing codes, Wi-Fi details, private media, or security vulnerabilities.</string>
+    <string name="bug_report_path_anonymous_title">Anonymous</string>
+    <string name="bug_report_path_anonymous_caption">No GitHub account. A small form sends only what you enter—no diagnostics or attachments.</string>
+    <string name="bug_report_path_anonymous_action">Report anonymously</string>
+    <string name="bug_report_path_anonymous_description">Report anonymously. No GitHub account needed. This creates a public GitHub issue.</string>
+    <string name="bug_report_path_github_title">Continue with GitHub</string>
+    <string name="bug_report_path_github_caption">Sign in in your browser to use the full issue form, with richer details and attachments.</string>
+    <string name="bug_report_path_github_action">Continue with GitHub</string>
+    <string name="bug_report_path_github_description">Continue with GitHub. Opens the public GitHub issue form in your browser and requires sign-in.</string>
     <string name="bug_report_subtitle">Send an anonymous Android report without a GitHub account.</string>
     <string name="bug_report_details_title">What happened?</string>
     <string name="bug_report_details_caption">Summary and what happened are required. Steps are optional but help reproduce it.</string>

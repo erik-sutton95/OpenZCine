@@ -12,6 +12,10 @@ class AndroidSupportLinksTest {
             AndroidSupportLinks.FEATURE_REQUEST,
         )
         assertEquals(
+            "https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml",
+            AndroidSupportLinks.BUG_REPORT,
+        )
+        assertEquals(
             "https://github.com/erik-sutton95/OpenZCine",
             AndroidSupportLinks.SOURCE,
         )

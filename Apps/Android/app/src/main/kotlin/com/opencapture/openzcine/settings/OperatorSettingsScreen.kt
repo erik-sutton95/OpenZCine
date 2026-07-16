@@ -122,6 +122,7 @@ import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioNetworkState
+import com.opencapture.openzcine.diagnostics.BugReportPathChooser
 import com.opencapture.openzcine.diagnostics.BugReportScreen
 import com.opencapture.openzcine.diagnostics.BugReportSubmitter
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
@@ -162,6 +163,11 @@ public enum class OperatorSettingsTab(
     DISPLAY(R.string.settings_tab_display, R.string.settings_tab_display, R.string.settings_rail_display, R.string.settings_subtitle_display, R.string.settings_pill_visibility),
     STORAGE(R.string.settings_tab_storage, R.string.settings_tab_storage, R.string.settings_rail_storage, R.string.settings_subtitle_storage, R.string.settings_pill_storage),
     SYSTEM(R.string.settings_tab_system, R.string.settings_tab_system, R.string.settings_rail_system, R.string.settings_subtitle_system, R.string.settings_pill_app),
+}
+
+private enum class BugReportDestination {
+    CHOOSER,
+    ANONYMOUS,
 }
 
 /**
@@ -238,16 +244,23 @@ internal fun OperatorSettingsScreen(
         }
     }
     var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
-    var bugReportPresented by remember { mutableStateOf(false) }
+    var bugReportDestination by remember { mutableStateOf<BugReportDestination?>(null) }
 
-    if (bugReportPresented) {
-        BugReportScreen(
-            submitter = bugReportSubmitter,
-            onOpenSecurityAdvisory = systemSettingsActions::openSecurityAdvisory,
-            onClose = { bugReportPresented = false },
-        )
-    } else {
-        BoxWithConstraints(
+    when (bugReportDestination) {
+        BugReportDestination.CHOOSER ->
+            BugReportPathChooser(
+                onChooseAnonymous = { bugReportDestination = BugReportDestination.ANONYMOUS },
+                onContinueWithGitHub = systemSettingsActions::openGitHubBugReport,
+                onClose = { bugReportDestination = null },
+            )
+        BugReportDestination.ANONYMOUS ->
+            BugReportScreen(
+                submitter = bugReportSubmitter,
+                onOpenSecurityAdvisory = systemSettingsActions::openSecurityAdvisory,
+                onClose = { bugReportDestination = null },
+            )
+        null ->
+            BoxWithConstraints(
             Modifier.fillMaxSize()
                 .background(LiveDesign.background)
                 // A hit-testable node at the root keeps every pointer event on
@@ -293,7 +306,7 @@ internal fun OperatorSettingsScreen(
                         onAssistToggle = toggleAssist,
                         onInteraction = emitHaptic,
                         compact = true,
-                        onReportProblem = { bugReportPresented = true },
+                        onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
                         modifier = Modifier.weight(1f),
                     )
                 } else {
@@ -325,7 +338,7 @@ internal fun OperatorSettingsScreen(
                             onAssistToggle = toggleAssist,
                             onInteraction = emitHaptic,
                             compact = false,
-                            onReportProblem = { bugReportPresented = true },
+                            onReportProblem = { bugReportDestination = BugReportDestination.CHOOSER },
                             modifier = Modifier.weight(1f),
                         )
                     }
