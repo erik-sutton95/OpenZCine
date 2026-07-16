@@ -2898,6 +2898,7 @@ struct OperatorSettingsPanel: View {
     @State private var diagnosticsShareItem: DiagnosticsShareItem?
     @State private var diagnosticsErrorMessage: String?
     @State private var isPreparingDiagnostics = false
+    @State private var bugReportPresented = DemoHarness.openBugReport
 
     private var selectedTab: OperatorSettingsTab {
         get { model.operatorSettingsTab }
@@ -2968,6 +2969,9 @@ struct OperatorSettingsPanel: View {
         .ignoresSafeArea()
         .sheet(item: $diagnosticsShareItem) { item in
             DiagnosticsShareSheet(url: item.url)
+        }
+        .fullScreenCover(isPresented: $bugReportPresented) {
+            BugReportFormView(onDismiss: { bugReportPresented = false })
         }
         .alert(
             "Couldn’t Share Diagnostics",
@@ -3323,10 +3327,12 @@ struct OperatorSettingsPanel: View {
             SettingsInlineRow(
                 title: "Report a Problem",
                 help:
-                    "Open a structured GitHub report with this app version, device class, and iOS version filled in."
+                    "Send an anonymous report from OpenZCine. It creates a public GitHub issue without uploading diagnostics."
             ) {
-                systemLinkButton(
-                    "Report", url: SupportLinkCatalog.bugReport(), label: "Report a Problem")
+                SettingsActionPill(title: "Report") {
+                    bugReportPresented = true
+                }
+                .accessibilityLabel("Report a Problem")
             }
             SettingsInlineRow(
                 title: "Request a Feature",
@@ -3612,6 +3618,391 @@ struct OperatorSettingsPanel: View {
                     action: items[index].action)
             }
         }
+    }
+}
+
+/// A private, in-app form that sends a small anonymous report to the public GitHub issue relay.
+///
+/// It intentionally has no diagnostics attachment, screenshot capture, media picker, retry queue,
+/// or persistent draft storage. The only automatic context is constructed by ``BugReportContext``.
+@MainActor
+struct BugReportFormView: View {
+    @Environment(\.openURL) private var openURL
+    @State private var model: BugReportFormModel
+
+    private let onDismiss: () -> Void
+
+    init(
+        onDismiss: @escaping () -> Void,
+        model: BugReportFormModel = BugReportFormModel()
+    ) {
+        self.onDismiss = onDismiss
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        @Bindable var form = model
+
+        ZStack {
+            LiveDesign.background.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                header
+                Rectangle()
+                    .fill(LiveDesign.hairline)
+                    .frame(height: 1)
+
+                if let receipt = model.receipt {
+                    submittedContent(receipt: receipt)
+                } else {
+                    formContent(draft: $form.draft)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button(action: onDismiss) {
+                Label("Close", systemImage: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+            }
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel("Close bug report")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Report a Problem")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                Text("Anonymous bug report")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+    }
+
+    private func formContent(draft: Binding<BugReportDraft>) -> some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 12) {
+                BugReportTextField(
+                    title: "Short summary",
+                    hint: "What went wrong?",
+                    text: draft.summary,
+                    maximum: 120
+                )
+
+                BugReportTextEditor(
+                    title: "What happened",
+                    hint: "Describe the problem and what you expected instead.",
+                    text: draft.whatHappened,
+                    maximum: 4_000,
+                    minimumHeight: 84
+                )
+
+                BugReportTextEditor(
+                    title: "Steps to reproduce (optional)",
+                    hint: "List the steps that make the problem happen.",
+                    text: draft.stepsToReproduce,
+                    maximum: 4_000,
+                    minimumHeight: 72
+                )
+
+                BugReportChoiceRow(
+                    title: "How often did it happen?",
+                    selection: draft.frequency,
+                    displayName: { $0.displayName }
+                )
+
+                BugReportChoiceRow(
+                    title: "How was the camera connected?",
+                    selection: draft.connection,
+                    displayName: { $0.displayName }
+                )
+
+                privacyNotice
+
+                if let errorMessage = model.errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color(.systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            Color(.systemOrange).opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
+                        )
+                        .accessibilityLabel("Report error: \(errorMessage)")
+                }
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            submissionFooter
+        }
+    }
+
+    private var privacyNotice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("Before you send", systemImage: "eye.slash")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Text(
+                "This creates a public GitHub issue. No GitHub account is required, the report is anonymous, and we cannot reply privately. Do not include passwords, pairing codes, private media, camera serial numbers, or anything sensitive."
+            )
+            .font(.system(size: 11.5))
+            .foregroundStyle(LiveDesign.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(
+                    "Security issue? Use SECURITY.md and send a private GitHub security advisory instead."
+                )
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(LiveDesign.text)
+                .fixedSize(horizontal: false, vertical: true)
+                Button("Open private security advisory") {
+                    openURL(SupportLinkCatalog.securityAdvisory)
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Open private GitHub security advisory")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
+    }
+
+    private var submissionFooter: some View {
+        VStack(spacing: 7) {
+            if model.isSubmitting {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(LiveDesign.accent)
+                    Text("Sending anonymous report…")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(LiveDesign.muted)
+                }
+                .accessibilityLabel("Sending anonymous bug report")
+            }
+
+            Button {
+                Task { await model.submit() }
+            } label: {
+                Text(model.isSubmitting ? "Sending…" : "Submit Anonymous Report")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(LiveDesign.background)
+                    .background(
+                        model.isSubmitting ? LiveDesign.muted : LiveDesign.accent,
+                        in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
+                    )
+            }
+            .buttonStyle(.zcTapTarget)
+            .disabled(model.isSubmitting)
+            .accessibilityLabel("Submit anonymous bug report")
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 9)
+        .padding(.bottom, 10)
+        .background(LiveDesign.background.opacity(0.98))
+        .overlay(alignment: .top) {
+            Rectangle().fill(LiveDesign.hairline).frame(height: 1)
+        }
+    }
+
+    private func submittedContent(receipt: BugReportSubmissionReceipt) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 42, weight: .medium))
+                .foregroundStyle(LiveDesign.accent)
+                .accessibilityHidden(true)
+            Text("Report sent")
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Text(submissionConfirmation(receipt: receipt))
+                .font(.system(size: 13))
+                .foregroundStyle(LiveDesign.muted)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 470)
+
+            if let issueURL = receipt.issueURL {
+                Button("Open Public Issue") {
+                    openURL(issueURL)
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Open public GitHub issue")
+            }
+
+            HStack(spacing: 16) {
+                Button("Report Another") {
+                    model.startAnotherReport()
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(LiveDesign.accent)
+                .buttonStyle(.zcTapTarget)
+
+                Button("Done", action: onDismiss)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                    .buttonStyle(.zcTapTarget)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func submissionConfirmation(receipt: BugReportSubmissionReceipt) -> String {
+        if let number = receipt.issueNumber {
+            "Your anonymous report is now public as GitHub issue #\(number). We cannot reply privately."
+        } else {
+            "Your anonymous report is now public on GitHub. We cannot reply privately."
+        }
+    }
+}
+
+/// A labelled, character-limited single-line input for the anonymous bug-report form.
+private struct BugReportTextField: View {
+    let title: String
+    let hint: String
+    @Binding var text: String
+    let maximum: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            BugReportFieldLabel(title: title, count: text.count, maximum: maximum)
+            TextField(hint, text: $text, axis: .vertical)
+                .font(.system(size: 14))
+                .foregroundStyle(LiveDesign.text)
+                .lineLimit(1...3)
+                .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled(false)
+                .padding(10)
+                .background(
+                    LiveDesign.background,
+                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                        .stroke(LiveDesign.hairline, lineWidth: 1)
+                )
+                .accessibilityLabel(title)
+                .accessibilityHint(hint)
+        }
+    }
+}
+
+/// A labelled, character-limited multi-line input for the anonymous bug-report form.
+private struct BugReportTextEditor: View {
+    let title: String
+    let hint: String
+    @Binding var text: String
+    let maximum: Int
+    let minimumHeight: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            BugReportFieldLabel(title: title, count: text.count, maximum: maximum)
+            TextEditor(text: $text)
+                .font(.system(size: 14))
+                .foregroundStyle(LiveDesign.text)
+                .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled(false)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(minHeight: minimumHeight)
+                .background(
+                    LiveDesign.background,
+                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                        .stroke(LiveDesign.hairline, lineWidth: 1)
+                )
+                .accessibilityLabel(title)
+                .accessibilityHint(hint)
+        }
+    }
+}
+
+/// A shared title and character count for a bug-report input.
+private struct BugReportFieldLabel: View {
+    let title: String
+    let count: Int
+    let maximum: Int
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+            Spacer(minLength: 8)
+            Text("\(count)/\(maximum)")
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(count > maximum ? Color(.systemOrange) : LiveDesign.faint)
+                .accessibilityLabel("\(count) of \(maximum) characters")
+        }
+    }
+}
+
+/// A compact, typed picker row for one coarse bug-report field.
+private struct BugReportChoiceRow<Value: CaseIterable & RawRepresentable & Hashable>: View
+where Value.RawValue == String {
+    let title: String
+    @Binding var selection: Value
+    let displayName: (Value) -> String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Picker(title, selection: $selection) {
+                ForEach(Array(Value.allCases), id: \.self) { value in
+                    Text(displayName(value)).tag(value)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .tint(LiveDesign.accent)
+            .accessibilityLabel(title)
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.surface,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        )
     }
 }
 
