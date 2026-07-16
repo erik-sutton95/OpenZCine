@@ -8,9 +8,11 @@ body:
         Thanks for helping improve OpenZCine. Describe what you saw in your own words.
         Only the first question is required, and you can skip anything marked **optional**.
 
-        If you have the app, **Operator Setup > System > Report a Problem** can create a public
-        bug report without a GitHub account. This web form remains available for signed-in GitHub
-        reporters and supports richer optional details.
+        In the app, **Operator Setup > System > Report a Problem** lets you choose an anonymous,
+        minimal report without a GitHub account or this signed-in GitHub route. Both create public
+        issues. This route supports richer optional details and attachments; open the signed-in
+        [issue chooser](https://github.com/erik-sutton95/OpenZCine/issues/new/choose) directly at
+        any time.
 
   - type: textarea
     id: what-happened

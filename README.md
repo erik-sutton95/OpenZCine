@@ -174,8 +174,9 @@ just bug-relay-check # test the standalone anonymous bug-report relay
 Contributions are welcome!
 
 - See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflow, code standards, and how to report bugs vs. request features.
-- The native app can submit a public bug report without a GitHub account; feature requests stay in
-  GitHub Discussions.
+- **Report a Problem** offers two public-issue paths: a minimal anonymous in-app report with no
+  GitHub account, or a [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new/choose)
+  with richer optional details. Feature requests stay in GitHub Discussions and require an account.
 - Before enabling that flow in a release, follow the secret-free GitHub App and Cloudflare
   provisioning steps in [`services/bug-relay/README.md`](services/bug-relay/README.md).
 - We use **GitHub Discussions** (Ideas category) for feature requests.

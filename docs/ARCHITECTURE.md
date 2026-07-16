@@ -217,13 +217,16 @@ USB cameras are identified by stable `usb:<device-id>` host keys in discovery re
 camera records (`transport: "USB-C"`), so startup policies can skip network probing for tethered
 bodies and reconnect them silently on plug-in.
 
-### ADR-006 — Anonymous Bug-Report Relay
+### ADR-006 — Bug-Report Paths and Relay
 
-Bug reports are intentionally a platform-shell concern, not a portable-core feature. The iOS and
-Android shells present native forms and send only the report text the operator supplies plus a
-small, closed set of app/platform fields. They never ship a GitHub credential, installation
-identifier, diagnostics, logs, screenshots, media, camera identity, or network identifier. Local
-diagnostics remain a separate user-reviewed share flow.
+Bug reports are intentionally a platform-shell concern, not a portable-core feature. **Report a
+Problem** offers two public GitHub-issue paths: an anonymous in-app form and the signed-in
+[GitHub issue chooser](https://github.com/erik-sutton95/OpenZCine/issues/new/choose). The anonymous
+form sends only the report text the operator supplies plus a small, closed set of app/platform
+fields; it never ships a GitHub credential, installation identifier, diagnostics, logs,
+screenshots, media, camera identity, or network identifier. The signed-in route hands richer
+optional details and attachments directly to GitHub. Local diagnostics remain a separate
+user-reviewed share flow.
 
 `services/bug-relay` is an independently deployable Cloudflare Worker. It validates the narrow
 wire contract, rate-limits anonymous submissions, makes retries idempotent, and uses a private
