@@ -129,6 +129,8 @@ class SystemRowsComposeTest {
 
         override fun requestFeature(): Boolean = true.also { feature += 1 }
 
+        override fun openGitHubBugReport(): Boolean = true
+
         override fun openSecurityAdvisory(): Boolean = true.also { security += 1 }
 
         override fun openSource(): Boolean = true.also { source += 1 }

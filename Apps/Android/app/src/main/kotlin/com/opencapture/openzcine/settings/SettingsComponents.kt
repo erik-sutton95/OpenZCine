@@ -186,12 +186,19 @@ public fun SettingsQuietLink(title: String, onClick: () -> Unit): Unit {
     }
 }
 
-/** Titled glass card with an optional per-tool reset and free-form content. */
+/**
+ * Titled glass card with an optional per-tool reset and free-form content.
+ *
+ * [captionMaxLines] defaults to the compact settings-card treatment. Flows
+ * that communicate a consequential choice can opt into an unbounded caption
+ * so accessibility font scaling never hides that context.
+ */
 @Composable
 public fun SettingsGroupCard(
     title: String,
     caption: String,
     onReset: (() -> Unit)? = null,
+    captionMaxLines: Int = 2,
     content: @Composable () -> Unit,
 ) {
     Column(
@@ -217,7 +224,7 @@ public fun SettingsGroupCard(
                 caption,
                 style = chromeStyle(11.5f, FontWeight.Normal),
                 color = LiveDesign.muted,
-                maxLines = 2,
+                maxLines = captionMaxLines,
             )
         }
         content()
