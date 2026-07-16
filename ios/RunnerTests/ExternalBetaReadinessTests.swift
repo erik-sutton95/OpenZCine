@@ -13,17 +13,36 @@ struct ExternalBetaDiagnosticsTests {
         operatingSystem: "iOS 18.0"
     )
 
-    @Test("Support destinations retain account-backed feature discussions and use the report relay")
+    @Test("Support destinations retain account-backed GitHub forms and use the report relay")
     func supportDestinations() {
         #expect(SupportLinkCatalog.support.absoluteString == "https://openzcine.app/support/")
         #expect(
             SupportLinkCatalog.featureRequest.absoluteString.contains(
                 "category=ideas-feature-requests"))
         #expect(
+            SupportLinkCatalog.githubBugReport.absoluteString
+                == "https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml")
+        #expect(SupportLinkCatalog.githubBugReport.host == "github.com")
+        #expect(
             SupportLinkCatalog.bugReportEndpoint.absoluteString
                 == "https://reports.openzcine.app/v1/bug-reports")
         #expect(SupportLinkCatalog.bugReportEndpoint.scheme == "https")
         #expect(!SupportLinkCatalog.bugReportEndpoint.absoluteString.contains("github.com"))
+    }
+
+    @Test("GitHub report handoff dismisses the chooser only after a browser accepts it")
+    func githubReportHandoff() {
+        var dismissalCount = 0
+
+        BugReportGitHubHandoff.dismissAfterAcceptedBrowserOpen(false) {
+            dismissalCount += 1
+        }
+        #expect(dismissalCount == 0)
+
+        BugReportGitHubHandoff.dismissAfterAcceptedBrowserOpen(true) {
+            dismissalCount += 1
+        }
+        #expect(dismissalCount == 1)
     }
 
     @Test("Diagnostic report contains closed events and an explicit privacy warning")

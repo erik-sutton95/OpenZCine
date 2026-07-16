@@ -25,7 +25,7 @@ enum DemoHarness {
     static let liveGuideStep = value("ZC_DEMO_LIVE_GUIDE_STEP")
     /// `ZC_DEMO_RED_BLOCKED=ap|off` forces the RED download blocked state for screenshots.
     static let forcedRedAvailability = value("ZC_DEMO_RED_BLOCKED")
-    /// `ZC_DEMO_OPEN_BUG_REPORT=1` opens the anonymous bug-report form for screenshot checks.
+    /// `ZC_DEMO_OPEN_BUG_REPORT=1` opens the bug-report route chooser for screenshot checks.
     static let openBugReport = flag("ZC_DEMO_OPEN_BUG_REPORT")
     /// `ZC_METAL_FEED=1` opts into the experimental GPU-native feed renderer.
     static let metalFeed = flag("ZC_METAL_FEED")
