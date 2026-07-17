@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +30,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
@@ -44,6 +46,8 @@ internal enum class MonitorPickerKind {
     IRIS,
     FOCUS,
     WHITE_BALANCE,
+    RESOLUTION,
+    CODEC,
 }
 
 /** One typed control tab inside an in-monitor picker. */
@@ -69,6 +73,42 @@ internal data class MonitorCaptureSettingPresentation(
     val picker: MonitorPickerPresentation?,
     val unavailableReason: String?,
 )
+
+/**
+ * Pickers behind the landscape top-pill resolution/codec readouts (and the
+ * portrait REC-options popover) — iOS opens `.resolution`/`.codec` pickers
+ * from those taps. Present only when the command projection already produced
+ * a Swift-validated request; nothing is invented here either.
+ */
+internal fun monitorTopPillPickers(
+    dashboard: CommandDashboardPresentation,
+    strings: PhoneStringResolver,
+): Map<MonitorPickerKind, MonitorPickerPresentation> {
+    val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
+    fun from(
+        kind: MonitorPickerKind,
+        tileKind: CommandTileKind,
+        subtitle: Int,
+    ): Pair<MonitorPickerKind, MonitorPickerPresentation>? {
+        val tile = primary[tileKind] ?: return null
+        val request = tile.request?.takeIf { it.options.isNotEmpty() } ?: return null
+        return kind to
+            MonitorPickerPresentation(
+                kind = kind,
+                title = tile.title,
+                subtitle = strings.resolve(subtitle),
+                modes = listOf(MonitorPickerModePresentation(tile.title, request)),
+            )
+    }
+    return listOfNotNull(
+        from(
+            MonitorPickerKind.RESOLUTION,
+            CommandTileKind.RESOLUTION_FRAMERATE,
+            R.string.camera_subtitle_resolution,
+        ),
+        from(MonitorPickerKind.CODEC, CommandTileKind.CODEC, R.string.camera_subtitle_codec),
+    ).toMap()
+}
 
 /** The shared-zone anchor used by an in-monitor control panel. */
 internal enum class MonitorPickerAnchor {
@@ -341,17 +381,61 @@ internal fun MonitorCaptureStrip(
     pendingControl: CameraControl?,
     onOpenPicker: (MonitorPickerKind) -> Unit,
     modifier: Modifier = Modifier,
+    maxContentWidth: Dp? = null,
 ) {
     val applyingState = stringResource(R.string.camera_state_applying)
     val otherChangeState = stringResource(R.string.camera_state_other_change)
     val readOnlyState = stringResource(R.string.camera_state_read_only)
     val lockedState = stringResource(R.string.camera_state_locked)
     val changeHint = stringResource(R.string.camera_state_change_hint)
-    Row(
+    // The glass shell stays at the shared 58dp band (iOS
+    // DesignTokens.controlHeight) so the two bottom bars always align; when a
+    // width budget is given, only the CELLS scale down to fit — scaling the
+    // whole pill shrank its height below the assist bar's.
+    Box(
         modifier =
             modifier
+                .height(LiveDesign.CONTROL_HEIGHT_DP.dp)
                 .glass(ChromeShape)
                 .padding(horizontal = 12.dp, vertical = 4.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        val cells: @Composable () -> Unit = {
+            CaptureStripCells(
+                settings = settings,
+                activePicker = activePicker,
+                controlsEnabled = controlsEnabled,
+                pendingControl = pendingControl,
+                onOpenPicker = onOpenPicker,
+                applyingState = applyingState,
+                otherChangeState = otherChangeState,
+                readOnlyState = readOnlyState,
+                lockedState = lockedState,
+                changeHint = changeHint,
+            )
+        }
+        if (maxContentWidth != null) {
+            FitScale(maxContentWidth - 24.dp) { cells() }
+        } else {
+            cells()
+        }
+    }
+}
+
+@Composable
+private fun CaptureStripCells(
+    settings: List<MonitorCaptureSettingPresentation>,
+    activePicker: MonitorPickerKind?,
+    controlsEnabled: Boolean,
+    pendingControl: CameraControl?,
+    onOpenPicker: (MonitorPickerKind) -> Unit,
+    applyingState: String,
+    otherChangeState: String,
+    readOnlyState: String,
+    lockedState: String,
+    changeHint: String,
+) {
+    Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -368,6 +368,8 @@ object DemoHarness {
         override val cameras: StateFlow<List<UsbPtpCamera>> =
             mutableCameras.asStateFlow()
 
+        override fun refresh() = Unit
+
         override fun requestPermission(camera: UsbPtpCamera) {
             if (camera.token == DEBUG_USB_TOKEN) {
                 mutableCameras.value = camerasFor(ScriptedUsbState.READY)

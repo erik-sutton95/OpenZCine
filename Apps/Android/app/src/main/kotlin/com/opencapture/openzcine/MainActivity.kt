@@ -419,7 +419,8 @@ class MainActivity : ComponentActivity() {
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
                                 lutLibrary = lutLibrary,
-                                initialTab = OperatorSettingsTab.STORAGE,
+                                // iOS's startup Settings lands on Link.
+                                initialTab = OperatorSettingsTab.LINK,
                                 systemSettingsActions = systemSettingsActions,
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =

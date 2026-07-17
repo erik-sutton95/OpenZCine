@@ -58,7 +58,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -197,23 +196,25 @@ public fun SavedCamerasExperience(
             }
         }
 
-    suspend fun reconnectAfterNikonPairing(
-        record: SavedCameraRecord,
-        cameraApReassociated: Boolean? = null,
-    ): PairedCamera? {
-        if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-            val reappeared =
-                cameraApReassociated
-                    ?: environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS)
-            if (!reappeared) return null
-        } else {
+    suspend fun reconnectAfterNikonPairing(record: SavedCameraRecord): PairedCamera? {
+        val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
+        if (!isCameraAp) {
             delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
         }
+        // Actively re-join the rebooting camera AP each pass (iOS
+        // attemptPairedReconnectRejoin) — Android's WifiNetworkSpecifier does
+        // not auto-rejoin a rebooted AP, so a passive wait strands the operator.
+        val rejoinSsid = record.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
+        val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
 
         return withTimeoutOrNull<PairedCamera>(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
             var reconnected: PairedCamera? = null
             while (reconnected == null) {
                 phase = SavedCameraPhase.Reconnecting(record.displayTitle)
+                if (rejoinSsid != null && !environment.joinCameraAp(rejoinSsid, rejoinKey)) {
+                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                    continue
+                }
                 val session = createStrictSavedProfileSession(record)
                 if (session != null) {
                     var handedOffSession = false
@@ -333,20 +334,6 @@ public fun SavedCamerasExperience(
                     phase = SavedCameraPhase.Connecting(record.displayTitle)
                     val activeSession = session ?: environment.createSession(host)
                     session = activeSession
-                    // Start observing before a rejected saved profile can
-                    // become a fresh Nikon pairing. The body may restart its
-                    // AP immediately after its confirmation, so subscribing
-                    // only after the temporary session returns can miss it.
-                    val cameraApRestartWaiter =
-                        if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-                            async(start = CoroutineStart.UNDISPATCHED) {
-                                environment.awaitCameraApRestart(
-                                    FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS,
-                                )
-                            }
-                        } else {
-                            null
-                        }
                     var pairingWasConfirmed = false
                     var pairingPin: String? = null
                     val progressWatcher =
@@ -386,7 +373,6 @@ public fun SavedCamerasExperience(
                                             connected?.identity?.name ?: record.cameraName,
                                         lastSeenAtEpochMillis = System.currentTimeMillis(),
                                     ),
-                                    cameraApReassociated = cameraApRestartWaiter?.await(),
                                 )
                             } else {
                                 connected?.let {
@@ -403,7 +389,6 @@ public fun SavedCamerasExperience(
                             }
                         } finally {
                             progressWatcher.cancel()
-                            cameraApRestartWaiter?.cancel()
                         }
                     if (pairedCamera == null) {
                         phase =

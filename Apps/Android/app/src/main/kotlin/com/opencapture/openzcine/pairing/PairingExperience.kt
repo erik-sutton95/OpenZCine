@@ -79,12 +79,12 @@ import com.opencapture.openzcine.transport.UsbPtpCameraSource
 import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.async
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -418,6 +418,9 @@ internal const val FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS: Long = 60_000L
 internal const val FIRST_PAIR_RECONNECT_INTERVAL_MILLIS: Long = 2_000L
 internal const val FIRST_PAIR_HOTSPOT_SETTLE_MILLIS: Long = 2_000L
 
+/** How often the USB discover step re-enumerates while waiting for a camera. */
+internal const val USB_DISCOVER_POLL_INTERVAL_MILLIS: Long = 1_500L
+
 private fun PairingPhase.isBusy(): Boolean =
     this !is PairingPhase.Idle && this !is PairingPhase.Error
 
@@ -499,25 +502,33 @@ public fun PairingExperience(
             }
         }
 
-    suspend fun reconnectAfterFirstPair(
-        savedCamera: SavedCameraRecord,
-        cameraApReassociated: Boolean? = null,
-    ): PairedCamera? {
-        if (savedCamera.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-            val reappeared =
-                cameraApReassociated
-                    ?: environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS)
-            if (!reappeared) return null
-        } else {
+    suspend fun reconnectAfterFirstPair(savedCamera: SavedCameraRecord): PairedCamera? {
+        val isCameraAp = savedCamera.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
+        if (!isCameraAp) {
             // The camera's hotspot/USB transport needs a short settle after its
             // body-side confirmation before it will accept the restored profile.
             delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
         }
+        // iOS keeps re-applying the camera AP configuration while the just-paired
+        // camera reboots its Wi-Fi (attemptPairedReconnectRejoin), then reconnects
+        // off the saved profile the moment it returns — staying armed until a
+        // connect succeeds. Android's WifiNetworkSpecifier does NOT auto-rejoin a
+        // rebooted AP, so we mirror the active re-join: each pass re-issues the
+        // join (which blocks until the AP is back, then binds the process) before
+        // attempting the saved-profile connect. Re-joining a session-approved SSID
+        // is silent on API 31+.
+        val rejoinSsid = savedCamera.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
+        val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
 
         return withTimeoutOrNull<PairedCamera>(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
             var reconnected: PairedCamera? = null
             while (reconnected == null) {
                 phase = PairingPhase.Reconnecting
+                if (rejoinSsid != null && !environment.joinCameraAp(rejoinSsid, rejoinKey)) {
+                    // The rebooted AP hasn't returned yet; wait and re-apply.
+                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                    continue
+                }
                 val session = createSavedProfileReconnectSession(savedCamera)
                 if (session != null) {
                     var handedOffSession = false
@@ -560,22 +571,6 @@ public fun PairingExperience(
         work.value =
             scope.launch {
                 var confirmation: PairingPhase.ConfirmOnCamera? = null
-                // Register before the temporary session can trigger the Nikon
-                // restart. If the AP drops quickly after ConfirmPairing, this
-                // prevents us from missing the loss/reappearance edge.
-                val cameraApRestartWaiter =
-                    if (
-                        firstTimePairing &&
-                            savedCamera.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
-                    ) {
-                        async(start = CoroutineStart.UNDISPATCHED) {
-                            environment.awaitCameraApRestart(
-                                FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS,
-                            )
-                        }
-                    } else {
-                        null
-                    }
                 val progressWatcher =
                     launch(start = CoroutineStart.UNDISPATCHED) {
                         session.connectionProgress.collect { progress ->
@@ -590,7 +585,15 @@ public fun PairingExperience(
                 try {
                     session.connect()
                     val connected = session.state.value as? CameraSessionState.Connected
-                    val pairingConfirmed = confirmation
+                    // USB-C pairs in-session over the cable — there is no
+                    // Wi-Fi-restart / confirm-on-body step (matches iOS, which
+                    // uses the USB session directly). Only the Wi-Fi paths run
+                    // the shutdown → reconnect dance, which re-applies the
+                    // camera AP SSID a USB camera does not have.
+                    val pairingConfirmed =
+                        confirmation.takeIf {
+                            savedCamera.transport != SavedCameraTransport.USB_C
+                        }
                     if (firstTimePairing && pairingConfirmed != null) {
                         // Nikon has accepted `ConfirmPairing`, but this is still
                         // not a usable monitor session. Persist the profile,
@@ -604,11 +607,7 @@ public fun PairingExperience(
                         onPairingProfilePrepared(preparedProfile)
                         phase = pairingConfirmed
                         withContext(NonCancellable) { session.disconnect() }
-                        val reconnected =
-                            reconnectAfterFirstPair(
-                                preparedProfile,
-                                cameraApReassociated = cameraApRestartWaiter?.await(),
-                            )
+                        val reconnected = reconnectAfterFirstPair(preparedProfile)
                         if (reconnected != null) {
                             handedOff.value = true
                             onPaired(reconnected)
@@ -642,7 +641,6 @@ public fun PairingExperience(
                     phase = PairingPhase.Error(unreachableMessage)
                 } finally {
                     progressWatcher.cancel()
-                    cameraApRestartWaiter?.cancel()
                 }
             }
     }
@@ -755,19 +753,14 @@ public fun PairingExperience(
     }
 
     /**
-     * The network step's single action (iOS "Connect my camera"): a remembered
-     * key goes straight to the connect popup; a first-time camera opens the
-     * scanner — scanning is the only credential path, as on iOS.
+     * The network step's single action (iOS "Connect my camera"): the first-pair
+     * wizard ALWAYS opens the scanner — scanning is the only credential path
+     * here, exactly like iOS's `advanceFirstPairWizard` →
+     * `presentCameraWiFiScanner`. Remembered keys shortcut only saved-camera
+     * reconnects, never a fresh pairing.
      */
     fun connectMyCamera() {
-        val rememberedSsid = environment.credentials.lastSsid
-        val rememberedKey = rememberedSsid?.let(environment.credentials::passphrase)
-        if (rememberedSsid != null && rememberedKey != null) {
-            connectingName = rememberedSsid
-            phase = PairingPhase.ReadyToJoin(rememberedSsid, rememberedKey, keyFromScan = false)
-        } else {
-            cameraWifiScannerPresented = true
-        }
+        cameraWifiScannerPresented = true
     }
 
     fun cancelWork() {
@@ -838,6 +831,16 @@ public fun PairingExperience(
                 if (source == null) {
                     usbCameras = emptyList()
                 } else {
+                    // Poll deviceList while waiting: Samsung/OEM devices don't
+                    // reliably deliver ACTION_USB_DEVICE_ATTACHED to a runtime
+                    // receiver, so a camera plugged in on this step would never
+                    // reach the flow otherwise.
+                    launch {
+                        while (isActive) {
+                            source.refresh()
+                            delay(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+                        }
+                    }
                     source.cameras.collect { usbCameras = it }
                 }
             } else {
@@ -1959,12 +1962,18 @@ internal fun StartupOutlineButton(
             )
             Spacer(Modifier.width(5.dp))
         }
-        Text(
+        // Auto-shrinks instead of clipping: the wizard's landscape intro column
+        // narrows to 148dp on the choose step, and large system font scales
+        // can outgrow any fixed width.
+        BasicText(
             text,
-            color = StartupColors.ink,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+            style =
+                TextStyle(
+                    color = StartupColors.ink,
+                    fontWeight = FontWeight.SemiBold,
+                ),
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(10.sp, 14.sp, 0.5.sp),
         )
     }
 }

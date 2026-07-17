@@ -204,12 +204,10 @@ private fun popupDetail(deviceName: String, phase: ConnectionPopupPhase): String
         ConnectionPopupPhase.Handshaking ->
             stringResource(R.string.conn_handshaking_detail, deviceName)
         ConnectionPopupPhase.Pairing -> stringResource(R.string.conn_pairing_detail, deviceName)
+        // The app auto-accepts the pairing request, so the camera's PIN is
+        // never something the operator has to enter — iOS omits it here too.
         is ConnectionPopupPhase.ConfirmOnCamera ->
-            if (phase.pin == null) {
-                stringResource(R.string.conn_confirm_detail, deviceName)
-            } else {
-                stringResource(R.string.conn_confirm_detail_pin, phase.pin, deviceName)
-            }
+            stringResource(R.string.conn_confirm_detail, deviceName)
         ConnectionPopupPhase.Reconnecting ->
             stringResource(R.string.conn_reconnecting_detail, deviceName)
         is ConnectionPopupPhase.Failed ->

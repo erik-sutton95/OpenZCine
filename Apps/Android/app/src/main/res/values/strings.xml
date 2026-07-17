@@ -152,7 +152,6 @@
     <string name="conn_pairing_detail">Confirm the pairing request on %1$s.</string>
     <string name="conn_confirm_title">Confirm on camera</string>
     <string name="conn_confirm_detail">Tap “Confirm” on %1$s. It will restart its Wi‑Fi — we\'ll reconnect automatically.</string>
-    <string name="conn_confirm_detail_pin">Confirm code %1$s on %2$s. It will restart its Wi‑Fi — we\'ll reconnect automatically.</string>
     <string name="conn_reconnecting_detail">Waiting for %1$s to come back online.</string>
     <string name="conn_connected_title">Connected</string>
     <string name="conn_connected_detail">%1$s is ready.</string>
@@ -205,7 +204,7 @@
     <string name="assist_label_level">LEVEL</string>
     <string name="assist_label_desqueeze">DE-SQ</string>
     <string name="assist_label_audio">AUDIO</string>
-    <string name="assist_title_focus_peaking">Focus Peaking</string>
+    <string name="assist_title_focus_peaking">Peaking</string>
     <string name="assist_title_false_color">False Color</string>
     <string name="assist_title_zebra">Zebra</string>
     <string name="assist_title_waveform">Waveform</string>
@@ -301,6 +300,10 @@
     <string name="camera_subtitle_iris">Aperture</string>
     <string name="camera_subtitle_focus">AF mode / area / subject</string>
     <string name="camera_subtitle_wb">Kelvin / preset / tint</string>
+    <string name="camera_subtitle_resolution">Resolution · frame rate</string>
+    <string name="camera_subtitle_codec">Recording format</string>
+    <string name="rec_option_resolution">Resolution · Framerate</string>
+    <string name="rec_option_codec">Codec</string>
     <string name="camera_mode_sensitivity">Sensitivity</string>
     <string name="camera_mode_base_iso">Base ISO</string>
     <string name="camera_mode_value">Value</string>
@@ -462,11 +465,11 @@
     <string name="focus_reset">Reset focus point to center</string>
     <string name="record_start_title">Start recording?</string>
     <string name="record_stop_title">Stop recording?</string>
-    <string name="record_start_message">The camera will begin recording.</string>
-    <string name="record_stop_message">The camera will stop recording.</string>
+    <string name="record_start_message">Send the record command to the camera.</string>
+    <string name="record_stop_message">Stop the current take on the camera.</string>
     <string name="action_start">Start</string>
     <string name="action_stop">Stop</string>
-    <string name="scope_fit_limit">2 scopes max in fit view. Close one or pinch to fill.</string>
+    <string name="scope_fit_limit">2 scopes max in fit view — close one or pinch to fill</string>
     <string name="display_mode_live">Live</string>
     <string name="display_mode_clean">Clean</string>
     <string name="display_mode_command">Command</string>
@@ -511,28 +514,28 @@
     <!-- Operator settings navigation and header. -->
     <string name="settings_tab_link">Link</string>
     <string name="settings_tab_assist">View Assist</string>
-    <string name="settings_tab_assist_compact">Assist</string>
+    <string name="settings_tab_assist_compact">View Assist</string>
     <string name="settings_tab_controls">Controls</string>
     <string name="settings_tab_display">Display</string>
     <string name="settings_tab_storage">Storage</string>
     <string name="settings_tab_system">System</string>
     <string name="settings_rail_connection">Connection</string>
     <string name="settings_rail_assist">Scopes &amp; overlays</string>
-    <string name="settings_rail_controls">Dials &amp; safety</string>
+    <string name="settings_rail_controls">Dials and safety</string>
     <string name="settings_rail_display">Live view</string>
-    <string name="settings_rail_storage">Local media</string>
+    <string name="settings_rail_storage">Cache &amp; accounts</string>
     <string name="settings_rail_system">App behavior</string>
-    <string name="settings_subtitle_link">Transport &amp; preview</string>
+    <string name="settings_subtitle_link">Connection state and link behavior.</string>
     <string name="settings_subtitle_assist">Behavior for live-view tools.</string>
     <string name="settings_subtitle_controls">Touch behavior and safety.</string>
     <string name="settings_subtitle_display">Live view buttons and chrome.</string>
-    <string name="settings_subtitle_storage">Local cache and offline media.</string>
+    <string name="settings_subtitle_storage">Local cache and integrations.</string>
     <string name="settings_subtitle_system">App-level behavior.</string>
     <string name="settings_pill_live">LIVE</string>
     <string name="settings_pill_assist">ASSIST</string>
     <string name="settings_pill_touch">TOUCH</string>
     <string name="settings_pill_visibility">VISIBILITY</string>
-    <string name="settings_pill_storage">STORAGE</string>
+    <string name="settings_pill_storage">DATA</string>
     <string name="settings_pill_app">APP</string>
     <string name="settings_scope_limit">2 scopes max in fit view. Close one or rotate to landscape.</string>
     <string name="settings_brand">OPENZCINE</string>
@@ -566,6 +569,9 @@
     <string name="preview_preset_quality">Quality</string>
     <string name="preview_bias_latency">Latency</string>
     <string name="preview_bias_detail">Detail</string>
+    <string name="settings_health_threshold">Health Threshold</string>
+    <string name="settings_reconnect_window">Reconnect Window</string>
+    <string name="settings_reconnect_window_value">4 sec</string>
     <string name="settings_thermal_preview">Thermal Preview</string>
     <string name="settings_preview_apply">Preview Apply</string>
     <string name="settings_native_source_unavailable">Native source unavailable</string>
@@ -770,7 +776,7 @@
     <string name="settings_toggle_assists">ASSISTS</string>
     <string name="settings_toggle_values">VALUES</string>
     <string name="settings_assist_toolbar">View Assist Toolbar</string>
-    <string name="settings_assist_toolbar_caption">Show or hide tools, then drag a trailing handle to set their monitor order.</string>
+    <string name="settings_assist_toolbar_caption">Drag to reorder; tap the eye to show or hide each tool on the monitor bar.</string>
     <string name="settings_reset_toolbar">Reset toolbar</string>
     <string name="settings_live_readouts">Live Status Readouts</string>
     <string name="settings_live_readouts_caption">Hide readouts you do not ride during a take.</string>
@@ -779,7 +785,7 @@
     <string name="settings_toggle_media">MEDIA</string>
     <string name="settings_toggle_fps">FPS</string>
     <string name="settings_disp_order">DISP Button Order</string>
-    <string name="settings_disp_order_caption">Drag to reorder; disable modes you do not use. One mode always remains.</string>
+    <string name="settings_disp_order_caption">Drag to reorder; tap to enable or disable modes.</string>
     <string name="settings_reset_disp">Reset DISP</string>
 
     <!-- Storage and delivery settings. -->
@@ -787,7 +793,7 @@
     <string name="cache_title">Local Media Cache</string>
     <string name="cache_caption_condensed">Completed offline cache only. Camera originals, share files, accounts, and transfers stay untouched.</string>
     <string name="cache_caption">Offline camera cache only. Nothing on the camera is deleted.</string>
-    <string name="cache_cached_media">Cached Media</string>
+    <string name="cache_cached_media">Local Media Cache</string>
     <string name="cache_incomplete_transfers">Incomplete Transfers</string>
     <string name="cache_incomplete_caption">Incomplete transfers stay in place so they can resume safely.</string>
     <string name="cache_clear">Clear Cache</string>
@@ -836,6 +842,7 @@
     <string name="system_live_view_guide">Live View Guide</string>
     <string name="system_live_view_guide_caption">Replay the short camera-controls, View Assist, and system-controls introduction without enabling camera commands underneath it.</string>
     <string name="system_guide_status">Guide Status</string>
+    <string name="action_show_again">Show Again</string>
     <string name="system_replay">Replay</string>
     <string name="action_now">Now</string>
     <string name="system_show_guide_now">Show Live View Guide Now</string>
