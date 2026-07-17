@@ -2831,9 +2831,19 @@ final class NativeAppModel {
             // that's how the USB hang was pinned down); everything else is the failure trace.
             if summary.hasPrefix("stage:") {
                 let stage = String(summary.dropFirst("stage:".count))
+                // Operator-friendly wording; the technical stage ids stay in the failure trace.
+                let friendly =
+                    switch stage {
+                    case "pairing": "Pairing with the camera…"
+                    case "app-control switch", "remote-mode fallback":
+                        "Taking control of the camera…"
+                    case "device info": "Almost connected…"
+                    default:
+                        stage.hasPrefix("first command") ? "Starting the session…" : "Connecting…"
+                    }
                 Task { @MainActor in
                     guard let self, self.connectionPhase != .failed else { return }
-                    self.connectionStageDetail = "Step: \(stage)…"
+                    self.connectionStageDetail = friendly
                 }
             } else {
                 diagnosticBox.withLock { $0 = summary }
@@ -2974,7 +2984,7 @@ final class NativeAppModel {
             // fails its first command with a raw ICC error. Recycle the session once — real close,
             // fresh open, full retry — before surfacing a failure. (establish() already closed the
             // failed transport, which parks the device; the recycle open un-parks it cleanly.)
-            connectionStageDetail = "USB session was stale — restarting it…"
+            connectionStageDetail = "Refreshing the connection…"
             connectionLogger.info(
                 "USB establish failed once, recycling session: \(error.localizedDescription, privacy: .private(mask: .hash))"
             )
