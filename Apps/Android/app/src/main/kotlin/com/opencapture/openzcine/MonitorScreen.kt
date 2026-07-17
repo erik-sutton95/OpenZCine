@@ -12,6 +12,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,8 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -1981,6 +1983,65 @@ internal fun MonitorScreen(
     }
 }
 
+/**
+ * iOS `PortraitRecOptionsButton` menu: a compact glass popover (not a Material
+ * dropdown) anchored under the button, with 14sp medium items and a hairline
+ * divider, each routing straight into the resolution/codec pickers.
+ */
+@Composable
+private fun RecOptionsPopover(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    resolutionAvailable: Boolean,
+    codecAvailable: Boolean,
+    onResolution: () -> Unit,
+    onCodec: () -> Unit,
+) {
+    if (!expanded) return
+    androidx.compose.ui.window.Popup(
+        alignment = Alignment.TopEnd,
+        offset = androidx.compose.ui.unit.IntOffset(0, with(LocalDensity.current) { 46.dp.roundToPx() }),
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+    ) {
+        Column(
+            Modifier.width(220.dp)
+                .glass(ChromeShape)
+                .border(1.dp, LiveDesign.hairline, ChromeShape),
+        ) {
+            if (resolutionAvailable) {
+                RecOptionItem(stringResource(R.string.rec_option_resolution)) {
+                    onDismiss()
+                    onResolution()
+                }
+            }
+            if (resolutionAvailable && codecAvailable) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
+            }
+            if (codecAvailable) {
+                RecOptionItem(stringResource(R.string.rec_option_codec)) {
+                    onDismiss()
+                    onCodec()
+                }
+            }
+        }
+    }
+}
+
+/** One iOS rec-options menu row: 14sp medium text, generous padding. */
+@Composable
+private fun RecOptionItem(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        style = chromeStyle(14f, FontWeight.Medium),
+        color = LiveDesign.text,
+        modifier =
+            Modifier.fillMaxWidth()
+                .chromeClickable(onClick)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+    )
+}
+
 /** The landscape top deck (iOS `MonitorInfoBar` `.infoPill`). */
 @Composable
 private fun InfoPill(
@@ -2132,29 +2193,14 @@ private fun PortraitChrome(
             ) { glyphModifier, tint ->
                 VideoGlyph(tint, glyphModifier)
             }
-            DropdownMenu(
+            RecOptionsPopover(
                 expanded = recOptionsExpanded,
-                onDismissRequest = { recOptionsExpanded = false },
-            ) {
-                if (resolutionPickerAvailable) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.rec_option_resolution)) },
-                        onClick = {
-                            recOptionsExpanded = false
-                            onOpenMonitorPicker(MonitorPickerKind.RESOLUTION)
-                        },
-                    )
-                }
-                if (codecPickerAvailable) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.rec_option_codec)) },
-                        onClick = {
-                            recOptionsExpanded = false
-                            onOpenMonitorPicker(MonitorPickerKind.CODEC)
-                        },
-                    )
-                }
-            }
+                onDismiss = { recOptionsExpanded = false },
+                resolutionAvailable = resolutionPickerAvailable,
+                codecAvailable = codecPickerAvailable,
+                onResolution = { onOpenMonitorPicker(MonitorPickerKind.RESOLUTION) },
+                onCodec = { onOpenMonitorPicker(MonitorPickerKind.CODEC) },
+            )
         }
     }
 

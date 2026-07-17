@@ -320,6 +320,7 @@
     <string name="action_close">Close</string>
     <string name="camera_controls_unavailable">Controls are unavailable until the camera is connected and unlocked.</string>
     <string name="camera_option_description">%1$s %2$s</string>
+    <string name="camera_picker_options_description">%1$s options wheel</string>
     <string name="camera_option_selected_suffix">, currently selected</string>
     <string name="camera_applying_change">Applying change…</string>
 

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -22,6 +21,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
+import com.opencapture.openzcine.settings.PanelCloseButton
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
@@ -513,29 +525,36 @@ internal fun MonitorControlPickerPanel(
                 },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // iOS `PickerHeader`: kerned heavy name + mono uppercase subtitle,
+        // baseline-aligned, then the circular glass close button.
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
                 Text(
                     picker.title,
-                    style = chromeStyle(18f, FontWeight.ExtraBold),
+                    style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
                     color = LiveDesign.text,
                     maxLines = 1,
                 )
                 Text(
                     picker.subtitle.uppercase(),
-                    style = chromeStyle(10f, FontWeight.SemiBold, mono = true),
+                    style =
+                        chromeStyle(11f, FontWeight.SemiBold, mono = true)
+                            .copy(letterSpacing = 1.5.sp),
                     color = LiveDesign.faint,
                     maxLines = 1,
                     overflow = TextOverflow.Clip,
+                    modifier = Modifier.padding(bottom = 2.dp),
                 )
             }
-            TextButton(onClick = onDismiss, enabled = !pending) {
-                Text(stringResource(R.string.action_close))
-            }
+            PanelCloseButton(onDismiss)
         }
 
         if (picker.modes.size > 1) {
@@ -588,44 +607,24 @@ internal fun MonitorControlPickerPanel(
             )
         }
 
+        // iOS `AccentDrumWheel`: the option set is a snapping vertical drum
+        // that applies on settle, not a flat list of buttons.
+        val options = commandControlOptions(mode.request, pendingControl, controlsEnabled)
+        val selectedLabel = options.firstOrNull { it.selected }?.label ?: options.firstOrNull()?.label ?: ""
+        val optionDescription = stringResource(R.string.camera_picker_options_description, mode.label)
         Column(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
+            Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            commandControlOptions(mode.request, pendingControl, controlsEnabled).forEach { option ->
-                val optionDescription =
-                    stringResource(R.string.camera_option_description, mode.label, option.label)
-                val selectedSuffix = stringResource(R.string.camera_option_selected_suffix)
-                TextButton(
-                    onClick = { onSelect(mode.request, option.label) },
-                    enabled = option.enabled,
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .background(
-                                if (option.selected) LiveDesign.accentDim else Color.Transparent,
-                                ChromeShape,
-                            )
-                            .border(
-                                1.dp,
-                                if (option.selected) LiveDesign.accent else LiveDesign.hairline,
-                                ChromeShape,
-                            )
-                            .semantics {
-                                contentDescription =
-                                    optionDescription + if (option.selected) selectedSuffix else ""
-                            },
-                ) {
-                    Text(
-                        option.label,
-                        style = chromeStyle(15f, FontWeight.Medium, mono = true),
-                        color = if (option.selected) LiveDesign.accent else LiveDesign.text,
-                    )
-                }
-            }
+            AccentDrumWheel(
+                options = options.map { it.label },
+                selection = selectedLabel,
+                interactive = controlsEnabled && !pending,
+                modifier = Modifier.fillMaxWidth().weight(1f).semantics { contentDescription = optionDescription },
+                onSettle = { settled ->
+                    if (settled != selectedLabel) onSelect(mode.request, settled)
+                },
+            )
             if (pendingControl == mode.request.control) {
                 Text(
                     stringResource(R.string.camera_applying_change),
@@ -634,5 +633,120 @@ internal fun MonitorControlPickerPanel(
                 )
             }
         }
+    }
+}
+
+/**
+ * iOS `AccentDrumWheel`: a snapping vertical drum — the centred row renders
+ * large in accent between two hairlines, neighbours dim above/below behind a
+ * top/bottom fade. Settling on a row calls [onSettle]; the whole wheel dims
+ * and stops scrolling when not [interactive] (control lock).
+ */
+@Composable
+internal fun AccentDrumWheel(
+    options: List<String>,
+    selection: String,
+    onSettle: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    interactive: Boolean = true,
+    markedValues: Set<String> = emptySet(),
+    wheelHeight: Dp = 176.dp,
+    rowHeight: Dp = 52.dp,
+) {
+    if (options.isEmpty()) return
+    val listState =
+        androidx.compose.foundation.lazy.rememberLazyListState(
+            initialFirstVisibleItemIndex = options.indexOf(selection).coerceAtLeast(0),
+        )
+    val fling = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(listState)
+    val centeredIndex by remember {
+        androidx.compose.runtime.derivedStateOf {
+            val layout = listState.layoutInfo
+            val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
+            layout.visibleItemsInfo
+                .minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) }
+                ?.index ?: 0
+        }
+    }
+    // Apply the row the wheel settles on (iOS applies on drum settle).
+    LaunchedEffect(listState, options) {
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress to centeredIndex }
+            .collect { (scrolling, index) ->
+                if (!scrolling) options.getOrNull(index)?.let(onSettle)
+            }
+    }
+    val edgePadding = (wheelHeight - rowHeight) / 2
+    Box(
+        modifier.height(wheelHeight).alpha(if (interactive) 1f else 0.55f),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.lazy.LazyColumn(
+            state = listState,
+            flingBehavior = fling,
+            userScrollEnabled = interactive,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = edgePadding),
+            modifier =
+                Modifier.fillMaxWidth()
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        // Top/bottom fade so off-centre rows dissolve, iOS mask.
+                        val fade = size.height * 0.22f
+                        drawRect(
+                            Brush.verticalGradient(
+                                0f to Color.Transparent, 1f to Color.Black, endY = fade,
+                            ),
+                            size = Size(size.width, fade),
+                            blendMode = BlendMode.DstIn,
+                        )
+                        drawRect(
+                            Brush.verticalGradient(
+                                0f to Color.Black, 1f to Color.Transparent,
+                                startY = size.height - fade, endY = size.height,
+                            ),
+                            topLeft = Offset(0f, size.height - fade),
+                            size = Size(size.width, fade),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    },
+        ) {
+            items(options.size) { index ->
+                val option = options[index]
+                val centered = index == centeredIndex
+                Row(
+                    Modifier.fillMaxWidth().height(rowHeight),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        option,
+                        style =
+                            chromeStyle(
+                                if (centered) 30f else 23f,
+                                if (centered) FontWeight.SemiBold else FontWeight.Normal,
+                                mono = true,
+                            ),
+                        color = if (centered) LiveDesign.accent else LiveDesign.muted.copy(alpha = 0.7f),
+                        maxLines = 1,
+                    )
+                    if (option in markedValues) {
+                        Text(
+                            " ★",
+                            style = chromeStyle(if (centered) 13f else 10f, FontWeight.Bold),
+                            color = if (centered) LiveDesign.accent else LiveDesign.muted.copy(alpha = 0.7f),
+                        )
+                    }
+                }
+            }
+        }
+        // Hairlines bracketing the settled row.
+        Box(
+            Modifier.fillMaxWidth().height(1.dp).offset(y = -rowHeight / 2)
+                .background(LiveDesign.hairlineStrong),
+        )
+        Box(
+            Modifier.fillMaxWidth().height(1.dp).offset(y = rowHeight / 2)
+                .background(LiveDesign.hairlineStrong),
+        )
     }
 }
