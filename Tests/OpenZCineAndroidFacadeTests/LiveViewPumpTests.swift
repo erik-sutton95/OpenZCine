@@ -179,11 +179,27 @@ struct LiveViewPumpTests {
     /// `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForDevice` on the
     /// Mac, `adb reverse tcp:15740 tcp:15740`, then launch the app with
     /// `--es zc.session.host 127.0.0.1`. Serves for an hour or until killed.
+    /// `ZC_FAKE_ZR_RAW_CROP=1` starts in R3D NE with the documented FX/DX RAW
+    /// frame-size domain so the Android picker can be visually checked.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["ZC_FAKE_ZR_PORT"] != nil))
     func servesFakeZRForDeviceEndToEnd() throws {
         var options = FakeZRServer.Options()
         options.port =
             UInt16(ProcessInfo.processInfo.environment["ZC_FAKE_ZR_PORT"] ?? "") ?? 15_740
+        if ProcessInfo.processInfo.environment["ZC_FAKE_ZR_RAW_CROP"] == "1" {
+            let r3dNE: UInt32 = 0x0031_0A03
+            let nRAW: UInt32 = 0x0002_0C02
+            let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+            let fx4K50 = UInt64(4_032) << 48 | UInt64(2_268) << 32 | UInt64(50) << 16
+            let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+            options.movieFileTypeRaw = r3dNE
+            options.movieRecordScreenSizeRaw = fx6K25
+            options.descriptorEnumOverrides[.movieFileType] = [r3dNE, nRAW]
+            options.screenSizeModesByFileType = [
+                r3dNE: [fx6K25, fx4K50, dx4K100],
+                nRAW: [fx6K25, fx4K50, dx4K100],
+            ]
+        }
         let server = try FakeZRServer(options: options)
         print("fake ZR serving on 127.0.0.1:\(server.port) — Ctrl-C to stop")
         Thread.sleep(forTimeInterval: 3_600)

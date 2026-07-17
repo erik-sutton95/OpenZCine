@@ -24,6 +24,41 @@ class CommandMonitorTest {
         assertEquals(24f, commandTileValueSize("5600K"))
         assertEquals(20f, commandTileValueSize("R3D NE HQ"))
         assertEquals(16f, commandTileValueSize("6000x3336 · 25p"))
+        assertEquals(16f, commandTileValueSize("[DX] 4K · 100p"))
+    }
+
+    @Test
+    fun `dashboard preserves raw frame size image area labels`() {
+        val presentation =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        resolutionFrameRate = "[DX] 4K · 100p",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                resolutionFrameRates =
+                                    listOf(
+                                        "[FX] 6K · 25p",
+                                        "[FX] 4K · 50p",
+                                        "[DX] 4K · 100p",
+                                    ),
+                            ),
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "NIKON ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        val resolution =
+            presentation.tiles.first { it.kind == CommandTileKind.RESOLUTION_FRAMERATE }
+        assertEquals("[DX] 4K · 100p", resolution.value)
+        assertEquals(
+            listOf("[FX] 6K · 25p", "[FX] 4K · 50p", "[DX] 4K · 100p"),
+            assertNotNull(resolution.request).options,
+        )
     }
 
     @Test

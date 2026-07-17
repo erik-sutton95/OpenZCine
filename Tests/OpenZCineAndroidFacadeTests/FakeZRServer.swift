@@ -160,8 +160,13 @@ final class FakeZRServer: @unchecked Sendable {
         var focusModeRaw: UInt8 = 1  // AF-C
         var focusAreaRaw: UInt16 = 0x8033  // Subject
         var focusSubjectRaw: UInt8 = 2  // People
+        /// Current packed movie-screen-size value returned by property readback.
+        var movieRecordScreenSizeRaw: UInt64 = 0x1770_0D08_0019_0000
         /// Current packed movie-file-type value returned by property readback.
         var movieFileTypeRaw: UInt32 = 0x0031_0A03
+        /// Optional codec-specific `MovScreenSize` descriptor domains. When configured, a codec
+        /// write switches the current screen size to the first value in that codec's domain.
+        var screenSizeModesByFileType: [UInt32: [UInt64]] = [:]
     }
 
     let port: UInt16
@@ -286,6 +291,15 @@ final class FakeZRServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return propertyWriteLog
+    }
+
+    /// Changes the camera-side codec without recording an app property write. Tests use this to
+    /// exercise the same state transition that a physical body's `DevicePropChanged(D0AF)` event
+    /// announces.
+    func setCameraMovieFileType(_ raw: UInt32) {
+        lock.lock()
+        defer { lock.unlock() }
+        updateCameraMovieFileTypeLocked(raw)
     }
 
     /// Transaction IDs in arrival order (parallel to `receivedOperations`).
@@ -815,6 +829,7 @@ final class FakeZRServer: @unchecked Sendable {
     private func cameraPropertyData(for property: PTPPropertyCode) -> Data? {
         lock.lock()
         let overridden = propertyValueOverrides[property.rawValue]
+        let activeMovieFileTypeRaw = activeMovieFileTypeRawLocked()
         lock.unlock()
         if let overridden { return overridden }
         switch property {
@@ -842,9 +857,12 @@ final class FakeZRServer: @unchecked Sendable {
         case .movieWBColorTemp:
             return Data(ByteCoding.uint16LE(5_600))
         case .movieRecordScreenSize:
-            return Data(ByteCoding.uint64LE(0x1770_0D08_0019_0000))
+            let raw =
+                options.screenSizeModesByFileType[activeMovieFileTypeRaw]?.first
+                ?? options.movieRecordScreenSizeRaw
+            return Data(ByteCoding.uint64LE(raw))
         case .movieFileType:
-            return Data(ByteCoding.uint32LE(options.movieFileTypeRaw))
+            return Data(ByteCoding.uint32LE(activeMovieFileTypeRaw))
         case .batteryLevel:
             return Data([options.batteryPercent])
         case .acPower:
@@ -902,6 +920,15 @@ final class FakeZRServer: @unchecked Sendable {
 
     /// Protocol-shaped descriptor datasets consumed only by shared-core decoders.
     private func cameraPropertyDescriptor(for property: PTPPropertyCode) -> Data? {
+        if property == .movieRecordScreenSize,
+            let modes = screenSizeModesForActiveFileType(),
+            !modes.isEmpty
+        {
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 8,
+                values: modes.map(ByteCoding.uint64LE))
+        }
         if let values = options.descriptorEnumOverrides[property],
             let byteCount = descriptorValueByteCount(property)
         {
@@ -995,6 +1022,21 @@ final class FakeZRServer: @unchecked Sendable {
         default:
             return nil
         }
+    }
+
+    private func screenSizeModesForActiveFileType() -> [UInt64]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return options.screenSizeModesByFileType[activeMovieFileTypeRawLocked()]
+    }
+
+    private func activeMovieFileTypeRawLocked() -> UInt32 {
+        guard let data = propertyValueOverrides[PTPPropertyCode.movieFileType.rawValue],
+            data.count >= MemoryLayout<UInt32>.size
+        else {
+            return options.movieFileTypeRaw
+        }
+        return ByteCoding.readUInt32LE(Array(data), at: 0)
     }
 
     private func descriptorValueByteCount(_ property: PTPPropertyCode) -> Int? {
@@ -1153,6 +1195,8 @@ final class FakeZRServer: @unchecked Sendable {
         let bytes = Array(data)
         propertyValueOverrides[property] = data
         switch PTPPropertyCode(rawValue: property) {
+        case .movieFileType where bytes.count >= MemoryLayout<UInt32>.size:
+            updateCameraMovieFileTypeLocked(ByteCoding.readUInt32LE(bytes, at: 0))
         case .movieFocusMode where !bytes.isEmpty:
             focusModeRaw = bytes[0]
         case .movieFocusMeteringMode where bytes.count >= 2:
@@ -1162,6 +1206,14 @@ final class FakeZRServer: @unchecked Sendable {
             focusSubjectDetectionActive = bytes[0] != 0
         default:
             break
+        }
+    }
+
+    private func updateCameraMovieFileTypeLocked(_ raw: UInt32) {
+        propertyValueOverrides[PTPPropertyCode.movieFileType.rawValue] = Data(
+            ByteCoding.uint32LE(raw))
+        if options.screenSizeModesByFileType[raw] != nil {
+            propertyValueOverrides[PTPPropertyCode.movieRecordScreenSize.rawValue] = nil
         }
     }
 

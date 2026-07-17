@@ -151,19 +151,22 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   Swift-authorized options. The dynamic option seam now covers ISO scoped to the active codec and
   base circuit, mounted-lens aperture, white-balance Kelvin and presets, focus mode/area/subject,
   audio sensitivity/input/wind filter/attenuator/32-bit float, resolution/frame rate, codec, active
-  shutter values, shutter mode and lock, white-balance tint, movie VR, and electronic VR. Exact
-  Nikon ZR identity gates the stable fallback domains needed for omitted or temporarily narrowed
-  descriptors; other models fail closed. Electronic VR also fails closed until codec readback is
-  known and remains unavailable for every RAW codec family. Writes are serialized, rejected when
-  the active Swift capability set does not contain the label, and accepted only after authoritative
-  property readback matches. Both PTP-IP and USB-C publish measured command/response RTT through the
-  session and clear it on disconnect. Fake-camera transport tests cover exact descriptor writes,
-  model scoping, base-circuit changes, RAW rejection, readback rejection, RTT, and Compose option
-  policy. **[VERIFY-ON-HW]** On a supported Nikon ZR over both Wi-Fi and USB-C, confirm descriptor
-  values and raw write acceptance in each recording mode, lens swaps and aperture bounds, Low/High
-  base-ISO switching, focus-ring descriptor narrowing, white-balance and audio modes, the omitted
-  movie-VR fallback, electronic-VR rejection for R3D NE/N-RAW/ProRes RAW, readback timing and
-  rejection feedback, plus RTT freshness across reconnect and transport replacement.
+  shutter values, shutter mode and lock, white-balance tint, movie VR, and electronic VR. For
+  N-RAW and R3D NE, Nikon ZR image area is frame-size-owned: Android labels documented,
+  device-advertised FX/DX modes in that existing picker and reloads the screen-size descriptor after
+  each codec change, never inventing a separate crop write (OPE-95). Exact Nikon ZR identity gates
+  the stable fallback domains needed for omitted or temporarily narrowed descriptors; other models
+  fail closed. Electronic VR also fails closed until codec readback is known and remains unavailable
+  for every RAW codec family. Writes are serialized, rejected when the active Swift capability set
+  does not contain the label, and accepted only after authoritative property readback matches. Both
+  PTP-IP and USB-C publish measured command/response RTT through the session and clear it on
+  disconnect. Fake-camera transport tests cover exact descriptor writes, model scoping, base-circuit
+  changes, RAW rejection, readback rejection, RTT, and Compose option policy. **[VERIFY-ON-HW]** On
+  a supported Nikon ZR over both Wi-Fi and USB-C, confirm descriptor values and raw write acceptance
+  in each recording mode, lens swaps and aperture bounds, Low/High base-ISO switching, focus-ring
+  descriptor narrowing, white-balance and audio modes, the omitted movie-VR fallback, electronic-VR
+  rejection for R3D NE/N-RAW/ProRes RAW, RAW FX/DX labels after every codec transition, readback
+  timing and rejection feedback, plus RTT freshness across reconnect and transport replacement.
 - **Android authoritative monitor readouts** (OPE-63, in review): render live-view timecode only
   from the camera frame accepted for display; render resolution, codec, card space, recording FPS,
   camera battery, ISO, shutter, iris, focus, and white balance from `CameraPropertySnapshot`; and

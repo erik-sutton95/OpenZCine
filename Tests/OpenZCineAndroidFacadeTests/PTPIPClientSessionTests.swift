@@ -407,6 +407,233 @@ struct PTPIPClientSessionTests {
         #expect(server.receivedPropertyWrites().count == rejectedBaseline)
     }
 
+    @Test func rawCodecChangesRefreshZRFrameSizeModesAndPreserveExactWrites() throws {
+        let h265: UInt32 = 0x0001_0A01
+        let r3dNE: UInt32 = 0x0031_0A03
+        let nRAW: UInt32 = 0x0002_0C02
+        let h265ScreenSize: UInt64 = 0x0F00_0870_003C_0000
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let fx4K50 = UInt64(4_032) << 48 | UInt64(2_268) << 32 | UInt64(50) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = h265
+        options.movieRecordScreenSizeRaw = h265ScreenSize
+        options.descriptorEnumOverrides[.movieFileType] = [h265, r3dNE, nRAW]
+        options.screenSizeModesByFileType = [
+            h265: [h265ScreenSize],
+            r3dNE: [fx6K25, fx4K50, dx4K100],
+            nRAW: [fx6K25, fx4K50, dx4K100],
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.codec == "H.265")
+        #expect(bootstrap.controls.resolutionFrameRate == "4K · 60p")
+        #expect(bootstrap.controls.resolutionFrameRates == ["4K · 60p"])
+
+        let screenSizeDescriptorReadsBeforeCodecChange =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+        server.setCameraMovieFileType(r3dNE)
+
+        let r3dReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieFileType.rawValue))
+        #expect(r3dReadback.result == .accepted)
+        #expect(r3dReadback.controls.codec == "R3D NE")
+        #expect(r3dReadback.controls.resolutionFrameRate == "[FX] 6K · 25p")
+        #expect(
+            r3dReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[FX] 4K · 50p", "[DX] 4K · 100p"])
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeDescriptorReadsBeforeCodecChange + 1)
+
+        let writeBaseline = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.resolutionFrameRate, label: "[DX] 4K · 100p")
+        #expect(
+            server.receivedPropertyWrites().dropFirst(writeBaseline).first
+                == FakeZRPropertyWrite(
+                    operation: .setDevicePropValue,
+                    property: PTPPropertyCode.movieRecordScreenSize.rawValue,
+                    data: Data(ByteCoding.uint64LE(dx4K100))))
+
+        let dxReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieRecordScreenSize.rawValue))
+        #expect(dxReadback.controls.resolutionFrameRate == "[DX] 4K · 100p")
+
+        let screenSizeDescriptorReadsBeforeNRAWWrite =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+        let screenSizeValueReadsBeforeNRAWWrite =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropValueEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+        try session.applyAndroidControl(.codec, label: "N-RAW")
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeDescriptorReadsBeforeNRAWWrite + 1)
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropValueEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeValueReadsBeforeNRAWWrite + 1)
+        let nRAWReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.batteryLevel.rawValue))
+        #expect(nRAWReadback.result == .accepted)
+        #expect(nRAWReadback.controls.codec == "N-RAW")
+        #expect(nRAWReadback.controls.resolutionFrameRate == "[FX] 6K · 25p")
+        #expect(
+            nRAWReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[FX] 4K · 50p", "[DX] 4K · 100p"])
+    }
+
+    @Test func rawCodecChangeWithholdsStaleFrameSizeWhileD0A0ReadbackSettles() throws {
+        let h265: UInt32 = 0x0001_0A01
+        let r3dNE: UInt32 = 0x0031_0A03
+        let h265ScreenSize: UInt64 = 0x0F00_0870_003C_0000
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = h265
+        options.movieRecordScreenSizeRaw = h265ScreenSize
+        options.descriptorEnumOverrides[.movieFileType] = [h265, r3dNE]
+        options.screenSizeModesByFileType = [
+            h265: [h265ScreenSize],
+            r3dNE: [fx6K25, dx4K100],
+        ]
+        options.shortPropertyCodesAfterFirstRead = [PTPPropertyCode.movieRecordScreenSize.rawValue]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.resolutionFrameRate == "4K · 60p")
+
+        server.setCameraMovieFileType(r3dNE)
+        let settlingReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieFileType.rawValue))
+        #expect(settlingReadback.result == .transportFailed)
+        #expect(settlingReadback.controls.codec == "R3D NE")
+        #expect(settlingReadback.controls.resolutionFrameRate == nil)
+        #expect(
+            settlingReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[DX] 4K · 100p"])
+    }
+
+    @Test func rawCodecPollRefreshesFrameSizeModesWhenEventIsMissed() throws {
+        let h265: UInt32 = 0x0001_0A01
+        let r3dNE: UInt32 = 0x0031_0A03
+        let h265ScreenSize: UInt64 = 0x0F00_0870_003C_0000
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = h265
+        options.movieRecordScreenSizeRaw = h265ScreenSize
+        options.descriptorEnumOverrides[.movieFileType] = [h265, r3dNE]
+        options.screenSizeModesByFileType = [
+            h265: [h265ScreenSize],
+            r3dNE: [fx6K25, dx4K100],
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.codec == "H.265")
+        #expect(bootstrap.controls.resolutionFrameRates == ["4K · 60p"])
+        let screenSizeDescriptorReadsBeforeCodecChange =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+
+        // The event may be delayed, dropped, or reordered. The regular monitor poll must still
+        // invalidate and rebuild the codec-dependent D0A0 descriptor after it observes D0AF.
+        server.setCameraMovieFileType(r3dNE)
+        let requestBaseline = server.receivedRequests().count
+        let pollOrder = PTPIPClientSession.androidMonitorPollOrder(isRecording: false)
+        guard let codecPollIndex = pollOrder.firstIndex(of: .movieFileType) else {
+            Issue.record("The live monitor poll must include MovFileType.")
+            return
+        }
+        var r3dReadback = bootstrap
+        for _ in 0...codecPollIndex {
+            r3dReadback = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
+        }
+
+        #expect(r3dReadback.result == .accepted)
+        #expect(r3dReadback.controls.codec == "R3D NE")
+        #expect(r3dReadback.controls.resolutionFrameRate == "[FX] 6K · 25p")
+        #expect(
+            r3dReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[DX] 4K · 100p"])
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeDescriptorReadsBeforeCodecChange + 1)
+        #expect(
+            Array(server.receivedRequests().dropFirst(requestBaseline).suffix(3))
+                == [
+                    FakeZRRequest(
+                        operation: .getDevicePropValueEx,
+                        parameters: [PTPPropertyCode.movieFileType.rawValue],
+                        dataPhase: .dataIn),
+                    FakeZRRequest(
+                        operation: .getDevicePropDescEx,
+                        parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
+                        dataPhase: .dataIn),
+                    FakeZRRequest(
+                        operation: .getDevicePropValueEx,
+                        parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
+                        dataPhase: .dataIn),
+                ])
+    }
+
+    @Test func rawImageAreaLabelsAreRestrictedToNikonZR() throws {
+        let r3dNE: UInt32 = 0x0031_0A03
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        func resolutionFrameRates(model: String) throws -> [String] {
+            var options = FakeZRServer.Options()
+            options.model = model
+            options.movieFileTypeRaw = r3dNE
+            options.movieRecordScreenSizeRaw = fx6K25
+            options.descriptorEnumOverrides[.movieFileType] = [r3dNE]
+            options.screenSizeModesByFileType = [r3dNE: [fx6K25, dx4K100]]
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            return session.refreshAndroidPropertySnapshot(.bootstrap).controls.resolutionFrameRates
+        }
+
+        #expect(
+            try resolutionFrameRates(model: "ZR")
+                == ["[FX] 6K · 25p", "[DX] 4K · 100p"])
+        #expect(
+            try resolutionFrameRates(model: "Z8")
+                == ["6K · 25p", "4K · 100p"])
+    }
+
     @Test func dynamicAndroidControlsPreserveAdvertisedRawValuesEndToEnd() throws {
         var options = FakeZRServer.Options()
         options.descriptorEnumOverrides = [
