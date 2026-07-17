@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,6 +25,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -78,6 +81,40 @@ fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier =
         indication = null,
         onClick = onClick,
     )
+
+/**
+ * iOS `.zcTapTarget` press feedback: while pressed the control drops to 60%
+ * opacity and scales to 0.97 — chrome buttons read as buttons without a
+ * Material ripple.
+ */
+@Composable
+fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val alpha by
+        androidx.compose.animation.core.animateFloatAsState(
+            if (pressed) 0.6f else 1f,
+            androidx.compose.animation.core.tween(durationMillis = 120),
+            label = "chrome press alpha",
+        )
+    val scale by
+        androidx.compose.animation.core.animateFloatAsState(
+            if (pressed) 0.97f else 1f,
+            androidx.compose.animation.core.tween(durationMillis = 120),
+            label = "chrome press scale",
+        )
+    return graphicsLayer {
+        this.alpha = alpha
+        scaleX = scale
+        scaleY = scale
+    }
+        .clickable(
+            enabled = true,
+            interactionSource = interaction,
+            indication = null,
+            onClick = onClick,
+        )
+}
 
 /** Text style matching iOS `.system(size:weight:design:)` closely enough. */
 fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextStyle =
@@ -176,7 +213,9 @@ fun ReadoutPill(
         modifier =
             surface
                 .then(
-                    if (onClick != null) Modifier.chromeClickable(true, onClick) else Modifier
+                    // iOS readout buttons always press like buttons; disabled
+                    // handlers no-op silently rather than losing button feel.
+                    if (onClick != null) Modifier.chromePressable(onClick) else Modifier
                 )
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),

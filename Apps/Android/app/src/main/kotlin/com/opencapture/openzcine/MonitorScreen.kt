@@ -2011,18 +2011,18 @@ private fun InfoPill(
         if (recReadoutVisible) RecordChip(recording)
         CameraTimecodeReadout(timecode = timecode, sizeSp = 20f, weight = FontWeight.Medium)
         if (!compact) {
-            // Resolution/codec readouts open their pickers like iOS's top-bar
-            // readout buttons; they stay inert readouts until the command
-            // projection has validated options for them.
+            // Resolution/codec readouts are ALWAYS buttons like iOS's top-bar
+            // readout buttons — press feedback included — and the tap no-ops
+            // silently while locked or before the command projection has
+            // validated options, exactly as iOS's lock gate behaves.
             ReadoutPill(
                 resolution,
                 active = activePicker == MonitorPickerKind.RESOLUTION,
-                onClick =
+                onClick = {
                     if (resolutionPickerAvailable && pickersEnabled) {
-                        { onOpenPicker(MonitorPickerKind.RESOLUTION) }
-                    } else {
-                        null
-                    },
+                        onOpenPicker(MonitorPickerKind.RESOLUTION)
+                    }
+                },
             ) { tint ->
                 VideoGlyph(tint)
             }
@@ -2030,12 +2030,11 @@ private fun InfoPill(
                 ReadoutPill(
                     codec,
                     active = activePicker == MonitorPickerKind.CODEC,
-                    onClick =
+                    onClick = {
                         if (codecPickerAvailable && pickersEnabled) {
-                            { onOpenPicker(MonitorPickerKind.CODEC) }
-                        } else {
-                            null
-                        },
+                            onOpenPicker(MonitorPickerKind.CODEC)
+                        }
+                    },
                 ) { tint ->
                     FilmGlyph(tint)
                 }
