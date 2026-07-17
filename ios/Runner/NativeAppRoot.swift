@@ -967,6 +967,11 @@ final class NativeAppModel {
         ) == nil
     }
 
+    /// Whether the current join already has a scanned or manually entered key ready to confirm.
+    var cameraWiFiJoinHasPasswordDraft: Bool {
+        !cameraWiFiJoinPasswordDraft.isEmpty
+    }
+
     /// Opens the on-screen credential scanner over the connect popup.
     func presentCameraWiFiScanner() {
         isCameraWiFiScannerPresented = true
@@ -975,10 +980,20 @@ final class NativeAppModel {
     /// Applies credentials scanned from the camera's Connection wizard: stages an exact-SSID join
     /// and pre-fills the key, so the popup's Connect button runs the normal join pipeline.
     func applyScannedCameraWiFi(ssid: String, key: String) {
+        stageCameraWiFiCredentials(ssid: ssid, key: key, cameFromScan: true)
+    }
+
+    /// Applies credentials copied manually from a camera screen when automatic OCR cannot validate
+    /// that body's SSID shape. The exact operator-entered SSID remains authoritative.
+    func applyManualCameraWiFi(ssid: String, key: String) {
+        stageCameraWiFiCredentials(ssid: ssid, key: key, cameFromScan: false)
+    }
+
+    private func stageCameraWiFiCredentials(ssid: String, key: String, cameFromScan: Bool) {
         isCameraWiFiScannerPresented = false
         pendingCameraWiFiJoinTarget = .specificSSID(ssid)
         cameraWiFiJoinPasswordDraft = key
-        cameraWiFiJoinKeyFromScan = true
+        cameraWiFiJoinKeyFromScan = cameFromScan
         connectionProgressDeviceName = ssid
         connectionProgressIsUSB = false
         connectionProgressShowsFailure = false
@@ -2408,7 +2423,7 @@ final class NativeAppModel {
     /// camera AP we paired over), else derive it from the camera's PTP name, else a saved record.
     private func cameraAccessPointSSID(host: String, displayName: String?) -> String? {
         if let ssid = connectedWiFiSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
-            ssid.uppercased().hasPrefix(CameraWiFiSSID.nikonAccessPointPrefix.uppercased())
+            CameraWiFiSSID.isNikonZAccessPoint(ssid)
         {
             return ssid
         }
@@ -2466,7 +2481,7 @@ final class NativeAppModel {
             connection = .disconnected
             WiFiJoinCoordinator.shared.leaveCameraNetwork(ssid: ssid)
             // The cached SSID is what AP detection reads — clear it now, or a stale
-            // "NIKON_ZR_…" keeps isOnCameraAccessPoint true and the post-hop internet wait
+            // A cached Nikon Z SSID keeps isOnCameraAccessPoint true and the post-hop internet wait
             // spins its full timeout.
             connectedWiFiSSID = nil
         }

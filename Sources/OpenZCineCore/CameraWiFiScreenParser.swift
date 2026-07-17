@@ -3,11 +3,10 @@ import Foundation
 /// Extracts Nikon camera access-point credentials from OCR text captured off the camera's
 /// on-screen **Connection wizard** (the screen showing `SSID:` and `Key:`).
 ///
-/// The wizard's format is tightly constrained — SSID is `NIKON_ZR_` + a 5-digit serial, and the
-/// key is 8 lowercase-hex characters — which is what makes screen OCR reliable: any character the
-/// recognizer confuses (`O`/`0`, `l`/`1`, `S`/`5`) can be corrected because only one interpretation
-/// is legal in each field. Returns credentials only when BOTH fields validate; otherwise `nil` and
-/// the caller falls back to manual entry.
+/// SSID layouts vary by Z body, so the parser validates the shared Nikon Z access-point shape and
+/// preserves unfamiliar model/serial segments instead of rebuilding them. The generated key remains
+/// an 8-character lowercase-hex value, which permits safe correction of common OCR confusions. The
+/// manual-entry path accepts the wider WPA passphrase contract when OCR cannot validate both fields.
 public enum CameraWiFiScreenParser {
     public struct Credentials: Equatable, Sendable {
         public let ssid: String
@@ -19,36 +18,79 @@ public enum CameraWiFiScreenParser {
         }
     }
 
+    /// Actionable outcome from one OCR frame.
+    public enum Result: Equatable, Sendable {
+        case credentials(Credentials)
+        case needsKey
+        case unsupportedSSID
+        case noCredentials
+    }
+
     /// Parses recognized text lines (e.g. one per `RecognizedItem.text` transcript).
     public static func parse(lines: [String]) -> Credentials? {
+        guard case .credentials(let credentials) = result(lines: lines) else { return nil }
+        return credentials
+    }
+
+    /// Classifies recognized text so the scanner can distinguish incomplete and unsupported frames.
+    public static func result(lines: [String]) -> Result {
         // Split on whitespace and the label separators the wizard uses ("SSID:", "Key:"), so a
-        // recognizer that merges label and value ("Key:a1b2c3d4") still yields clean tokens.
+        // recognizer that merges any localized label and value still yields clean tokens.
         let separators: Set<Character> = [" ", "\t", "\n", ":", "|", "\u{00A0}"]
         let tokens =
             lines
             .flatMap { $0.split(whereSeparator: { separators.contains($0) }) }
             .map(String.init)
-        guard let ssid = tokens.lazy.compactMap(correctedSSID).first else { return nil }
-        guard let key = tokens.lazy.compactMap(correctedKey).first else { return nil }
-        return Credentials(ssid: ssid, key: key)
+        guard let ssid = tokens.lazy.compactMap(correctedSSID).first else {
+            return tokens.contains(where: isUnsupportedNikonSSIDCandidate)
+                ? .unsupportedSSID : .noCredentials
+        }
+        guard let key = tokens.lazy.compactMap(correctedKey).first else { return .needsKey }
+        return .credentials(Credentials(ssid: ssid, key: key))
     }
 
     public static func parse(_ transcript: String) -> Credentials? {
         parse(lines: transcript.components(separatedBy: .newlines))
     }
 
-    /// A token that reads as `NIKON_<model>_<5 serial>` → the canonical camera AP SSID.
-    /// Anchors on the known prefix so only the 5 serial digits need OCR correction.
+    /// Validates credentials typed from the camera screen when OCR cannot read its format.
+    public static func manualCredentials(ssid rawSSID: String, key rawKey: String) -> Credentials? {
+        guard !rawSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            rawSSID.utf8.count <= 32
+        else { return nil }
+        guard (8...63).contains(rawKey.utf8.count) else { return nil }
+        guard rawKey.unicodeScalars.allSatisfy({ (0x20...0x7E).contains($0.value) }) else {
+            return nil
+        }
+        return Credentials(ssid: rawSSID, key: rawKey)
+    }
+
+    /// A token with a conservative Nikon Z access-point shape, preserving its model layout.
     static func correctedSSID(_ raw: String) -> String? {
         let token = raw.trimmingCharacters(in: Self.punctuation)
+        if let correctedZR = correctedLegacyZRSSID(token) { return correctedZR }
+        return CameraWiFiSSID.normalizedScannedNikonZAccessPoint(token)
+    }
+
+    /// Retains the ZR-specific OCR recovery shipped before other Z-body SSID formats were observed.
+    private static func correctedLegacyZRSSID(_ token: String) -> String? {
         let parts = token.split(separator: "_").map(String.init)
         guard parts.count >= 3 else { return nil }
         guard isNikonBrand(parts[0]) else { return nil }
         let model = correctModel(parts[1])
-        guard !model.isEmpty, model.allSatisfy({ $0.isLetter || $0.isNumber }) else { return nil }
+        guard model == "ZR" else { return nil }
         let serial = correctDigits(parts[parts.count - 1])
         guard serial.count == 5, serial.allSatisfy(\.isNumber) else { return nil }
         return "NIKON_\(model)_\(serial)"
+    }
+
+    private static func isUnsupportedNikonSSIDCandidate(_ raw: String) -> Bool {
+        let token = raw.trimmingCharacters(in: Self.punctuation).uppercased()
+        guard token.count >= 8 else { return false }
+        let prefix = String(token.prefix(5))
+        guard isNikonBrand(prefix) else { return false }
+        return token.contains("Z")
+            && token.contains(where: { $0.isNumber || "OILSBZG".contains($0) })
     }
 
     /// An 8-character token that reads as lowercase hex → the WPA key.

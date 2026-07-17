@@ -44,25 +44,29 @@ flowchart TD
 ### PREPARE-01 — Prepare camera
 
 - **Status:** shipped
-- **Screen:** Numbered instruction cards for putting the ZR on its Connection wizard screen.
+- **Screen:** Numbered instruction cards for putting the Nikon Z camera on its Connection wizard
+  screen.
 - **Code:** `StartupWizardPrepareCards` / `StartupWizardContent.preparationSteps(for:)`.
 - 📝 Notes:
 
 ### SCAN-01 — OCR scanner
 
 - **Status:** shipped
-- **Screen:** VisionKit DataScanner reads SSID + key off the ZR's screen; parser self-corrects
-  OCR (O/0, l/1, S/5) because `NIKON_ZR_` + 5 digits and 8-hex-key are the only legal shapes.
+- **Screen:** VisionKit DataScanner reads SSID + key off the camera screen. The parser accepts the
+  conservative shape shared by Nikon Z access points while preserving unfamiliar model/serial
+  segments; the known ZR form retains its O/0, l/1, and S/5 recovery. Labels may be localized.
 - **Code:** `CameraWiFiScannerView.swift`, core `CameraWiFiScreenParser.swift` (+ tests).
-- **Detail:** Simulator has no DataScanner → manual fallback. Scan feeds the join popup via
-  `applyScannedCameraWiFi` — never a parallel join path.
+- **Detail:** **Enter manually** accepts the exact camera SSID and standard 8–63-character WPA key
+  when glare, unavailable scanning, or a future SSID layout prevents automatic capture. Scan and
+  manual entry both feed the same staged join popup and normal join pipeline.
 - 📝 Notes:
 
 ### JOIN-01 — Ready to join (white card)
 
 - **Status:** shipped
-- **Screen:** Light card (scanner-matching): SSID title, read-only monospaced key chip
-  ("Scanned from camera screen — check it matches."), Connect, Cancel. Wrong OCR ⇒ Cancel + rescan.
+- **Screen:** Light card (scanner-matching): SSID title, read-only monospaced key chip for OCR
+  results, source-appropriate verification copy, Connect, Cancel. Wrong OCR ⇒ Cancel + rescan or
+  enter the exact details manually.
 - **Code:** `ConnectionProgressSheet.swift` (single light card for ALL phases now).
 - 📝 Notes:
 

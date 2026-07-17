@@ -152,7 +152,11 @@ struct LinkExperience: View {
         .fullScreenCover(isPresented: Bindable(model).isCameraWiFiScannerPresented) {
             CameraWiFiScannerScreen(
                 onCapture: { model.applyScannedCameraWiFi(ssid: $0.ssid, key: $0.key) },
-                onCancel: { model.isCameraWiFiScannerPresented = false }
+                onManualEntry: {
+                    model.applyManualCameraWiFi(ssid: $0.ssid, key: $0.key)
+                },
+                onCancel: { model.isCameraWiFiScannerPresented = false },
+                startsInManualEntry: DemoHarness.cameraWiFiScannerMode == "manual"
             )
         }
     }
