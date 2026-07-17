@@ -94,6 +94,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       android: ${{ steps.filter.outputs.android }}
+      bug_relay: ${{ steps.filter.outputs.bug_relay }}
     steps:
       # `dorny/paths-filter` fetches the base ref to diff on push events, which needs the checkout's
       # git credentials — so this job keeps them (unlike the others). It runs no repository code, so
@@ -123,6 +124,10 @@ jobs:
               - 'Package.resolved'
               - 'scripts/android-*.sh'
               - 'justfile'
+            bug_relay:
+              - 'services/bug-relay/**'
+              - 'justfile'
+              - '.github/workflows/ci.yml'
 
   native:
     name: Native Swift/iOS
@@ -152,7 +157,7 @@ jobs:
     # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
     # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
     if: always()
-    needs: [meta, secrets, changes, native, android]
+    needs: [meta, secrets, changes, native, android, bug-relay]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have passed or been deliberately skipped
@@ -208,3 +213,19 @@ jobs:
         env:
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
         run: ./gradlew assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest test lint :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact
+
+  bug-relay:
+    name: Anonymous bug relay
+    needs: changes
+    if: ${{ needs.changes.outputs.bug_relay == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Validate Worker
+        working-directory: services/bug-relay
+        run: npm run check

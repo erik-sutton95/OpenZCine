@@ -63,6 +63,7 @@ import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
+import com.opencapture.openzcine.diagnostics.AndroidBugReportClient
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 import com.opencapture.openzcine.media.MediaBrowseScreen
@@ -150,6 +151,7 @@ class MainActivity : ComponentActivity() {
         val debugScopes = DemoHarness.scopeKinds(intent)
         val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
         val debugLiveGuideStep = DemoHarness.liveGuideStep(intent)
+        val debugInitialSettingsTab = DemoHarness.settingsTab(intent)
         val debugSession: CameraSession? =
             demo?.first ?: if (isNsdTransportRequested()) nsdTransportSession() else null
         val pairingScript = DemoHarness.pairingScript(intent)
@@ -193,6 +195,10 @@ class MainActivity : ComponentActivity() {
                 val systemSettingsActions =
                     remember {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
+                    }
+                val bugReportSubmitter =
+                    remember {
+                        AndroidBugReportClient(applicationContext)
                     }
                 LaunchedEffect(debugLiveGuideStep) {
                     debugLiveGuideStep?.let(liveViewGuide::forceForDebug)
@@ -257,7 +263,8 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
-                var standaloneSettingsPresented by rememberSaveable { mutableStateOf(false) }
+                var standaloneSettingsPresented by
+                    rememberSaveable { mutableStateOf(debugInitialSettingsTab != null) }
                 // Branded launch splash (iOS `LaunchSplashTiming`: fully
                 // visible 2250ms, then a 350ms ease-out fade). Debug demo and
                 // scripted launches skip it so screenshots stay deterministic.
@@ -419,9 +426,12 @@ class MainActivity : ComponentActivity() {
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
                                 lutLibrary = lutLibrary,
-                                // iOS's startup Settings lands on Link.
-                                initialTab = OperatorSettingsTab.LINK,
+                                // iOS's startup Settings lands on Link; a debug
+                                // intent can still force a specific tab.
+                                initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.LINK,
                                 systemSettingsActions = systemSettingsActions,
+                                bugReportSubmitter = bugReportSubmitter,
+                                bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
                                 liveViewGuideController = liveViewGuide,
                                 onShowGuideOnNextRealFrame =
                                     liveViewGuide::replayOnNextRealFrame,
@@ -613,6 +623,8 @@ class MainActivity : ComponentActivity() {
                                                 { disconnectToSavedCameraHome(true) }
                                             },
                                         systemSettingsActions = systemSettingsActions,
+                                        bugReportSubmitter = bugReportSubmitter,
+                                        bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
                                         liveViewGuideController = liveViewGuide,
                                         onShowGuideNow = {
                                             liveViewGuide.replayNow()

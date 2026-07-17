@@ -87,13 +87,42 @@ class DiagnosticsFileProviderTest {
                 context = context,
                 diagnostics = diagnostics,
                 intentLauncher = { false },
-            )
+        )
 
         assertFalse(actions.openSupport())
-        assertFalse(actions.reportBug())
         assertFalse(actions.requestFeature())
+        assertFalse(actions.openGitHubBugReport())
+        assertFalse(actions.openSecurityAdvisory())
         assertFalse(actions.openSource())
         assertFalse(actions.openPrivacy())
         assertFalse(actions.openTerms())
+    }
+
+    @Test
+    fun githubBugReportUsesTheCanonicalIssueForm() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val diagnostics =
+            AndroidAppDiagnostics.createForTest(
+                context = context,
+                store =
+                    DiagnosticEventStore(
+                        File(context.filesDir, "diagnostics-github-bug-report/events.log"),
+                    ),
+                exitReader = HistoricalProcessExitReader { emptyList() },
+            )
+        var launchedIntent: Intent? = null
+        val actions =
+            AndroidSystemSettingsActions(
+                context = context,
+                diagnostics = diagnostics,
+                intentLauncher = { intent ->
+                    launchedIntent = intent
+                    true
+                },
+            )
+
+        assertTrue(actions.openGitHubBugReport())
+        assertEquals(Intent.ACTION_VIEW, launchedIntent?.action)
+        assertEquals(AndroidSupportLinks.BUG_REPORT, launchedIntent?.dataString)
     }
 }

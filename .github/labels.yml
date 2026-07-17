@@ -109,6 +109,10 @@
   color: 5319e7
   description: Proposed product direction tracked in GitHub Discussions
 
+- name: source:anonymous
+  color: 5319e7
+  description: Submitted through the account-free in-app bug reporter
+
 # ------------------------------------------------------------------
 # Area / component labels (highly recommended for this project)
 # ------------------------------------------------------------------
@@ -194,6 +198,7 @@
 # gh label create "blocked" --color "e4e669" --description "Blocked by another issue, dependency, or decision"
 # gh label create "ready" --color "0e8a16" --description "Triaged and ready to pick up"
 # gh label create "roadmap" --color "5319e7" --description "Proposed product direction tracked in GitHub Discussions"
+# gh label create "source:anonymous" --color "5319e7" --description "Submitted through the account-free in-app bug reporter"
 #
 # gh label create "area:core" --color "1d76db" --description "Shared Swift core (Sources/OpenZCineCore)"
 # gh label create "area:protocol" --color "1d76db" --description "PTP/MTP protocol, camera communication, discovery"

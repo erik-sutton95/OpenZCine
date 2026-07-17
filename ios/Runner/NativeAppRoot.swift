@@ -309,6 +309,14 @@ struct LUTFileStore {
     }
 }
 
+enum ExternalInternetLinkReturnPolicy {
+    /// Rejoin only after an active browser handoff actually backgrounded the app. Presentation
+    /// transitions alone can produce active-state churn while the destination is still opening.
+    static func shouldReconnect(handoffActive: Bool, sawBackground: Bool) -> Bool {
+        handoffActive && sawBackground
+    }
+}
+
 @MainActor
 @Observable
 final class NativeAppModel {
@@ -581,9 +589,26 @@ final class NativeAppModel {
     /// Operator Setup presented standalone from the startup home (no camera connection needed —
     /// e.g. signing in to Frame.io or clearing the media cache before a shoot).
     var isStandaloneSettingsPresented = false
+    /// Root-owned presentation state for the report flow, so it survives a camera-AP internet hop.
+    var isBugReportPresented = false
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
     /// internet. Drives the download screen's "Switching networks…" state.
     private(set) var internetHopActive = false
+    /// True only while a browser link is intentionally using an internet hop. On return to the
+    /// foreground, the app rejoins the camera AP through the normal saved-profile pipeline.
+    private(set) var externalInternetLinkHandoffActive = false
+    /// Set only after an accepted external-browser handoff actually backgrounds OpenZCine. This
+    /// prevents transient activation changes during presentation from prompting an immediate
+    /// camera-AP rejoin over the page the person just opened.
+    @ObservationIgnored private var externalInternetLinkSawBackground = false
+    /// True while the root-owned anonymous/GitHub report flow is using the internet side of a
+    /// camera-AP hop. Unlike a browser handoff, ordinary foreground transitions must not end this
+    /// hop because screenshot picking can briefly move the app inactive while the form is open.
+    private(set) var bugReportInternetHandoffActive = false
+    /// The selected destination shown while iOS leaves the camera AP and settles on an
+    /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
+    /// panel collapse with the camera session.
+    private(set) var internetDestinationPreparationTitle: String?
     /// Share context to restore after an internet hop re-hosts the media browser (the monitor
     /// panel's view state dies with the monitor): the clips whose share sheet initiated the hop.
     /// The standalone browser consumes this on mount — reopening a single cached clip, or the
@@ -2382,7 +2407,7 @@ final class NativeAppModel {
     /// download reach the internet from camera-AP transport. The download screen unblocks itself
     /// reactively when reachability flips; ``endInternetHop()`` (fired when that screen
     /// dismisses) arms the rejoin + reconnect.
-    func beginInternetHop() {
+    func beginInternetHop(rehostActivePanel: Bool = true) {
         guard !internetHopActive else { return }
         internetHopActive = true
         // Capture identity before teardown. The host falls back to the camera-AP convention
@@ -2399,20 +2424,21 @@ final class NativeAppModel {
                 return
             }
             internetHopReturn = (host, ssid)
-            // The monitor collapses when the session drops; re-host the panel that started the
-            // hop as a standalone root cover so the operator's context survives it.
-            if activePanel == .media {
-                activePanel = nil
-                isStandaloneMediaLibraryPresented = true
-            } else {
-                if activePanel == .settings {
-                    // Frame.io sign-in from Settings → Storage hops for internet; keep the
-                    // Storage tab on screen (root cover) through the disconnect + rejoin.
+            if rehostActivePanel {
+                // Long-running downloads and account sign-in keep their initiating surface alive
+                // as a root cover. Support/report actions deliberately skip this: their selected
+                // destination becomes the next surface after the camera session drops.
+                if activePanel == .media {
                     activePanel = nil
-                    isStandaloneSettingsPresented = true
+                    isStandaloneMediaLibraryPresented = true
+                } else {
+                    if activePanel == .settings {
+                        activePanel = nil
+                        isStandaloneSettingsPresented = true
+                    }
+                    pendingHopShareResumeClips = nil
                 }
-                // No media re-host → the existing browser (and its share sheet) survive in
-                // place; nothing to restore on mount.
+            } else {
                 pendingHopShareResumeClips = nil
             }
             // Nothing may pull the phone back onto the camera AP mid-download.
@@ -2486,6 +2512,88 @@ final class NativeAppModel {
                 reconnectHost: hopReturn.host
             )
         }
+    }
+
+    /// Leaves the camera AP only when needed and waits for a validated internet route before an
+    /// external support, GitHub, or privacy link is opened.
+    func prepareExternalInternetLinkHandoff() async -> Bool {
+        if bugReportInternetHandoffActive {
+            bugReportInternetHandoffActive = false
+            externalInternetLinkHandoffActive = true
+            externalInternetLinkSawBackground = false
+            return true
+        }
+        guard isOnCameraAccessPoint else { return true }
+        beginInternetHop(rehostActivePanel: false)
+        guard await waitForInternetPath(timeoutSeconds: 30) else {
+            endInternetHop()
+            return false
+        }
+        externalInternetLinkHandoffActive = true
+        externalInternetLinkSawBackground = false
+        return true
+    }
+
+    /// Leaves the camera AP for the in-app report flow without preserving or reopening Settings.
+    /// The report becomes the root-owned destination after internet reachability is confirmed.
+    func prepareBugReportInternetHandoff() async -> Bool {
+        if bugReportInternetHandoffActive { return true }
+        guard isOnCameraAccessPoint else { return true }
+        beginInternetHop(rehostActivePanel: false)
+        guard await waitForInternetPath(timeoutSeconds: 30) else {
+            endInternetHop()
+            return false
+        }
+        bugReportInternetHandoffActive = true
+        return true
+    }
+
+    /// Shows root-owned progress while an external destination waits for an internet route.
+    func beginInternetDestinationPreparation(_ title: String) {
+        internetDestinationPreparationTitle = title
+    }
+
+    /// Clears progress only for the task that originally set it, preventing an older handoff from
+    /// hiding a newer destination's status.
+    func finishInternetDestinationPreparation(_ title: String) {
+        guard internetDestinationPreparationTitle == title else { return }
+        internetDestinationPreparationTitle = nil
+    }
+
+    /// Completes a rejected browser handoff immediately so the camera is not left disconnected.
+    func completeExternalInternetLinkHandoff(browserAccepted: Bool) {
+        guard !browserAccepted else { return }
+        guard externalInternetLinkHandoffActive else { return }
+        externalInternetLinkHandoffActive = false
+        externalInternetLinkSawBackground = false
+        endInternetHop()
+    }
+
+    /// Records that an accepted external page really took OpenZCine into the background. A mere
+    /// inactive/active transition is not enough evidence that the person finished with the page.
+    func noteExternalInternetLinkHandoffEnteredBackground() {
+        guard externalInternetLinkHandoffActive else { return }
+        externalInternetLinkSawBackground = true
+    }
+
+    /// Rejoins the camera after the person returns from the external browser.
+    func resumeExternalInternetLinkHandoffIfNeeded() {
+        guard
+            ExternalInternetLinkReturnPolicy.shouldReconnect(
+                handoffActive: externalInternetLinkHandoffActive,
+                sawBackground: externalInternetLinkSawBackground
+            )
+        else { return }
+        externalInternetLinkHandoffActive = false
+        externalInternetLinkSawBackground = false
+        endInternetHop()
+    }
+
+    /// Rejoins the camera when the in-app report flow finishes or is explicitly closed.
+    func resumeBugReportInternetHandoffIfNeeded() {
+        guard bugReportInternetHandoffActive else { return }
+        bugReportInternetHandoffActive = false
+        endInternetHop()
     }
 
     /// Re-applies the camera AP config (throttled) while waiting for a just-paired camera to return,
@@ -6394,6 +6502,12 @@ struct NativeAppRoot: View {
                 .environment(deliveryCoordinator)
                 .zIndex(150)
 
+            if let destinationTitle = model.internetDestinationPreparationTitle {
+                InternetDestinationPreparationOverlay(destinationTitle: destinationTitle)
+                    .transition(.opacity)
+                    .zIndex(160)
+            }
+
             if showsLaunchSplash {
                 LaunchSplashOverlay(isVisible: $showsLaunchSplash)
                     .transition(.opacity)
@@ -6455,6 +6569,16 @@ struct NativeAppRoot: View {
                 .environment(model)
             }
         }
+        .fullScreenCover(isPresented: bugReportPresented) {
+            BugReportFlowView(
+                onDismiss: {
+                    model.isBugReportPresented = false
+                    model.resumeBugReportInternetHandoffIfNeeded()
+                },
+                onBrowserHandoff: { model.isBugReportPresented = false }
+            )
+            .environment(model)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ZCBackground().ignoresSafeArea())
         .preferredColorScheme(.dark)
@@ -6470,6 +6594,7 @@ struct NativeAppRoot: View {
             for await _ in NotificationCenter.default.notifications(
                 named: UIApplication.didEnterBackgroundNotification)
             {
+                model.noteExternalInternetLinkHandoffEnteredBackground()
                 model.enterBackground()
             }
         }
@@ -6489,6 +6614,7 @@ struct NativeAppRoot: View {
                 named: UIApplication.didBecomeActiveNotification)
             {
                 model.updateBluetoothShutter()
+                model.resumeExternalInternetLinkHandoffIfNeeded()
             }
         }
         .task {
@@ -6543,6 +6669,52 @@ struct NativeAppRoot: View {
         )
     }
 
+    private var bugReportPresented: Binding<Bool> {
+        Binding(
+            get: { model.isBugReportPresented },
+            set: { model.isBugReportPresented = $0 }
+        )
+    }
+
+}
+
+private struct InternetDestinationPreparationOverlay: View {
+    let destinationTitle: String
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.58)
+                .ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(LiveDesign.accent)
+
+                Text("Switching networks…")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+
+                Text("Waiting for an internet connection before opening \(destinationTitle).")
+                    .font(.system(size: 14))
+                    .foregroundStyle(LiveDesign.muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 34)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 430)
+            .background(LiveDesign.surface, in: RoundedRectangle(cornerRadius: 18))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(LiveDesign.hairlineStrong, lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 24, y: 12)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Switching networks")
+        .accessibilityValue("Waiting to open \(destinationTitle)")
+    }
 }
 
 // MARK: - Media library (Media page)

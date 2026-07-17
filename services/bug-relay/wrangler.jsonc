@@ -1,0 +1,44 @@
+{
+  "name": "openzcine-bug-relay",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-07-16",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "reports.openzcine.app",
+      "custom_domain": true
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BUG_REPORT_IDEMPOTENCY",
+        "class_name": "BugReportIdempotency"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "BugReportIdempotency"
+      ]
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "BUG_REPORT_RATE_LIMITER",
+      "namespace_id": "73910481",
+      "simple": {
+        "limit": 3,
+        "period": 60
+      }
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUG_REPORT_MEDIA",
+      "bucket_name": "openzcine-bug-report-media"
+    }
+  ]
+}

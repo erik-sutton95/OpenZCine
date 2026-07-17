@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- PTP-IP camera sockets (local network only; there is no server backend). -->
+    <!-- PTP-IP camera sockets stay local. The only public request is an
+      operator-initiated anonymous bug report sent to the HTTPS relay. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Camera-AP join: WifiNetworkSpecifier requestNetwork + bindProcessToNetwork. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />

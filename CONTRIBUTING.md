@@ -62,8 +62,17 @@ committed to this repo**.
 
 ## Reporting bugs & requesting features
 
-- **Bugs only** — Use the **Bug report** issue template. New bugs are automatically labeled `needs-triage`. There is **no feature request template** — issues are strictly for bugs.
-- **Feature ideas, enhancements & discussions** — Use **GitHub Discussions** (the "Discussions" tab). Start a new discussion in the **Ideas** category. This keeps Issues focused on actionable bugs.
+- **Bugs only** — In **Operator Setup &gt; System &gt; Report a Problem**, choose one of two public
+  GitHub-issue paths:
+  - **Anonymous in-app report** — No GitHub account. You may opt into a privacy-filtered app
+    activity log or user-selected screenshots; both become public with the issue. Screenshot file
+    metadata is removed, but visible content can still identify someone. It cannot receive a
+    private reply.
+  - **Signed-in GitHub issue** — Open [GitHub's bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
+    for richer optional details and attachments. A GitHub account is required.
+  New bugs are automatically labeled `needs-triage`; issues are strictly for bugs. Never put
+  sensitive information in either public path.
+- **Feature ideas, enhancements & discussions** — Use **GitHub Discussions** (the "Discussions" tab). Start a new discussion in the **Ideas** category. A GitHub account is required, which keeps feature conversations attributable and Issues focused on actionable bugs.
 - **Security vulnerabilities** — Follow [`SECURITY.md`](SECURITY.md). Do **not** open a public issue.
 
 ## Labels & triage

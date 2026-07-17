@@ -217,6 +217,29 @@ USB cameras are identified by stable `usb:<device-id>` host keys in discovery re
 camera records (`transport: "USB-C"`), so startup policies can skip network probing for tethered
 bodies and reconnect them silently on plug-in.
 
+### ADR-006 — Bug-Report Paths and Relay
+
+Bug reports are intentionally a platform-shell concern, not a portable-core feature. **Report a
+Problem** offers two public GitHub-issue paths: an anonymous in-app form and the signed-in
+[GitHub bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml). The anonymous
+form sends the report text the operator supplies plus a small, closed set of app/platform fields.
+It never ships a GitHub credential, installation identifier, raw diagnostics, arbitrary logs,
+camera identity, or network identifier. Operators can explicitly opt into a closed
+privacy-filtered activity-event snapshot or user-selected screenshots. The apps re-render selected
+screenshots with generic filenames and no embedded file metadata; a server-side canonicalizer
+enforces that boundary again. Screenshot pixels may still contain sensitive information, so the UI
+requires a public-sharing warning and review. The signed-in route hands richer optional details and
+attachments directly to GitHub. Local diagnostics remain a separate user-reviewed share flow.
+
+`services/bug-relay` is an independently deployable Cloudflare Worker. It validates the narrow
+wire contract, rate-limits anonymous submissions, makes retries idempotent, and uses a private
+GitHub App installation with only Issues access to create a labelled public issue. Canonical PNG
+screenshots are kept in a private R2 bucket and are exposed only through opaque relay URLs embedded
+in the public issue; no original source image or filename is retained. The GitHub App private key
+remains a Worker secret; neither mobile binary can create an issue directly. The separate
+feature-request links continue to open GitHub Discussions, where accounts remain required for
+attributable conversation.
+
 ## Deviations from the iOS Dev Guide
 
 > **Directory-rename deviation:** The iOS dev guide's `MyApp/App/Features/Core/Resources`
