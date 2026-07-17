@@ -156,9 +156,28 @@ fun RecordChip(recording: Boolean) {
 
 /** Glyph + value in a glass capsule (iOS `inlineReadout`). */
 @Composable
-fun ReadoutPill(value: String, icon: @Composable () -> Unit) {
+fun ReadoutPill(
+    value: String,
+    active: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    icon: @Composable () -> Unit,
+) {
+    // Active = the iOS readout-button treatment: accent-dim capsule + border
+    // + gold value while its picker is open.
+    val surface =
+        if (active) {
+            Modifier.background(LiveDesign.accentDim, CircleShape)
+                .border(1.dp, LiveDesign.accent, CircleShape)
+        } else {
+            Modifier.chipGlass(CircleShape)
+        }
     Row(
-        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier =
+            surface
+                .then(
+                    if (onClick != null) Modifier.chromeClickable(true, onClick) else Modifier
+                )
+                .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -166,7 +185,7 @@ fun ReadoutPill(value: String, icon: @Composable () -> Unit) {
         Text(
             text = value,
             style = chromeStyle(15f, FontWeight.Medium, mono = true),
-            color = LiveDesign.text,
+            color = if (active) LiveDesign.accent else LiveDesign.text,
             maxLines = 1,
         )
     }

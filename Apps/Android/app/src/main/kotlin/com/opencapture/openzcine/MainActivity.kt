@@ -15,11 +15,28 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -196,6 +213,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
+                // Read once: a pre-parity Android installation paired every
+                // saved card with one static PTP-IP GUID. The production
+                // environment migrates that identity only on this upgrade;
+                // new installs receive their own persisted identity instead.
+                val hasSavedCameraProfilesAtLaunch = remember { savedCameras.isNotEmpty() }
                 var offlineMediaBucket by
                     remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
                 var completedMediaBuckets by
@@ -220,7 +242,10 @@ class MainActivity : ComponentActivity() {
                 val pairingEnvironment =
                     remember(pairingScript) {
                         pairingScript?.environment
-                            ?: realPairingEnvironment(applicationContext)
+                            ?: realPairingEnvironment(
+                                applicationContext,
+                                hasLegacySavedCameraProfiles = hasSavedCameraProfilesAtLaunch,
+                            )
                     }
                 // USB attach/detach must stay observed while a handed-off
                 // session is on the monitor; close the Android receiver only
@@ -240,8 +265,26 @@ class MainActivity : ComponentActivity() {
                     }
                 var standaloneSettingsPresented by
                     rememberSaveable { mutableStateOf(debugInitialSettingsTab != null) }
-                fun acceptPairedCamera(paired: PairedCamera) {
-                    val saved = paired.savedCamera
+                // Branded launch splash (iOS `LaunchSplashTiming`: fully
+                // visible 2250ms, then a 350ms ease-out fade). Debug demo and
+                // scripted launches skip it so screenshots stay deterministic.
+                var launchSplashVisible by
+                    rememberSaveable {
+                        mutableStateOf(debugSession == null && pairingScript == null)
+                    }
+                LaunchedEffect(Unit) {
+                    if (launchSplashVisible) {
+                        delay(2_250)
+                        launchSplashVisible = false
+                    }
+                }
+                /**
+                 * Saves a Nikon-confirmed profile before the temporary pairing
+                 * session is released. The monitor is deliberately not entered
+                 * here: [PairingExperience] must reconnect with this profile
+                 * after the camera applies its body-side confirmation.
+                 */
+                fun persistPairedCameraProfile(saved: SavedCameraRecord): SavedCameraRecord {
                     val updated =
                         SavedCameraRecords.upserting(
                             host = saved.host,
@@ -253,8 +296,7 @@ class MainActivity : ComponentActivity() {
                         )
                     savedCameras = updated
                     savedCameraStore.replace(updated)
-                    activeSavedCamera =
-                        updated.firstOrNull { candidate ->
+                    return updated.firstOrNull { candidate ->
                             candidate.transport == saved.transport &&
                                 (
                                     candidate.host == saved.host ||
@@ -264,13 +306,17 @@ class MainActivity : ComponentActivity() {
                                         )
                                 )
                         } ?: saved
+                }
+
+                fun acceptPairedCamera(paired: PairedCamera) {
+                    activeSavedCamera = persistPairedCameraProfile(paired.savedCamera)
                     monitorSession = paired.session
                 }
-                // The monitor is immersive; the pairing screens keep the
-                // (transparent, dark-styled) system bars, like the iOS
-                // startup screens keep the status bar.
+                // Startup and monitor are both immersive; re-assert whenever
+                // the surface changes so a transient swipe-reveal on one
+                // surface never leaks bars onto the next.
                 val immersive = monitorSession != null || offlineMediaBucket != null
-                LaunchedEffect(immersive) { setSystemBarsHidden(immersive) }
+                LaunchedEffect(immersive) { applyImmersiveSystemBars() }
                 LaunchedEffect(immersive, operatorSettings.keepScreenAwake.value) {
                     if (operatorSettings.shouldKeepScreenAwake(immersive)) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -350,7 +396,14 @@ class MainActivity : ComponentActivity() {
                                     environment = pairingEnvironment,
                                     script = pairingScript,
                                     onPaired = ::acceptPairedCamera,
+                                    onPairingProfilePrepared = ::persistPairedCameraProfile,
                                     onOpenSettings = { standaloneSettingsPresented = true },
+                                    onShowSavedCameras =
+                                        if (savedCameras.isEmpty()) {
+                                            null
+                                        } else {
+                                            { startupSurface = StartupSurface.SAVED_CAMERAS }
+                                        },
                                 )
                         }
                         if (standaloneSettingsPresented) {
@@ -373,7 +426,9 @@ class MainActivity : ComponentActivity() {
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
                                 lutLibrary = lutLibrary,
-                                initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.STORAGE,
+                                // iOS's startup Settings lands on Link; a debug
+                                // intent can still force a specific tab.
+                                initialTab = debugInitialSettingsTab ?: OperatorSettingsTab.LINK,
                                 systemSettingsActions = systemSettingsActions,
                                 bugReportSubmitter = bugReportSubmitter,
                                 bugReportActivityLogProvider = diagnostics::privacyFilteredActivityLog,
@@ -384,6 +439,7 @@ class MainActivity : ComponentActivity() {
                                 onClose = { standaloneSettingsPresented = false },
                             )
                         }
+                        LaunchSplashOverlay(visible = launchSplashVisible)
                     }
                 } else {
                     var monitorSessionRecoveryEnabled by
@@ -656,6 +712,14 @@ class MainActivity : ComponentActivity() {
         publishFrameioRedirect(intent)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // System dialogs (runtime permissions, the Wi-Fi network-request
+        // sheet) re-show the bars while they hold focus; re-assert immersive
+        // as soon as this window gets focus back.
+        if (hasFocus) applyImmersiveSystemBars()
+    }
+
     private fun publishFrameioRedirect(newIntent: Intent) {
         if (newIntent.action != Intent.ACTION_VIEW) return
         newIntent.dataString?.takeIf(String::isNotBlank)?.let { callbackURI ->
@@ -666,8 +730,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Hides (monitor) or shows (pairing) the system bars; styling stays transparent-dark. */
-    private fun setSystemBarsHidden(hidden: Boolean) {
+    /** Hides the system bars on every surface; styling stays transparent-dark. */
+    private fun applyImmersiveSystemBars() {
         // BEHAVIOR_DEFAULT, not TRANSIENT_BARS_BY_SWIPE: the swipe reveal is
         // equally transient on this device under both, but only DEFAULT emits
         // the legacy system-UI visibility event MonitorScreen listens to for
@@ -675,11 +739,10 @@ class MainActivity : ComponentActivity() {
         // observable signal at all).
         WindowCompat.getInsetsController(window, window.decorView).apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
-            if (hidden) {
-                hide(WindowInsetsCompat.Type.systemBars())
-            } else {
-                show(WindowInsetsCompat.Type.systemBars())
-            }
+            // Startup and monitor both run fully immersive: Android's status
+            // bar is far busier than iOS's clock strip, so hiding it is the
+            // closer match to the iOS startup screens (a swipe reveals it).
+            hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -741,6 +804,64 @@ fun MonitorShell(
                     color = BrandColors.dimmedText,
                     style = MaterialTheme.typography.titleMedium,
                 )
+        }
+    }
+}
+
+/**
+ * Branded launch splash — the Compose continuation of the system splash,
+ * porting iOS `LaunchSplashView` (ios/Runner/Branding.swift): the diagonal
+ * near-black gradient with a gold top-trailing glow, the app logo, and the
+ * wordmark, fading out with an ease-out after the hold.
+ */
+@Composable
+private fun LaunchSplashOverlay(visible: Boolean) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = androidx.compose.animation.EnterTransition.None,
+        exit = fadeOut(tween(durationMillis = 350)),
+    ) {
+        Column(
+            Modifier.fillMaxSize().drawBehind {
+                drawRect(
+                    Brush.linearGradient(
+                        colors =
+                            listOf(
+                                androidx.compose.ui.graphics.Color(0xFF0A0908),
+                                androidx.compose.ui.graphics.Color(0xFF100E0C),
+                                androidx.compose.ui.graphics.Color(0xFF17140F),
+                            ),
+                        start = Offset.Zero,
+                        end = Offset(size.width, size.height),
+                    )
+                )
+                drawRect(
+                    Brush.radialGradient(
+                        colors =
+                            listOf(
+                                androidx.compose.ui.graphics.Color(0xFFFFE100).copy(alpha = 0.18f),
+                                androidx.compose.ui.graphics.Color.Transparent,
+                            ),
+                        center = Offset(size.width * 0.85f, size.height * 0.10f),
+                        radius = size.maxDimension * 0.7f,
+                    )
+                )
+            },
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Image(
+                painter = painterResource(R.drawable.openzcine_splash_icon),
+                contentDescription = null,
+                modifier = Modifier.size(96.dp).clip(RoundedCornerShape(21.dp)),
+            )
+            Box(Modifier.size(24.dp))
+            Text(
+                "OpenZCine",
+                color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }

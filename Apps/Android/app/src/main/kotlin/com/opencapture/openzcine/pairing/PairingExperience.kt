@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -31,9 +33,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,23 +51,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.opencapture.openzcine.R
+import com.opencapture.openzcine.bridge.PtpIpConnectionStrategy
+import com.opencapture.openzcine.bridge.PtpIpInitiatorIdentity
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
+import com.opencapture.openzcine.core.CameraConnectionPhase
+import com.opencapture.openzcine.core.CameraConnectionProgress
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
@@ -76,11 +78,16 @@ import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpCameraSource
 import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Saved camera-AP credential surface the wizard needs (real: [CameraWifiCredentialStore]). */
 public interface PairingCredentials {
@@ -110,36 +117,104 @@ public class PairingEnvironment(
     public val releaseCameraAp: () -> Unit,
     /** NSD camera discovery on the hotspot subnet (phone-hotspot path only). */
     public val hotspotCameras: Flow<List<DiscoveredCamera>>,
-    /** Builds the control session once a camera host is known. */
+    /** Builds a saved-camera session that may recover a rejected legacy profile by pairing. */
     public val createSession: (host: String) -> CameraSession,
+    /** Builds a strict saved-profile session after Nikon has accepted a pairing request. */
+    public val createSavedProfileSession: (host: String) -> CameraSession = createSession,
+    /** Builds a session that starts directly in Nikon's first-time pairing path. */
+    public val createFirstTimePairingSession: (host: String) -> CameraSession = createSession,
     /** Android USB Host discovery and raw-byte ownership, when the device supports it. */
     public val usbCameraSource: UsbPtpCameraSource?,
-    /** Builds a Swift-core-backed session over an already-open USB PTP transport. */
+    /** Builds a USB-C saved-camera session that may restore then pair as needed. */
     public val createUsbSession: (UsbPtpOpenResult.Opened) -> CameraSession,
+    /** Builds a strict saved-profile USB-C session after Nikon pairing is confirmed. */
+    public val createSavedProfileUsbSession: (UsbPtpOpenResult.Opened) -> CameraSession =
+        createUsbSession,
+    /** Builds a USB-C session that may restore a profile before first-time pairing. */
+    public val createFirstTimePairingUsbSession: (UsbPtpOpenResult.Opened) -> CameraSession =
+        createUsbSession,
     /** Remembered camera-AP credentials. */
     public val credentials: PairingCredentials,
+    /**
+     * Waits for the current camera AP to leave and return after first-time
+     * pairing. Non-camera-AP environments use the default and retry their
+     * discovered profile endpoint.
+     */
+    public val awaitCameraApRestart: suspend (timeoutMillis: Long) -> Boolean = { true },
 )
 
-/** Production [PairingEnvironment] over the real platform services. */
-public fun realPairingEnvironment(context: Context): PairingEnvironment {
+/**
+ * Production [PairingEnvironment] over the real platform services.
+ *
+ * [hasLegacySavedCameraProfiles] is true only while upgrading an installation
+ * that already has Android camera records from the former shared initiator
+ * GUID. It lets that one install retain those camera-side profiles; new
+ * installs always receive a fresh private identity.
+ */
+public fun realPairingEnvironment(
+    context: Context,
+    hasLegacySavedCameraProfiles: Boolean = false,
+): PairingEnvironment {
     val joiner = CameraApJoiner(context.getSystemService(ConnectivityManager::class.java))
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
     val usbCameraSource = AndroidUsbPtpCameraSource(context)
+    val initiatorGuid =
+        PtpIpInitiatorIdentity(context).guid(
+            preferLegacyStaticIdentity = hasLegacySavedCameraProfiles,
+        )
     return PairingEnvironment(
         joinCameraAp = { ssid, passphrase -> joiner.join(ssid, passphrase) },
         releaseCameraAp = joiner::release,
         hotspotCameras = discovery.cameras(),
-        createSession = { host -> SwiftCoreCameraSession(host) },
+        createSession = { host ->
+            SwiftCoreCameraSession(
+                host = host,
+                connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
+                initiatorGuid = initiatorGuid,
+            )
+        },
+        createSavedProfileSession = { host ->
+            SwiftCoreCameraSession(
+                host = host,
+                connectionStrategy = PtpIpConnectionStrategy.SAVED_PROFILE,
+                initiatorGuid = initiatorGuid,
+            )
+        },
+        createFirstTimePairingSession = { host ->
+            SwiftCoreCameraSession(
+                host = host,
+                connectionStrategy = PtpIpConnectionStrategy.FIRST_TIME_PAIRING,
+                initiatorGuid = initiatorGuid,
+            )
+        },
         usbCameraSource = usbCameraSource,
         createUsbSession = { opened ->
             SwiftCoreCameraSession(
                 host = opened.hostKey,
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
+                connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
+            )
+        },
+        createSavedProfileUsbSession = { opened ->
+            SwiftCoreCameraSession(
+                host = opened.hostKey,
+                cameraNameHint = opened.displayName,
+                usbTransport = opened.transport,
+                connectionStrategy = PtpIpConnectionStrategy.SAVED_PROFILE,
+            )
+        },
+        createFirstTimePairingUsbSession = { opened ->
+            SwiftCoreCameraSession(
+                host = opened.hostKey,
+                cameraNameHint = opened.displayName,
+                usbTransport = opened.transport,
+                connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
             )
         },
         credentials = CameraWifiCredentialStore(context),
+        awaitCameraApRestart = joiner::awaitReassociation,
     )
 }
 
@@ -153,6 +228,8 @@ public data class PairingScript(
     val environment: PairingEnvironment,
     /** Jump straight into the connecting phase (for the connecting screenshot). */
     val autoConnect: Boolean = false,
+    /** Stages the connect popup: `ready`, `joining`, or `failed` (iOS ZC_DEMO_JOIN_POPUP). */
+    val joinPopup: String? = null,
 )
 
 /** A connected session together with the profile needed to reconnect after relaunch. */
@@ -174,6 +251,14 @@ public fun requiredPairingPermission(): String =
 /** Whether the pairing permission is already granted. */
 public fun isPairingPermissionGranted(context: Context): Boolean =
     context.checkSelfPermission(requiredPairingPermission()) == PackageManager.PERMISSION_GRANTED
+
+/** Whether Camera (the credential scanner's permission) is already granted. */
+public fun isCameraPermissionGranted(context: Context): Boolean =
+    context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+/** Whether every permission the wizard's permissions step lists is granted. */
+public fun arePairingPermissionsGranted(context: Context): Boolean =
+    isPairingPermissionGranted(context) && isCameraPermissionGranted(context)
 
 // MARK: - Copy
 
@@ -215,7 +300,7 @@ internal object PairingCopy {
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_badge_simplest
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_badge_best_wireless
-            PairingPath.USB_C -> R.string.pairing_badge_direct_cable
+            PairingPath.USB_C -> R.string.pairing_badge_most_stable
         }
 
     fun pathPros(path: PairingPath): List<Int> =
@@ -225,7 +310,7 @@ internal object PairingCopy {
             PairingPath.PHONE_HOTSPOT ->
                 listOf(R.string.pairing_pro_wireless_quality, R.string.pairing_pro_stable_high_settings)
             PairingPath.USB_C ->
-                listOf(R.string.pairing_pro_direct_wired, R.string.pairing_pro_no_wifi_key)
+                listOf(R.string.pairing_pro_usb_stable, R.string.pairing_pro_usb_no_radio)
         }
 
     @StringRes
@@ -233,25 +318,7 @@ internal object PairingCopy {
         when (path) {
             PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_con_softer_link
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_con_battery_drain
-            PairingPath.USB_C -> R.string.pairing_con_data_cable
-        }
-
-    /** Short landscape-card copy that keeps every connection choice readable. */
-    @StringRes
-    fun compactPathPro(path: PairingPath): Int =
-        when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_compact_pro_camera_ap
-            PairingPath.PHONE_HOTSPOT -> R.string.pairing_compact_pro_hotspot
-            PairingPath.USB_C -> R.string.pairing_compact_pro_usb
-        }
-
-    /** Short landscape-card tradeoff paired with [compactPathPro]. */
-    @StringRes
-    fun compactPathCon(path: PairingPath): Int =
-        when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_compact_con_camera_ap
-            PairingPath.PHONE_HOTSPOT -> R.string.pairing_compact_con_hotspot
-            PairingPath.USB_C -> R.string.pairing_compact_con_usb
+            PairingPath.USB_C -> R.string.pairing_con_usb_tethered
         }
 
     // [VERIFY-ON-HW] Confirm the ZR's exact menu wording for each path on hardware.
@@ -279,14 +346,9 @@ internal object PairingCopy {
         }
 
     @StringRes
-    fun networkSubtitle(path: PairingPath, keyRemembered: Boolean): Int =
+    fun networkSubtitle(path: PairingPath): Int =
         when (path) {
-            PairingPath.CAMERA_ACCESS_POINT ->
-                if (keyRemembered) {
-                    R.string.pairing_network_ap_remembered
-                } else {
-                    R.string.pairing_network_ap_new
-                }
+            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_network_ap
             PairingPath.PHONE_HOTSPOT -> R.string.pairing_network_hotspot
             PairingPath.USB_C -> R.string.pairing_network_usb
         }
@@ -323,12 +385,44 @@ internal object PairingCopy {
 private sealed interface PairingPhase {
     data object Idle : PairingPhase
 
+    /** Credentials staged in the connect popup, waiting for the operator's Connect. */
+    data class ReadyToJoin(val ssid: String, val key: String?, val keyFromScan: Boolean) :
+        PairingPhase
+
     data object Joining : PairingPhase
 
-    data object Connecting : PairingPhase
+    data object Handshaking : PairingPhase
+
+    data class Pairing(val pin: String?) : PairingPhase
+
+    data class ConfirmOnCamera(val pin: String?) : PairingPhase
+
+    data object Reconnecting : PairingPhase
 
     data class Error(val message: String) : PairingPhase
 }
+
+/** Maps the shared-core lifecycle without treating a PTP-IP handshake as pairing. */
+private fun pairingPhaseFor(progress: CameraConnectionProgress): PairingPhase? =
+    when (progress.phase) {
+        CameraConnectionPhase.HANDSHAKING -> PairingPhase.Handshaking
+        CameraConnectionPhase.PAIRING -> PairingPhase.Pairing(progress.detail.ifBlank { null })
+        CameraConnectionPhase.CONFIRM_ON_CAMERA -> PairingPhase.ConfirmOnCamera(
+            progress.detail.ifBlank { null },
+        )
+        else -> null
+    }
+
+internal const val FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS: Long = 60_000L
+internal const val FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS: Long = 60_000L
+internal const val FIRST_PAIR_RECONNECT_INTERVAL_MILLIS: Long = 2_000L
+internal const val FIRST_PAIR_HOTSPOT_SETTLE_MILLIS: Long = 2_000L
+
+/** How often the USB discover step re-enumerates while waiting for a camera. */
+internal const val USB_DISCOVER_POLL_INTERVAL_MILLIS: Long = 1_500L
+
+private fun PairingPhase.isBusy(): Boolean =
+    this !is PairingPhase.Idle && this !is PairingPhase.Error
 
 /**
  * The first-pair wizard — Android port of the iOS `StartupFirstPairWizardView`
@@ -343,45 +437,35 @@ public fun PairingExperience(
     environment: PairingEnvironment,
     script: PairingScript? = null,
     onPaired: (PairedCamera) -> Unit,
+    onPairingProfilePrepared: (SavedCameraRecord) -> Unit = {},
     onOpenSettings: (() -> Unit)? = null,
+    onShowSavedCameras: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
     var permissionGranted by remember { mutableStateOf(isPairingPermissionGranted(context)) }
     var permissionDenied by remember { mutableStateOf(false) }
+    var cameraPermissionGranted by remember {
+        mutableStateOf(isCameraPermissionGranted(context))
+    }
+    var cameraPermissionDenied by remember { mutableStateOf(false) }
     var flow by remember {
         mutableStateOf(
-            script?.start ?: PairingFlowState.initial(isPairingPermissionGranted(context))
+            script?.start ?: PairingFlowState.initial(arePairingPermissionsGranted(context))
         )
     }
     var phase by remember { mutableStateOf<PairingPhase>(PairingPhase.Idle) }
-    var ssidField by remember {
-        mutableStateOf(
-            environment.credentials.lastSsid ?: CameraDiscovery.NIKON_ZR_SSID_PREFIX
-        )
-    }
-    var keyField by remember {
-        mutableStateOf(
-            environment.credentials.lastSsid?.let(environment.credentials::passphrase) ?: ""
-        )
-    }
-    // This remains process-memory-only. `joinCameraAp` is the sole point that
-    // writes a confirmed key into the encrypted credential store.
-    var keyCameFromScanner by remember { mutableStateOf(false) }
+    // The SSID actually joined this run — recorded on the saved profile so a
+    // reconnect can rejoin the same camera AP.
+    var joinedSsid by remember { mutableStateOf<String?>(null) }
+    // Device title for the connect popup (SSID while joining, camera name after).
+    var connectingName by remember { mutableStateOf<String?>(null) }
     var cameraWifiScannerPresented by remember { mutableStateOf(false) }
-    val keyWasRemembered = remember { keyField.isNotEmpty() }
     var cameras by remember { mutableStateOf(emptyList<DiscoveredCamera>()) }
     var usbCameras by remember { mutableStateOf(emptyList<UsbPtpCamera>()) }
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
     val handedOff = remember { mutableStateOf(false) }
-
-    fun clearScannedCameraWifiDraft() {
-        if (!keyCameFromScanner) return
-        keyField = ""
-        keyCameFromScanner = false
-        ssidField = environment.credentials.lastSsid ?: CameraDiscovery.NIKON_ZR_SSID_PREFIX
-    }
 
     DisposableEffect(environment) {
         onDispose {
@@ -390,18 +474,147 @@ public fun PairingExperience(
         }
     }
 
+    fun reconnectHost(record: SavedCameraRecord): String =
+        if (record.transport == SavedCameraTransport.PHONE_HOTSPOT) {
+            cameras.firstOrNull { camera ->
+                camera.host == record.host ||
+                    SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
+            }?.host ?: record.host
+        } else {
+            record.host
+        }
+
+    fun createSavedProfileReconnectSession(record: SavedCameraRecord): CameraSession? =
+        when (record.transport) {
+            SavedCameraTransport.CAMERA_ACCESS_POINT,
+            SavedCameraTransport.PHONE_HOTSPOT,
+            -> environment.createSavedProfileSession(reconnectHost(record))
+            SavedCameraTransport.USB_C -> {
+                val source = environment.usbCameraSource ?: return null
+                val camera =
+                    usbCameras.firstOrNull {
+                        it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                    } ?: return null
+                when (val opened = source.open(camera)) {
+                    is UsbPtpOpenResult.Opened -> environment.createSavedProfileUsbSession(opened)
+                    is UsbPtpOpenResult.Rejected -> null
+                }
+            }
+        }
+
+    suspend fun reconnectAfterFirstPair(savedCamera: SavedCameraRecord): PairedCamera? {
+        val isCameraAp = savedCamera.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
+        if (!isCameraAp) {
+            // The camera's hotspot/USB transport needs a short settle after its
+            // body-side confirmation before it will accept the restored profile.
+            delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
+        }
+        // iOS keeps re-applying the camera AP configuration while the just-paired
+        // camera reboots its Wi-Fi (attemptPairedReconnectRejoin), then reconnects
+        // off the saved profile the moment it returns — staying armed until a
+        // connect succeeds. Android's WifiNetworkSpecifier does NOT auto-rejoin a
+        // rebooted AP, so we mirror the active re-join: each pass re-issues the
+        // join (which blocks until the AP is back, then binds the process) before
+        // attempting the saved-profile connect. Re-joining a session-approved SSID
+        // is silent on API 31+.
+        val rejoinSsid = savedCamera.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
+        val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
+
+        return withTimeoutOrNull<PairedCamera>(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
+            var reconnected: PairedCamera? = null
+            while (reconnected == null) {
+                phase = PairingPhase.Reconnecting
+                if (rejoinSsid != null && !environment.joinCameraAp(rejoinSsid, rejoinKey)) {
+                    // The rebooted AP hasn't returned yet; wait and re-apply.
+                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                    continue
+                }
+                val session = createSavedProfileReconnectSession(savedCamera)
+                if (session != null) {
+                    var handedOffSession = false
+                    try {
+                        session.connect()
+                        val connected = session.state.value as? CameraSessionState.Connected
+                        if (connected != null) {
+                            handedOffSession = true
+                            reconnected = PairedCamera(
+                                session = session,
+                                savedCamera =
+                                    savedCamera.copy(
+                                        host = reconnectHost(savedCamera),
+                                        cameraName = connected.identity.name,
+                                        lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                    ),
+                            )
+                        }
+                    } finally {
+                        if (!handedOffSession) {
+                            withContext(NonCancellable) { session.disconnect() }
+                        }
+                    }
+                }
+                if (reconnected == null) {
+                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                }
+            }
+            checkNotNull(reconnected)
+        }
+    }
+
     fun connect(
         session: CameraSession,
         savedCamera: SavedCameraRecord,
         unreachableMessage: String,
+        firstTimePairing: Boolean,
     ) {
-        phase = PairingPhase.Connecting
+        phase = PairingPhase.Handshaking
         work.value =
             scope.launch {
+                var confirmation: PairingPhase.ConfirmOnCamera? = null
+                val progressWatcher =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        session.connectionProgress.collect { progress ->
+                            pairingPhaseFor(progress)?.let { updated ->
+                                phase = updated
+                                if (updated is PairingPhase.ConfirmOnCamera) {
+                                    confirmation = updated
+                                }
+                            }
+                        }
+                    }
                 try {
                     session.connect()
                     val connected = session.state.value as? CameraSessionState.Connected
-                    if (connected != null) {
+                    // USB-C pairs in-session over the cable — there is no
+                    // Wi-Fi-restart / confirm-on-body step (matches iOS, which
+                    // uses the USB session directly). Only the Wi-Fi paths run
+                    // the shutdown → reconnect dance, which re-applies the
+                    // camera AP SSID a USB camera does not have.
+                    val pairingConfirmed =
+                        confirmation.takeIf {
+                            savedCamera.transport != SavedCameraTransport.USB_C
+                        }
+                    if (firstTimePairing && pairingConfirmed != null) {
+                        // Nikon has accepted `ConfirmPairing`, but this is still
+                        // not a usable monitor session. Persist the profile,
+                        // close the temporary session, then wait for the body
+                        // confirmation/restart and reconnect through that profile.
+                        val preparedProfile =
+                            savedCamera.copy(
+                                cameraName = connected?.identity?.name ?: savedCamera.cameraName,
+                                lastSeenAtEpochMillis = System.currentTimeMillis(),
+                            )
+                        onPairingProfilePrepared(preparedProfile)
+                        phase = pairingConfirmed
+                        withContext(NonCancellable) { session.disconnect() }
+                        val reconnected = reconnectAfterFirstPair(preparedProfile)
+                        if (reconnected != null) {
+                            handedOff.value = true
+                            onPaired(reconnected)
+                        } else {
+                            phase = PairingPhase.Error(unreachableMessage)
+                        }
+                    } else if (connected != null) {
                         handedOff.value = true
                         onPaired(
                             PairedCamera(
@@ -426,6 +639,8 @@ public fun PairingExperience(
                 } catch (_: Exception) {
                     withContext(NonCancellable) { session.disconnect() }
                     phase = PairingPhase.Error(unreachableMessage)
+                } finally {
+                    progressWatcher.cancel()
                 }
             }
     }
@@ -437,22 +652,26 @@ public fun PairingExperience(
             } else {
                 SavedCameraTransport.PHONE_HOTSPOT
             }
+        val discoveredName = cameras.firstOrNull { it.host == host }?.name
+        if (discoveredName != null) connectingName = discoveredName
         connect(
-            session = environment.createSession(host),
+            session = environment.createFirstTimePairingSession(host),
             savedCamera =
                 SavedCameraRecord(
                     host = host,
-                    cameraName = resources.getString(R.string.pairing_default_camera_name),
+                    cameraName =
+                        discoveredName ?: resources.getString(R.string.pairing_default_camera_name),
                     transport = transport,
                     lastSeenAtEpochMillis = null,
                     wifiSsid =
                         if (transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-                            ssidField.trim().takeIf(String::isNotEmpty)
+                            joinedSsid
                         } else {
                             null
                         },
                 ),
             unreachableMessage = resources.getString(R.string.pairing_error_camera_unreachable),
+            firstTimePairing = true,
         )
     }
 
@@ -462,6 +681,7 @@ public fun PairingExperience(
             phase = PairingPhase.Error(resources.getString(R.string.pairing_error_usb_unsupported))
             return
         }
+        connectingName = camera.displayName
         when (camera.access) {
             UsbPtpCameraAccess.NEEDS_PERMISSION,
             UsbPtpCameraAccess.DENIED,
@@ -476,7 +696,7 @@ public fun PairingExperience(
                     is UsbPtpOpenResult.Opened -> {
                         val session =
                             try {
-                                environment.createUsbSession(opened)
+                                environment.createFirstTimePairingUsbSession(opened)
                             } catch (_: Exception) {
                                 // The source already claimed a physical
                                 // interface. Do not leave it claimed when the
@@ -500,6 +720,7 @@ public fun PairingExperience(
                                 ),
                             unreachableMessage =
                                 resources.getString(R.string.pairing_error_usb_unreachable),
+                            firstTimePairing = true,
                         )
                     }
                     is UsbPtpOpenResult.Rejected -> phase = PairingPhase.Error(opened.message)
@@ -507,21 +728,19 @@ public fun PairingExperience(
         }
     }
 
-    fun joinCameraAp() {
-        val ssid = ssidField.trim()
-        if (ssid.isEmpty()) return
-        val passphrase = keyField.ifEmpty { null }
+    fun joinCameraAp(ssid: String, passphrase: String?) {
+        if (ssid.isBlank()) return
+        joinedSsid = ssid
+        connectingName = ssid
         phase = PairingPhase.Joining
         work.value =
             scope.launch {
                 val joined = environment.joinCameraAp(ssid, passphrase)
                 if (joined) {
+                    // The encrypted store is the only place a confirmed key
+                    // lives; the popup's plaintext staging dies with the phase.
                     if (passphrase != null) environment.credentials.save(ssid, passphrase)
                     environment.credentials.lastSsid = ssid
-                    // The encrypted store now owns a successful scanned key;
-                    // release the plaintext draft before the PTP connect begins.
-                    keyField = ""
-                    keyCameFromScanner = false
                     // Camera-AP mode: the ZR always answers on the fixed AP host.
                     connect(CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST)
                 } else {
@@ -533,36 +752,61 @@ public fun PairingExperience(
             }
     }
 
+    /**
+     * The network step's single action (iOS "Connect my camera"): the first-pair
+     * wizard ALWAYS opens the scanner — scanning is the only credential path
+     * here, exactly like iOS's `advanceFirstPairWizard` →
+     * `presentCameraWiFiScanner`. Remembered keys shortcut only saved-camera
+     * reconnects, never a fresh pairing.
+     */
+    fun connectMyCamera() {
+        cameraWifiScannerPresented = true
+    }
+
     fun cancelWork() {
         work.value?.cancel()
         work.value = null
         if (flow.path == PairingPath.CAMERA_ACCESS_POINT) environment.releaseCameraAp()
-        clearScannedCameraWifiDraft()
+        connectingName = null
         phase = PairingPhase.Idle
     }
 
     fun retreat() {
-        if (flow.step == PairingStep.NETWORK) clearScannedCameraWifiDraft()
         phase = PairingPhase.Idle
         flow = flow.retreat()
     }
 
-    // Permission launcher + re-check on return from Settings.
+    // Permission launchers + re-check on return from Settings.
     val permissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             permissionGranted = granted
             permissionDenied = !granted
         }
+    val cameraPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            cameraPermissionGranted = granted
+            cameraPermissionDenied = !granted
+        }
+    fun openAppSettings() {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null),
+            )
+        )
+    }
     fun requestPairingPermission() {
         if (permissionDenied) {
-            context.startActivity(
-                Intent(
-                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.fromParts("package", context.packageName, null),
-                )
-            )
+            openAppSettings()
         } else {
             permissionLauncher.launch(requiredPairingPermission())
+        }
+    }
+    fun requestCameraPermission() {
+        if (cameraPermissionDenied) {
+            openAppSettings()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -570,6 +814,7 @@ public fun PairingExperience(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 permissionGranted = isPairingPermissionGranted(context)
+                cameraPermissionGranted = isCameraPermissionGranted(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -586,6 +831,16 @@ public fun PairingExperience(
                 if (source == null) {
                     usbCameras = emptyList()
                 } else {
+                    // Poll deviceList while waiting: Samsung/OEM devices don't
+                    // reliably deliver ACTION_USB_DEVICE_ATTACHED to a runtime
+                    // receiver, so a camera plugged in on this step would never
+                    // reach the flow otherwise.
+                    launch {
+                        while (isActive) {
+                            source.refresh()
+                            delay(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+                        }
+                    }
                     source.cameras.collect { usbCameras = it }
                 }
             } else {
@@ -598,27 +853,47 @@ public fun PairingExperience(
     if (script?.autoConnect == true) {
         LaunchedEffect(script) { connect(CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST) }
     }
+    if (script?.joinPopup != null) {
+        LaunchedEffect(script) {
+            connectingName = "NIKON_ZR_01234"
+            phase =
+                when (script.joinPopup) {
+                    "joining" -> PairingPhase.Joining
+                    "failed" ->
+                        PairingPhase.Error(resources.getString(R.string.pairing_error_wifi_join))
+                    else ->
+                        PairingPhase.ReadyToJoin("NIKON_ZR_01234", "a1b2c3d4", keyFromScan = true)
+                }
+        }
+    }
 
-    val busy = phase == PairingPhase.Joining || phase == PairingPhase.Connecting
+    val busy = phase.isBusy()
+    // iOS keeps the wizard's status pill amber "Looking" for the whole first
+    // pair (discovery runs behind it); connect phases render in the popup, so
+    // the pill only switches wording while one is active.
     val statusTitle =
         when {
             phase == PairingPhase.Joining -> stringResource(R.string.pairing_status_joining)
-            phase == PairingPhase.Connecting -> stringResource(R.string.pairing_status_connecting)
-            flow.step == PairingStep.DISCOVER -> stringResource(R.string.pairing_status_looking)
-            else -> stringResource(R.string.pairing_status_ready)
+            phase == PairingPhase.Handshaking -> stringResource(R.string.pairing_status_connecting)
+            phase is PairingPhase.Pairing -> stringResource(R.string.pairing_status_pairing)
+            phase is PairingPhase.ConfirmOnCamera ->
+                stringResource(R.string.pairing_status_confirm_on_camera)
+            phase == PairingPhase.Reconnecting -> stringResource(R.string.pairing_status_reconnecting)
+            else -> stringResource(R.string.pairing_status_looking)
         }
 
     Box(Modifier.fillMaxSize().startupBackdrop()) {
         Column(
             Modifier.fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(horizontal = 24.dp, vertical = 12.dp)
+                .padding(horizontal = 24.dp, vertical = 10.dp)
         ) {
+            // No Settings entry during first pairing — iOS keeps it on the
+            // saved-cameras home only.
             StartupHeader(
                 title = stringResource(R.string.pairing_connection_setup),
                 statusTitle = statusTitle,
-                isBusy = busy || flow.step == PairingStep.DISCOVER,
-                onOpenSettings = if (busy) null else onOpenSettings,
+                isBusy = true,
             )
             Spacer(Modifier.height(12.dp))
             BoxWithConstraints(Modifier.weight(1f)) {
@@ -631,7 +906,7 @@ public fun PairingExperience(
                 // scrollable card body behind the navigation edge.
                 val introWidth =
                     if (flow.step == PairingStep.CHOOSE_PATH) {
-                        168.dp
+                        148.dp
                     } else {
                         maxOf(236.dp, viewportWidth * 0.28f)
                     }
@@ -639,99 +914,109 @@ public fun PairingExperience(
                     val compactThreshold =
                         if (flow.step == PairingStep.CHOOSE_PATH) 500.dp else 400.dp
                     val compactStep = viewportWidth - introWidth - 16.dp < compactThreshold
-                    val condensedChoiceCards =
-                        flow.step == PairingStep.CHOOSE_PATH && !compactStep
+                    val condensedIntro = flow.step == PairingStep.CHOOSE_PATH && !compactStep
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         IntroCard(
                             flow = flow,
-                            condensed = condensedChoiceCards,
+                            condensed = condensedIntro,
+                            onShowSavedCameras = onShowSavedCameras,
                             modifier = Modifier.width(introWidth).fillMaxSize(),
                         )
                         StepCard(
                             flow = flow,
-                            phase = phase,
                             permissionGranted = permissionGranted,
                             permissionDenied = permissionDenied,
-                            ssidField = ssidField,
-                            onSsidChange = {
-                                ssidField = it
-                                keyCameFromScanner = false
-                            },
-                            keyField = keyField,
-                            onKeyChange = {
-                                keyField = it
-                                keyCameFromScanner = false
-                            },
-                            keyCameFromScanner = keyCameFromScanner,
-                            keyWasRemembered = keyWasRemembered,
+                            cameraPermissionGranted = cameraPermissionGranted,
+                            cameraPermissionDenied = cameraPermissionDenied,
                             cameras = cameras,
                             usbCameras = usbCameras,
                             onRequestPermission = ::requestPairingPermission,
-                            onScanCameraWifi = { cameraWifiScannerPresented = true },
+                            onRequestCameraPermission = ::requestCameraPermission,
                             onChoose = { flow = flow.choose(it) },
                             onAdvance = { flow = flow.advance() },
                             onRetreat = ::retreat,
-                            onJoin = ::joinCameraAp,
+                            onConnectMyCamera = ::connectMyCamera,
                             onConnectCamera = { connect(it.host) },
                             onConnectUsbCamera = ::connectUsb,
-                            onCancel = ::cancelWork,
                             compact = compactStep,
-                            condensedChoiceCards = condensedChoiceCards,
+                            tightChrome = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
                         )
                     }
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // iOS portrait stacks the first-run hero above the
+                        // progress bar on every step.
+                        PortraitIntroHeader(
+                            flow = flow,
+                            onShowSavedCameras = onShowSavedCameras,
+                        )
                         StartupWizardProgress(
                             currentStep = flow.displayStepNumber,
                             totalSteps = flow.stepCount,
                         )
                         StepCard(
                             flow = flow,
-                            phase = phase,
                             permissionGranted = permissionGranted,
                             permissionDenied = permissionDenied,
-                            ssidField = ssidField,
-                            onSsidChange = {
-                                ssidField = it
-                                keyCameFromScanner = false
-                            },
-                            keyField = keyField,
-                            onKeyChange = {
-                                keyField = it
-                                keyCameFromScanner = false
-                            },
-                            keyCameFromScanner = keyCameFromScanner,
-                            keyWasRemembered = keyWasRemembered,
+                            cameraPermissionGranted = cameraPermissionGranted,
+                            cameraPermissionDenied = cameraPermissionDenied,
                             cameras = cameras,
                             usbCameras = usbCameras,
                             onRequestPermission = ::requestPairingPermission,
-                            onScanCameraWifi = { cameraWifiScannerPresented = true },
+                            onRequestCameraPermission = ::requestCameraPermission,
                             onChoose = { flow = flow.choose(it) },
                             onAdvance = { flow = flow.advance() },
                             onRetreat = ::retreat,
-                            onJoin = ::joinCameraAp,
+                            onConnectMyCamera = ::connectMyCamera,
                             onConnectCamera = { connect(it.host) },
                             onConnectUsbCamera = ::connectUsb,
-                            onCancel = ::cancelWork,
                             compact = viewportWidth < 480.dp,
-                            condensedChoiceCards = false,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
                     }
                 }
             }
         }
+        val popupPhase =
+            when (val active = phase) {
+                PairingPhase.Idle -> null
+                is PairingPhase.ReadyToJoin ->
+                    ConnectionPopupPhase.ReadyToJoin(active.key, active.keyFromScan)
+                PairingPhase.Joining -> ConnectionPopupPhase.JoiningWifi
+                PairingPhase.Handshaking -> ConnectionPopupPhase.Handshaking
+                is PairingPhase.Pairing -> ConnectionPopupPhase.Pairing
+                is PairingPhase.ConfirmOnCamera ->
+                    ConnectionPopupPhase.ConfirmOnCamera(active.pin)
+                PairingPhase.Reconnecting -> ConnectionPopupPhase.Reconnecting
+                is PairingPhase.Error -> ConnectionPopupPhase.Failed(active.message)
+            }
+        popupPhase?.let { popup ->
+            ConnectionProgressPopup(
+                deviceName = connectionDisplayName(connectingName),
+                phase = popup,
+                onConnect = {
+                    (phase as? PairingPhase.ReadyToJoin)?.let { staged ->
+                        joinCameraAp(staged.ssid, staged.key)
+                    }
+                },
+                onDismiss = ::cancelWork,
+            )
+        }
         if (cameraWifiScannerPresented) {
             CameraWifiScannerOverlay(
                 onConfirmed = { candidate ->
                     // The scanner has already been reviewed by the operator;
-                    // this stages the exact fields for the normal Join action.
-                    // No credential is persisted until a successful join.
-                    ssidField = candidate.ssid
-                    keyField = candidate.key
-                    keyCameFromScanner = true
+                    // this stages the connect popup's Connect action. No
+                    // credential is persisted until a successful join.
                     cameraWifiScannerPresented = false
+                    connectingName = candidate.ssid
+                    phase =
+                        PairingPhase.ReadyToJoin(
+                            candidate.ssid,
+                            candidate.key,
+                            keyFromScan = true,
+                        )
                 },
                 onDismiss = { cameraWifiScannerPresented = false },
             )
@@ -741,10 +1026,67 @@ public fun PairingExperience(
 
 // MARK: - Left column
 
+/**
+ * The stacked first-run hero above the progress bar in single-column layouts —
+ * iOS `portraitIntroHeader`: eyebrow, title, walkthrough line, per-step helper.
+ */
+@Composable
+private fun PortraitIntroHeader(
+    flow: PairingFlowState,
+    onShowSavedCameras: (() -> Unit)?,
+) {
+    // Sizes mirror iOS's compactPortrait profile (StartupDesign.swift
+    // `portraitIntroHeader`): 11pt eyebrow / 22pt title / 12pt body / 11pt helper.
+    Column {
+        Row(verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.pairing_first_run),
+                    color = StartupColors.muted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.4.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.pairing_intro_title),
+                    color = StartupColors.ink,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 25.sp,
+                )
+            }
+            onShowSavedCameras?.let { showSavedCameras ->
+                Spacer(Modifier.width(12.dp))
+                StartupOutlineButton(
+                    text = stringResource(R.string.saved_your_cameras),
+                    onClick = showSavedCameras,
+                    leadingChevron = true,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            stringResource(R.string.pairing_intro_full),
+            color = StartupColors.muted,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            stringResource(PairingCopy.introFooter(flow.step)),
+            color = StartupColors.dim,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
+    }
+}
+
 @Composable
 private fun IntroCard(
     flow: PairingFlowState,
     condensed: Boolean = false,
+    onShowSavedCameras: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // Vertical budget is tight in the ~360dp-tall landscape band — sizes are
@@ -794,6 +1136,15 @@ private fun IntroCard(
             fontSize = if (condensed) 10.sp else 11.sp,
             lineHeight = if (condensed) 13.sp else 15.sp,
         )
+        onShowSavedCameras?.let { showSavedCameras ->
+            Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
+            StartupOutlineButton(
+                text = stringResource(R.string.saved_your_cameras),
+                onClick = showSavedCameras,
+                leadingChevron = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
@@ -802,31 +1153,30 @@ private fun IntroCard(
 @Composable
 private fun StepCard(
     flow: PairingFlowState,
-    phase: PairingPhase,
     permissionGranted: Boolean,
     permissionDenied: Boolean,
-    ssidField: String,
-    onSsidChange: (String) -> Unit,
-    keyField: String,
-    onKeyChange: (String) -> Unit,
-    keyCameFromScanner: Boolean,
-    keyWasRemembered: Boolean,
+    cameraPermissionGranted: Boolean,
+    cameraPermissionDenied: Boolean,
     cameras: List<DiscoveredCamera>,
     usbCameras: List<UsbPtpCamera>,
     onRequestPermission: () -> Unit,
-    onScanCameraWifi: () -> Unit,
+    onRequestCameraPermission: () -> Unit,
     onChoose: (PairingPath) -> Unit,
     onAdvance: () -> Unit,
     onRetreat: () -> Unit,
-    onJoin: () -> Unit,
+    onConnectMyCamera: () -> Unit,
     onConnectCamera: (DiscoveredCamera) -> Unit,
     onConnectUsbCamera: (UsbPtpCamera) -> Unit,
-    onCancel: () -> Unit,
     compact: Boolean,
-    condensedChoiceCards: Boolean,
+    tightChrome: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier.startupCard().padding(20.dp)) {
+    Column(
+        modifier.startupCard().padding(
+            horizontal = if (tightChrome) 16.dp else 20.dp,
+            vertical = if (tightChrome) 14.dp else 20.dp,
+        )
+    ) {
         Text(
             stringResource(R.string.pairing_step_counter, flow.displayStepNumber, flow.stepCount),
             color = StartupColors.muted,
@@ -843,69 +1193,39 @@ private fun StepCard(
         )
         Spacer(Modifier.height(10.dp))
 
-        val busy = phase == PairingPhase.Joining || phase == PairingPhase.Connecting
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            if (busy) {
-                BusyBody(phase)
-            } else {
-                when (flow.step) {
-                    PairingStep.PERMISSIONS ->
-                        PermissionsBody(permissionGranted, permissionDenied, onRequestPermission)
-                    PairingStep.CHOOSE_PATH ->
-                        ChoosePathBody(
-                            onChoose = onChoose,
-                            compact = compact,
-                            condensed = condensedChoiceCards,
-                        )
-                    PairingStep.PREPARE ->
-                        NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
-                    PairingStep.NETWORK ->
-                        NetworkBody(
-                            path = flow.path,
-                            ssidField = ssidField,
-                            onSsidChange = onSsidChange,
-                            keyField = keyField,
-                            onKeyChange = onKeyChange,
-                            keyCameFromScanner = keyCameFromScanner,
-                            keyWasRemembered = keyWasRemembered,
-                            onScanCameraWifi = onScanCameraWifi,
-                        )
-                    PairingStep.DISCOVER ->
-                        DiscoverBody(
-                            path = flow.path,
-                            cameras = cameras,
-                            usbCameras = usbCameras,
-                            onConnectCamera = onConnectCamera,
-                            onConnectUsbCamera = onConnectUsbCamera,
-                        )
-                }
-                (phase as? PairingPhase.Error)?.let { error ->
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        error.message,
-                        color = StartupColors.destructive,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
+        val bodyScroll = rememberScrollState()
+        Column(Modifier.weight(1f).fadeOverflowBottom(bodyScroll).verticalScroll(bodyScroll)) {
+            when (flow.step) {
+                PairingStep.PERMISSIONS ->
+                    PermissionsBody(
+                        nearbyGranted = permissionGranted,
+                        nearbyDenied = permissionDenied,
+                        cameraGranted = cameraPermissionGranted,
+                        cameraDenied = cameraPermissionDenied,
+                        onRequestNearby = onRequestPermission,
+                        onRequestCamera = onRequestCameraPermission,
                     )
-                }
+                PairingStep.CHOOSE_PATH ->
+                    ChoosePathBody(onChoose = onChoose, compact = compact)
+                PairingStep.PREPARE ->
+                    NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
+                PairingStep.NETWORK -> NetworkBody(path = flow.path)
+                PairingStep.DISCOVER ->
+                    DiscoverBody(
+                        path = flow.path,
+                        cameras = cameras,
+                        usbCameras = usbCameras,
+                        onConnectCamera = onConnectCamera,
+                        onConnectUsbCamera = onConnectUsbCamera,
+                    )
             }
         }
 
         // Footer nav — mirrors iOS: none on the choose step (tapping a card
-        // advances); Cancel while busy; Back + primary elsewhere.
-        if (busy || flow.step != PairingStep.CHOOSE_PATH) {
+        // advances); Back + primary elsewhere. Connect phases render in the
+        // shared popup, never in this card.
+        if (flow.step != PairingStep.CHOOSE_PATH) {
             Spacer(Modifier.height(12.dp))
-        }
-        if (busy) {
-            Row {
-                Spacer(Modifier.weight(1f))
-                StartupOutlineButton(
-                    stringResource(R.string.action_cancel),
-                    onClick = onCancel,
-                    modifier = Modifier.width(116.dp),
-                )
-            }
-        } else if (flow.step != PairingStep.CHOOSE_PATH) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -914,24 +1234,31 @@ private fun StepCard(
                     StartupOutlineButton(
                         stringResource(R.string.action_back),
                         onClick = onRetreat,
+                        leadingChevron = true,
                         modifier = Modifier.width(116.dp),
                     )
                 }
                 if (!compact) Spacer(Modifier.weight(1f))
                 when {
-                    flow.step == PairingStep.NETWORK &&
-                        flow.path == PairingPath.CAMERA_ACCESS_POINT ->
+                    flow.step == PairingStep.NETWORK ->
                         StartupFilledButton(
-                            stringResource(R.string.pairing_join_camera_wifi),
-                            enabled = ssidField.isNotBlank(),
-                            onClick = onJoin,
+                            stringResource(R.string.pairing_connect_my_camera),
+                            enabled = true,
+                            onClick =
+                                if (flow.path == PairingPath.CAMERA_ACCESS_POINT) {
+                                    onConnectMyCamera
+                                } else {
+                                    onAdvance
+                                },
                             modifier =
                                 if (compact) Modifier.weight(1f) else Modifier.width(220.dp),
                         )
                     !flow.isFinalStep ->
                         StartupFilledButton(
                             stringResource(R.string.action_continue),
-                            enabled = flow.step != PairingStep.PERMISSIONS || permissionGranted,
+                            enabled =
+                                flow.step != PairingStep.PERMISSIONS ||
+                                    (permissionGranted && cameraPermissionGranted),
                             onClick = onAdvance,
                             modifier =
                                 if (compact) Modifier.weight(1f) else Modifier.width(220.dp),
@@ -947,176 +1274,272 @@ private fun StepCard(
 // MARK: - Step bodies
 
 @Composable
-private fun BusyBody(phase: PairingPhase) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(
-            if (phase == PairingPhase.Joining) {
-                stringResource(R.string.pairing_busy_joining)
-            } else {
-                stringResource(R.string.pairing_busy_connecting)
-            },
-            color = StartupColors.ink,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            if (phase == PairingPhase.Joining) {
-                stringResource(R.string.pairing_busy_joining_detail)
-            } else {
-                stringResource(R.string.pairing_busy_connecting_detail)
-            },
-            color = StartupColors.muted,
-            fontSize = 12.sp,
-            lineHeight = 17.sp,
-        )
-        StartupIndeterminateBar()
-    }
-}
-
-@Composable
-private fun PermissionsBody(granted: Boolean, denied: Boolean, onRequest: () -> Unit) {
+private fun PermissionsBody(
+    nearbyGranted: Boolean,
+    nearbyDenied: Boolean,
+    cameraGranted: Boolean,
+    cameraDenied: Boolean,
+    onRequestNearby: () -> Unit,
+    onRequestCamera: () -> Unit,
+) {
+    // Structure and sizes mirror iOS `StartupWizardPermissionsStep` in the
+    // compactPortrait profile: 10pt group label, 30pt icon circles at 14%
+    // accent, 13pt titles / 11pt details, inset hairline divider.
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(
-            Modifier.fillMaxWidth()
-                .startupInstructionCard()
-                .clickable(enabled = !granted, onClick = onRequest)
-                .padding(horizontal = 16.dp, vertical = 13.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(PairingCopy.permissionTitle),
-                        color = StartupColors.ink,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        stringResource(PairingCopy.permissionDetail),
-                        color = StartupColors.muted,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                when {
-                    granted -> StatusPill(stringResource(R.string.status_allowed), StartupColors.ready)
-                    denied -> StatusPill(stringResource(R.string.status_settings), StartupColors.muted)
-                    else ->
-                        Text(
-                            stringResource(R.string.action_allow),
-                            color = StartupColors.darkText,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier =
-                                Modifier.clip(CircleShape)
-                                    .background(StartupColors.accent)
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                        )
-                }
+        Column(Modifier.fillMaxWidth().startupInstructionCard()) {
+            Row(
+                Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StartupGlyph(
+                    StartupGlyphKind.SHIELD,
+                    tint = StartupColors.accent,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    stringResource(R.string.pairing_permissions_group),
+                    color = StartupColors.muted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
+            PermissionRow(
+                glyph = StartupGlyphKind.CAMERA,
+                title = stringResource(R.string.pairing_permission_camera),
+                detail = stringResource(R.string.pairing_permission_camera_detail),
+                granted = cameraGranted,
+                denied = cameraDenied,
+                onRequest = onRequestCamera,
+            )
+            Box(
+                Modifier.fillMaxWidth()
+                    .padding(start = 42.dp)
+                    .height(1.dp)
+                    .background(StartupColors.border.copy(alpha = 0.10f))
+            )
+            PermissionRow(
+                glyph = StartupGlyphKind.WIFI,
+                title = stringResource(PairingCopy.permissionTitle),
+                detail = stringResource(PairingCopy.permissionDetail),
+                granted = nearbyGranted,
+                denied = nearbyDenied,
+                onRequest = onRequestNearby,
+            )
         }
-        if (!granted) {
+        if (!nearbyGranted || !cameraGranted) {
             Text(
                 stringResource(R.string.pairing_permission_required),
                 color = StartupColors.dim,
                 fontSize = 11.sp,
+                lineHeight = 15.sp,
             )
         }
     }
 }
 
 @Composable
-private fun StatusPill(text: String, color: androidx.compose.ui.graphics.Color) {
-    Text(
-        text,
-        color = color,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        modifier =
-            Modifier.border(1.dp, color.copy(alpha = 0.5f), CircleShape)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-    )
+private fun PermissionRow(
+    glyph: StartupGlyphKind,
+    title: String,
+    detail: String,
+    granted: Boolean,
+    denied: Boolean,
+    onRequest: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(enabled = !granted, onClick = onRequest)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            Modifier.size(30.dp)
+                .background(StartupColors.accent.copy(alpha = 0.14f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(15.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = StartupColors.ink,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                detail,
+                color = StartupColors.muted,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
+        }
+        when {
+            granted ->
+                PermissionStatusPill(
+                    text = stringResource(R.string.status_allowed),
+                    glyph = "✓",
+                    fill = StartupColors.ready.copy(alpha = 0.16f),
+                    stroke = StartupColors.ready.copy(alpha = 0.5f),
+                    textColor = StartupColors.ready,
+                )
+            denied ->
+                PermissionStatusPill(
+                    text = stringResource(R.string.status_settings),
+                    glyph = null,
+                    fill = StartupColors.control.copy(alpha = 0.6f),
+                    stroke = StartupColors.border.copy(alpha = 0.12f),
+                    textColor = StartupColors.muted,
+                )
+            else ->
+                PermissionStatusPill(
+                    text = stringResource(R.string.action_allow),
+                    glyph = null,
+                    fill = StartupColors.accent,
+                    stroke = androidx.compose.ui.graphics.Color.Transparent,
+                    textColor = StartupColors.darkText,
+                )
+        }
+    }
+}
+
+@Composable
+private fun PermissionStatusPill(
+    text: String,
+    glyph: String?,
+    fill: androidx.compose.ui.graphics.Color,
+    stroke: androidx.compose.ui.graphics.Color,
+    textColor: androidx.compose.ui.graphics.Color,
+) {
+    Row(
+        Modifier.clip(CircleShape)
+            .background(fill)
+            .border(1.dp, stroke, CircleShape)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (glyph != null) {
+            Text(glyph, color = textColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        Text(text, color = textColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+    }
 }
 
 @Composable
 private fun ChoosePathBody(
     onChoose: (PairingPath) -> Unit,
     compact: Boolean,
-    condensed: Boolean,
 ) {
-    // Tight vertical budget: all three cards must clear the card fold without
-    // scrolling on the ~180dp step body of a 720px-tall landscape panel. On a
-    // narrow portrait viewport they stack inside the body's existing scroll.
+    // iOS `transportCards`: portrait stacks the full cards inside the step
+    // body's scroll; landscape puts the same three cards side by side with
+    // wrapping copy — there is no condensed variant.
     if (compact) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             for (path in PairingPath.entries) {
-                PathChoiceCard(path, onChoose, Modifier.fillMaxWidth(), condensed = false)
+                PathChoiceCard(path, onChoose, Modifier.fillMaxWidth())
             }
         }
     } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            Modifier.height(IntrinsicSize.Max),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             for (path in PairingPath.entries) {
-                PathChoiceCard(path, onChoose, Modifier.weight(1f), condensed = condensed)
+                PathChoiceCard(
+                    path,
+                    onChoose,
+                    Modifier.weight(1f).fillMaxHeight(),
+                    tight = true,
+                )
             }
         }
     }
 }
 
+/**
+ * One transport option (iOS `StartupWizardTransportCard`, 14pt padding / 34pt
+ * tile). [tight] trims the vertical chrome for the landscape band — Android
+ * phones are ~30dp shorter there than the iPhone the fixed iOS metrics fit.
+ */
 @Composable
 private fun PathChoiceCard(
     path: PairingPath,
     onChoose: (PairingPath) -> Unit,
     modifier: Modifier,
-    condensed: Boolean,
+    tight: Boolean = false,
 ) {
     Column(
         modifier
             .startupTile()
             .clickable { onChoose(path) }
-            .padding(horizontal = 12.dp, vertical = if (condensed) 8.dp else 10.dp)
+            .padding(horizontal = 14.dp, vertical = if (tight) 8.dp else 14.dp)
     ) {
-        Text(
-            stringResource(PairingCopy.pathTitle(path)),
-            color = StartupColors.ink,
-            fontSize = if (condensed) 14.sp else 15.sp,
-            fontWeight = FontWeight.Bold,
-            lineHeight = if (condensed) 17.sp else 18.sp,
-        )
-        Spacer(Modifier.height(if (condensed) 5.dp else 6.dp))
+        Box(
+            Modifier.size(if (tight) 26.dp else 34.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(StartupColors.accent.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            StartupGlyph(
+                kind =
+                    when (path) {
+                        PairingPath.CAMERA_ACCESS_POINT -> StartupGlyphKind.ANTENNA
+                        PairingPath.PHONE_HOTSPOT -> StartupGlyphKind.PHONE_WAVES
+                        PairingPath.USB_C -> StartupGlyphKind.CABLE
+                    },
+                tint = StartupColors.accent,
+                modifier = Modifier.size(if (tight) 15.dp else 19.dp),
+            )
+        }
+        Spacer(Modifier.height(if (tight) 5.dp else 10.dp))
+        if (tight) {
+            // One auto-shrinking line in the landscape band (iOS shrinks via
+            // minimumScaleFactor; a wrapped title is what overflows here).
+            BasicText(
+                stringResource(PairingCopy.pathTitle(path)),
+                style =
+                    TextStyle(
+                        color = StartupColors.ink,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                maxLines = 1,
+                autoSize = TextAutoSize.StepBased(11.sp, 15.sp, 0.5.sp),
+            )
+        } else {
+            Text(
+                stringResource(PairingCopy.pathTitle(path)),
+                color = StartupColors.ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 18.sp,
+                maxLines = 2,
+            )
+        }
+        Spacer(Modifier.height(if (tight) 4.dp else 8.dp))
         Text(
             stringResource(PairingCopy.pathBadge(path)),
             color = StartupColors.accent,
-            fontSize = if (condensed) 11.sp else 12.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             modifier =
                 Modifier.clip(CircleShape)
                     .background(StartupColors.accent.copy(alpha = 0.15f))
-                    .padding(horizontal = if (condensed) 8.dp else 9.dp, vertical = if (condensed) 2.dp else 3.dp),
+                    .padding(horizontal = 9.dp, vertical = if (tight) 2.dp else 4.dp),
         )
-        Spacer(Modifier.height(if (condensed) 5.dp else 7.dp))
-        if (condensed) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                TradeoffRow(
-                    "+",
-                    StartupColors.ready,
-                    stringResource(PairingCopy.compactPathPro(path)),
-                    compact = true,
-                )
-                TradeoffRow(
-                    "−",
-                    StartupColors.dim,
-                    stringResource(PairingCopy.compactPathCon(path)),
-                    compact = true,
-                )
+        Spacer(Modifier.height(if (tight) 4.dp else 10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(if (tight) 2.dp else 6.dp)) {
+            for (pro in PairingCopy.pathPros(path)) {
+                TradeoffRow("+", StartupColors.ready, stringResource(pro), tight = tight)
             }
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                for (pro in PairingCopy.pathPros(path)) {
-                    TradeoffRow("+", StartupColors.ready, stringResource(pro))
-                }
-                TradeoffRow("−", StartupColors.dim, stringResource(PairingCopy.pathCon(path)))
-            }
+            TradeoffRow(
+                "−",
+                StartupColors.dim,
+                stringResource(PairingCopy.pathCon(path)),
+                tight = tight,
+            )
         }
     }
 }
@@ -1126,20 +1549,22 @@ private fun TradeoffRow(
     symbol: String,
     color: androidx.compose.ui.graphics.Color,
     text: String,
-    compact: Boolean = false,
+    tight: Boolean = false,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
         Text(
             symbol,
             color = color,
-            fontSize = if (compact) 11.sp else 12.sp,
+            fontSize = if (tight) 11.sp else 12.sp,
             fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(12.dp),
         )
         Text(
             text,
             color = StartupColors.muted,
-            fontSize = if (compact) 11.sp else 12.sp,
-            lineHeight = if (compact) 14.sp else 16.sp,
+            fontSize = if (tight) 11.sp else 12.sp,
+            lineHeight = if (tight) 14.sp else 16.sp,
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -1187,164 +1612,99 @@ private fun NumberedCards(steps: List<String>) {
     }
 }
 
+/**
+ * The network step is instruction-only on every path (iOS
+ * `StartupWizardNetworkStep`): the camera-AP flow is scanner-first — the
+ * "Connect my camera" primary opens the scanner, never a typed credential form.
+ */
 @Composable
-private fun NetworkBody(
-    path: PairingPath,
-    ssidField: String,
-    onSsidChange: (String) -> Unit,
-    keyField: String,
-    onKeyChange: (String) -> Unit,
-    keyCameFromScanner: Boolean,
-    keyWasRemembered: Boolean,
-    onScanCameraWifi: () -> Unit,
-) {
+private fun NetworkBody(path: PairingPath) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            stringResource(PairingCopy.networkSubtitle(path, keyRemembered = keyWasRemembered)),
+            stringResource(PairingCopy.networkSubtitle(path)),
             color = StartupColors.muted,
             fontSize = 13.sp,
             lineHeight = 18.sp,
         )
-        // Camera-AP: the subtitle already tells the operator where the SSID and
-        // key are — the entry fields must sit above the scroll fold, so no
-        // camera instruction card here (iOS "tight" mode collapses it too).
-        if (path == PairingPath.PHONE_HOTSPOT) {
-            DeviceInstructionCard(
-                label = stringResource(R.string.pairing_on_camera),
-                steps = PairingCopy.hotspotCameraSteps.map { stringResource(it) },
-            )
-        }
-        if (path == PairingPath.CAMERA_ACCESS_POINT) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .startupInstructionCard()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    stringResource(R.string.pairing_on_phone),
-                    color = StartupColors.muted,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
+        when (path) {
+            PairingPath.CAMERA_ACCESS_POINT -> {
+                DeviceInstructionCard(
+                    glyph = StartupGlyphKind.APERTURE,
+                    label = stringResource(R.string.pairing_on_camera),
+                    steps = listOf(stringResource(R.string.pairing_network_ap_camera_1)),
                 )
-                if (keyCameFromScanner) {
-                    ScannedCameraWifiCredentials(
-                        ssid = ssidField,
-                        key = keyField,
-                        onRescan = onScanCameraWifi,
-                    )
-                } else {
-                    StartupTextField(
-                        value = ssidField,
-                        onValueChange = onSsidChange,
-                        placeholder =
-                            stringResource(
-                                R.string.pairing_network_ssid_hint,
-                                CameraDiscovery.NIKON_ZR_SSID_PREFIX,
-                            ),
-                    )
-                    StartupTextField(
-                        value = keyField,
-                        onValueChange = onKeyChange,
-                        placeholder = stringResource(R.string.pairing_network_key_hint),
-                        password = true,
-                    )
-                    StartupOutlineButton(
-                        text = stringResource(R.string.pairing_scan_ssid_key),
-                        onClick = onScanCameraWifi,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        stringResource(R.string.pairing_scanner_privacy),
-                        color = StartupColors.dim,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp,
-                    )
-                }
+                DeviceInstructionCard(
+                    glyph = StartupGlyphKind.PHONE,
+                    label = stringResource(R.string.pairing_on_phone),
+                    steps = listOf(stringResource(R.string.pairing_network_ap_phone_1)),
+                )
+            }
+            PairingPath.PHONE_HOTSPOT ->
+                DeviceInstructionCard(
+                    glyph = StartupGlyphKind.APERTURE,
+                    label = stringResource(R.string.pairing_on_camera),
+                    steps = PairingCopy.hotspotCameraSteps.map { stringResource(it) },
+                )
+            PairingPath.USB_C -> {
+                DeviceInstructionCard(
+                    glyph = StartupGlyphKind.APERTURE,
+                    label = stringResource(R.string.pairing_on_camera),
+                    steps =
+                        listOf(
+                            stringResource(R.string.pairing_network_usb_camera_1),
+                            stringResource(R.string.pairing_network_usb_camera_2),
+                        ),
+                )
+                DeviceInstructionCard(
+                    glyph = StartupGlyphKind.PHONE,
+                    label = stringResource(R.string.pairing_on_phone),
+                    steps = listOf(stringResource(R.string.pairing_network_usb_phone_1)),
+                )
             }
         }
     }
 }
 
-/** Reviewed scanner result, held only until the operator explicitly joins the camera AP. */
-@Composable
-private fun ScannedCameraWifiCredentials(
-    ssid: String,
-    key: String,
-    onRescan: () -> Unit,
-) {
-    val keyDescription = stringResource(R.string.pairing_scanned_key_description)
-    Text(
-        stringResource(R.string.pairing_scanned_check),
-        color = StartupColors.ready,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 1.1.sp,
-    )
-    Text(
-        ssid,
-        color = StartupColors.ink,
-        fontSize = 14.sp,
-        fontWeight = FontWeight.SemiBold,
-        modifier =
-            Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(StartupColors.control)
-                .padding(horizontal = 13.dp, vertical = 10.dp),
-    )
-    Text(
-        key,
-        color = StartupColors.ink,
-        fontSize = 14.sp,
-        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-        modifier =
-            Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(StartupColors.control)
-                .padding(horizontal = 13.dp, vertical = 10.dp)
-                .clearAndSetSemantics {
-                    contentDescription = keyDescription
-                },
-    )
-    StartupOutlineButton(
-        text = stringResource(R.string.pairing_rescan_ssid_key),
-        onClick = onRescan,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
 /** Device-labelled numbered instruction card (iOS `StartupWizardDeviceInstructionCard`). */
 @Composable
-private fun DeviceInstructionCard(label: String, steps: List<String>) {
+private fun DeviceInstructionCard(
+    glyph: StartupGlyphKind,
+    label: String,
+    steps: List<String>,
+) {
     Column(
         Modifier.fillMaxWidth()
             .startupInstructionCard()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(
-            label,
-            color = StartupColors.muted,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.2.sp,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(16.dp))
+            Text(
+                label,
+                color = StartupColors.ink,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
         steps.forEachIndexed { index, step ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     stringResource(R.string.step_number, index + 1),
                     color = StartupColors.muted,
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.width(14.dp),
                 )
                 Text(
                     step,
                     color = StartupColors.ink,
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
-                    lineHeight = 16.sp,
+                    lineHeight = 17.sp,
                 )
             }
         }
@@ -1365,26 +1725,11 @@ private fun DiscoverBody(
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .startupInstructionCard()
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    stringResource(R.string.pairing_waiting_hotspot),
-                    color = StartupColors.ink,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    stringResource(R.string.pairing_waiting_hotspot_detail),
-                    color = StartupColors.muted,
-                    fontSize = 11.sp,
-                )
-            }
-            StartupIndeterminateBar()
+            EmptyDiscoveryCard(
+                glyph = StartupGlyphKind.ANTENNA,
+                title = stringResource(R.string.pairing_looking_for_cameras),
+                detail = stringResource(R.string.pairing_waiting_hotspot_detail),
+            )
         } else {
             for (camera in cameras) {
                 Row(
@@ -1393,7 +1738,13 @@ private fun DiscoverBody(
                         .clickable { onConnectCamera(camera) }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    StartupGlyph(
+                        StartupGlyphKind.CAMERA,
+                        tint = StartupColors.accent,
+                        modifier = Modifier.size(20.dp),
+                    )
                     Column(Modifier.weight(1f)) {
                         Text(
                             camera.name,
@@ -1430,26 +1781,11 @@ private fun UsbDiscoverBody(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .startupInstructionCard()
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    stringResource(R.string.pairing_waiting_usb),
-                    color = StartupColors.ink,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    stringResource(R.string.pairing_waiting_usb_detail),
-                    color = StartupColors.muted,
-                    fontSize = 11.sp,
-                )
-            }
-            StartupIndeterminateBar()
+            EmptyDiscoveryCard(
+                glyph = StartupGlyphKind.CABLE,
+                title = stringResource(R.string.pairing_waiting_usb),
+                detail = stringResource(R.string.pairing_waiting_usb_detail),
+            )
         } else {
             cameras.forEach { camera ->
                 val actionable =
@@ -1508,6 +1844,35 @@ private fun UsbDiscoverBody(
                 }
             }
         }
+    }
+}
+
+/** Centered icon + copy card while discovery waits (iOS `StartupEmptyDiscoveryCard`). */
+@Composable
+private fun EmptyDiscoveryCard(glyph: StartupGlyphKind, title: String, detail: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            Modifier.fillMaxWidth()
+                .startupInstructionCard()
+                .padding(horizontal = 12.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(26.dp))
+            Text(
+                title,
+                color = StartupColors.ink,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                detail,
+                color = StartupColors.muted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+        }
+        StartupIndeterminateBar()
     }
 }
 
@@ -1572,66 +1937,43 @@ internal fun StartupFilledButton(
 }
 
 @Composable
-internal fun StartupOutlineButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
+internal fun StartupOutlineButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leadingChevron: Boolean = false,
+) {
+    Row(
         modifier
             .height(40.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(StartupColors.control.copy(alpha = 0.82f))
             .border(1.dp, StartupColors.border.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
     ) {
-        Text(
+        if (leadingChevron) {
+            StartupGlyph(
+                StartupGlyphKind.CHEVRON_LEFT,
+                tint = StartupColors.ink,
+                modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(5.dp))
+        }
+        // Auto-shrinks instead of clipping: the wizard's landscape intro column
+        // narrows to 148dp on the choose step, and large system font scales
+        // can outgrow any fixed width.
+        BasicText(
             text,
-            color = StartupColors.ink,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+            style =
+                TextStyle(
+                    color = StartupColors.ink,
+                    fontWeight = FontWeight.SemiBold,
+                ),
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(10.sp, 14.sp, 0.5.sp),
         )
     }
-}
-
-/** Single-line field in the startup control style; never logs its contents. */
-@Composable
-private fun StartupTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    password: Boolean = false,
-) {
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
-        singleLine = true,
-        textStyle =
-            TextStyle(
-                color = StartupColors.ink,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-            ),
-        cursorBrush = SolidColor(StartupColors.accent),
-        visualTransformation =
-            if (password) PasswordVisualTransformation() else VisualTransformation.None,
-        decorationBox = { innerTextField ->
-            Box(
-                Modifier.fillMaxWidth()
-                    .height(42.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(StartupColors.control)
-                    .border(
-                        1.dp,
-                        StartupColors.border.copy(alpha = 0.12f),
-                        RoundedCornerShape(16.dp),
-                    )
-                    .padding(horizontal = 13.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                if (value.isEmpty()) {
-                    Text(placeholder, color = StartupColors.dim, fontSize = 14.sp)
-                }
-                innerTextField()
-            }
-        },
-    )
 }

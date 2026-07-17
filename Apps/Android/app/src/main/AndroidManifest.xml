@@ -78,6 +78,17 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Claim attached PTP cameras (Still Image class / Nikon) so
+              Android routes them to OpenZCine instead of the system MTP
+              handler (com.android.mtp), which otherwise holds the interface
+              open and makes every PTP bulk write fail. The filter also grants
+              this app implicit USB permission for the chosen device. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_device_filter" />
             <!-- Adobe IMS returns a PKCE authorization code through the custom
               redirect registered for this Android build. The committed fallback
               scheme is intentionally unusable by the Frame.io configuration gate;

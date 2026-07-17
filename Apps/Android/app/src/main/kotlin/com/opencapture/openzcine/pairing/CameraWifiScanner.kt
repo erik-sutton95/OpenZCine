@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -52,11 +53,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -190,10 +193,14 @@ internal fun CameraWifiScannerOverlay(
     val controller = remember { CameraWifiScannerController(SwiftCameraWifiTranscriptParser) }
     val debugCandidate = remember(context) { CameraWifiScannerDemo.initialCandidate(context) }
     var scannerState by remember {
-        mutableStateOf<CameraWifiScannerState>(
-            debugCandidate?.let(CameraWifiScannerState::Candidate)
-                ?: CameraWifiScannerState.Scanning,
-        )
+        mutableStateOf<CameraWifiScannerState>(CameraWifiScannerState.Scanning)
+    }
+    LaunchedEffect(debugCandidate) {
+        debugCandidate?.let { candidate ->
+            controller.close()
+            scannerState = CameraWifiScannerState.Closed
+            onConfirmed(candidate)
+        }
     }
     var cameraPermissionGranted by remember {
         mutableStateOf(context.hasCameraPermission())
@@ -245,13 +252,13 @@ internal fun CameraWifiScannerOverlay(
     Box(
         modifier =
             Modifier.fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.72f))
+                .background(PopupColors.scrim)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(12.dp),
+                .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
         BoxWithConstraints(
-            modifier = Modifier.fillMaxWidth(0.96f).widthIn(max = 540.dp),
+            modifier = Modifier.widthIn(max = 360.dp),
             contentAlignment = Alignment.Center,
         ) {
             val compact = maxHeight < 480.dp
@@ -259,43 +266,31 @@ internal fun CameraWifiScannerOverlay(
                 modifier =
                     Modifier.fillMaxWidth()
                         .heightIn(max = maxHeight)
-                        .startupCard()
+                        .shadow(24.dp, RoundedCornerShape(24.dp))
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(PopupColors.card)
                         .verticalScroll(rememberScrollState())
-                        .padding(if (compact) 12.dp else 24.dp),
-                verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 14.dp),
+                        .padding(if (compact) 14.dp else 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp),
             ) {
                 Text(
                     text = stringResource(R.string.wifi_scanner_title),
-                    color = StartupColors.ink,
-                    fontSize = if (compact) 19.sp else 22.sp,
+                    color = PopupColors.title,
+                    fontSize = 20.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    textAlign = TextAlign.Center,
                 )
                 Text(
                     text = stringResource(R.string.wifi_scanner_intro),
-                    color = StartupColors.muted,
-                    fontSize = if (compact) 12.sp else 14.sp,
-                    lineHeight = if (compact) 16.sp else 19.sp,
+                    color = PopupColors.detail,
+                    fontSize = 15.sp,
+                    lineHeight = 20.sp,
+                    textAlign = TextAlign.Center,
                 )
 
                 when {
                     scannerState is CameraWifiScannerState.Closed -> Unit
-
-                    scannerState is CameraWifiScannerState.Candidate -> {
-                        val candidate = (scannerState as CameraWifiScannerState.Candidate).value
-                        CameraWifiScannerConfirmation(
-                            candidate = candidate,
-                            compact = compact,
-                            onRescan = {
-                                controller.rescan()
-                                scannerState = CameraWifiScannerState.Scanning
-                            },
-                            onUseDetails = {
-                                controller.close()
-                                scannerState = CameraWifiScannerState.Closed
-                                onConfirmed(candidate)
-                            },
-                        )
-                    }
 
                     !cameraPermissionGranted ->
                         CameraWifiScannerPermissionPanel(
@@ -313,7 +308,11 @@ internal fun CameraWifiScannerOverlay(
                             compact = compact,
                             onTranscript = { transcript ->
                                 controller.acceptTranscript(transcript)?.let { candidate ->
-                                    scannerState = CameraWifiScannerState.Candidate(candidate)
+                                    // First fully-validated frame hands off to
+                                    // the connect popup, like iOS onCapture.
+                                    controller.close()
+                                    scannerState = CameraWifiScannerState.Closed
+                                    onConfirmed(candidate)
                                 }
                             },
                             onFailure = { reason ->
@@ -333,10 +332,9 @@ internal fun CameraWifiScannerOverlay(
                     }
                 }
 
-                StartupOutlineButton(
+                PopupCancelButton(
                     text = stringResource(R.string.action_cancel),
                     onClick = ::dismiss,
-                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
@@ -350,12 +348,16 @@ private fun CameraWifiScannerPermissionPanel(
     onOpenSettings: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth().startupInstructionCard().padding(14.dp),
+        modifier =
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(PopupColors.field)
+                .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             text = stringResource(R.string.wifi_scanner_permission_title),
-            color = StartupColors.ink,
+            color = PopupColors.title,
             fontSize = 14.sp,
             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
         )
@@ -366,11 +368,11 @@ private fun CameraWifiScannerPermissionPanel(
                 } else {
                     stringResource(R.string.wifi_scanner_permission_privacy)
                 },
-            color = StartupColors.muted,
+            color = PopupColors.detail,
             fontSize = 12.sp,
             lineHeight = 16.sp,
         )
-        StartupFilledButton(
+        PopupFilledButton(
             text =
                 stringResource(
                     if (permanentlyDenied) {
@@ -379,9 +381,7 @@ private fun CameraWifiScannerPermissionPanel(
                         R.string.wifi_scanner_allow_camera
                     },
                 ),
-            enabled = true,
             onClick = if (permanentlyDenied) onOpenSettings else onRetry,
-            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -396,122 +396,19 @@ private fun CameraWifiScannerPreview(
         CameraWifiCameraPreview(
             onTranscript = onTranscript,
             onFailure = onFailure,
-            modifier = Modifier.fillMaxWidth().height(if (compact) 122.dp else 232.dp),
+            modifier =
+                if (compact) {
+                    Modifier.fillMaxWidth().height(122.dp)
+                } else {
+                    Modifier.fillMaxWidth().aspectRatio(4f / 3f)
+                },
         )
         Text(
             text = stringResource(R.string.wifi_scanner_searching),
-            color = StartupColors.dim,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-        )
-    }
-}
-
-@Composable
-private fun CameraWifiScannerConfirmation(
-    candidate: CameraWifiScanCandidate,
-    compact: Boolean,
-    onRescan: () -> Unit,
-    onUseDetails: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 12.dp)) {
-        if (candidate.isDebugFixture) {
-            Text(
-                text = "DEBUG FIXTURE — NOT CAMERA OCR",
-                color = StartupColors.destructive,
-                fontSize = 10.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                letterSpacing = 1.sp,
-            )
-        }
-        if (compact) {
-            Text(
-                text = stringResource(R.string.wifi_scanner_compact_review),
-                color = StartupColors.muted,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
-            )
-        } else {
-            Text(
-                text = stringResource(R.string.wifi_scanner_review_title),
-                color = StartupColors.ink,
-                fontSize = 18.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-            )
-            Text(
-                text = stringResource(R.string.wifi_scanner_review_detail),
-                color = StartupColors.muted,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-            )
-        }
-        CameraWifiScannerCredentialValue(
-            label = stringResource(R.string.wifi_scanner_network_ssid),
-            value = candidate.ssid,
-            compact = compact,
-        )
-        CameraWifiScannerCredentialValue(
-            label = stringResource(R.string.wifi_scanner_network_key),
-            value = candidate.key,
-            sensitive = true,
-            compact = compact,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StartupOutlineButton(
-                text = stringResource(R.string.wifi_scanner_rescan),
-                onClick = onRescan,
-                modifier = Modifier.weight(1f),
-            )
-            StartupFilledButton(
-                text = stringResource(R.string.wifi_scanner_use_details),
-                enabled = true,
-                onClick = onUseDetails,
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun CameraWifiScannerCredentialValue(
-    label: String,
-    value: String,
-    sensitive: Boolean = false,
-    compact: Boolean,
-) {
-    val sensitiveDescription = stringResource(R.string.wifi_scanner_key_description)
-    Column(
-        modifier =
-            Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(StartupColors.control)
-                .border(1.dp, StartupColors.border.copy(alpha = 0.16f), RoundedCornerShape(14.dp))
-                .padding(
-                    horizontal = if (compact) 10.dp else 13.dp,
-                    vertical = if (compact) 6.dp else 10.dp,
-                ),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Text(
-            text = label,
-            color = StartupColors.muted,
-            fontSize = if (compact) 9.sp else 10.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-            letterSpacing = 1.1.sp,
-        )
-        Text(
-            text = value,
-            color = StartupColors.ink,
-            fontSize = if (compact) 13.sp else 15.sp,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            modifier =
-                if (sensitive) {
-                    Modifier.clearAndSetSemantics {
-                        contentDescription = sensitiveDescription
-                    }
-                } else {
-                    Modifier
-                },
+            color = PopupColors.detail,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            textAlign = TextAlign.Center,
         )
     }
 }
@@ -522,12 +419,16 @@ private fun CameraWifiScannerFailurePanel(
     onRetry: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth().startupInstructionCard().padding(14.dp),
+        modifier =
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(PopupColors.field)
+                .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             text = stringResource(R.string.wifi_scanner_failure_title),
-            color = StartupColors.destructive,
+            color = PopupColors.failure,
             fontSize = 15.sp,
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
         )
@@ -541,16 +442,14 @@ private fun CameraWifiScannerFailurePanel(
                     CameraWifiScannerFailure.CORE_UNAVAILABLE ->
                         stringResource(R.string.wifi_scanner_core_unavailable)
                 },
-            color = StartupColors.muted,
+            color = PopupColors.detail,
             fontSize = 12.sp,
             lineHeight = 16.sp,
         )
         if (failure != CameraWifiScannerFailure.CORE_UNAVAILABLE) {
-            StartupFilledButton(
+            PopupFilledButton(
                 text = stringResource(R.string.action_try_again),
-                enabled = true,
                 onClick = onRetry,
-                modifier = Modifier.fillMaxWidth(),
             )
         }
     }

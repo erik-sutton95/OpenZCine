@@ -838,20 +838,14 @@ private fun LinkRows(
                 }
             }
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_thermal_preview), showTopDivider = false) {
-            SettingsValueText(thermalPreviewLabel)
+        // iOS Link shows Health Threshold + Reconnect Window value rows here;
+        // the Android-only Thermal Preview / Preview Apply / Camera Warning
+        // diagnostics were removed for parity.
+        SettingsInlineRow(title = stringResource(R.string.settings_health_threshold), showTopDivider = false) {
+            SettingsValueText(stringResource(R.string.preview_preset_balanced))
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_preview_apply)) {
-            SettingsValueText(
-                if (liveViewSource == null) {
-                    stringResource(R.string.settings_native_source_unavailable)
-                } else {
-                    previewApplicationLabel
-                },
-            )
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_camera_warning)) {
-            SettingsValueText(warningLabel)
+        SettingsInlineRow(title = stringResource(R.string.settings_reconnect_window)) {
+            SettingsValueText(stringResource(R.string.settings_reconnect_window_value))
         }
     }
 
@@ -924,48 +918,10 @@ private fun AssistRows(
 ) {
     val configuration = settings.feedEffectsConfiguration
     val imageEffectsAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
-    SettingsRowCard {
-        // Local framing tools have their own configuration group below. They
-        // do not belong to AssistState, which intentionally owns only image
-        // effects, scopes, and audio metering.
-        AssistTool.entries
-            .filterNot { it in AssistTool.framingTools }
-            .filter { imageEffectsAvailable || it !in imageEffectTools }
-            .forEachIndexed { index, tool ->
-            SettingsSwitchRow(
-                stringResource(tool.titleResource()),
-                isOn = assistState.isOn(tool),
-                showTopDivider = index != 0,
-            ) { onAssistToggle(tool) }
-        }
-    }
+    // iOS keeps the Assist settings tab to the per-tool scope/effect cards;
+    // tool on/off lives on the monitor toolbar and LUT management lives in the
+    // toolbar's LUT popup (Built-in / RED / Custom tabs).
     if (imageEffectsAvailable) {
-        if (lutLibrary != null) {
-            StoredLutLibraryRows(
-                library = lutLibrary,
-                assistState = assistState,
-                onInteraction = onInteraction,
-            )
-            RedLutWorkflowRows()
-        }
-        SettingsGroupCard(
-            title = stringResource(R.string.settings_monitor_lut),
-            caption = stringResource(R.string.settings_monitor_lut_caption),
-        ) {
-            SettingsInlineRow(title = stringResource(R.string.settings_lut_look), showTopDivider = false) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    FeedLut.entries.forEach { lut ->
-                        AssistChoice(
-                            label = feedLutLabel(lut),
-                            selected = assistState.selectedLut == FeedLutSelection.BuiltIn(lut),
-                        ) {
-                            assistState.selectLut(lut)
-                            onInteraction()
-                        }
-                    }
-                }
-            }
-        }
         SettingsGroupCard(
             title = stringResource(R.string.settings_false_color),
             caption = stringResource(R.string.settings_false_color_caption),
@@ -1035,16 +991,6 @@ private fun AssistRows(
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_panel_scale), showTopDivider = false) {
-            ScopeScaleSlider(
-                selected = settings.scopeAssistConfiguration.trafficLightsScale,
-                onSelect = { value ->
-                    settings.scopeAssistConfiguration =
-                        settings.scopeAssistConfiguration.copy(trafficLightsScale = value)
-                    onInteraction()
-                },
-            )
-        }
         SettingsSwitchRow(
             stringResource(R.string.settings_histogram_traffic_lights),
             isOn = settings.histogramTrafficLightsEnabled.value,
@@ -1076,145 +1022,8 @@ private fun AssistRows(
             color = LiveDesign.muted,
         )
     }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_local_framing),
-        caption = stringResource(R.string.settings_local_framing_caption),
-    ) {
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_show_delivery_guides),
-            isOn = settings.guidesVisible.value,
-            showTopDivider = false,
-        ) {
-            // Use the same seeding behavior as the monitor toolbar: turning
-            // on an empty guide selection must produce the iOS-default 2.39:1
-            // frame instead of an apparently broken empty overlay.
-            settings.toggleLocalFramingTool(AssistTool.GUIDES)
-            onInteraction()
-        }
-        Text(
-            stringResource(R.string.settings_delivery_family),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        FramingGuideFamilyChoices(
-            selected = settings.guideFamily,
-            onSelect = { family ->
-                settings.guideFamily = family
-                onInteraction()
-            },
-        )
-        FramingGuideChoices(
-            family = settings.guideFamily,
-            selected = settings.selectedGuideRatios,
-            onToggle = { ratio ->
-                settings.toggleGuideRatio(ratio)
-                onInteraction()
-            },
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_mask_frames),
-            isOn = settings.guideMaskEnabled.value,
-        ) {
-            onSettingToggle(settings.guideMaskEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_composition_grid),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_show_composition_grid),
-            isOn = settings.localGridVisible.value,
-        ) {
-            // Likewise, re-enabling an otherwise empty grid starts with
-            // thirds so the visible result always matches the control state.
-            settings.toggleLocalFramingTool(AssistTool.GRID)
-            onInteraction()
-        }
-        FramingGridChoices(
-            thirds = settings.ruleOfThirdsEnabled.value,
-            phi = settings.phiGridEnabled.value,
-            diagonal = settings.diagonalGridEnabled.value,
-            onToggleThirds = { onSettingToggle(settings.ruleOfThirdsEnabled) },
-            onTogglePhi = { onSettingToggle(settings.phiGridEnabled) },
-            onToggleDiagonal = { onSettingToggle(settings.diagonalGridEnabled) },
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_centre_crosshair),
-            isOn = settings.centerCrosshairEnabled.value,
-        ) {
-            onSettingToggle(settings.centerCrosshairEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_desqueeze),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_enable_desqueeze),
-            isOn = settings.desqueezeEnabled.value,
-        ) {
-            onSettingToggle(settings.desqueezeEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_ratio),
-            style = chromeStyle(11.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        DesqueezeRatioChoices(
-            selected = settings.desqueezeRatio,
-            onSelect = { ratio ->
-                settings.desqueezeRatio = ratio
-                onInteraction()
-            },
-        )
-        Text(
-            stringResource(R.string.settings_compressed_axis),
-            style = chromeStyle(11.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        DesqueezeOrientationChoices(
-            selected = settings.desqueezeOrientation,
-            onSelect = { orientation ->
-                settings.desqueezeOrientation = orientation
-                onInteraction()
-            },
-        )
-        Text(
-            stringResource(R.string.settings_local_assists_caption),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
-    }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_camera_level),
-        caption = stringResource(R.string.settings_camera_level_caption),
-    ) {
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_level),
-            isOn = settings.levelAssistEnabled.value,
-            showTopDivider = false,
-        ) {
-            onSettingToggle(settings.levelAssistEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_style),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        LevelStyleChoices(
-            selected = settings.levelStyle,
-            onSelect = { style ->
-                settings.levelStyle = style
-                onInteraction()
-            },
-        )
-        Text(
-            stringResource(R.string.settings_level_fallback),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
-    }
+    // iOS: Local Framing and Camera Level configure via the monitor toolbar's
+    // long-press popups, not the Assist settings tab.
 }
 
 private val imageEffectTools: Set<AssistTool> =
@@ -2288,27 +2097,22 @@ private fun ControlsRows(
             isOn = settings.recordConfirmationEnabled.value,
             showTopDivider = false,
         ) { onToggle(settings.recordConfirmationEnabled) }
+        // iOS row order: the remote shutter lives in this card, second.
+        SettingsSwitchRow(
+            stringResource(R.string.settings_media_remote),
+            isOn = settings.mediaRemoteShutterEnabled.value,
+        ) { onToggle(settings.mediaRemoteShutterEnabled) }
+        Text(
+            stringResource(R.string.settings_media_remote_caption),
+            style = chromeStyle(10.5f, FontWeight.Normal),
+            color = LiveDesign.muted,
+        )
         SettingsSwitchRow(stringResource(R.string.settings_haptics), isOn = settings.hapticsEnabled.value) {
             onToggle(settings.hapticsEnabled)
         }
         SettingsSwitchRow(stringResource(R.string.settings_keep_awake), isOn = settings.keepScreenAwake.value) {
             onToggle(settings.keepScreenAwake)
         }
-    }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_media_remote),
-        caption = stringResource(R.string.settings_media_remote_caption),
-    ) {
-        SettingsSwitchRow(
-            stringResource(R.string.settings_enable_media_remote),
-            isOn = settings.mediaRemoteShutterEnabled.value,
-            showTopDivider = false,
-        ) { onToggle(settings.mediaRemoteShutterEnabled) }
-        Text(
-            stringResource(R.string.settings_media_remote_detail),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
     }
 }
 
@@ -2789,30 +2593,8 @@ private fun DisplayRows(
     parentScrollState: ScrollState,
     viewportBounds: Rect?,
 ) {
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_monitor_chrome),
-        caption = stringResource(R.string.settings_monitor_chrome_caption),
-    ) {
-        DisplayToggleGrid(
-            compact = compact,
-            entries =
-                listOf(
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_status), settings.statusBarVisible.value) {
-                        onToggle(settings.statusBarVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_rails), settings.sideRailsVisible.value) {
-                        onToggle(settings.sideRailsVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_assists), settings.assistToolbarVisible.value) {
-                        onToggle(settings.assistToolbarVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_values), settings.cameraValuesVisible.value) {
-                        onToggle(settings.cameraValuesVisible)
-                    },
-                ),
-            twoColumnOrder = listOf(0, 2, 1, 3),
-        )
-    }
+    // iOS Display has no "Monitor Chrome" section; the chrome visibility
+    // toggles stay at their defaults and DISP modes own chrome density.
     SettingsGroupCard(
         title = stringResource(R.string.settings_assist_toolbar),
         caption = stringResource(R.string.settings_assist_toolbar_caption),
@@ -2946,7 +2728,6 @@ private fun StorageRows(
     val storageState = remember(mediaCacheStore) { MediaCacheSettingsState(mediaCacheStore) }
     var snapshot by remember(mediaCacheStore) { mutableStateOf<MediaCacheStorageSnapshot?>(null) }
     var loadFailure by remember(mediaCacheStore) { mutableStateOf<String?>(null) }
-    var showClearConfirmation by remember { mutableStateOf(false) }
     var clearing by remember { mutableStateOf(false) }
 
     LaunchedEffect(storageState) {
@@ -2958,6 +2739,10 @@ private fun StorageRows(
         }
     }
 
+    // iOS order: Frame.io first, then the local cache card.
+    frameioController?.let { controller ->
+        FrameioStorageRows(controller, condensed)
+    }
     SettingsGroupCard(
         title = stringResource(R.string.cache_title),
         caption =
@@ -2977,31 +2762,28 @@ private fun StorageRows(
                     SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
                 }
             }
-            snapshot?.usage?.let { usage ->
-                if (usage.incompleteEntryCount > 0) {
-                    if (condensed) {
-                        CondensedStorageRow(title = stringResource(R.string.cache_incomplete_transfers)) {
-                            SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
-                        }
-                    } else {
-                        SettingsInlineRow(title = stringResource(R.string.cache_incomplete_transfers)) {
-                            SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
-                        }
-                        Text(
-                            stringResource(R.string.cache_incomplete_caption),
-                            style = chromeStyle(10.5f, FontWeight.Normal),
-                            color = LiveDesign.muted,
-                        )
+            fun clearNow() {
+                clearing = true
+                loadFailure = null
+                scope.launch {
+                    try {
+                        snapshot = withContext(Dispatchers.IO) { storageState.clearCompleted() }
+                        onCompletedMediaCacheCleared()
+                    } catch (error: Exception) {
+                        loadFailure =
+                            error.message ?: resources.getString(R.string.cache_clear_failed)
+                    } finally {
+                        clearing = false
                     }
                 }
             }
             if (condensed) {
                 CondensedStorageRow(title = stringResource(R.string.cache_clear)) {
-                    StorageClearAction(clearing) { showClearConfirmation = true }
+                    StorageClearAction(clearing, ::clearNow)
                 }
             } else {
                 SettingsInlineRow(title = stringResource(R.string.cache_clear)) {
-                    StorageClearAction(clearing) { showClearConfirmation = true }
+                    StorageClearAction(clearing, ::clearNow)
                 }
                 Text(
                     stringResource(R.string.cache_clear_caption),
@@ -3026,48 +2808,6 @@ private fun StorageRows(
         }
     }
 
-    if (showClearConfirmation) {
-        AlertDialog(
-            onDismissRequest = { showClearConfirmation = false },
-            title = { Text(stringResource(R.string.cache_clear_title)) },
-            text = {
-                Text(
-                    stringResource(R.string.cache_clear_message),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearConfirmation = false
-                        clearing = true
-                        loadFailure = null
-                        scope.launch {
-                            try {
-                                snapshot = withContext(Dispatchers.IO) { storageState.clearCompleted() }
-                                onCompletedMediaCacheCleared()
-                            } catch (error: Exception) {
-                                loadFailure =
-                                    error.message ?: resources.getString(R.string.cache_clear_failed)
-                            } finally {
-                                clearing = false
-                            }
-                        }
-                    },
-                ) {
-                    Text(stringResource(R.string.cache_clear_action))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearConfirmation = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-
-    frameioController?.let { controller ->
-        FrameioStorageRows(controller, condensed)
-    }
 }
 
 /** Frame.io account entry point; upload project selection lives beside media selection. */
@@ -3122,15 +2862,8 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
                 else -> SettingsValueText(connectionLabel)
             }
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_internet)) {
-            SettingsValueText(networkLabel)
-        }
-        SettingsInlineRow(title = stringResource(R.string.frameio_upload_project)) {
-            SettingsValueText(
-                controller.selectedDestination?.projectName
-                    ?: stringResource(R.string.frameio_choose_media),
-            )
-        }
+        // iOS's Storage tab shows Frame.io as a single account row; the
+        // internet-hop state and project choice surface in the Media flow.
         controller.errorMessage?.let { message ->
             Text(
                 message,
@@ -3268,33 +3001,13 @@ internal fun SystemRows(
                 runAction(actions::shareDiagnostics)
             }
         }
-    }
-
-    SettingsGroupCard(
-        title = stringResource(R.string.system_live_view_guide),
-        caption = stringResource(R.string.system_live_view_guide_caption),
-    ) {
-        SettingsInlineRow(stringResource(R.string.system_guide_status), showTopDivider = false) {
-            SettingsValueText(stringResource(guideController.status.labelResource))
-        }
-        SettingsInlineRow(stringResource(R.string.system_replay)) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (onShowGuideNow != null && guideController.canReplayNow) {
-                    SettingsLinkAction(
-                        stringResource(R.string.action_now),
-                        stringResource(R.string.system_show_guide_now),
-                        onShowGuideNow,
-                    )
-                }
-                SettingsLinkAction(
-                    stringResource(R.string.action_next_frame),
-                    stringResource(R.string.system_show_guide_next_frame),
-                    onShowGuideOnNextRealFrame,
-                )
-            }
+        // iOS keeps the guide as one Help & Feedback row with a Show Again pill.
+        SettingsInlineRow(stringResource(R.string.system_live_view_guide)) {
+            SettingsLinkAction(
+                stringResource(R.string.action_show_again),
+                stringResource(R.string.system_show_guide_next_frame),
+                onShowGuideOnNextRealFrame,
+            )
         }
     }
 

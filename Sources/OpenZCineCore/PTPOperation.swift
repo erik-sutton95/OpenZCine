@@ -44,6 +44,10 @@ public enum PTPOperationCode: UInt16, Sendable {
     case getPairingInfo = 0x952B
     case confirmPairing = 0x935A
     case changeApplicationMode = 0x9435
+    // p1 0 PC-camera mode / 1 remote mode. Over USB the ZR boots into
+    // PC-camera mode and denies vendor app-control until remote mode is set;
+    // Wi-Fi smart-device sessions arrive already trusted. [verify-on-HW]
+    case changeCameraMode = 0x90C2
 
     // Properties. 2-byte `0xDxxx` props use the standard PIMA 15740 ops (0x1015/0x1016); the `Ex`
     // ops serve the 4-byte `0x0001_Dxxx` extended props. Ex-writing a 2-byte recording-format

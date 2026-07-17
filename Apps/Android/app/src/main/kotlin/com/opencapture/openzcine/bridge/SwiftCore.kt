@@ -529,18 +529,28 @@ object SwiftCore {
 
     /**
      * Connects to the camera at [host] (numeric IPv4, port 15740): PTP-IP Init
-     * handshake on both channels, then the Nikon open/pair/identify sequence,
-     * all inside the Swift core's session layer. Returns immediately; progress
+     * handshake on both channels, then the Nikon sequence selected by
+     * [connectionStrategy], all inside the Swift core's session layer.
+     * [initiatorGuid] is the stable, exactly 16-byte identity paired to this
+     * Android installation; it is never logged. Returns immediately; progress
      * and the terminal result arrive on [listener] from a background thread.
      * [connectionOwner] is an opaque, per-attempt token used only to ensure a
      * stale cancellation cannot tear down a newer session.
      */
-    external fun sessionConnect(host: String, connectionOwner: Long, listener: SessionListener)
+    external fun sessionConnect(
+        host: String,
+        connectionOwner: Long,
+        connectionStrategy: Int,
+        initiatorGuid: ByteArray,
+        listener: SessionListener,
+    )
 
     /**
      * Connects over a claimed Android USB PTP interface. Kotlin supplies only
      * raw bulk/interrupt bytes through [transport]; Swift owns PTP container
      * framing, session open/pair/identify strategy, and all camera operations.
+     * [connectionStrategy] uses the same stable ordinal as the Wi-Fi path;
+     * USB has no PTP-IP initiator GUID.
      * Progress and the terminal result arrive on [listener] from a background
      * thread, just like [sessionConnect]. [connectionOwner] scopes later
      * teardown to this exact connection attempt.
@@ -550,6 +560,7 @@ object SwiftCore {
         host: String,
         cameraNameHint: String,
         connectionOwner: Long,
+        connectionStrategy: Int,
         listener: SessionListener,
     )
 

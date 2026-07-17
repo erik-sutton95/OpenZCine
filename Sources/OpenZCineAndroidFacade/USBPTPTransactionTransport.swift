@@ -101,6 +101,20 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
         metricLock.unlock()
     }
 
+    /// Discards whatever an earlier timed-out attempt left queued on the
+    /// bulk-in pipe so the next transaction reads its own response. Bounded,
+    /// short-timeout reads: an already-empty pipe costs one 200 ms timeout.
+    func drainStaleInput() {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
+        commandBuffer = PTPUSBReadBuffer()
+        for _ in 0..<8 {
+            guard let bytes = rawIO.readBulk(maxBytes: readChunkSize, timeoutMilliseconds: 200),
+                !bytes.isEmpty
+            else { return }
+        }
+    }
+
     /// Latest successful USB command-container to response-container duration.
     func latestCommandRoundTripMilliseconds() -> Double? {
         metricLock.lock()
@@ -150,11 +164,19 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
         }
 
         var dataPayload = Data()
+        var staleContainerSkips = 0
         while true {
             let container = try nextCommandContainer(timeoutMilliseconds: timeout)
             guard container.transactionID == transactionID else {
-                throw AndroidUSBPTPTransportError.mismatchedTransaction(
-                    expected: transactionID, actual: container.transactionID)
+                // A response that a timed-out earlier attempt never read shifts
+                // every later read one transaction back. Discard bounded stale
+                // leftovers so one lost deadline cannot poison the session.
+                staleContainerSkips += 1
+                guard staleContainerSkips <= 4 else {
+                    throw AndroidUSBPTPTransportError.mismatchedTransaction(
+                        expected: transactionID, actual: container.transactionID)
+                }
+                continue
             }
             switch container.type {
             case .data:
@@ -186,6 +208,18 @@ final class AndroidUSBPTPTransport: CameraTransport, @unchecked Sendable {
                 throw AndroidUSBPTPTransportError.unexpectedContainer(container.type)
             }
         }
+    }
+
+    /// One best-effort read of the interrupt/event endpoint, result discarded.
+    /// Used only during establishment to keep the event pipe serviced while a
+    /// long command (application-mode entry) is in flight — the ZR stalls that
+    /// switch until it can deliver its StoreRemoved event, and ICC on iOS
+    /// always has an event loop running. Swallows every error (a bare timeout
+    /// is the normal case); never touches the command pipe.
+    func servicePendingEvent(timeoutMilliseconds: Int) {
+        eventLock.lock()
+        defer { eventLock.unlock() }
+        _ = try? nextEventContainer(timeoutMilliseconds: timeoutMilliseconds)
     }
 
     /// Blocking event entry used by the USB session's one Swift-owned drain

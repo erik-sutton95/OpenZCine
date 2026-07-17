@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PTP / Still Image cameras. The class-6 match claims any camera presenting a
+  standard PTP interface; the explicit Nikon vendor (0x04B0 = 1200) entry
+  ensures the ZR is routed to OpenZCine even when it enumerates its PTP
+  interface only inside a composite/vendor device descriptor.
+-->
+<resources>
+    <!-- USB Still Image / PTP interface class. -->
+    <usb-device class="6" subclass="1" protocol="1" />
+    <!-- Nikon. -->
+    <usb-device vendor-id="1200" />
+</resources>

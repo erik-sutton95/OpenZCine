@@ -37,6 +37,25 @@ public enum AndroidPTPIPInitiator {
     import Darwin
 #endif
 
+#if os(Android)
+    /// One-shot stop flag for the USB establishment event pump. Set from the
+    /// establish thread, read from the pump thread — hence the lock.
+    final class USBEventPumpFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stop = false
+        var stopRequested: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return stop
+        }
+        func requestStop() {
+            lock.lock()
+            stop = true
+            lock.unlock()
+        }
+    }
+#endif
+
 /// Errors surfaced by the facade's PTP-IP session layer.
 public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case connectionFailed(String)
@@ -47,6 +66,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case operationRejected(PTPOperationCode, PTPResponseCode)
     case invalidPacketLength(UInt32)
     case pairingChallengeUnavailable
+    /// A saved camera-side profile did not accept this initiator for app control.
+    case savedProfileRequired
     case appControlUnavailable
     case unsupportedProperty(UInt32)
     case unsupportedControl(PTPCameraControl, String)
@@ -79,6 +100,8 @@ public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
         case .pairingChallengeUnavailable:
             return
                 "The camera did not provide a pairing code. Restart Connect to Smart Device on the camera, then pair again."
+        case .savedProfileRequired:
+            return "The camera requires first-time pairing before app control can start."
         case .appControlUnavailable:
             return "The camera did not open app-control mode after pairing."
         case .unsupportedProperty(let code):
@@ -328,6 +351,23 @@ struct AndroidMediaBrowsePreparation: Sendable {
 // SAFETY: `@unchecked Sendable` — `nextTransactionID` and socket I/O are only
 // touched inside transactions serialized by `transactionLock`.
 public final class PTPIPClientSession: @unchecked Sendable {
+    /// Selects how this connection establishes Nikon app-control access.
+    ///
+    /// An unknown Wi-Fi camera must use ``firstTimePairing`` directly. A
+    /// `ChangeApplicationMode` probe can interrupt the camera's Wi-Fi pairing
+    /// wizard before `GetPairingInfo` has a chance to provide its challenge.
+    public enum ConnectionStrategy: Equatable, Sendable {
+        /// Reconnect through a camera-side profile that has already paired this initiator.
+        case savedProfile
+        /// Establish a new profile without probing app control first.
+        case firstTimePairing
+        /// Try a saved profile, then pair only if the profile is specifically rejected.
+        ///
+        /// This is appropriate for USB, where there is no Wi-Fi pairing wizard
+        /// to disrupt. It preserves the facade's pre-strategy compatibility behavior.
+        case restoreProfileThenPairing
+    }
+
     private let command: PosixTCPSocket?
     private let event: PosixTCPSocket?
     #if os(Android)
@@ -433,59 +473,180 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     /// Connects, handshakes, and establishes an app-control PTP session.
     ///
-    /// Mirrors the iOS shell's connection strategy: first a quiet saved-profile
-    /// attempt (OpenSession → ChangeApplicationMode); when the camera refuses
-    /// app control, the link is torn down gracefully and re-established with
-    /// the first-time pairing sequence (GetPairingInfo poll → ConfirmPairing).
+    /// Use ``ConnectionStrategy/firstTimePairing`` for an unknown Wi-Fi
+    /// camera. ``ConnectionStrategy/restoreProfileThenPairing`` remains the
+    /// compatibility default for callers that have not yet selected a strategy.
     /// Progress is pushed through `onPhase` (`.handshaking`, `.pairing`,
-    /// `.confirmOnCamera` with the PIN as detail, `.connected`).
+    /// `.confirmOnCamera` with the PIN as detail after `ConfirmPairing`
+    /// succeeds, `.connected`).
     public static func connect(
         host: String,
         port: UInt16 = UInt16(ptpIPPort),
         guid: Data = AndroidPTPIPInitiator.appGUID,
         friendlyName: String = AndroidPTPIPInitiator.friendlyName,
         timeoutMilliseconds: Int32 = 10_000,
+        strategy: ConnectionStrategy = .restoreProfileThenPairing,
         onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
     ) throws -> PTPIPClientSession {
         onPhase(.handshaking, "")
-        let probe = try establishLink(
-            host: host, port: port, guid: guid, friendlyName: friendlyName,
-            timeoutMilliseconds: timeoutMilliseconds)
-        do {
-            try probe.openSession()
-            if try probe.enableAppControl() {
-                try probe.identify()
-                onPhase(.connected, probe.identity.displayName)
-                return probe
+        switch strategy {
+        case .savedProfile:
+            return try connectSavedProfile(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
+        case .firstTimePairing:
+            return try connectFirstTimePairing(
+                host: host,
+                port: port,
+                guid: guid,
+                friendlyName: friendlyName,
+                timeoutMilliseconds: timeoutMilliseconds,
+                onPhase: onPhase
+            )
+        case .restoreProfileThenPairing:
+            do {
+                return try connectSavedProfile(
+                    host: host,
+                    port: port,
+                    guid: guid,
+                    friendlyName: friendlyName,
+                    timeoutMilliseconds: timeoutMilliseconds,
+                    onPhase: onPhase
+                )
+            } catch {
+                guard let sessionError = error as? PTPIPClientSessionError,
+                    sessionError == .savedProfileRequired
+                else {
+                    throw error
+                }
+                return try connectFirstTimePairing(
+                    host: host,
+                    port: port,
+                    guid: guid,
+                    friendlyName: friendlyName,
+                    timeoutMilliseconds: timeoutMilliseconds,
+                    onPhase: onPhase
+                )
             }
-        } catch {
-            probe.disconnect()
-            throw error
         }
-        // Saved profile unavailable — release the slot gracefully and pair fresh,
-        // exactly like the iOS shell's savedProfile → firstTimePairing fallback.
-        probe.disconnect()
+    }
 
-        onPhase(.pairing, "")
-        let pairing = try establishLink(
-            host: host, port: port, guid: guid, friendlyName: friendlyName,
-            timeoutMilliseconds: timeoutMilliseconds)
+    private static func connectSavedProfile(
+        host: String,
+        port: UInt16,
+        guid: Data,
+        friendlyName: String,
+        timeoutMilliseconds: Int32,
+        onPhase: (CameraConnectionPhase, String) -> Void
+    ) throws -> PTPIPClientSession {
+        let session = try establishLink(
+            host: host,
+            port: port,
+            guid: guid,
+            friendlyName: friendlyName,
+            timeoutMilliseconds: timeoutMilliseconds
+        )
         do {
-            try pairing.openSession()
-            let challenge = try pairing.waitForPairingChallenge()
-            onPhase(.confirmOnCamera, challenge.pin ?? "")
-            try pairing.transactExpectingOK(
-                .confirmPairing, parameters: [PTPIPSessionScript.pairingConfirmValue])
-            guard try pairing.enableAppControl() else {
-                throw PTPIPClientSessionError.appControlUnavailable
-            }
-            try pairing.identify()
-            onPhase(.connected, pairing.identity.displayName)
-            return pairing
+            try establishSavedProfile(on: session, onPhase: onPhase)
+            return session
         } catch {
-            pairing.disconnect()
+            session.disconnect()
             throw error
         }
+    }
+
+    private static func establishSavedProfile(
+        on session: PTPIPClientSession,
+        onPhase: (CameraConnectionPhase, String) -> Void
+    ) throws {
+        try session.openSession()
+        guard try session.enableAppControl() else {
+            throw PTPIPClientSessionError.savedProfileRequired
+        }
+        try session.identify()
+        onPhase(.connected, session.identity.displayName)
+    }
+
+    #if os(Android)
+        /// USB variant of the establish sequence. The cable has no PTP-IP Init
+        /// handshake, so there is no pairing step and no paired-GUID trust —
+        /// the ZR boots into PC-camera mode and Access_Denies the vendor
+        /// app-control switch that Wi-Fi sessions get for free. Monitoring
+        /// does not need it, so the path is: open → remote mode → prove live
+        /// view streams. [verify-on-HW: ZR over USB-C, 2026-07-17 — connects,
+        /// streams 24 fps, full metadata.]
+        private static func establishUSBSession(
+            on session: PTPIPClientSession,
+            onPhase: (CameraConnectionPhase, String) -> Void
+        ) throws {
+            try session.openSession()
+            // Application mode — NOT remote mode — is what keeps the camera
+            // BODY awake (remote mode locks it to "Connected to computer").
+            // iOS only ever uses application mode. Over USB the ZR's app-mode
+            // switch blocks on delivering a StoreRemoved event, so the switch
+            // is serviced with a concurrent event pump. The camera has no
+            // GetPairingInfo/ConfirmPairing over USB (absent from its USB
+            // OperationsSupported), so there is no pairing fallback here.
+            if try session.enableAppControlServicingEvents() != .ok {
+                // App mode still refused. Degrade to remote mode: the live
+                // feed works, though the camera body stays on "Connected to
+                // computer" (tracked follow-up). Better a working feed than a
+                // failed connect.
+                _ = try? session.executeTransaction(.changeCameraMode, parameters: [1])
+            }
+            try session.identify()
+            onPhase(.connected, session.identity.displayName)
+        }
+    #endif
+
+    private static func connectFirstTimePairing(
+        host: String,
+        port: UInt16,
+        guid: Data,
+        friendlyName: String,
+        timeoutMilliseconds: Int32,
+        onPhase: (CameraConnectionPhase, String) -> Void
+    ) throws -> PTPIPClientSession {
+        let session = try establishLink(
+            host: host,
+            port: port,
+            guid: guid,
+            friendlyName: friendlyName,
+            timeoutMilliseconds: timeoutMilliseconds
+        )
+        do {
+            try establishFirstTimePairing(on: session, onPhase: onPhase)
+            return session
+        } catch {
+            session.disconnect()
+            throw error
+        }
+    }
+
+    private static func establishFirstTimePairing(
+        on session: PTPIPClientSession,
+        onPhase: (CameraConnectionPhase, String) -> Void
+    ) throws {
+        try session.openSession()
+        onPhase(.pairing, "")
+        let challenge = try session.waitForPairingChallenge()
+        try session.transactExpectingOK(
+            .confirmPairing,
+            parameters: [PTPIPSessionScript.pairingConfirmValue]
+        )
+        // `ConfirmPairing` has succeeded. The camera can now show its body-side
+        // confirmation and restart its AP; Kotlin uses this phase to wait for that reconnect.
+        onPhase(.confirmOnCamera, challenge.pin ?? "")
+        guard try session.enableAppControl() else {
+            throw PTPIPClientSessionError.appControlUnavailable
+        }
+        try session.identify()
+        onPhase(.connected, session.identity.displayName)
     }
 
     #if os(Android)
@@ -497,6 +658,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             transport: AndroidUSBPTPTransport,
             host: String,
             cameraNameHint: String,
+            strategy: ConnectionStrategy = .restoreProfileThenPairing,
             onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
         ) throws -> PTPIPClientSession {
             onPhase(.handshaking, "")
@@ -513,37 +675,31 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // The privacy-safe USB key is a Kotlin-local saved-record lookup;
             // PTP has no network host, so it is neither addressed nor sent here.
             _ = host
+            // USB has no Nikon pairing gate: `GetPairingInfo` is a Wi-Fi-only
+            // vendor flow, and issuing it on the cable is never answered and
+            // wedges the body's USB stack until a replug. Every strategy
+            // therefore runs the saved-profile establish here, and an
+            // app-control refusal is surfaced as a real error, not routed to
+            // pairing.
+            _ = strategy
+            // A timed-out earlier attempt can leave its response queued on the
+            // still-claimed bulk-in pipe, shifting every later read one
+            // transaction back. Start each attempt from an empty pipe.
+            transport.drainStaleInput()
             do {
-                try session.openSession()
-                if try session.enableAppControl() {
-                    try session.identify()
-                    onPhase(.connected, session.identity.displayName)
-                    return session
-                }
-
-                // A new USB transport cannot be recreated by Swift, so reset
-                // the PTP session on this already-claimed interface before
-                // executing the same first-time pairing sequence as Wi-Fi.
-                // [VERIFY-ON-HW] Confirm the ZR accepts CloseSession followed
-                // by OpenSession on one claimed USB interface after app-mode
-                // refusal; the transaction sequence reset is covered below.
-                _ = try? transport.executeTransactionSynchronously(
-                    operationCode: .closeSession,
-                    deadline: .seconds(2)
+                // GetDeviceInfo is the only operation valid outside a session,
+                // and every host stack (macOS ICC, Windows, libgphoto2) issues
+                // it before OpenSession while enumerating. Observed on the ZR:
+                // an OpenSession-first sequence is held unanswered while
+                // CloseSession still answers instantly — so match the
+                // universal order. Outside a session the TransactionID is 0.
+                _ = try transport.executeTransactionSynchronously(
+                    operationCode: .getDeviceInfo,
+                    transactionID: 0,
+                    dataPhase: .dataIn,
+                    deadline: .seconds(5)
                 )
-                try session.openSession()
-                onPhase(.pairing, "")
-                let challenge = try session.waitForPairingChallenge()
-                onPhase(.confirmOnCamera, challenge.pin ?? "")
-                try session.transactExpectingOK(
-                    .confirmPairing,
-                    parameters: [PTPIPSessionScript.pairingConfirmValue]
-                )
-                guard try session.enableAppControl() else {
-                    throw PTPIPClientSessionError.appControlUnavailable
-                }
-                try session.identify()
-                onPhase(.connected, session.identity.displayName)
+                try establishUSBSession(on: session, onPhase: onPhase)
                 return session
             } catch {
                 session.disconnect()
@@ -618,10 +774,38 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Nikon app-control gate. `true` when the camera accepted app control —
     /// `false` routes the caller to first-time pairing (core probe policy).
     private func enableAppControl() throws -> Bool {
-        let appMode = try executeTransaction(.changeApplicationMode, parameters: [1])
-        return PTPIPSavedProfileProbePolicy.resolve(
-            applicationModeResponse: appMode.operationResponse.responseCode) == .accepted
+        try enableAppControlResponse() == .ok
     }
+
+    /// `ChangeApplicationMode` returning the raw response so the USB path can
+    /// branch on Access_Denied vs OK (Session_Already_Open never applies to
+    /// this op).
+    func enableAppControlResponse() throws -> PTPResponseCode {
+        try executeTransaction(.changeApplicationMode, parameters: [1])
+            .operationResponse.responseCode
+    }
+
+    #if os(Android)
+        /// `ChangeApplicationMode` with the interrupt/event pipe serviced on a
+        /// side thread for the duration of the call. Entering application mode
+        /// makes the ZR emit a StoreRemoved event, and over USB it stalls the
+        /// switch (~5 s, then Access_Denied) until the host drains that event.
+        /// ImageCaptureCore on iOS always runs an event loop, so it never
+        /// stalls; our establish is single-threaded, so pump events here. The
+        /// event endpoint has its own lock — this never blocks the command
+        /// pipe carrying the app-mode request itself.
+        func enableAppControlServicingEvents() throws -> PTPResponseCode {
+            guard let usbTransport else { return try enableAppControlResponse() }
+            let pump = USBEventPumpFlag()
+            Thread.detachNewThread {
+                while !pump.stopRequested {
+                    usbTransport.servicePendingEvent(timeoutMilliseconds: 250)
+                }
+            }
+            defer { pump.requestStop() }
+            return try enableAppControlResponse()
+        }
+    #endif
 
     /// Polls `GetPairingInfo` until the camera produces a pairing challenge,
     /// with the same cadence as the iOS shell (10 attempts, 250 ms apart).

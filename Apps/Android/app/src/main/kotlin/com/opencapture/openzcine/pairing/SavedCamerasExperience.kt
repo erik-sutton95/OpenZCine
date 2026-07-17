@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,20 +38,31 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.openzcine.R
+import com.opencapture.openzcine.core.CameraConnectionPhase
+import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpOpenResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 private sealed interface SavedCameraPhase {
     data object Idle : SavedCameraPhase
@@ -58,8 +71,17 @@ private sealed interface SavedCameraPhase {
 
     data class Connecting(val title: String) : SavedCameraPhase
 
+    data class Pairing(val title: String) : SavedCameraPhase
+
+    data class ConfirmOnCamera(val title: String, val pin: String?) : SavedCameraPhase
+
+    data class Reconnecting(val title: String) : SavedCameraPhase
+
     data class Error(val message: String) : SavedCameraPhase
 }
+
+private fun SavedCameraPhase.isBusy(): Boolean =
+    this !is SavedCameraPhase.Idle && this !is SavedCameraPhase.Error
 
 /**
  * Applies a deliberate monitor action to USB auto-reconnect suppression. A
@@ -156,6 +178,76 @@ public fun SavedCamerasExperience(
         }?.host ?: record.host
     }
 
+    fun createStrictSavedProfileSession(record: SavedCameraRecord): CameraSession? =
+        when (record.transport) {
+            SavedCameraTransport.CAMERA_ACCESS_POINT,
+            SavedCameraTransport.PHONE_HOTSPOT,
+            -> environment.createSavedProfileSession(resolvedHost(record))
+            SavedCameraTransport.USB_C -> {
+                val source = environment.usbCameraSource ?: return null
+                val camera =
+                    usbCameras.firstOrNull {
+                        it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                    } ?: return null
+                when (val opened = source.open(camera)) {
+                    is UsbPtpOpenResult.Opened -> environment.createSavedProfileUsbSession(opened)
+                    is UsbPtpOpenResult.Rejected -> null
+                }
+            }
+        }
+
+    suspend fun reconnectAfterNikonPairing(record: SavedCameraRecord): PairedCamera? {
+        val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
+        if (!isCameraAp) {
+            delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
+        }
+        // Actively re-join the rebooting camera AP each pass (iOS
+        // attemptPairedReconnectRejoin) — Android's WifiNetworkSpecifier does
+        // not auto-rejoin a rebooted AP, so a passive wait strands the operator.
+        val rejoinSsid = record.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
+        val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
+
+        return withTimeoutOrNull<PairedCamera>(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
+            var reconnected: PairedCamera? = null
+            while (reconnected == null) {
+                phase = SavedCameraPhase.Reconnecting(record.displayTitle)
+                if (rejoinSsid != null && !environment.joinCameraAp(rejoinSsid, rejoinKey)) {
+                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                    continue
+                }
+                val session = createStrictSavedProfileSession(record)
+                if (session != null) {
+                    var handedOffSession = false
+                    try {
+                        session.connect()
+                        val connected = session.state.value as? CameraSessionState.Connected
+                        if (connected != null) {
+                            handedOffSession = true
+                            reconnected =
+                                PairedCamera(
+                                    session = session,
+                                    savedCamera =
+                                        record.copy(
+                                            host = resolvedHost(record),
+                                            cameraName = connected.identity.name,
+                                            lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                        ),
+                                )
+                        }
+                    } finally {
+                        if (!handedOffSession) {
+                            withContext(NonCancellable) { session.disconnect() }
+                        }
+                    }
+                }
+                if (reconnected == null) {
+                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                }
+            }
+            checkNotNull(reconnected)
+        }
+    }
+
     fun reconnect(record: SavedCameraRecord, explicit: Boolean = true) {
         if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
         if (explicit && record.transport == SavedCameraTransport.USB_C) {
@@ -167,7 +259,7 @@ public fun SavedCamerasExperience(
         phase = SavedCameraPhase.Connecting(record.displayTitle)
         work.value =
             scope.launch {
-                var session: com.opencapture.openzcine.core.CameraSession? = null
+                var session: CameraSession? = null
                 var handoffSucceeded = false
                 var host = resolvedHost(record)
                 try {
@@ -242,9 +334,63 @@ public fun SavedCamerasExperience(
                     phase = SavedCameraPhase.Connecting(record.displayTitle)
                     val activeSession = session ?: environment.createSession(host)
                     session = activeSession
-                    activeSession.connect()
-                    val connected = activeSession.state.value as? CameraSessionState.Connected
-                    if (connected == null) {
+                    var pairingWasConfirmed = false
+                    var pairingPin: String? = null
+                    val progressWatcher =
+                        launch(start = CoroutineStart.UNDISPATCHED) {
+                            activeSession.connectionProgress.collect { progress ->
+                                when (progress.phase) {
+                                    CameraConnectionPhase.PAIRING ->
+                                        phase = SavedCameraPhase.Pairing(record.displayTitle)
+                                    CameraConnectionPhase.CONFIRM_ON_CAMERA -> {
+                                        pairingWasConfirmed = true
+                                        pairingPin = progress.detail.ifBlank { null }
+                                        phase =
+                                            SavedCameraPhase.ConfirmOnCamera(
+                                                record.displayTitle,
+                                                pairingPin,
+                                            )
+                                    }
+                                    else -> Unit
+                                }
+                            }
+                        }
+                    val pairedCamera =
+                        try {
+                            activeSession.connect()
+                            val connected = activeSession.state.value as? CameraSessionState.Connected
+                            if (pairingWasConfirmed) {
+                                // A saved profile was rejected and Nikon accepted a fresh
+                                // pairing request. Mirror iOS: never hand this temporary
+                                // session to the monitor; wait for the body confirmation and
+                                // reconnect with the newly restored profile instead.
+                                phase = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, pairingPin)
+                                withContext(NonCancellable) { activeSession.disconnect() }
+                                reconnectAfterNikonPairing(
+                                    record.copy(
+                                        host = host,
+                                        cameraName =
+                                            connected?.identity?.name ?: record.cameraName,
+                                        lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                    ),
+                                )
+                            } else {
+                                connected?.let {
+                                    PairedCamera(
+                                        session = activeSession,
+                                        savedCamera =
+                                            record.copy(
+                                                host = host,
+                                                cameraName = it.identity.name,
+                                                lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                            ),
+                                    )
+                                }
+                            }
+                        } finally {
+                            progressWatcher.cancel()
+                        }
+                    if (pairedCamera == null) {
                         phase =
                             SavedCameraPhase.Error(
                                 "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
@@ -253,17 +399,8 @@ public fun SavedCamerasExperience(
                     }
                     handoffSucceeded = true
                     handedOff.value = true
-                    onPaired(
-                        PairedCamera(
-                            session = activeSession,
-                            savedCamera =
-                                record.copy(
-                                    host = host,
-                                    cameraName = connected.identity.name,
-                                    lastSeenAtEpochMillis = System.currentTimeMillis(),
-                                ),
-                        ),
-                    )
+                    session = pairedCamera.session
+                    onPaired(pairedCamera)
                 } catch (error: CancellationException) {
                     session?.let { active ->
                         withContext(NonCancellable) { active.disconnect() }
@@ -337,13 +474,19 @@ public fun SavedCamerasExperience(
         requested?.let(::reconnect)
     }
 
-    val busy = phase is SavedCameraPhase.Joining || phase is SavedCameraPhase.Connecting
+    val busy = phase.isBusy()
     val statusTitle =
         when (phase) {
-            is SavedCameraPhase.Joining -> "Joining"
-            is SavedCameraPhase.Connecting -> "Connecting"
-            is SavedCameraPhase.Error -> "Needs attention"
-            SavedCameraPhase.Idle -> "Ready"
+            is SavedCameraPhase.Joining -> stringResource(R.string.pairing_status_joining)
+            is SavedCameraPhase.Connecting -> stringResource(R.string.pairing_status_connecting)
+            is SavedCameraPhase.Pairing -> stringResource(R.string.pairing_status_pairing)
+            is SavedCameraPhase.ConfirmOnCamera ->
+                stringResource(R.string.pairing_status_confirm_on_camera)
+            is SavedCameraPhase.Reconnecting ->
+                stringResource(R.string.pairing_status_reconnecting)
+            is SavedCameraPhase.Error,
+            SavedCameraPhase.Idle,
+            -> stringResource(R.string.pairing_status_ready)
         }
 
     Box(Modifier.fillMaxSize().startupBackdrop()) {
@@ -352,11 +495,12 @@ public fun SavedCamerasExperience(
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .padding(horizontal = 24.dp, vertical = 12.dp),
         ) {
+            // Settings lives on the intro card, matching iOS — the header
+            // carries only the wordmark, title, legal links, and status pill.
             StartupHeader(
-                title = "Your cameras",
+                title = stringResource(R.string.saved_your_cameras),
                 statusTitle = statusTitle,
                 isBusy = busy,
-                onOpenSettings = if (busy) null else onOpenSettings,
             )
             Spacer(Modifier.height(12.dp))
             BoxWithConstraints(Modifier.weight(1f)) {
@@ -365,8 +509,8 @@ public fun SavedCamerasExperience(
                 if (twoColumn) {
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         SavedCameraOverview(
-                            cameraCount = cameras.size,
                             onPairNewCamera = onPairNewCamera,
+                            onOpenSettings = onOpenSettings,
                             enabled = !busy,
                             modifier = Modifier.width(overviewWidth).fillMaxSize(),
                         )
@@ -383,7 +527,6 @@ public fun SavedCamerasExperience(
                                 renameDraft = record.customName.orEmpty()
                             },
                             onRemove = { removalTarget = it },
-                            onCancel = ::cancelWork,
                             fillAvailableHeight = true,
                             scrollRows = true,
                             modifier = Modifier.weight(1f).fillMaxSize(),
@@ -396,8 +539,8 @@ public fun SavedCamerasExperience(
                     ) {
                         item {
                             SavedCameraOverview(
-                                cameraCount = cameras.size,
                                 onPairNewCamera = onPairNewCamera,
+                                onOpenSettings = onOpenSettings,
                                 enabled = !busy,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -416,7 +559,6 @@ public fun SavedCamerasExperience(
                                     renameDraft = record.customName.orEmpty()
                                 },
                                 onRemove = { removalTarget = it },
-                                onCancel = ::cancelWork,
                                 fillAvailableHeight = false,
                                 scrollRows = false,
                                 modifier = Modifier.fillMaxWidth(),
@@ -426,16 +568,45 @@ public fun SavedCamerasExperience(
                 }
             }
         }
+        // Every reconnect phase renders in the shared connect popup, exactly
+        // like iOS's ConnectionProgressSheet over the saved-camera home.
+        val popupPhase =
+            when (val active = phase) {
+                SavedCameraPhase.Idle -> null
+                is SavedCameraPhase.Joining -> ConnectionPopupPhase.JoiningWifi
+                is SavedCameraPhase.Connecting -> ConnectionPopupPhase.Handshaking
+                is SavedCameraPhase.Pairing -> ConnectionPopupPhase.Pairing
+                is SavedCameraPhase.ConfirmOnCamera ->
+                    ConnectionPopupPhase.ConfirmOnCamera(active.pin)
+                is SavedCameraPhase.Reconnecting -> ConnectionPopupPhase.Reconnecting
+                is SavedCameraPhase.Error -> ConnectionPopupPhase.Failed(active.message)
+            }
+        popupPhase?.let { popup ->
+            ConnectionProgressPopup(
+                deviceName =
+                    connectionDisplayName(
+                        when (val active = phase) {
+                            is SavedCameraPhase.Joining -> active.title
+                            is SavedCameraPhase.Connecting -> active.title
+                            is SavedCameraPhase.Pairing -> active.title
+                            is SavedCameraPhase.ConfirmOnCamera -> active.title
+                            is SavedCameraPhase.Reconnecting -> active.title
+                            else -> null
+                        },
+                    ),
+                phase = popup,
+                onConnect = {},
+                onDismiss = ::cancelWork,
+            )
+        }
     }
 
     removalTarget?.let { record ->
         AlertDialog(
             onDismissRequest = { removalTarget = null },
-            title = { Text("Remove ${record.displayTitle}?") },
+            title = { Text(stringResource(R.string.saved_remove_title)) },
             text = {
-                Text(
-                    "This removes the saved camera profile from this phone. You can pair it again later.",
-                )
+                Text(stringResource(R.string.saved_remove_message, record.displayTitle))
             },
             confirmButton = {
                 TextButton(
@@ -444,25 +615,31 @@ public fun SavedCamerasExperience(
                         removalTarget = null
                     },
                 ) {
-                    Text("Remove")
+                    Text(stringResource(R.string.action_remove))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { removalTarget = null }) { Text("Cancel") }
+                TextButton(onClick = { removalTarget = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
         )
     }
     renameTarget?.let { record ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
-            title = { Text("Name ${record.displayTitle}") },
+            title = { Text(stringResource(R.string.saved_rename_title)) },
             text = {
-                OutlinedTextField(
-                    value = renameDraft,
-                    onValueChange = { renameDraft = it },
-                    singleLine = true,
-                    label = { Text("Camera name") },
-                )
+                Column {
+                    Text(stringResource(R.string.saved_rename_message))
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = renameDraft,
+                        onValueChange = { renameDraft = it },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.saved_rename_hint)) },
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
@@ -477,11 +654,13 @@ public fun SavedCamerasExperience(
                         renameTarget = null
                     },
                 ) {
-                    Text("Save")
+                    Text(stringResource(R.string.action_save))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
+                TextButton(onClick = { renameTarget = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
         )
     }
@@ -489,8 +668,8 @@ public fun SavedCamerasExperience(
 
 @Composable
 private fun SavedCameraOverview(
-    cameraCount: Int,
     onPairNewCamera: () -> Unit,
+    onOpenSettings: () -> Unit,
     enabled: Boolean,
     modifier: Modifier,
 ) {
@@ -499,30 +678,28 @@ private fun SavedCameraOverview(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            "CAMERAS",
-            color = StartupColors.muted,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.4.sp,
-        )
-        Text(
-            if (cameraCount == 1) "One camera is ready." else "$cameraCount cameras are ready.",
+            stringResource(R.string.saved_your_cameras_title),
             color = StartupColors.ink,
-            fontSize = 24.sp,
+            fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
-            lineHeight = 27.sp,
+            lineHeight = 29.sp,
         )
         Text(
-            "Reconnect a camera, update its label, or pair another body. Camera Wi‑Fi keys stay encrypted on this phone.",
+            stringResource(R.string.saved_intro_body),
             color = StartupColors.muted,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
         )
         Spacer(Modifier.weight(1f, fill = false))
         StartupFilledButton(
-            text = "Pair new camera",
+            text = stringResource(R.string.saved_pair_new_camera),
             enabled = enabled,
             onClick = onPairNewCamera,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        StartupOutlineButton(
+            text = stringResource(R.string.action_settings),
+            onClick = onOpenSettings,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -539,15 +716,14 @@ private fun SavedCameraList(
     onOpenCachedMedia: (SavedCameraRecord) -> Unit,
     onRename: (SavedCameraRecord) -> Unit,
     onRemove: (SavedCameraRecord) -> Unit,
-    onCancel: () -> Unit,
     fillAvailableHeight: Boolean,
     scrollRows: Boolean,
     modifier: Modifier,
 ) {
-    val busy = phase is SavedCameraPhase.Joining || phase is SavedCameraPhase.Connecting
+    val busy = phase.isBusy()
     Column(modifier.startupCard().padding(20.dp)) {
         Text(
-            "SAVED CAMERAS",
+            stringResource(R.string.saved_camera_list),
             color = StartupColors.muted,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
@@ -555,24 +731,18 @@ private fun SavedCameraList(
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            if (busy) {
-                when (val active = phase) {
-                    is SavedCameraPhase.Joining -> "Joining ${active.title}"
-                    is SavedCameraPhase.Connecting -> "Connecting ${active.title}"
-                }
-            } else {
-                "Choose a camera to reconnect"
-            },
+            stringResource(R.string.saved_tap_to_connect),
             color = StartupColors.ink,
             fontSize = 21.sp,
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(10.dp))
+        val rowScroll = rememberScrollState()
         Column(
             (if (fillAvailableHeight) Modifier.weight(1f) else Modifier)
                 .then(
                     if (scrollRows) {
-                        Modifier.verticalScroll(rememberScrollState())
+                        Modifier.fadeOverflowBottom(rowScroll).verticalScroll(rowScroll)
                     } else {
                         Modifier
                     },
@@ -581,7 +751,7 @@ private fun SavedCameraList(
         ) {
             if (cameras.isEmpty()) {
                 Text(
-                    "No saved cameras yet. Pair a camera to make reconnecting faster next time.",
+                    stringResource(R.string.saved_empty),
                     color = StartupColors.muted,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -614,25 +784,6 @@ private fun SavedCameraList(
                     )
                 }
             }
-            (phase as? SavedCameraPhase.Error)?.let { error ->
-                Text(
-                    error.message,
-                    color = StartupColors.destructive,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp,
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        if (busy) {
-            Row {
-                Spacer(Modifier.weight(1f))
-                StartupOutlineButton(
-                    text = "Cancel",
-                    onClick = onCancel,
-                    modifier = Modifier.width(116.dp),
-                )
-            }
         }
     }
 }
@@ -648,7 +799,9 @@ internal fun SavedCameraRow(
     onRename: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    val availabilityColor = if (isDiscovered) StartupColors.ready else StartupColors.muted
+    val availabilityColor = if (isDiscovered) StartupColors.ready else StartupColors.dim
+    val moreOptionsDescription = stringResource(R.string.saved_more_options)
+    var optionsExpanded by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxWidth()
             .startupTile(borderColor = availabilityColor.copy(alpha = 0.28f))
@@ -656,26 +809,23 @@ internal fun SavedCameraRow(
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    record.displayTitle,
-                    color = StartupColors.ink,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
-                if (record.customName != null) {
-                    Text(
-                        record.cameraName,
-                        color = StartupColors.dim,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                    )
-                }
-            }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Text(
-                if (isDiscovered) "Nearby" else "Saved",
+                record.displayTitle,
+                color = StartupColors.ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                stringResource(
+                    if (isDiscovered) R.string.saved_pill_online else R.string.saved_pill_offline
+                ),
                 color = availabilityColor,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -683,46 +833,95 @@ internal fun SavedCameraRow(
                     Modifier.border(1.dp, availabilityColor.copy(alpha = 0.45f), CircleShape)
                         .padding(horizontal = 9.dp, vertical = 4.dp),
             )
+            // iOS fills the Connect button only when the camera is actually
+            // reachable; offline rows get the quiet outline style.
+            if (isDiscovered) {
+                StartupFilledButton(
+                    text = stringResource(R.string.action_connect),
+                    enabled = enabled,
+                    onClick = onConnect,
+                    modifier = Modifier.width(96.dp),
+                )
+            } else {
+                StartupOutlineButton(
+                    text = stringResource(R.string.action_connect),
+                    onClick = onConnect,
+                    modifier = Modifier.width(96.dp),
+                )
+            }
+            Box {
+                Text(
+                    "⋯",
+                    color = StartupColors.muted,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier =
+                        Modifier.clip(CircleShape)
+                            .clickable(enabled = enabled) { optionsExpanded = true }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .semantics {
+                                contentDescription = moreOptionsDescription
+                            },
+                )
+                DropdownMenu(
+                    expanded = optionsExpanded,
+                    onDismissRequest = { optionsExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_rename)) },
+                        onClick = {
+                            optionsExpanded = false
+                            onRename()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_remove)) },
+                        onClick = {
+                            optionsExpanded = false
+                            onRemove()
+                        },
+                    )
+                }
+            }
         }
         Text(
-            if (record.transport == SavedCameraTransport.USB_C) {
-                "${record.transport.displayName} · " +
-                    if (isDiscovered) "attached and authorized" else "connect and authorize"
-            } else {
-                "${record.transport.displayName} · ${record.host}"
-            },
+            savedCameraSubtitle(record),
             color = StartupColors.muted,
-            fontSize = 11.sp,
+            fontSize = 13.sp,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StartupFilledButton(
-                text = "Connect",
-                enabled = enabled,
-                onClick = onConnect,
-                modifier = Modifier.width(112.dp),
-            )
-            Text(
-                "Rename",
-                color = StartupColors.muted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.clickable(enabled = enabled, onClick = onRename).padding(8.dp),
-            )
-            Text(
-                "Remove",
-                color = StartupColors.destructive,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.clickable(enabled = enabled, onClick = onRemove).padding(8.dp),
-            )
-        }
         if (hasCachedMedia && enabled) {
             StartupOutlineButton(
-                text = "Browse cached media",
+                text = stringResource(R.string.saved_media_library),
                 onClick = onOpenCachedMedia,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
     }
+}
+
+/**
+ * iOS row subtitle: `USB-C · connect cable to wake the session` or
+ * `Wi‑Fi · <SSID> · <recency>`, with the recency phrased off the record's
+ * last-seen timestamp.
+ */
+@Composable
+private fun savedCameraSubtitle(record: SavedCameraRecord): String {
+    if (record.transport == SavedCameraTransport.USB_C) {
+        return stringResource(R.string.saved_usb_subtitle)
+    }
+    val networkName = record.wifiSsid ?: record.host
+    val lastSeen = record.lastSeenAtEpochMillis
+    val recency =
+        if (lastSeen == null) {
+            stringResource(R.string.saved_profile_fallback)
+        } else {
+            when (val days = ((System.currentTimeMillis() - lastSeen) / 86_400_000L).toInt()) {
+                0 -> stringResource(R.string.saved_last_today)
+                1 -> stringResource(R.string.saved_last_yesterday)
+                else -> stringResource(R.string.saved_last_days, days)
+            }
+        }
+    return stringResource(R.string.saved_wifi_subtitle, networkName, recency)
 }

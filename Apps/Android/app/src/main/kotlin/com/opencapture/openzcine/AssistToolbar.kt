@@ -606,7 +606,9 @@ fun AssistToolbar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             supportedTools.forEachIndexed { index, tool ->
-                if (index > 0 && index % 3 == 0) {
+                // Tools group in threes; AUDIO always rides its own trailing
+                // section after a divider (iOS MonitorAssistStrip).
+                if (index > 0 && (tool == AssistTool.AUDIO || index % 3 == 0)) {
                     Box(
                         Modifier.padding(horizontal = 4.dp)
                             .size(width = 1.dp, height = 28.dp)
@@ -708,11 +710,8 @@ internal fun PortraitFillAssistRail(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                stringResource(R.string.assist_view),
-                style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = LiveDesign.accent,
-            )
+            // iOS collapsed rail shows the slider.horizontal.3 glyph, not text.
+            SliderHorizontal3Glyph(LiveDesign.accent, Modifier.size(18.dp))
         }
         return
     }
@@ -745,11 +744,8 @@ internal fun PortraitFillAssistRail(
                 .semantics { contentDescription = closeDescription },
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                stringResource(R.string.assist_view),
-                style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = LiveDesign.accent,
-            )
+            // iOS collapse handle is a chevron, not a text label.
+            ChevronCollapseGlyph(LiveDesign.accent, Modifier.size(13.dp))
         }
         supportedTools.forEach { tool ->
             val isFramingTool = tool in AssistTool.framingTools
@@ -1115,5 +1111,44 @@ private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = 
                 }
             }
         }
+    }
+}
+
+/** Canvas stand-in for SF `slider.horizontal.3` (the fill-rail collapsed pill). */
+@Composable
+internal fun SliderHorizontal3Glyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val stroke = size.minDimension * 0.085f
+        val knobRadius = size.minDimension * 0.09f
+        val rows = listOf(0.24f, 0.5f, 0.76f)
+        val knobs = listOf(0.68f, 0.34f, 0.58f)
+        rows.forEachIndexed { index, rowY ->
+            val y = size.height * rowY
+            drawLine(
+                tint,
+                Offset(size.width * 0.06f, y),
+                Offset(size.width * 0.94f, y),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round,
+            )
+            drawCircle(tint, radius = knobRadius, center = Offset(size.width * knobs[index], y))
+        }
+    }
+}
+
+/** Canvas stand-in for SF `chevron.left` (the fill-rail collapse handle). */
+@Composable
+internal fun ChevronCollapseGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val path = Path().apply {
+            moveTo(size.width * 0.62f, size.height * 0.22f)
+            lineTo(size.width * 0.38f, size.height * 0.5f)
+            lineTo(size.width * 0.62f, size.height * 0.78f)
+        }
+        drawPath(
+            path,
+            tint,
+            style = Stroke(width = size.minDimension * 0.12f, cap = StrokeCap.Round),
+        )
     }
 }

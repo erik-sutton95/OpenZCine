@@ -1843,30 +1843,19 @@ private fun DeliverySelectionAction(
 /** Sort popup uses explicit menu choices rather than cycling a hidden state. */
 @Composable
 private fun SortControl(sortOrder: MediaLibrarySortOrder, onSelect: (MediaLibrarySortOrder) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        Text(
-            "${sortOrder.title.uppercase()} ▾",
-            style = chromeStyle(10f, FontWeight.Bold, mono = true),
-            color = LiveDesign.muted,
-            modifier =
-                Modifier.glass(CapsuleShape)
-                    .semantics { contentDescription = "Sort media: ${sortOrder.title}" }
-                    .chromeClickable { expanded = true }
-                    .padding(horizontal = 10.dp, vertical = 9.dp),
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            MediaLibrarySortOrder.entries.forEach { order ->
-                DropdownMenuItem(
-                    text = { Text(order.title) },
-                    onClick = {
-                        expanded = false
-                        onSelect(order)
-                    },
-                )
-            }
-        }
-    }
+    // iOS: a blind-cycle "SORT" pill — tapping advances to the next order.
+    val orders = MediaLibrarySortOrder.entries
+    val next = orders[(orders.indexOf(sortOrder) + 1) % orders.size]
+    Text(
+        "SORT",
+        style = chromeStyle(10f, FontWeight.Bold, mono = true),
+        color = LiveDesign.muted,
+        modifier =
+            Modifier.glass(CapsuleShape)
+                .semantics { contentDescription = "Sort media: ${sortOrder.title}" }
+                .chromeClickable { onSelect(next) }
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+    )
 }
 
 /** Grid/list switch retained across launches in [MediaLibraryIndex]. */
@@ -1948,13 +1937,13 @@ private fun MediaFilterDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Filter media") },
+        title = { Text("Filters") },
         text = {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 290.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                FilterSection("CONTAINER") {
+                FilterSection("FORMAT") {
                     MediaContainerFilter.entries.forEach { value ->
                         FilterChoice(value.title, value in filters.containers) {
                             onFiltersChanged(filters.copy(containers = filters.containers.toggled(value)))
@@ -1974,7 +1963,7 @@ private fun MediaFilterDialog(
                     }
                 }
                 if (storageIds.isNotEmpty()) {
-                    FilterSection("CAMERA SLOT") {
+                    FilterSection("STORAGE") {
                         storageIds.forEachIndexed { index, storageId ->
                             FilterChoice("SLOT ${index + 1}", filters.storageId == storageId) {
                                 onFiltersChanged(
@@ -1994,7 +1983,7 @@ private fun MediaFilterDialog(
                 enabled = filters.activeCount > 0,
                 onClick = { onFiltersChanged(MediaLibraryFilters()) },
             ) {
-                Text("Clear all")
+                Text("Clear all filters")
             }
         },
         containerColor = LiveDesign.surface,
@@ -2558,13 +2547,13 @@ private fun EmptyState(source: MediaLibrarySource) {
     CenteredState {
         FilmGlyph(LiveDesign.faint, Modifier.size(44.dp, 40.dp))
         Text(
-            if (source == MediaLibrarySource.CAMERA) "No media yet" else "No complete cached media",
+            if (source == MediaLibrarySource.CAMERA) "No clips yet" else "No complete cached media",
             style = chromeStyle(15f, FontWeight.Medium),
             color = LiveDesign.muted,
         )
         Text(
             if (source == MediaLibrarySource.CAMERA) {
-                "Media appears here as the card is listed."
+                "Clips appear here as they\u2019re discovered on the card."
             } else {
                 "Complete camera media you have opened appears here safely."
             },
@@ -2655,7 +2644,7 @@ private fun CloseCircleButton(modifier: Modifier = Modifier, onClick: () -> Unit
 
 private fun MediaLibraryCategory.titleForHeader(): String =
     when (this) {
-        MediaLibraryCategory.ALL -> "All media"
+        MediaLibraryCategory.ALL -> "All clips"
         MediaLibraryCategory.VIDEOS -> "Videos"
         MediaLibraryCategory.PHOTOS -> "Photos"
         MediaLibraryCategory.FAVORITES -> "Favorites"

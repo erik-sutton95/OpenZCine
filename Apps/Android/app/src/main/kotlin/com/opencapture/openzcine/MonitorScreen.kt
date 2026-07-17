@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -495,8 +497,13 @@ internal fun MonitorScreen(
         remember(commandPresentation, stringResolver) {
             monitorCaptureSettings(commandPresentation, stringResolver)
         }
+    val topPillPickers =
+        remember(commandPresentation, stringResolver) {
+            monitorTopPillPickers(commandPresentation, stringResolver)
+        }
     val activeMonitorPicker =
         captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
+            ?: activeMonitorPickerKind?.let(topPillPickers::get)
     val mediaOwnsCommandChannel =
         (propertyRefreshStatus as? CameraPropertyRefreshStatus.Degraded)?.failure ==
             CameraPropertyRefreshFailure.MEDIA_BUSY
@@ -1442,6 +1449,8 @@ internal fun MonitorScreen(
                         if (pendingCommandControl == null) activeMonitorPickerKind = null
                         onOpenSettings()
                     },
+                    resolutionPickerAvailable = MonitorPickerKind.RESOLUTION in topPillPickers,
+                    codecPickerAvailable = MonitorPickerKind.CODEC in topPillPickers,
                     onOpenMonitorPicker = { kind ->
                         activeAssistOptions = null
                         activeCommandControl = null
@@ -1524,6 +1533,25 @@ internal fun MonitorScreen(
                                     codec = cameraReadouts.codec,
                                     media = cameraReadouts.media,
                                     fps = cameraReadouts.framesPerSecond,
+                                    activePicker = activeMonitorPickerKind,
+                                    resolutionPickerAvailable =
+                                        MonitorPickerKind.RESOLUTION in topPillPickers,
+                                    codecPickerAvailable =
+                                        MonitorPickerKind.CODEC in topPillPickers,
+                                    pickersEnabled =
+                                        commandControlsEnabled && pendingCommandControl == null,
+                                    onOpenPicker = { kind ->
+                                        activeCommandControl = null
+                                        activeMonitorPickerKind =
+                                            nextMonitorPicker(
+                                                current = activeMonitorPickerKind,
+                                                requested = kind,
+                                                controlsEnabled =
+                                                    commandControlsEnabled &&
+                                                        pendingCommandControl == null,
+                                            )
+                                        commandControlFeedback = null
+                                    },
                                 )
                             }
                         }
@@ -1554,26 +1582,25 @@ internal fun MonitorScreen(
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     contentAlignment = Alignment.CenterEnd,
                                 ) {
-                                    FitScale(strip.width.dp) {
-                                        MonitorCaptureStrip(
-                                            settings = captureSettings,
-                                            activePicker = activeMonitorPickerKind,
-                                            controlsEnabled = commandControlsEnabled,
-                                            pendingControl = pendingCommandControl,
-                                            onOpenPicker = { kind ->
-                                                activeCommandControl = null
-                                                activeMonitorPickerKind =
-                                                    nextMonitorPicker(
-                                                        current = activeMonitorPickerKind,
-                                                        requested = kind,
-                                                        controlsEnabled =
-                                                            commandControlsEnabled &&
-                                                                pendingCommandControl == null,
-                                                    )
-                                                commandControlFeedback = null
-                                            },
-                                        )
-                                    }
+                                    MonitorCaptureStrip(
+                                        settings = captureSettings,
+                                        activePicker = activeMonitorPickerKind,
+                                        controlsEnabled = commandControlsEnabled,
+                                        pendingControl = pendingCommandControl,
+                                        onOpenPicker = { kind ->
+                                            activeCommandControl = null
+                                            activeMonitorPickerKind =
+                                                nextMonitorPicker(
+                                                    current = activeMonitorPickerKind,
+                                                    requested = kind,
+                                                    controlsEnabled =
+                                                        commandControlsEnabled &&
+                                                            pendingCommandControl == null,
+                                                )
+                                            commandControlFeedback = null
+                                        },
+                                        maxContentWidth = strip.width.dp,
+                                    )
                                 }
                             }
                         }
@@ -1584,7 +1611,35 @@ internal fun MonitorScreen(
                     // Persistent side rails: lock + authoritative batteries +
                     // record / configured DISP / media / settings.
                     LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
-                    zones.batteryPhone?.let {
+                    // Like iOS hugging the Dynamic Island, the two battery
+                    // indicators cluster around the punch-hole camera when the
+                    // display cutout sits in the leading lane (camera battery
+                    // above the cutout, phone below); zone-map frames are the
+                    // fallback on cutout-less hardware.
+                    val batteryView = LocalView.current
+                    val batteryDensity = LocalDensity.current
+                    val cutoutCenterY =
+                        remember(batteryView, isPortrait, zones) {
+                            if (isPortrait) {
+                                null
+                            } else {
+                                batteryView.rootWindowInsets
+                                    ?.displayCutout
+                                    ?.boundingRects
+                                    ?.minByOrNull { it.left }
+                                    ?.takeIf { it.left.toFloat() < zones.feed.width / 2f }
+                                    ?.exactCenterY()
+                                    ?.div(batteryDensity.density)
+                            }
+                        }
+                    val (phoneBatteryFrame, cameraBatteryFrame) =
+                        cutoutHuggedBatteryFrames(
+                            phone = zones.batteryPhone,
+                            camera = zones.batteryCamera,
+                            cutoutCenterY = cutoutCenterY,
+                            bounds = zones.feed,
+                        )
+                    phoneBatteryFrame?.let {
                         BatteryIndicatorColumn(
                             percent = phoneBatteryReadout.percent,
                             isCamera = false,
@@ -1592,7 +1647,7 @@ internal fun MonitorScreen(
                             externalPower = phoneBatteryReadout.externalPower,
                         )
                     }
-                    zones.batteryCamera?.let {
+                    cameraBatteryFrame?.let {
                         BatteryIndicatorColumn(
                             percent = cameraReadouts.batteryPercent,
                             isCamera = true,
@@ -1749,18 +1804,25 @@ internal fun MonitorScreen(
                 modifier =
                     Modifier
                         .zone(resetFrame)
-                        .background(Color.Black.copy(alpha = 0.58f), CircleShape)
-                        .border(1.dp, LiveDesign.hairline, CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f), CircleShape)
                         .testTag("focus_reset_button")
                         .semantics {
                             contentDescription = resetDescription
                         },
             ) {
-                Text(
-                    text = if (focusResetPending) "…" else "◎",
-                    style = chromeStyle(18f, FontWeight.SemiBold),
-                    color = LiveDesign.text,
-                )
+                if (focusResetPending) {
+                    Text(
+                        text = "…",
+                        style = chromeStyle(18f, FontWeight.SemiBold),
+                        color = LiveDesign.text,
+                    )
+                } else {
+                    // iOS uses `dot.viewfinder` in a 40pt black circle.
+                    DotViewfinderGlyph(
+                        LiveDesign.text,
+                        Modifier.size(17.dp),
+                    )
+                }
             }
         }
 
@@ -1912,6 +1974,11 @@ private fun InfoPill(
     codec: String,
     media: String,
     fps: String,
+    activePicker: MonitorPickerKind? = null,
+    resolutionPickerAvailable: Boolean = false,
+    codecPickerAvailable: Boolean = false,
+    pickersEnabled: Boolean = false,
+    onOpenPicker: (MonitorPickerKind) -> Unit = {},
 ) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -1921,9 +1988,34 @@ private fun InfoPill(
         if (recReadoutVisible) RecordChip(recording)
         CameraTimecodeReadout(timecode = timecode, sizeSp = 20f, weight = FontWeight.Medium)
         if (!compact) {
-            ReadoutPill(resolution) { VideoGlyph(LiveDesign.muted) }
+            // Resolution/codec readouts open their pickers like iOS's top-bar
+            // readout buttons; they stay inert readouts until the command
+            // projection has validated options for them.
+            ReadoutPill(
+                resolution,
+                active = activePicker == MonitorPickerKind.RESOLUTION,
+                onClick =
+                    if (resolutionPickerAvailable && pickersEnabled) {
+                        { onOpenPicker(MonitorPickerKind.RESOLUTION) }
+                    } else {
+                        null
+                    },
+            ) {
+                VideoGlyph(LiveDesign.muted)
+            }
             if (codecReadoutVisible) {
-                ReadoutPill(codec) { FilmGlyph(LiveDesign.muted) }
+                ReadoutPill(
+                    codec,
+                    active = activePicker == MonitorPickerKind.CODEC,
+                    onClick =
+                        if (codecPickerAvailable && pickersEnabled) {
+                            { onOpenPicker(MonitorPickerKind.CODEC) }
+                        } else {
+                            null
+                        },
+                ) {
+                    FilmGlyph(LiveDesign.muted)
+                }
             }
             if (mediaReadoutVisible) {
                 ReadoutPill(media) { SdCardGlyph(LiveDesign.muted) }
@@ -1968,6 +2060,8 @@ private fun PortraitChrome(
     onOpenMedia: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenMonitorPicker: (MonitorPickerKind) -> Unit,
+    resolutionPickerAvailable: Boolean = false,
+    codecPickerAvailable: Boolean = false,
     onOpenCommandControl: (CommandControlRequest) -> Unit,
     onMoveCommandTile: (CommandTileKind, Int) -> Unit,
     onReorderStarted: () -> Unit,
@@ -1987,6 +2081,51 @@ private fun PortraitChrome(
             cameraExternalPower = cameraReadouts.externalPower,
             modifier = Modifier.zone(zones.infoBar),
         )
+    }
+
+    // REC-options button (iOS PortraitRecOptionsButton): a glass circle at the
+    // feed's top-trailing corner, under the top bar, whose popover routes to
+    // the resolution/codec pickers. Only shown while a validated picker exists.
+    if (!isCommand && !locked && (resolutionPickerAvailable || codecPickerAvailable)) {
+        var recOptionsExpanded by remember { mutableStateOf(false) }
+        val recOptionsFrame =
+            ZoneFrame(
+                x = zones.feed.x + zones.feed.width - 44f - 10f,
+                y = zones.infoBar.y + zones.infoBar.height + 10f,
+                width = 44f,
+                height = 44f,
+            )
+        Box(Modifier.zone(recOptionsFrame)) {
+            AuxCircleButton(
+                Modifier.fillMaxSize(),
+                onClick = { recOptionsExpanded = true },
+            ) { glyphModifier, tint ->
+                VideoGlyph(tint, glyphModifier)
+            }
+            DropdownMenu(
+                expanded = recOptionsExpanded,
+                onDismissRequest = { recOptionsExpanded = false },
+            ) {
+                if (resolutionPickerAvailable) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.rec_option_resolution)) },
+                        onClick = {
+                            recOptionsExpanded = false
+                            onOpenMonitorPicker(MonitorPickerKind.RESOLUTION)
+                        },
+                    )
+                }
+                if (codecPickerAvailable) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.rec_option_codec)) },
+                        onClick = {
+                            recOptionsExpanded = false
+                            onOpenMonitorPicker(MonitorPickerKind.CODEC)
+                        },
+                    )
+                }
+            }
+        }
     }
 
     // Fit-mode horizontal assist toolbar between the scopes zone and the tile
@@ -2066,15 +2205,14 @@ private fun PortraitChrome(
                 Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                 contentAlignment = Alignment.Center,
             ) {
-                FitScale(strip.width.dp) {
-                    MonitorCaptureStrip(
-                        settings = captureSettings,
-                        activePicker = activeMonitorPicker,
-                        controlsEnabled = commandControlsEnabled,
-                        pendingControl = pendingCommandControl,
-                        onOpenPicker = onOpenMonitorPicker,
-                    )
-                }
+                MonitorCaptureStrip(
+                    settings = captureSettings,
+                    activePicker = activeMonitorPicker,
+                    controlsEnabled = commandControlsEnabled,
+                    pendingControl = pendingCommandControl,
+                    onOpenPicker = onOpenMonitorPicker,
+                    maxContentWidth = strip.width.dp,
+                )
             }
         }
     }
@@ -2199,4 +2337,67 @@ private fun PortraitInfoBar(
             }
         }
     }
+}
+
+/** Canvas stand-in for SF `dot.viewfinder` (the focus-reset affordance). */
+@Composable
+private fun DotViewfinderGlyph(
+    tint: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val stroke = size.minDimension * 0.09f
+        val corner = size.minDimension * 0.26f
+        // Center dot.
+        drawCircle(tint, radius = size.minDimension * 0.14f, center = center)
+        // Four open viewfinder corners.
+        val w = size.width
+        val h = size.height
+        fun cornerPath(
+            startX: Float, startY: Float, midX: Float, midY: Float, endX: Float, endY: Float,
+        ) {
+            val path = androidx.compose.ui.graphics.Path().apply {
+                moveTo(startX, startY)
+                lineTo(midX, midY)
+                lineTo(endX, endY)
+            }
+            drawPath(
+                path,
+                tint,
+                style =
+                    androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = stroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    ),
+            )
+        }
+        cornerPath(corner, 0f, 0f, 0f, 0f, corner)
+        cornerPath(w - corner, 0f, w, 0f, w, corner)
+        cornerPath(w, h - corner, w, h, w - corner, h)
+        cornerPath(corner, h, 0f, h, 0f, h - corner)
+    }
+}
+
+/**
+ * Clusters the landscape battery indicators around the display cutout —
+ * phone battery above, camera battery below, mirroring how iOS flanks the
+ * Dynamic Island. Returns the zone-map frames untouched when there is no
+ * usable cutout or the hugged frames would leave the feed bounds.
+ */
+internal fun cutoutHuggedBatteryFrames(
+    phone: ZoneFrame?,
+    camera: ZoneFrame?,
+    cutoutCenterY: Float?,
+    bounds: ZoneFrame,
+): Pair<ZoneFrame?, ZoneFrame?> {
+    if (phone == null || camera == null || cutoutCenterY == null) return phone to camera
+    val gap = 28f
+    val phoneFrame = phone.copy(y = cutoutCenterY - gap / 2f - phone.height)
+    val cameraFrame = camera.copy(y = cutoutCenterY + gap / 2f)
+    val top = bounds.y
+    val bottom = bounds.y + bounds.height
+    if (phoneFrame.y < top || cameraFrame.y + cameraFrame.height > bottom) {
+        return phone to camera
+    }
+    return phoneFrame to cameraFrame
 }
