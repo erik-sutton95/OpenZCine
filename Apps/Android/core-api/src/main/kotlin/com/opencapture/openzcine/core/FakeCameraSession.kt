@@ -22,8 +22,21 @@ import kotlinx.coroutines.flow.update
  */
 public class FakeCameraSession(
     private val discoverable: CameraIdentity? = null,
+    /**
+     * When true and [discoverable] is non-null, the session starts already
+     * connected so demo launches enter the monitor without an extra connect
+     * handshake.
+     */
+    private val startConnected: Boolean = false,
 ) : CameraSession {
-    private val mutableState = MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
+    private val mutableState =
+        MutableStateFlow<CameraSessionState>(
+            if (startConnected && discoverable != null) {
+                CameraSessionState.Connected(discoverable)
+            } else {
+                CameraSessionState.Disconnected
+            },
+        )
     private val mutableRecordingState = MutableStateFlow(CameraRecordingState.STANDBY)
     private val mutableProperties = MutableStateFlow(DEMO_PROPERTIES)
 

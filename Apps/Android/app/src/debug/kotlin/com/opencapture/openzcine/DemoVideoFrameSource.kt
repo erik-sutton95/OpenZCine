@@ -15,12 +15,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
+import kotlin.coroutines.coroutineContext
 
 /**
- * Debug-only [LiveFrameSource] that loops JPEG frames extracted from a local
- * sample video (gitignored `samples/` clips staged into debug assets, or an
- * explicit on-device path via `zc.demo.video`). [DemoHarness] falls back to
- * the synthetic colour-bar feed when nothing is readable.
+ * Debug-only [LiveFrameSource] that loops a local sample video (gitignored
+ * `samples/` clips staged into debug assets, or `zc.demo.video` path).
+ *
+ * Strategy (tuned for low-end devices like SM-A12):
+ * 1. Decode a modest set of evenly spaced frames with
+ *    [MediaMetadataRetriever] (first frame first so the feed is never blank).
+ * 2. Once the loop buffer is full, replay it at a steady rate with no further
+ *    seeks — smooth looping without real-time MediaCodec complexity.
  *
  * The sample never ships in release; it stays outside the committed tree.
  */
@@ -28,32 +34,91 @@ class DemoVideoFrameSource(
     private val openSession: () -> ExtractionSession?,
     @Suppress("UNUSED_PARAMETER")
     private val includeDebugCameraLevel: Boolean = true,
-    private val framesPerSecond: Int = DEFAULT_FPS,
-    private val maxFrames: Int = MAX_EXTRACTED_FRAMES,
+    private val playbackFps: Int = PLAYBACK_FPS,
 ) : LiveFrameSource {
     override val frames: Flow<LiveFrame> =
         flow {
-            val loop = extractJpegLoop()
-            if (loop.isEmpty()) {
-                Log.w(TAG, "sample video produced no frames — demo feed will fall back")
+            val session = openSession()
+            if (session == null) {
+                Log.w(TAG, "sample video could not be opened")
                 return@flow
             }
-            Log.i(TAG, "demo video loop ready (${loop.size} frames @ ${framesPerSecond} fps)")
-            val periodNanos = 1_000_000_000L / framesPerSecond
-            val startNanos = System.nanoTime()
+            val loop = ArrayList<ByteArray>(MAX_LOOP_FRAMES)
+            try {
+                val retriever = session.retriever
+                val durationMs =
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()
+                        ?.coerceAtLeast(1L)
+                if (durationMs == null) {
+                    Log.w(TAG, "sample video has no duration metadata")
+                    return@flow
+                }
+                val sampleCount =
+                    ((durationMs / 1000.0) * SAMPLE_FPS)
+                        .toInt()
+                        .coerceIn(MIN_LOOP_FRAMES, MAX_LOOP_FRAMES)
+                val stepUs = (durationMs * 1_000L) / sampleCount
+                Log.i(
+                    TAG,
+                    "demo video extracting $sampleCount frames from ${durationMs}ms clip",
+                )
+                val stream = ByteArrayOutputStream()
+                // Phase 1: extract and emit as we go so the first frame appears ASAP.
+                for (index in 0 until sampleCount) {
+                    if (!coroutineContext.isActive) return@flow
+                    val timeUs = index * stepUs
+                    val bitmap =
+                        retriever.getFrameAtTime(
+                            timeUs,
+                            MediaMetadataRetriever.OPTION_CLOSEST,
+                        )
+                    if (bitmap == null) {
+                        Log.w(TAG, "null frame at ${timeUs}us — skipping")
+                        continue
+                    }
+                    val jpeg = jpegBytes(bitmap, stream)
+                    loop += jpeg
+                    emit(
+                        LiveFrame(
+                            timestampNanos = System.nanoTime(),
+                            jpegData = jpeg,
+                            audioLevels = null,
+                            focus = null,
+                            level = null,
+                            timecode = demoTimecode(index.toLong(), SAMPLE_FPS),
+                            measuredFramesPerSecond = SAMPLE_FPS.toDouble(),
+                        ),
+                    )
+                    // Yield so the UI can present the first frames while we keep decoding.
+                    delay(0)
+                }
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "demo video extract failed", error)
+            } finally {
+                session.close()
+            }
+
+            if (loop.isEmpty()) {
+                Log.w(TAG, "sample video produced no frames")
+                return@flow
+            }
+            Log.i(TAG, "demo video loop ready (${loop.size} frames @ ${playbackFps} fps)")
+            // Phase 2: smooth in-memory loop — no more seeks.
+            val periodNanos = 1_000_000_000L / playbackFps
             var frameIndex = 0L
-            while (true) {
+            val startNanos = System.nanoTime()
+            while (coroutineContext.isActive) {
                 val jpeg = loop[(frameIndex % loop.size).toInt()]
                 emit(
                     LiveFrame(
                         timestampNanos = System.nanoTime(),
                         jpegData = jpeg,
-                        // Keep synthetic audio/AF/level off the pure sample path.
                         audioLevels = null,
                         focus = null,
                         level = null,
-                        timecode = demoTimecode(frameIndex, framesPerSecond),
-                        measuredFramesPerSecond = framesPerSecond.toDouble(),
+                        timecode = demoTimecode(frameIndex, playbackFps),
+                        measuredFramesPerSecond = playbackFps.toDouble(),
                     ),
                 )
                 frameIndex++
@@ -64,46 +129,13 @@ class DemoVideoFrameSource(
         }
             .flowOn(Dispatchers.Default)
 
-    private fun extractJpegLoop(): List<ByteArray> {
-        val session = openSession() ?: return emptyList()
-        return try {
-            val retriever = session.retriever
-            val durationMs =
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    ?.toLongOrNull()
-                    ?.coerceAtLeast(1L)
-                    ?: return emptyList()
-            val reportedFps =
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
-                    ?.toFloatOrNull()
-                    ?.takeIf { it >= 1f }
-            val fps = reportedFps?.toInt() ?: framesPerSecond
-            val naturalCount = ((durationMs / 1000.0) * fps).toInt().coerceAtLeast(1)
-            val count = naturalCount.coerceAtMost(maxFrames)
-            val stepUs = (durationMs * 1000L) / count
-            val out = ArrayList<ByteArray>(count)
-            val stream = ByteArrayOutputStream()
-            for (index in 0 until count) {
-                val bitmap =
-                    retriever.getFrameAtTime(
-                        index * stepUs,
-                        MediaMetadataRetriever.OPTION_CLOSEST,
-                    )
-                        ?: continue
-                val scaled = scaleForDemo(bitmap)
-                if (scaled !== bitmap) bitmap.recycle()
-                stream.reset()
-                scaled.compress(Bitmap.CompressFormat.JPEG, 82, stream)
-                scaled.recycle()
-                out += stream.toByteArray()
-            }
-            out
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "failed to extract demo video frames", error)
-            emptyList()
-        } finally {
-            session.close()
-        }
+    private fun jpegBytes(source: Bitmap, stream: ByteArrayOutputStream): ByteArray {
+        val scaled = scaleForDemo(source)
+        if (scaled !== source) source.recycle()
+        stream.reset()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+        scaled.recycle()
+        return stream.toByteArray()
     }
 
     private fun scaleForDemo(source: Bitmap): Bitmap {
@@ -128,9 +160,13 @@ class DemoVideoFrameSource(
 
     companion object {
         private const val TAG = "DemoVideoFrameSource"
-        private const val DEFAULT_FPS = 25
-        private const val MAX_EXTRACTED_FRAMES = 150
-        private const val MAX_LONG_EDGE = 1280
+        /** Frames sampled during the initial extract pass (motion preview). */
+        private const val SAMPLE_FPS = 8
+        /** Steady loop rate after the buffer is full. */
+        private const val PLAYBACK_FPS = 12
+        private const val MIN_LOOP_FRAMES = 8
+        private const val MAX_LOOP_FRAMES = 48
+        private const val MAX_LONG_EDGE = 960
         private const val ASSET_DEMO_DIR = "demo"
 
         /** Preferred sample name when several files exist under samples/assets. */

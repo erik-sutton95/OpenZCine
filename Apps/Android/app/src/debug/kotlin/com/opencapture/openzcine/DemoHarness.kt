@@ -248,7 +248,13 @@ object DemoHarness {
         if (!intent.getBooleanExtra(EXTRA_DEMO_FEED, false)) return null
         val session =
             FakeCameraSession(
-                CameraIdentity(name = "Demo Feed", model = "OpenZCine Demo", serialNumber = "DEMO"),
+                discoverable =
+                    CameraIdentity(
+                        name = "Demo Feed",
+                        model = "OpenZCine Demo",
+                        serialNumber = "DEMO",
+                    ),
+                startConnected = true,
             )
         val includeDebugCameraLevel = intent.getStringExtra(EXTRA_DEMO_LEVEL_SOURCE) != "none"
         val videoPath = intent.getStringExtra(EXTRA_DEMO_VIDEO)
