@@ -9,6 +9,7 @@ import android.net.Uri
 import android.net.nsd.NsdManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.annotation.StringRes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -172,6 +173,7 @@ public fun realPairingEnvironment(
                 host = host,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
                 initiatorGuid = initiatorGuid,
+                phaseLogger = ::logCameraSessionPhase,
             )
         },
         createSavedProfileSession = { host ->
@@ -179,6 +181,7 @@ public fun realPairingEnvironment(
                 host = host,
                 connectionStrategy = PtpIpConnectionStrategy.SAVED_PROFILE,
                 initiatorGuid = initiatorGuid,
+                phaseLogger = ::logCameraSessionPhase,
             )
         },
         createFirstTimePairingSession = { host ->
@@ -186,6 +189,7 @@ public fun realPairingEnvironment(
                 host = host,
                 connectionStrategy = PtpIpConnectionStrategy.FIRST_TIME_PAIRING,
                 initiatorGuid = initiatorGuid,
+                phaseLogger = ::logCameraSessionPhase,
             )
         },
         usbCameraSource = usbCameraSource,
@@ -195,6 +199,7 @@ public fun realPairingEnvironment(
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
+                phaseLogger = ::logCameraSessionPhase,
             )
         },
         createSavedProfileUsbSession = { opened ->
@@ -203,6 +208,7 @@ public fun realPairingEnvironment(
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
                 connectionStrategy = PtpIpConnectionStrategy.SAVED_PROFILE,
+                phaseLogger = ::logCameraSessionPhase,
             )
         },
         createFirstTimePairingUsbSession = { opened ->
@@ -211,12 +217,28 @@ public fun realPairingEnvironment(
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
+                phaseLogger = ::logCameraSessionPhase,
             )
         },
         credentials = CameraWifiCredentialStore(context),
         awaitCameraApRestart = joiner::awaitReassociation,
     )
 }
+
+/** Emits only safe connection failures to logcat, never pairing-phase details. */
+private fun logCameraSessionPhase(phase: String, detail: String) {
+    val message = cameraSessionDiagnosticMessage(phase, detail) ?: return
+    Log.w(CAMERA_SESSION_LOG_TAG, message)
+}
+
+private const val CAMERA_SESSION_LOG_TAG = "SwiftCoreCameraSession"
+
+/** Returns only diagnostics whose phase cannot carry the camera pairing credential. */
+internal fun cameraSessionDiagnosticMessage(phase: String, detail: String): String? =
+    when (phase) {
+        "failed", "eventChannelEnded", "eventChannelCleanupFailed" -> "$phase: $detail"
+        else -> null
+    }
 
 /**
  * Debug-only wizard script: a forced starting state plus a fake environment,

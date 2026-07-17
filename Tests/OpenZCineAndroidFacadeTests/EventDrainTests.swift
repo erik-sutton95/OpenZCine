@@ -1,7 +1,8 @@
 // Event-channel lifecycle tests against the scripted fake ZR. These cover the
 // second PTP-IP socket that the command/live-view tests do not read: raw event
-// preservation, Nikon record lifecycle delivery, and terminal teardown.
+// preservation, Nikon record lifecycle delivery, and independent socket recovery.
 
+import Dispatch
 import Foundation
 import OpenZCineCore
 import Testing
@@ -65,7 +66,7 @@ struct EventDrainTests {
         }
     }
 
-    @Test func eventChannelFailureClosesTheUntrustworthyCommandSession() throws {
+    @Test func eventChannelFailureLeavesCommandAndLiveViewUsable() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
         let session = try connect(to: server)
@@ -81,9 +82,12 @@ struct EventDrainTests {
         try collector.waitForEnd()
 
         #expect(collector.terminalMessage != nil)
-        #expect(throws: PTPIPClientSessionError.self) {
-            try session.startRecording()
-        }
+        let firstFrame = DispatchSemaphore(value: 0)
+        try session.startLiveView(
+            onFrame: { _, _ in firstFrame.signal() },
+            onEnded: {})
+        defer { session.stopLiveView() }
+        #expect(firstFrame.wait(timeout: .now() + .seconds(5)) == .success)
     }
 }
 

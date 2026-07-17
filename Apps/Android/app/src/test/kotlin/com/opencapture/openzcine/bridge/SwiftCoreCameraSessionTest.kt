@@ -511,19 +511,110 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
-    fun `unexpected event channel end makes the session disconnected`() = runTest {
+    fun `PTP-IP event channel end keeps the command session connected`() = runTest {
         val bridge = FakeBridge()
-        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val phases = mutableListOf<Pair<String, String>>()
+        val session =
+            SwiftCoreCameraSession(
+                "192.168.1.1",
+                { phase, detail -> phases += phase to detail },
+                bridge,
+            )
         val connecting = async { session.connect() }
         runCurrent()
         bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
         connecting.await()
 
         bridge.eventListeners.single().onEnded("The camera closed the connection.")
-        bridge.eventListeners.single().onEvent(0xC10A, 10, longArrayOf())
+
+        assertEquals(
+            CameraSessionState.Connected(CameraIdentity("ZR", "NIKON ZR", "6001234")),
+            session.state.value,
+        )
+        assertEquals(listOf("eventChannelEnded" to "The camera closed the connection."), phases)
+
+        session.setRecording(true)
+        assertEquals(listOf(true), bridge.recordingRequests)
+
+        session.disconnect()
+        assertEquals(1, bridge.disconnects)
+    }
+
+    @Test
+    fun `USB event channel end tears down its native owner`() = runTest {
+        val bridge = FakeBridge()
+        val transport = FakeUsbTransport()
+        val session =
+            SwiftCoreCameraSession(
+                host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                automaticallyRefreshProperties = false,
+                usbTransport = transport,
+                cameraNameHint = "Nikon USB camera",
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        bridge.eventListeners.single().onEnded("The camera closed the USB event endpoint.")
+
+        assertEquals(CameraSessionState.Connecting, session.state.value)
+        runCurrent()
+        assertEquals(CameraSessionState.Disconnected, session.state.value)
+        assertEquals(1, bridge.disconnects)
+        assertTrue(transport.isClosed())
+    }
+
+    @Test
+    fun `USB event teardown waits for an in-flight camera command`() = runTest {
+        val bridge = FakeBridge()
+        val transport = FakeUsbTransport()
+        val session =
+            SwiftCoreCameraSession(
+                host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                automaticallyRefreshProperties = false,
+                usbTransport = transport,
+                cameraNameHint = "Nikon USB camera",
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        val commandStarted = CountDownLatch(1)
+        val releaseCommand = CountDownLatch(1)
+        bridge.controlHandler = { _, _ ->
+            commandStarted.countDown()
+            check(releaseCommand.await(5, TimeUnit.SECONDS))
+            SwiftCore.CONTROL_COMMAND_ACCEPTED
+        }
+        val command = async(Dispatchers.Default) { session.applyControl(CameraControl.ISO, "800") }
+        try {
+            assertTrue(commandStarted.await(5, TimeUnit.SECONDS))
+            bridge.eventListeners.single().onEnded("The camera closed the USB event endpoint.")
+            runCurrent()
+
+            assertEquals(CameraSessionState.Connecting, session.state.value)
+            assertEquals(0, bridge.disconnects)
+
+            releaseCommand.countDown()
+            command.await()
+            runCurrent()
+        } finally {
+            releaseCommand.countDown()
+        }
 
         assertEquals(CameraSessionState.Disconnected, session.state.value)
-        assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
+        assertEquals(1, bridge.disconnects)
+        assertTrue(transport.isClosed())
     }
 
     @Test

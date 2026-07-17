@@ -167,6 +167,14 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   descriptor narrowing, white-balance and audio modes, the omitted movie-VR fallback, electronic-VR
   rejection for R3D NE/N-RAW/ProRes RAW, RAW FX/DX labels after every codec transition, readback
   timing and rejection feedback, plus RTT freshness across reconnect and transport replacement.
+- **Android live-view event-channel resilience** (OPE-96, in review; OPE-100, planned): an
+  independent PTP-IP event-socket failure no longer discards a healthy Android command and
+  live-view session, while a shared USB event-endpoint failure remains terminal and releases its
+  transport before recovery. OPE-100 will establish whether the Nikon ZR supports a bounded
+  in-session event-stream re-open or requires a complete reconnect. **[VERIFY-ON-HW]** With a
+  supported Nikon ZR, observe or induce event-stream loss, confirm that the feed and commands stay
+  usable when the command channel is healthy, and confirm record-state/property-event recovery or
+  a safe reconnect when it is not.
 - **Android authoritative monitor readouts** (OPE-63, in review): render live-view timecode only
   from the camera frame accepted for display; render resolution, codec, card space, recording FPS,
   camera battery, ISO, shutter, iris, focus, and white balance from `CameraPropertySnapshot`; and
