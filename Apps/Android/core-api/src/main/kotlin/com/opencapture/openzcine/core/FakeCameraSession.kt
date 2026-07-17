@@ -76,6 +76,20 @@ public class FakeCameraSession(
                 mutableProperties.update {
                     it.copy(codec = label, codecSelection = label)
                 }
+            CameraControl.WHITE_BALANCE ->
+                mutableProperties.update {
+                    if (label.endsWith("K")) {
+                        val kelvin = label.dropLast(1).toIntOrNull()
+                        it.copy(
+                            whiteBalanceMode = "Color temp",
+                            whiteBalanceKelvin = kelvin,
+                        )
+                    } else {
+                        it.copy(whiteBalanceMode = label)
+                    }
+                }
+            CameraControl.WHITE_BALANCE_TINT ->
+                mutableProperties.update { it.copy(whiteBalanceTint = label) }
             else -> throw CameraControlException.UnsupportedSelection
         }
     }
@@ -93,6 +107,9 @@ public class FakeCameraSession(
                 resolutionFrameRate = "6K · 25p",
                 codec = "R3D NE",
                 codecSelection = "R3D NE",
+                whiteBalanceMode = "Auto",
+                whiteBalanceKelvin = 5_600,
+                whiteBalanceTint = "Neutral",
                 controlCapabilities =
                     CameraControlCapabilities(
                         resolutionFrameRates =
@@ -110,6 +127,25 @@ public class FakeCameraSession(
                                 "ProRes RAW HQ",
                                 "ProRes 422 HQ",
                                 "H.265 10-bit",
+                            ),
+                        whiteBalanceValues =
+                            listOf(
+                                "Auto",
+                                "Natural auto",
+                                "Sunny",
+                                "Cloudy",
+                                "5600K",
+                                "3200K",
+                            ),
+                        // Sparse sample of the 13×13 grid so the Tint tab is
+                        // present; the pad can still emit any valid label.
+                        whiteBalanceTints =
+                            listOf(
+                                "Neutral",
+                                "A1 · G0.5",
+                                "A2 · G1",
+                                "B1 · M0.25",
+                                "B1 · G1",
                             ),
                     ),
             )

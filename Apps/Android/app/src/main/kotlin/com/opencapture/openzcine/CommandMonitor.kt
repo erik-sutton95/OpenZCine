@@ -1459,6 +1459,7 @@ internal fun CommandControlDialog(
     val pending = pendingControl != null
     val options = commandControlOptions(request, pendingControl, controlsEnabled)
     val selectedSuffix = stringResource(R.string.camera_option_selected_suffix)
+    val isTintPad = request.control == CameraControl.WHITE_BALANCE_TINT
     AlertDialog(
         onDismissRequest = {
             if (!pending) onDismiss()
@@ -1475,7 +1476,9 @@ internal fun CommandControlDialog(
         },
         text = {
             Column(
-                Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                Modifier.heightIn(max = 320.dp).then(
+                    if (isTintPad) Modifier else Modifier.verticalScroll(rememberScrollState()),
+                ),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (feedback != null) {
@@ -1494,6 +1497,19 @@ internal fun CommandControlDialog(
                         modifier = Modifier.padding(bottom = 4.dp),
                     )
                 }
+                if (isTintPad) {
+                    // iOS command/monitor Tint surface is the 2-D pad, not a
+                    // 169-row list of grid labels.
+                    val tintAvailable = options.isNotEmpty()
+                    WhiteBalanceTintPad(
+                        currentLabel = request.currentValue.ifBlank { "Neutral" },
+                        available = tintAvailable,
+                        interactive = controlsEnabled && !pending && tintAvailable,
+                        onCommit = { label ->
+                            if (label != request.currentValue) onSelect(label)
+                        },
+                    )
+                } else {
                 options.forEach { option ->
                     val optionDescription =
                         stringResource(
@@ -1526,6 +1542,7 @@ internal fun CommandControlDialog(
                             color = if (option.selected) LiveDesign.accent else LiveDesign.text,
                         )
                     }
+                }
                 }
                 if (pending) {
                     Text(

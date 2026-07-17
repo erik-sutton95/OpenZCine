@@ -632,23 +632,20 @@ internal fun MonitorControlPickerPanel(
             )
         }
 
-        // iOS `AccentDrumWheel`: the option set is a snapping vertical drum
-        // that applies on settle, not a flat list of buttons.
-        val options = commandControlOptions(mode.request, pendingControl, controlsEnabled)
-        val selectedLabel = options.firstOrNull { it.selected }?.label ?: options.firstOrNull()?.label ?: ""
-        val optionDescription = stringResource(R.string.camera_picker_options_description, mode.label)
-        Column(
-            Modifier.fillMaxWidth().weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            AccentDrumWheel(
-                options = options.map { it.label },
-                selection = selectedLabel,
-                interactive = controlsEnabled && !pending,
-                modifier = Modifier.fillMaxWidth().weight(1f).semantics { contentDescription = optionDescription },
-                onSettle = { settled ->
-                    if (settled != selectedLabel) onSelect(mode.request, settled)
+        // iOS: WB "Tint" tab swaps the drum for `WhiteBalanceTintPad`.
+        // Every other mode uses `AccentDrumWheel`.
+        if (mode.request.control == CameraControl.WHITE_BALANCE_TINT) {
+            // Dim when the body advertised no fine-tune options for the active
+            // WB mode (iOS `whiteBalanceTintAvailable`); still show the pad.
+            val tintAvailable = mode.request.options.isNotEmpty()
+            WhiteBalanceTintPad(
+                currentLabel = mode.request.currentValue.ifBlank { "Neutral" },
+                available = tintAvailable,
+                interactive = controlsEnabled && !pending && tintAvailable,
+                onCommit = { label ->
+                    if (label != mode.request.currentValue) onSelect(mode.request, label)
                 },
+                modifier = Modifier.fillMaxWidth().weight(1f),
             )
             if (pendingControl == mode.request.control) {
                 Text(
@@ -656,6 +653,41 @@ internal fun MonitorControlPickerPanel(
                     style = chromeStyle(11f, FontWeight.Medium),
                     color = LiveDesign.muted,
                 )
+            }
+        } else {
+            // iOS `AccentDrumWheel`: the option set is a snapping vertical drum
+            // that applies on settle, not a flat list of buttons.
+            val options = commandControlOptions(mode.request, pendingControl, controlsEnabled)
+            val selectedLabel =
+                options.firstOrNull { it.selected }?.label
+                    ?: options.firstOrNull()?.label
+                    ?: ""
+            val optionDescription =
+                stringResource(R.string.camera_picker_options_description, mode.label)
+            Column(
+                Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                AccentDrumWheel(
+                    options = options.map { it.label },
+                    selection = selectedLabel,
+                    interactive = controlsEnabled && !pending,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .semantics { contentDescription = optionDescription },
+                    onSettle = { settled ->
+                        if (settled != selectedLabel) onSelect(mode.request, settled)
+                    },
+                )
+                if (pendingControl == mode.request.control) {
+                    Text(
+                        stringResource(R.string.camera_applying_change),
+                        style = chromeStyle(11f, FontWeight.Medium),
+                        color = LiveDesign.muted,
+                    )
+                }
             }
         }
     }
