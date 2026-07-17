@@ -16,12 +16,16 @@ import com.opencapture.openzcine.core.LiveFrameTimecode
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.isActive
 import kotlin.coroutines.coroutineContext
 
@@ -37,6 +41,9 @@ import kotlin.coroutines.coroutineContext
  * copy for looping. Steady loop: replay the in-memory buffer at the clip fps
  * (typically 25) with no decoder work.
  *
+ * [frames] is **shared** across collectors (live feed + scopes). A cold Flow
+ * would start a second MediaCodec per subscriber and starve both paths.
+ *
  * The sample never ships in release; it stays outside the committed tree.
  */
 class DemoVideoFrameSource(
@@ -44,7 +51,9 @@ class DemoVideoFrameSource(
     @Suppress("UNUSED_PARAMETER")
     private val includeDebugCameraLevel: Boolean = true,
 ) : LiveFrameSource {
-    override val frames: Flow<LiveFrame> =
+    private val producerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val producer: Flow<LiveFrame> =
         flow {
             val source = openDataSource()
             if (source == null) {
@@ -108,6 +117,17 @@ class DemoVideoFrameSource(
             }
         }
             .flowOn(Dispatchers.Default)
+
+    /**
+     * One shared producer for every subscriber (feed + scopes). Replay keeps
+     * a late scope collector from waiting a full decode cycle for its first tick.
+     */
+    override val frames: Flow<LiveFrame> =
+        producer.shareIn(
+            scope = producerScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 0),
+            replay = 1,
+        )
 
     /**
      * Sequential MediaCodec decode of the video track. Invokes [onFrame] for

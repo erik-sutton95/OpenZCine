@@ -18,11 +18,15 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.shareIn
 
 /**
  * Debug-only [LiveFrameSource] that synthesizes JPEG frames on the fly —
@@ -32,6 +36,9 @@ import kotlinx.coroutines.flow.flowOn
  *
  * Emission is paced against an absolute schedule (`start + n * period`), not
  * per-frame sleeps, so compression cost doesn't skew the rate.
+ *
+ * [frames] is shared so the live feed and scope sampler do not each spin a
+ * second generator (same multi-subscriber issue as [DemoVideoFrameSource]).
  */
 class DemoFrameSource(
     private val width: Int = 1280,
@@ -40,7 +47,9 @@ class DemoFrameSource(
     /** Omit the synthetic level only when visually exercising device-tilt fallback. */
     private val includeDebugCameraLevel: Boolean = true,
 ) : LiveFrameSource {
-    override val frames: Flow<LiveFrame> =
+    private val producerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val producer: Flow<LiveFrame> =
         flow {
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
@@ -70,6 +79,13 @@ class DemoFrameSource(
             }
         }
             .flowOn(Dispatchers.Default)
+
+    override val frames: Flow<LiveFrame> =
+        producer.shareIn(
+            scope = producerScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 0),
+            replay = 1,
+        )
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint =
