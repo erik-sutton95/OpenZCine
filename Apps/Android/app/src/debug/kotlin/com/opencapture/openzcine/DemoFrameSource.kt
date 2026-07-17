@@ -95,6 +95,19 @@ class DemoFrameSource(
         }
         paint.color = Color.BLACK
         canvas.drawRect(0f, height * 0.7f, width.toFloat(), height.toFloat(), paint)
+        // Horizontal luminance ramp: the classic scope verification signal —
+        // every column lands on a different level, so a healthy waveform
+        // plots one continuous diagonal trace (flat bars alone collapse each
+        // column onto a single dot, which reads as "no signal").
+        val rampTop = height * 0.72f
+        val rampBottom = height * 0.86f
+        val steps = width / 2
+        val stepWidth = width / steps.toFloat()
+        for (step in 0 until steps) {
+            val level = (step * 255 / (steps - 1)).coerceIn(0, 255)
+            paint.color = Color.rgb(level, level, level)
+            canvas.drawRect(step * stepWidth, rampTop, (step + 1) * stepWidth, rampBottom, paint)
+        }
 
         val seconds = frameIndex / framesPerSecond
         val timecode =
