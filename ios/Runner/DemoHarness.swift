@@ -27,6 +27,10 @@ enum DemoHarness {
     static let forcedRedAvailability = value("ZC_DEMO_RED_BLOCKED")
     /// `ZC_DEMO_OPEN_BUG_REPORT=1` opens the bug-report route chooser for screenshot checks.
     static let openBugReport = flag("ZC_DEMO_OPEN_BUG_REPORT")
+    /// `ZC_DEMO_INTERNET_CONFIRM=support|report|feature` stages the camera-AP confirmation alert.
+    static let internetHandoffConfirmation = value("ZC_DEMO_INTERNET_CONFIRM")
+    /// `ZC_DEMO_INTERNET_PROGRESS=support|report|feature` stages the route-waiting overlay.
+    static let internetHandoffProgress = value("ZC_DEMO_INTERNET_PROGRESS")
     /// `ZC_METAL_FEED=1` opts into the experimental GPU-native feed renderer.
     static let metalFeed = flag("ZC_METAL_FEED")
     /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
@@ -343,6 +347,9 @@ enum DemoHarness {
                 // normal presentation path visible beneath it if a screenshot closes the form.
                 model.openStandaloneSettings()
                 model.operatorSettingsTab = .system
+            }
+            if let destination = SettingsInternetDestination.demoValue(internetHandoffProgress) {
+                model.beginInternetDestinationPreparation(destination.title)
             }
             if let raw = env["ZC_DEMO_ORIENTATION"] {
                 // Demo/screenshot affordance: force the interface orientation so headless
