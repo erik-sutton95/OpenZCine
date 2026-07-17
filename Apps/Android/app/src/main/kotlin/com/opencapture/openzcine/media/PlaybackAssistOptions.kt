@@ -5,7 +5,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -39,6 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -52,7 +54,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.AssistState
+import com.opencapture.openzcine.AssistToolGlyph
 import com.opencapture.openzcine.AssistTool
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.ExposureAssistCameraInput
@@ -83,8 +87,6 @@ import com.opencapture.openzcine.settings.ScopeGuideLines
 import com.opencapture.openzcine.settings.ScopeParadeMode
 import com.opencapture.openzcine.settings.ScopeVectorscopeZoom
 import com.opencapture.openzcine.settings.ScopeWaveformMode
-import com.opencapture.openzcine.settings.SettingsQuietLink
-import com.opencapture.openzcine.settings.SettingsSwitchRow
 import com.opencapture.openzcine.zebraEditorValue
 import com.opencapture.openzcine.zebraMonitorPercent
 import kotlin.math.roundToInt
@@ -272,7 +274,12 @@ private fun AssistOptionsOverlay(
         val revealOffset by
             animateDpAsState(
                 targetValue = if (revealed) 0.dp else 24.dp,
-                animationSpec = tween(durationMillis = 180),
+                // iOS reveal: 0.20s ease-out slide-up.
+                animationSpec =
+                    tween(
+                        durationMillis = 200,
+                        easing = androidx.compose.animation.core.CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
+                    ),
                 label = "playback assist panel reveal",
             )
         LaunchedEffect(tool) { revealed = true }
@@ -319,11 +326,17 @@ private fun AssistOptionsOverlay(
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                AssistToolGlyph(
+                    tool,
+                    tint = LiveDesign.text,
+                    modifier = Modifier.width(15.dp).height(15.dp),
+                )
                 Text(
                     tool.settingsTitle.uppercase(),
                     modifier = Modifier.weight(1f),
-                    style = chromeStyle(14f, FontWeight.Bold),
+                    style = chromeStyle(14f, FontWeight.Bold).copy(letterSpacing = 1.2.sp),
                     color = LiveDesign.text,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -373,7 +386,7 @@ private fun PlaybackAssistOptionsContent(
         AssistTool.LEVEL -> LevelOptions(actions, settings)
         AssistTool.DESQ -> DesqueezeOptions(actions, settings)
         AssistTool.AUDIO ->
-            OptionCopy("Meters the playing clip's audio. iOS exposes this as a tap-only tool.")
+            OptionCopy("Meters the playing clip's audio. Available during media playback.")
     }
 }
 
@@ -391,6 +404,14 @@ private enum class RedOutputSpaceFilter(val label: String, val needle: String?) 
     REC2020("Rec.2020", "2020"),
 }
 
+/** One row the LUT drum can land on. */
+private data class LutWheelEntry(
+    val label: String,
+    val selected: Boolean,
+    val apply: () -> Unit,
+    val stored: com.opencapture.openzcine.lut.StoredLutEntry? = null,
+)
+
 @Composable
 private fun LutOptions(
     actions: AssistOptionsActions,
@@ -399,105 +420,357 @@ private fun LutOptions(
     val storedEntries = lutLibrary?.entries?.collectAsState()?.value.orEmpty()
     val scope = rememberCoroutineScope()
     var feedback by remember { mutableStateOf<String?>(null) }
-    var category by remember { mutableStateOf(LutPopupCategory.BUILT_IN) }
+    // iOS opens on the tab of the currently applied LUT.
+    var category by
+        remember {
+            mutableStateOf(
+                when (val applied = actions.sharedAssistState.selectedLut) {
+                    is FeedLutSelection.Stored ->
+                        if (applied.value.category == StoredLutCategory.RED) {
+                            LutPopupCategory.RED
+                        } else {
+                            LutPopupCategory.CUSTOM
+                        }
+                    else -> LutPopupCategory.BUILT_IN
+                },
+            )
+        }
     var redFilter by remember { mutableStateOf(RedOutputSpaceFilter.ALL) }
+    var pendingDelete by
+        remember { mutableStateOf<com.opencapture.openzcine.lut.StoredLutEntry?>(null) }
 
+    val applyStored: (com.opencapture.openzcine.lut.StoredLutEntry) -> Unit = { entry ->
+        val library = lutLibrary
+        if (library != null) {
+            scope.launch {
+                if (library.prepare(entry.selection)) {
+                    actions.selectStoredLut(entry.selection)
+                    actions.setVisible(AssistTool.LUT, true)
+                    feedback = null
+                } else {
+                    feedback =
+                        library.failures.value[entry.selection]?.operatorMessage
+                            ?: "This LUT could not be prepared."
+                }
+            }
+        }
+    }
     SegmentedChoice(
         LutPopupCategory.entries.toList(),
         LutPopupCategory::label,
         selected = { category == it },
-    ) { category = it }
+    ) { next ->
+        category = next
+        pendingDelete = null
+        // iOS `applyRepresentativeLUT`: switching tabs immediately applies that
+        // tab's current (or first) look and switches the LUT tool on.
+        when (next) {
+            LutPopupCategory.BUILT_IN -> {
+                val current =
+                    (actions.sharedAssistState.selectedLut as? FeedLutSelection.BuiltIn)?.value
+                        ?: FeedLut.entries.first()
+                actions.selectLut(current)
+                actions.setVisible(AssistTool.LUT, true)
+            }
+            LutPopupCategory.RED, LutPopupCategory.CUSTOM -> {
+                val storedCategory =
+                    if (next == LutPopupCategory.RED) {
+                        StoredLutCategory.RED
+                    } else {
+                        StoredLutCategory.CUSTOM
+                    }
+                val current =
+                    (actions.sharedAssistState.selectedLut as? FeedLutSelection.Stored)
+                        ?.value
+                        ?.takeIf { it.category == storedCategory }
+                val target =
+                    current?.let { active ->
+                        storedEntries.firstOrNull { it.selection == active }
+                    } ?: storedEntries.firstOrNull { it.selection.category == storedCategory }
+                target?.let(applyStored)
+            }
+        }
+    }
 
     when (category) {
         LutPopupCategory.BUILT_IN ->
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                FeedLut.entries.forEach { lut ->
-                    OptionChoice(
-                        label = lut.label,
-                        selected =
-                            actions.sharedAssistState.selectedLut == FeedLutSelection.BuiltIn(lut),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        actions.selectLut(lut)
-                        actions.setVisible(AssistTool.LUT, true)
-                        feedback = null
-                    }
-                }
-            }
+            LutDrumWheel(
+                entries =
+                    FeedLut.entries.map { lut ->
+                        LutWheelEntry(
+                            label = lut.label,
+                            selected =
+                                actions.sharedAssistState.selectedLut ==
+                                    FeedLutSelection.BuiltIn(lut),
+                            apply = {
+                                actions.selectLut(lut)
+                                actions.setVisible(AssistTool.LUT, true)
+                                feedback = null
+                            },
+                        )
+                    },
+                onDeleteRequest = null,
+            )
         LutPopupCategory.RED -> {
-            SegmentedChoice(
-                RedOutputSpaceFilter.entries.toList(),
-                RedOutputSpaceFilter::label,
-                selected = { redFilter == it },
-            ) { redFilter = it }
             val redEntries =
                 storedEntries.filter { entry ->
                     entry.selection.category == StoredLutCategory.RED &&
                         (redFilter.needle == null || entry.displayName.contains(redFilter.needle!!))
                 }
-            StoredLutList(
-                entries = redEntries,
-                emptyCopy =
-                    "Authorized RED looks downloaded in Operator Setup appear here.",
-                actions = actions,
-                lutLibrary = lutLibrary,
-                scope = scope,
-                onFeedback = { feedback = it },
-            )
+            if (redEntries.isEmpty() && redFilter == RedOutputSpaceFilter.ALL) {
+                // iOS placeholder shape: a titled empty state with the download
+                // capsule; RED delivery stays fail-closed on Android for now.
+                OptionLabel("RED IPP2 LUTs")
+                OptionCopy("Authorized RED looks downloaded in Operator Setup appear here.")
+                CapsuleActionButton("Download from RED", enabled = false) {}
+            } else {
+                CompactSegmented(
+                    RedOutputSpaceFilter.entries.toList(),
+                    RedOutputSpaceFilter::label,
+                    selected = { redFilter == it },
+                ) { redFilter = it }
+                LutDrumWheel(
+                    entries =
+                        redEntries.map { entry ->
+                            LutWheelEntry(
+                                label = entry.displayName,
+                                selected =
+                                    actions.sharedAssistState.selectedLut ==
+                                        FeedLutSelection.Stored(entry.selection),
+                                apply = { applyStored(entry) },
+                                stored = entry,
+                            )
+                        },
+                    onDeleteRequest = { pendingDelete = it },
+                )
+            }
         }
-        LutPopupCategory.CUSTOM ->
-            StoredLutList(
-                entries =
-                    storedEntries.filter {
-                        it.selection.category == StoredLutCategory.CUSTOM
-                    },
-                emptyCopy = "Custom .cube looks imported in Operator Setup appear here.",
-                actions = actions,
-                lutLibrary = lutLibrary,
-                scope = scope,
-                onFeedback = { feedback = it },
-            )
+        LutPopupCategory.CUSTOM -> {
+            val customEntries =
+                storedEntries.filter { it.selection.category == StoredLutCategory.CUSTOM }
+            if (customEntries.isEmpty()) {
+                OptionCopy("No custom LUTs yet.")
+            } else {
+                LutDrumWheel(
+                    entries =
+                        customEntries.map { entry ->
+                            LutWheelEntry(
+                                label = entry.displayName,
+                                selected =
+                                    actions.sharedAssistState.selectedLut ==
+                                        FeedLutSelection.Stored(entry.selection),
+                                apply = { applyStored(entry) },
+                                stored = entry,
+                            )
+                        },
+                    onDeleteRequest = { pendingDelete = it },
+                )
+            }
+            LutImportButton(lutLibrary, scope) { feedback = it }
+        }
+    }
+    pendingDelete?.let { entry ->
+        LutDeleteConfirmRow(
+            entry = entry,
+            onCancel = { pendingDelete = null },
+        ) {
+            val library = lutLibrary ?: return@LutDeleteConfirmRow
+            scope.launch {
+                if (library.delete(entry.selection)) {
+                    if (
+                        actions.sharedAssistState.selectedLut ==
+                        FeedLutSelection.Stored(entry.selection)
+                    ) {
+                        library.firstPreparedReplacement(entry.selection)
+                            ?.let(actions.selectStoredLut)
+                            ?: actions.setVisible(AssistTool.LUT, false)
+                    }
+                    feedback = "${entry.displayName} deleted."
+                } else {
+                    feedback = "This LUT could not be deleted."
+                }
+                pendingDelete = null
+            }
+        }
     }
     feedback?.let { message -> OptionCopy(message) }
 }
 
+/** iOS "Import .cube" capsule: opens the document picker straight from the popup. */
 @Composable
-private fun StoredLutList(
-    entries: List<com.opencapture.openzcine.lut.StoredLutEntry>,
-    emptyCopy: String,
-    actions: AssistOptionsActions,
+private fun LutImportButton(
     lutLibrary: AndroidLutLibrary?,
     scope: kotlinx.coroutines.CoroutineScope,
     onFeedback: (String) -> Unit,
 ) {
-    if (entries.isEmpty()) {
-        OptionCopy(emptyCopy)
-        return
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        entries.forEach { entry ->
-            OptionChoice(
-                label = entry.displayName,
-                selected =
-                    actions.sharedAssistState.selectedLut ==
-                        FeedLutSelection.Stored(entry.selection),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                val library = lutLibrary ?: return@OptionChoice
+    val launcher =
+        androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+        ) { uri ->
+            val library = lutLibrary ?: return@rememberLauncherForActivityResult
+            if (uri != null) {
                 scope.launch {
-                    if (library.prepare(entry.selection)) {
-                        actions.selectStoredLut(entry.selection)
-                        actions.setVisible(AssistTool.LUT, true)
-                        onFeedback("${entry.displayName} selected.")
-                    } else {
-                        onFeedback(
-                            library.failures.value[entry.selection]?.operatorMessage
-                                ?: "This LUT could not be prepared.",
-                        )
+                    when (val result = library.importFromDocument(uri)) {
+                        is com.opencapture.openzcine.lut.CustomLutImportResult.Imported ->
+                            onFeedback("${result.entry.displayName} imported.")
+                        is com.opencapture.openzcine.lut.CustomLutImportResult.Rejected ->
+                            onFeedback(result.message)
                     }
                 }
             }
         }
+    CapsuleActionButton("Import .cube", enabled = lutLibrary != null) {
+        launcher.launch(arrayOf("*/*"))
+    }
+}
+
+/** iOS delete confirmation, inlined as a destructive row instead of a system dialog. */
+@Composable
+private fun LutDeleteConfirmRow(
+    entry: com.opencapture.openzcine.lut.StoredLutEntry,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    AssistRowDivider()
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 38.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "Delete ${entry.displayName}?",
+            style = chromeStyle(11.5f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        CapsuleActionButton("Cancel", enabled = true, onClick = onCancel)
+        CapsuleActionButton(
+            "Delete LUT",
+            enabled = true,
+            destructive = true,
+            onClick = onDelete,
+        )
+    }
+}
+
+@Composable
+private fun CapsuleActionButton(
+    label: String,
+    enabled: Boolean,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val tint = if (destructive) LiveDesign.rec else LiveDesign.accent
+    Box(
+        Modifier.height(32.dp)
+            .background(LiveDesign.background.copy(alpha = 0.38f), ChromeShape)
+            .border(1.dp, if (enabled) tint.copy(alpha = 0.6f) else LiveDesign.hairline, ChromeShape)
+            .alpha(if (enabled) 1f else 0.45f)
+            .chromeClickable(enabled, onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = chromeStyle(11.5f, FontWeight.SemiBold),
+            color = if (enabled) tint else LiveDesign.muted,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * iOS `AccentDrumWheel`: a snapping wheel — the settled row renders large in
+ * accent between two hairlines; neighbours dim above and below. Settling on a
+ * row applies it; long-press requests deletion for stored looks.
+ */
+@Composable
+private fun LutDrumWheel(
+    entries: List<LutWheelEntry>,
+    onDeleteRequest: ((com.opencapture.openzcine.lut.StoredLutEntry) -> Unit)?,
+) {
+    if (entries.isEmpty()) return
+    val rowHeightDp = 44.dp
+    val wheelHeight = rowHeightDp * 3
+    val listState =
+        androidx.compose.foundation.lazy.rememberLazyListState(
+            initialFirstVisibleItemIndex =
+                entries.indexOfFirst(LutWheelEntry::selected).coerceAtLeast(0),
+        )
+    val fling = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(listState)
+    val centeredIndex by remember {
+        androidx.compose.runtime.derivedStateOf {
+            val layout = listState.layoutInfo
+            val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
+            layout.visibleItemsInfo
+                .minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) }
+                ?.index ?: 0
+        }
+    }
+    // Apply the row the wheel settles on — iOS applies on drum settle.
+    LaunchedEffect(listState, entries) {
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress to centeredIndex }
+            .collect { (scrolling, index) ->
+                if (!scrolling) {
+                    entries.getOrNull(index)?.takeIf { !it.selected }?.apply?.invoke()
+                }
+            }
+    }
+    Box(Modifier.fillMaxWidth().height(wheelHeight)) {
+        androidx.compose.foundation.lazy.LazyColumn(
+            state = listState,
+            flingBehavior = fling,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = rowHeightDp),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            items(entries.size) { index ->
+                val entry = entries[index]
+                val isCentered = index == centeredIndex
+                Box(
+                    Modifier.fillMaxWidth()
+                        .height(rowHeightDp)
+                        .pointerInput(entry) {
+                            detectTapGestures(
+                                onTap = { entry.apply() },
+                                onLongPress = {
+                                    entry.stored?.let { onDeleteRequest?.invoke(it) }
+                                },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        entry.label,
+                        style =
+                            chromeStyle(
+                                if (isCentered) 20f else 14f,
+                                if (isCentered) FontWeight.Bold else FontWeight.Medium,
+                                mono = true,
+                            ),
+                        color = if (isCentered) LiveDesign.accent else LiveDesign.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        // Hairlines bracketing the settled row, like the iOS drum.
+        Box(
+            Modifier.fillMaxWidth()
+                .height(1.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = rowHeightDp)
+                .background(LiveDesign.hairlineStrong),
+        )
+        Box(
+            Modifier.fillMaxWidth()
+                .height(1.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = rowHeightDp * 2)
+                .background(LiveDesign.hairlineStrong),
+        )
     }
 }
 
@@ -507,7 +780,7 @@ private fun FalseColorOptions(
     settings: OperatorSettings,
 ) {
     val configuration = settings.feedEffectsConfiguration
-    OptionSection(
+    AssistInlineRow(
         "Scale",
         help =
             "The camera signal selects Log3G10 or N-Log automatically. ZC Stops marks minimum " +
@@ -516,8 +789,9 @@ private fun FalseColorOptions(
                 "curve-aware display mapping, with 18% gray at 42 IRE and the camera clip at " +
                 "100. Limits paints only shadow and highlight warnings, leaving other colors " +
                 "untouched.",
+        divider = false,
     ) {
-        SegmentedChoice(
+        CompactSegmented(
             options = FeedFalseColorScale.entries.toList(),
             label = FeedFalseColorScale::label,
             selected = { actions.sharedAssistState.selectedFalseColorScale == it },
@@ -538,17 +812,18 @@ private fun FalseColorOptions(
 @Composable
 private fun PeakingOptions(settings: OperatorSettings) {
     val configuration = settings.feedEffectsConfiguration
-    OptionSection(
+    AssistInlineRow(
         "Sensitivity",
         help = "Higher sensitivity catches finer edges but can get noisy on detailed scenes.",
+        divider = false,
     ) {
-        SegmentedChoice(
+        CompactSegmented(
             options = FeedPeakingSensitivity.entries.toList(),
             label = FeedPeakingSensitivity::label,
             selected = { configuration.peakingSensitivity == it },
         ) { settings.feedEffectsConfiguration = configuration.copy(peakingSensitivity = it) }
     }
-    OptionSection(
+    AssistInlineRow(
         "Color",
         help = "Choose the edge color that stays readable over your typical scene.",
     ) {
@@ -578,16 +853,23 @@ private fun zebraSwatch(color: FeedZebraStripeColor): androidx.compose.ui.graphi
         FeedZebraStripeColor.GREEN -> androidx.compose.ui.graphics.Color(0xFF3DBE6B)
     }
 
+/** iOS zebra palettes: three stripe colors per zone, not the full enum. */
+private val zebraHighlightPalette =
+    listOf(FeedZebraStripeColor.WHITE, FeedZebraStripeColor.AMBER, FeedZebraStripeColor.RED)
+private val zebraMidtonePalette =
+    listOf(FeedZebraStripeColor.AMBER, FeedZebraStripeColor.CYAN, FeedZebraStripeColor.GREEN)
+
 @Composable
 private fun ZebraOptions(settings: OperatorSettings, cameraInput: ExposureAssistCameraInput) {
     val configuration = settings.feedEffectsConfiguration
-    OptionSection(
+    AssistInlineRow(
         "Units",
         help =
             "Switch between Nikon-style native 0-255 codes and OpenZCine's normalized 0-100 " +
                 "monitoring IRE scale.",
+        divider = false,
     ) {
-        SegmentedChoice(
+        CompactSegmented(
             options = FeedZebraUnit.entries.toList(),
             label = FeedZebraUnit::label,
             selected = { configuration.zebraUnit == it },
@@ -609,6 +891,7 @@ private fun ZebraOptions(settings: OperatorSettings, cameraInput: ExposureAssist
         onThreshold = {
             settings.feedEffectsConfiguration = configuration.copy(zebraHighlightIre = it)
         },
+        palette = zebraHighlightPalette,
         color = configuration.zebraHighlightColor,
         onColor = {
             settings.feedEffectsConfiguration = configuration.copy(zebraHighlightColor = it)
@@ -630,6 +913,7 @@ private fun ZebraOptions(settings: OperatorSettings, cameraInput: ExposureAssist
         onThreshold = {
             settings.feedEffectsConfiguration = configuration.copy(zebraMidtoneIre = it)
         },
+        palette = zebraMidtonePalette,
         color = configuration.zebraMidtoneColor,
         onColor = {
             settings.feedEffectsConfiguration = configuration.copy(zebraMidtoneColor = it)
@@ -638,9 +922,10 @@ private fun ZebraOptions(settings: OperatorSettings, cameraInput: ExposureAssist
 }
 
 /**
- * iOS `zebraZoneRow`: one grouped zone — enable switch, numeric threshold
- * stepper, and stripe-color dots. The stepper stays camera-gated: without the
- * shared exposure mapping it degrades to the same explanatory copy as before.
+ * iOS `zebraZoneRow`: label + help on the left, then — on the SAME row — the
+ * enable switch, the tappable numeric threshold field, and the zone's three
+ * stripe-color dots. Camera-gated: without the shared exposure mapping the
+ * field is absent and the explanatory copy renders under the row.
  */
 @Composable
 private fun ZebraZoneRow(
@@ -652,47 +937,59 @@ private fun ZebraZoneRow(
     unit: FeedZebraUnit,
     monitorPercent: Float,
     onThreshold: (Float) -> Unit,
+    palette: List<FeedZebraStripeColor>,
     color: FeedZebraStripeColor,
     onColor: (FeedZebraStripeColor) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SwitchInlineRow(title = title, isOn = enabled, help = help, onToggle = onEnabledToggle)
-        val editorValue =
-            remember(cameraInput, unit, monitorPercent) {
-                zebraEditorValue(cameraInput, unit, monitorPercent)
-            }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (editorValue != null) {
-                val maximum = if (unit == FeedZebraUnit.NATIVE) 255 else 100
-                NumberStepper(
-                    value = editorValue.roundToInt(),
-                    range = 0..maximum,
-                ) { value ->
-                    zebraMonitorPercent(cameraInput, unit, value.toFloat())?.let(onThreshold)
-                }
-            }
-            ColorDotsRow(
-                options = FeedZebraStripeColor.entries.toList(),
-                label = FeedZebraStripeColor::label,
-                swatch = ::zebraSwatch,
-                selected = { color == it },
-                onSelect = onColor,
-            )
+    val editorValue =
+        remember(cameraInput, unit, monitorPercent) {
+            zebraEditorValue(cameraInput, unit, monitorPercent)
         }
-        if (editorValue == null) {
-            OptionCopy("$title threshold is unavailable until the shared exposure mapping is ready.")
+    AssistRowDivider()
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 44.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        OptionLabel(title)
+        HelpBadge(help)
+        Spacer(Modifier.weight(1f))
+        androidx.compose.material3.Switch(
+            checked = enabled,
+            onCheckedChange = { onEnabledToggle() },
+            colors =
+                androidx.compose.material3.SwitchDefaults.colors(
+                    checkedTrackColor = LiveDesign.accent,
+                    checkedThumbColor = LiveDesign.background,
+                ),
+        )
+        if (editorValue != null) {
+            val maximum = if (unit == FeedZebraUnit.NATIVE) 255 else 100
+            NumberValueField(
+                value = editorValue.roundToInt(),
+                range = 0..maximum,
+            ) { value ->
+                zebraMonitorPercent(cameraInput, unit, value.toFloat())?.let(onThreshold)
+            }
         }
+        ColorDotsRow(
+            options = palette,
+            label = FeedZebraStripeColor::label,
+            swatch = ::zebraSwatch,
+            selected = { color == it },
+            onSelect = onColor,
+        )
+    }
+    if (editorValue == null) {
+        OptionCopy("$title threshold is unavailable until the shared exposure mapping is ready.")
     }
 }
 
 @Composable
 private fun WaveformOptions(settings: OperatorSettings) {
     val configuration = settings.scopeAssistConfiguration
-    OptionSection("Mode") {
-        SegmentedChoice(
+    AssistInlineRow("Mode", divider = false) {
+        CompactSegmented(
             ScopeWaveformMode.entries.toList(),
             ScopeWaveformMode::label,
             selected = { configuration.waveformMode == it },
@@ -713,8 +1010,8 @@ private fun WaveformOptions(settings: OperatorSettings) {
 @Composable
 private fun ParadeOptions(settings: OperatorSettings) {
     val configuration = settings.scopeAssistConfiguration
-    OptionSection("Mode") {
-        SegmentedChoice(
+    AssistInlineRow("Mode", divider = false) {
+        CompactSegmented(
             ScopeParadeMode.entries.toList(),
             ScopeParadeMode::label,
             selected = { configuration.paradeMode == it },
@@ -735,14 +1032,15 @@ private fun ParadeOptions(settings: OperatorSettings) {
 @Composable
 private fun VectorscopeOptions(settings: OperatorSettings) {
     val configuration = settings.scopeAssistConfiguration
-    OptionSection(
+    AssistInlineRow(
         "Trace Zoom",
         help =
             "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope " +
                 "reads the monitor image (your active LUT, or the built-in display tone map), " +
                 "where chroma is meaningful.",
+        divider = false,
     ) {
-        SegmentedChoice(
+        CompactSegmented(
             ScopeVectorscopeZoom.entries.toList(),
             ScopeVectorscopeZoom::label,
             selected = { configuration.vectorscopeZoom == it },
@@ -763,6 +1061,7 @@ private fun HistogramOptions(settings: OperatorSettings) {
         "Traffic Lights",
         settings.histogramTrafficLightsEnabled.value,
         help = "Show small RGB edge blocks for crushed and clipped channels.",
+        divider = false,
     ) { settings.histogramTrafficLightsEnabled.toggle() }
     CompensationChoices(
         settings,
@@ -779,15 +1078,21 @@ private fun TrafficLightsOptions(settings: OperatorSettings) {
         help =
             "Stops of crush/clip tolerance before a channel indicator glows. Shared with the " +
                 "histogram traffic lights.",
+        divider = false,
     )
 }
 
 @Composable
-private fun CompensationChoices(settings: OperatorSettings, help: String? = null) {
-    OptionSection("Crush/Clip Compensation", help = help) {
-        SegmentedChoice(
+private fun CompensationChoices(
+    settings: OperatorSettings,
+    help: String? = null,
+    divider: Boolean = true,
+) {
+    AssistInlineRow("Crush/Clip Compensation", help = help, divider = divider) {
+        CompactSegmented(
             ScopeCrushClipCompensation.entries.toList(),
-            ScopeCrushClipCompensation::label,
+            // iOS renders the fraction glyphs (0 · ¼ · ½ · ¾ · 1).
+            ScopeCrushClipCompensation::compactLabel,
             selected = { settings.scopeCrushClipCompensation == it },
         ) { settings.scopeCrushClipCompensation = it }
     }
@@ -823,10 +1128,9 @@ private fun GuideOptions(actions: AssistOptionsActions, settings: OperatorSettin
             }
         }
     }
-    SettingsSwitchRow(
+    CircleToggleRow(
         "Mask outside frame",
         settings.guideMaskEnabled.value,
-        showTopDivider = false,
     ) { settings.guideMaskEnabled.toggle() }
 }
 
@@ -867,9 +1171,10 @@ private fun LevelOptions(actions: AssistOptionsActions, settings: OperatorSettin
 
 @Composable
 private fun DesqueezeOptions(actions: AssistOptionsActions, settings: OperatorSettings) {
-    SwitchInlineRow(
+    CircleToggleRow(
         "Enable",
         actions.isOn(AssistTool.DESQ),
+        divider = false,
     ) { actions.setVisible(AssistTool.DESQ, !actions.isOn(AssistTool.DESQ)) }
     SegmentedChoice(
         LocalDesqueezeRatio.entries.toList(),
@@ -885,17 +1190,22 @@ private fun DesqueezeOptions(actions: AssistOptionsActions, settings: OperatorSe
 
 @Composable
 private fun ScopeGuides(guides: ScopeGuideLines, onChange: (ScopeGuideLines) -> Unit) {
-    SettingsSwitchRow("Safe Border Clip", guides.clip, showTopDivider = false) {
+    SwitchInlineRow("Safe Border Clip", guides.clip) {
         onChange(guides.copy(clip = !guides.clip))
     }
-    SettingsSwitchRow("Safe Border Crush", guides.crush, showTopDivider = false) {
+    SwitchInlineRow("Safe Border Crush", guides.crush) {
         onChange(guides.copy(crush = !guides.crush))
     }
-    SettingsSwitchRow("Middle Gray", guides.middle, showTopDivider = false) {
+    SwitchInlineRow("Middle Gray", guides.middle) {
         onChange(guides.copy(middle = !guides.middle))
     }
 }
 
+/**
+ * iOS `SettingsPercentSlider` row: label + help on the left, the slider and a
+ * fixed-width percent readout right-aligned on the SAME row.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun BrightnessSlider(
     title: String,
@@ -903,75 +1213,199 @@ private fun BrightnessSlider(
     help: String? = null,
     onChange: (Int) -> Unit,
 ) {
-    ValueSlider(
-        title = title,
-        help = help,
-        value = value.toFloat(),
-        valueRange =
-            ScopeAssistConfiguration.MIN_BRIGHTNESS.toFloat()..
-                ScopeAssistConfiguration.MAX_BRIGHTNESS.toFloat(),
-        valueLabel = "$value%",
-        steps = ScopeAssistConfiguration.MAX_BRIGHTNESS - ScopeAssistConfiguration.MIN_BRIGHTNESS - 1,
-    ) { onChange(it.roundToInt()) }
-}
-
-@Composable
-private fun ValueSlider(
-    title: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    valueLabel: String,
-    steps: Int = 0,
-    help: String? = null,
-    onChange: (Float) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            OptionLabel(title)
-            help?.let { HelpBadge(it) }
-            Spacer(Modifier.weight(1f))
-            Text(
-                valueLabel,
-                style = chromeStyle(11f, FontWeight.Medium, mono = true),
-                color = LiveDesign.muted,
-            )
-        }
+    AssistRowDivider()
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 38.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        OptionLabel(title)
+        help?.let { HelpBadge(it) }
+        Spacer(Modifier.weight(1f))
         Slider(
-            value = value.coerceIn(valueRange),
-            onValueChange = onChange,
-            valueRange = valueRange,
-            steps = steps.coerceAtLeast(0),
+            value =
+                value.toFloat()
+                    .coerceIn(
+                        ScopeAssistConfiguration.MIN_BRIGHTNESS.toFloat(),
+                        ScopeAssistConfiguration.MAX_BRIGHTNESS.toFloat(),
+                    ),
+            onValueChange = { onChange(it.roundToInt()) },
+            valueRange =
+                ScopeAssistConfiguration.MIN_BRIGHTNESS.toFloat()..
+                    ScopeAssistConfiguration.MAX_BRIGHTNESS.toFloat(),
             colors =
                 SliderDefaults.colors(
-                    thumbColor = LiveDesign.accent,
                     activeTrackColor = LiveDesign.accent,
                     inactiveTrackColor = LiveDesign.hairlineStrong,
                 ),
-            modifier = Modifier.fillMaxWidth().height(36.dp),
+            // iOS renders a round white knob, not Material's bar handle.
+            thumb = {
+                Box(
+                    Modifier.size(22.dp)
+                        .background(
+                            androidx.compose.ui.graphics.Color.White,
+                            androidx.compose.foundation.shape.CircleShape,
+                        ),
+                )
+            },
+            modifier = Modifier.width(150.dp).height(32.dp),
+        )
+        Text(
+            "$value%",
+            style = chromeStyle(11.5f, FontWeight.Medium, mono = true),
+            color = LiveDesign.text,
+            modifier = Modifier.widthIn(min = 40.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
         )
     }
 }
 
+/** iOS row separator: a full-width hairline between quick-settings rows. */
 @Composable
-private fun OptionSection(
+private fun AssistRowDivider() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
+}
+
+/**
+ * iOS `SettingsInlineRow`: one flat row — label plus optional `?` help badge on
+ * the left, the control right-aligned — with a hairline above every row except
+ * the panel's first. This is the popup grammar; sectioned stacks are not.
+ */
+@Composable
+private fun AssistInlineRow(
     title: String,
     help: String? = null,
-    content: @Composable () -> Unit,
+    divider: Boolean = true,
+    control: @Composable () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            OptionLabel(title)
-            help?.let { HelpBadge(it) }
-        }
-        content()
+    if (divider) AssistRowDivider()
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 38.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        OptionLabel(title)
+        help?.let { HelpBadge(it) }
+        Spacer(Modifier.weight(1f))
+        control()
     }
+}
+
+/**
+ * iOS `SettingsSegmented`: a compact right-aligned pill whose segments size to
+ * their text — unlike the full-width [SegmentedChoice] kept for the framing
+ * pickers that iOS also renders full width.
+ */
+@Composable
+private fun <T> CompactSegmented(
+    options: List<T>,
+    label: (T) -> String,
+    selected: (T) -> Boolean,
+    onSelect: (T) -> Unit,
+) {
+    Row(
+        Modifier.background(LiveDesign.background.copy(alpha = 0.38f), ChromeShape)
+            .border(1.dp, LiveDesign.hairline, ChromeShape)
+            .padding(3.dp)
+            .selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        options.forEach { option ->
+            val isSelected = selected(option)
+            Box(
+                Modifier.height(30.dp)
+                    .background(
+                        if (isSelected) {
+                            LiveDesign.accentDim
+                        } else {
+                            androidx.compose.ui.graphics.Color.Transparent
+                        },
+                        ChromeShape,
+                    )
+                    .selectable(selected = isSelected, role = Role.RadioButton) {
+                        onSelect(option)
+                    }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label(option),
+                    style = chromeStyle(11.5f, FontWeight.SemiBold),
+                    color = if (isSelected) LiveDesign.accent else LiveDesign.muted,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * iOS `SettingsNumberField`: a tappable mono value pill that edits in place
+ * with the numeric keyboard and clamps on commit.
+ */
+@Composable
+private fun NumberValueField(
+    value: Int,
+    range: IntRange,
+    onCommit: (Int) -> Unit,
+) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(value) { mutableStateOf(value.toString()) }
+    val commit = {
+        draft.toIntOrNull()?.let { onCommit(it.coerceIn(range)) }
+        editing = false
+    }
+    Box(
+        Modifier.height(30.dp)
+            .widthIn(min = 46.dp)
+            .background(LiveDesign.background.copy(alpha = 0.38f), ChromeShape)
+            .border(1.dp, LiveDesign.hairline, ChromeShape)
+            .then(
+                if (editing) Modifier else Modifier.chromeClickable(true) { editing = true },
+            )
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (editing) {
+            androidx.compose.foundation.text.BasicTextField(
+                value = draft,
+                onValueChange = { next -> draft = next.filter(Char::isDigit).take(3) },
+                textStyle =
+                    chromeStyle(13f, FontWeight.Medium, mono = true)
+                        .copy(
+                            color = LiveDesign.text,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        ),
+                keyboardOptions =
+                    androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                    ),
+                keyboardActions =
+                    androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
+                singleLine = true,
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(LiveDesign.accent),
+                modifier =
+                    Modifier.widthIn(min = 30.dp, max = 52.dp)
+                        .onFocusChanged { if (!it.isFocused && editing) commit() }
+                        .focusRequester(rememberEditFocus()),
+            )
+        } else {
+            Text(
+                value.toString(),
+                style = chromeStyle(13f, FontWeight.Medium, mono = true),
+                color = LiveDesign.text,
+            )
+        }
+    }
+}
+
+/** Requests focus once for the in-place number editor as it appears. */
+@Composable
+private fun rememberEditFocus(): androidx.compose.ui.focus.FocusRequester {
+    val requester = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { requester.requestFocus() }
+    return requester
 }
 
 /** iOS `HelpBadge`: a quiet "?" that reveals the row's help copy in a glass popover. */
@@ -1075,7 +1509,8 @@ private fun <T> ColorDotsRow(
                     .widthIn(min = 26.dp)
                     .border(
                         width = if (isSelected) 2.dp else 1.dp,
-                        color = if (isSelected) LiveDesign.accent else LiveDesign.hairlineStrong,
+                        // iOS rings the selected dot with its own swatch color.
+                        color = if (isSelected) swatch(option) else LiveDesign.hairlineStrong,
                         shape = androidx.compose.foundation.shape.CircleShape,
                     )
                     .padding(4.dp)
@@ -1089,53 +1524,58 @@ private fun <T> ColorDotsRow(
     }
 }
 
-/** iOS `SettingsNumberField`: a mono value with −/+ steppers. */
+/**
+ * iOS `ToggleRow` (framing popups): label left, a stroked circle right that
+ * fills accent when on — distinct from the Material switch the analysis
+ * popups use, mirroring the iOS split.
+ */
 @Composable
-private fun NumberStepper(
-    value: Int,
-    range: IntRange,
-    onChange: (Int) -> Unit,
+private fun CircleToggleRow(
+    title: String,
+    isOn: Boolean,
+    divider: Boolean = true,
+    onToggle: () -> Unit,
 ) {
+    if (divider) AssistRowDivider()
     Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = 38.dp)
+            .toggleable(value = isOn, role = Role.Switch, onValueChange = { onToggle() }),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        StepperButton("−", enabled = value > range.first) { onChange(value - 1) }
-        Text(
-            value.toString(),
-            style = chromeStyle(13f, FontWeight.Medium, mono = true),
-            color = LiveDesign.text,
-            modifier = Modifier.widthIn(min = 34.dp),
+        OptionLabel(title)
+        Spacer(Modifier.weight(1f))
+        Box(
+            Modifier.size(24.dp)
+                .border(
+                    width = if (isOn) 0.dp else 1.5.dp,
+                    color = LiveDesign.muted,
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                )
+                .padding(if (isOn) 0.dp else 4.dp)
+                .background(
+                    if (isOn) LiveDesign.accent else androidx.compose.ui.graphics.Color.Transparent,
+                    androidx.compose.foundation.shape.CircleShape,
+                ),
         )
-        StepperButton("+", enabled = value < range.last) { onChange(value + 1) }
     }
 }
 
-@Composable
-private fun StepperButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.height(28.dp)
-            .widthIn(min = 28.dp)
-            .background(LiveDesign.background.copy(alpha = 0.38f), ChromeShape)
-            .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .alpha(if (enabled) 1f else 0.4f)
-            .chromeClickable(enabled, onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(glyph, style = chromeStyle(14f, FontWeight.SemiBold), color = LiveDesign.text)
-    }
-}
-
-/** iOS `SettingsSwitchInlineRow` with optional help badge. */
+/** iOS `SettingsSwitchInlineRow`: hairline above, label + help left, switch right. */
 @Composable
 private fun SwitchInlineRow(
     title: String,
     isOn: Boolean,
     help: String? = null,
+    divider: Boolean = true,
     onToggle: () -> Unit,
 ) {
+    if (divider) AssistRowDivider()
     Row(
-        Modifier.fillMaxWidth().toggleable(value = isOn, role = Role.Switch, onValueChange = { onToggle() }),
+        Modifier.fillMaxWidth()
+            .heightIn(min = 38.dp)
+            .toggleable(value = isOn, role = Role.Switch, onValueChange = { onToggle() }),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -1174,52 +1614,6 @@ private fun OptionCopy(message: String) {
         maxLines = 3,
         overflow = TextOverflow.Ellipsis,
     )
-}
-
-@Composable
-private fun <T> ChoiceRow(
-    options: List<T>,
-    label: (T) -> String,
-    selected: (T) -> Boolean,
-    onSelect: (T) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        options.forEach { option ->
-            OptionChoice(label(option), selected(option)) { onSelect(option) }
-        }
-    }
-}
-
-@Composable
-private fun OptionChoice(
-    label: String,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier
-            .height(40.dp)
-            .widthIn(min = 62.dp)
-            .background(
-                if (selected) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
-                ChromeShape,
-            ).border(1.dp, if (selected) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .padding(horizontal = 9.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = chromeStyle(10f, FontWeight.SemiBold, mono = true),
-            color = if (selected) LiveDesign.accent else LiveDesign.muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
 }
 
 @Composable

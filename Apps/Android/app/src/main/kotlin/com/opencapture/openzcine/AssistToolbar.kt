@@ -68,17 +68,17 @@ import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
  */
 enum class AssistTool(val label: String, val settingsTitle: String) {
     LUT("LUT", "LUT"),
-    PEAK("PEAK", "Focus Peaking"),
+    PEAK("PEAK", "Peaking"),
     FALSE("FALSE", "False Color"),
     ZEBRA("ZEBRA", "Zebra"),
     WAVE("WAVE", "Waveform"),
-    PARADE("PARADE", "Parade"),
+    PARADE("PARADE", "RGB Parade"),
     HISTO("HISTO", "Histogram"),
     VECTOR("VECTOR", "Vectorscope"),
     LIGHTS("LIGHTS", "Traffic Lights"),
-    GUIDES("GUIDES", "Frame Guides"),
-    GRID("GRID", "Composition Grid"),
-    CROSS("CROSS", "Centre Crosshair"),
+    GUIDES("GUIDES", "Guides"),
+    GRID("GRID", "Grid"),
+    CROSS("CROSS", "Crosshair"),
     LEVEL("LEVEL", "Horizon"),
     DESQ("DE-SQ", "Desqueeze"),
     AUDIO("AUDIO", "Audio Levels"),
@@ -570,7 +570,14 @@ fun AssistToolbar(
     val view = LocalView.current
     val leadingFade = scroll.canScrollBackward
     val trailingFade = scroll.canScrollForward
-    Box(modifier.glass(ChromeShape)) {
+    // iOS anchors the options popup to the whole toolbar's frame (trailing
+    // edge, band above), not to the pressed cell.
+    var toolbarBounds by remember { mutableStateOf<Rect?>(null) }
+    Box(
+        modifier
+            .onGloballyPositioned { toolbarBounds = it.boundsInRoot() }
+            .glass(ChromeShape),
+    ) {
         Row(
             Modifier
                 .fillMaxHeight()
@@ -622,45 +629,54 @@ fun AssistToolbar(
                     } else {
                         state.isOn(tool)
                     }
-                AssistToolCell(
-                    tool = tool,
-                    isOn = isOn,
-                    enabled = enabled,
-                    onLongClick =
-                        if (tool.hasConfiguration &&
-                            (onLongPressTool != null || onLongPressToolAnchored != null)
-                        ) {
-                            { anchor ->
-                                if (tool in AssistTool.scopeTools &&
-                                    !isOn &&
-                                    maximumActiveScopes != null &&
-                                    state.selectedScopes.size >= maximumActiveScopes
-                                ) {
-                                    onScopeLimitReached()
-                                } else {
-                                    if (hapticsEnabled) {
-                                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                val capBlocked =
+                    tool in AssistTool.scopeTools &&
+                        !isOn &&
+                        maximumActiveScopes != null &&
+                        state.selectedScopes.size >= maximumActiveScopes
+                // iOS renders a cap-blocked scope button at 0.35 opacity while
+                // keeping it tappable so the refusal toast can explain.
+                Box(Modifier.alpha(if (capBlocked) 0.35f else 1f)) {
+                    AssistToolCell(
+                        tool = tool,
+                        isOn = isOn,
+                        enabled = enabled,
+                        onLongClick =
+                            if (tool.hasConfiguration &&
+                                (onLongPressTool != null || onLongPressToolAnchored != null)
+                            ) {
+                                { anchor ->
+                                    if (capBlocked) {
+                                        onScopeLimitReached()
+                                    } else {
+                                        if (hapticsEnabled) {
+                                            view.performHapticFeedback(
+                                                HapticFeedbackConstants.LONG_PRESS,
+                                            )
+                                        }
+                                        onLongPressToolAnchored?.invoke(
+                                            tool,
+                                            toolbarBounds ?: anchor,
+                                        ) ?: onLongPressTool?.invoke(tool)
                                     }
-                                    onLongPressToolAnchored?.invoke(tool, anchor)
-                                        ?: onLongPressTool?.invoke(tool)
                                 }
-                            }
+                            } else {
+                                null
+                            },
+                    ) {
+                        var changed = true
+                        if (isFramingTool) {
+                            onToggleFramingTool(tool)
                         } else {
-                            null
-                        },
-                ) {
-                    var changed = true
-                    if (isFramingTool) {
-                        onToggleFramingTool(tool)
-                    } else {
-                        changed = state.toggle(tool, maximumActiveScopes)
-                    }
-                    if (!changed) {
-                        onScopeLimitReached()
-                        return@AssistToolCell
-                    }
-                    if (hapticsEnabled) {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            changed = state.toggle(tool, maximumActiveScopes)
+                        }
+                        if (!changed) {
+                            onScopeLimitReached()
+                            return@AssistToolCell
+                        }
+                        if (hapticsEnabled) {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        }
                     }
                 }
             }
@@ -907,7 +923,7 @@ private fun Modifier.assistToolClickable(
 
 /** Canvas stand-ins for the iOS SF Symbol per tool (`MonitorAssistTool.icon`). */
 @Composable
-private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = Modifier) {
+internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val stroke = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
         when (tool) {
