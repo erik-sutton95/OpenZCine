@@ -7,6 +7,11 @@ enum StartupConnectionCopy {
         guard !trimmed.isEmpty else { return trimmed }
 
         let lower = trimmed.lowercased()
+        if lower.contains("imagecapturecore") {
+            // Raw ICC error (e.g. -21400 on a stale USB session): the app retries with a session
+            // recycle automatically, so reaching the operator means even that failed.
+            return "The USB link got stuck. Unplug the cable, plug it back in, and try again."
+        }
         if lower.contains("ptp-ip") || lower.contains("ptp ip") {
             if lower.contains("no") && (lower.contains("service") || lower.contains("answered")) {
                 return "Couldn't reach the camera. Check Wi‑Fi and try again."
@@ -674,14 +679,24 @@ struct StartupCameraListRow: View {
     }
 
     private var statusPill: some View {
-        Text(statusText)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(statusColor)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .overlay(Capsule().stroke(statusColor.opacity(0.5), lineWidth: 1))
+        // Ticks once a second while a USB card scan is running so the pill's percent/readiness
+        // stays live between discovery passes.
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            Text(statusText)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(statusColor)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .overlay(Capsule().stroke(statusColor.opacity(0.5), lineWidth: 1))
+        }
+    }
+
+    /// USB card-scan state for this row's discovered camera; nil for Wi-Fi rows or once absent.
+    private var usbScan: (ready: Bool, percent: Int)? {
+        guard case .available(let discovered) = availability else { return nil }
+        return model.usbCardScan(for: discovered)
     }
 
     /// Discoverable rename / remove, mirroring the long-press context menu.
@@ -712,7 +727,11 @@ struct StartupCameraListRow: View {
         if isRecoveryTarget { return "Waiting for hotspot" }
         switch availability {
         case .connected: return "Connected"
-        case .available: return "Online"
+        case .available:
+            if let usbScan {
+                return usbScan.ready ? "Ready" : "Preparing card… \(usbScan.percent)%"
+            }
+            return "Online"
         case .offline: return "Offline"
         }
     }
@@ -720,7 +739,9 @@ struct StartupCameraListRow: View {
     private var statusColor: Color {
         if isRecoveryTarget { return StartupColors.accent }
         switch availability {
-        case .connected, .available: return StartupColors.ready
+        case .connected, .available:
+            if let usbScan, !usbScan.ready { return StartupColors.accent }
+            return StartupColors.ready
         case .offline: return StartupColors.dim
         }
     }

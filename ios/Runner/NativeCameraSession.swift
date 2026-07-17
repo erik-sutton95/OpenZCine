@@ -381,7 +381,8 @@ final class NativeCameraSession: @unchecked Sendable {
         do {
             return try await session.openAndIdentify(
                 requestPairing: requestPairing,
-                onPairingChallenge: onPairingChallenge
+                onPairingChallenge: onPairingChallenge,
+                onStage: { onEstablishmentDiagnostic?("stage:\($0)") }
             )
         } catch {
             if !session.establishmentSummary.isEmpty {
@@ -416,7 +417,14 @@ final class NativeCameraSession: @unchecked Sendable {
     /// [verify-on-HW: confirm CloseSession-then-close makes the ZR release the slot and accept the
     /// next Init without the timeout→retry dance the logs show today.]
     func shutdown() async {
-        _ = try? await transact(operationCode: .closeSession, deadline: .seconds(2))
+        // Over USB, ImageCaptureCore owns the PTP session (it opened it — that's why OpenSession
+        // tolerates Session_Already_Open). Closing it behind ICC's back leaves the parked warm
+        // session pointing at a dead PTP session, and the next adopt fails its first command
+        // (ICC -21400). Wi-Fi keeps the graceful CloseSession — a wedged ZR slot otherwise
+        // rejects the next Init. [verify-on-HW: USB disconnect → reconnect]
+        if transport.kind != .usb {
+            _ = try? await transact(operationCode: .closeSession, deadline: .seconds(2))
+        }
         transport.close()
     }
 
@@ -902,12 +910,19 @@ final class NativeCameraSession: @unchecked Sendable {
 
     private func openAndIdentify(
         requestPairing: Bool,
-        onPairingChallenge: NativePairingChallengeHandler?
+        onPairingChallenge: NativePairingChallengeHandler?,
+        onStage: (@Sendable (String) -> Void)? = nil
     ) async throws -> NativeCameraSession {
+        // Over USB the first transaction can sit behind ImageCaptureCore's own card enumeration,
+        // which scales with card fullness (thousands of stills = minutes, not seconds) — the 15 s
+        // wedge backstop would mistake that wait for a dead camera. Wi-Fi keeps the short deadline.
+        // [verify-on-HW: ZR over USB-C with a full card]
+        onStage?("first command (OpenSession)")
         let open = try await transact(
             operationCode: .openSession,
             transactionID: 0,
-            parameters: [1]
+            parameters: [1],
+            deadline: transport.kind == .usb ? .seconds(180) : Self.commandTransactionTimeout
         )
         // `Session_Already_Open` is success: over USB, ImageCaptureCore opens the PTP session
         // itself before handing the device to the app. [VERIFY-ON-HW] on the ZR over USB-C.
@@ -921,16 +936,19 @@ final class NativeCameraSession: @unchecked Sendable {
         // the trust boundary. [verify-on-HW: ZR over USB-C]
         let isUSB = transport.kind == .usb
         if requestPairing, !isUSB {
+            onStage?("pairing")
             try await completePairing(onPairingChallenge: onPairingChallenge)
         } else {
             establishmentSummary += isUSB ? "pairing=usb " : "pairing=skipped "
         }
+        onStage?("app-control switch")
         var appModeResponse = try await enableCameraControl()
         if isUSB, appModeResponse != .ok {
             // Over USB the ZR boots into PC-camera mode and denies the vendor app-control switch
             // that Wi-Fi sessions get for free. Remote mode is accepted and unlocks control, though
             // the camera body stays on its "Connected to computer" screen.
             // [verify-on-HW: ZR over USB-C, 2026-07-17 — connects, streams, full metadata]
+            onStage?("remote-mode fallback")
             let remote = try await transact(operationCode: .changeCameraMode, parameters: [1])
             let remoteResponse = remote.operationResponse.responseCode
             establishmentSummary += "remoteMode=0x\(String(remoteResponse.rawValue, radix: 16)) "
@@ -946,6 +964,7 @@ final class NativeCameraSession: @unchecked Sendable {
             }
         }
 
+        onStage?("device info")
         let infoResult = try await transact(operationCode: .getDeviceInfo, dataPhase: .dataIn)
         guard infoResult.operationResponse.responseCode == .ok else {
             throw NativeCameraSessionError.operationRejected(
