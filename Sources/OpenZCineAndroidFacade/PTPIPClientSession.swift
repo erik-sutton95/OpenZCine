@@ -37,6 +37,25 @@ public enum AndroidPTPIPInitiator {
     import Darwin
 #endif
 
+#if os(Android)
+    /// One-shot stop flag for the USB establishment event pump. Set from the
+    /// establish thread, read from the pump thread — hence the lock.
+    final class USBEventPumpFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stop = false
+        var stopRequested: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return stop
+        }
+        func requestStop() {
+            lock.lock()
+            stop = true
+            lock.unlock()
+        }
+    }
+#endif
+
 /// Errors surfaced by the facade's PTP-IP session layer.
 public enum PTPIPClientSessionError: Error, LocalizedError, Equatable {
     case connectionFailed(String)
@@ -553,6 +572,38 @@ public final class PTPIPClientSession: @unchecked Sendable {
         onPhase(.connected, session.identity.displayName)
     }
 
+    #if os(Android)
+        /// USB variant of the establish sequence. The cable has no PTP-IP Init
+        /// handshake, so there is no pairing step and no paired-GUID trust —
+        /// the ZR boots into PC-camera mode and Access_Denies the vendor
+        /// app-control switch that Wi-Fi sessions get for free. Monitoring
+        /// does not need it, so the path is: open → remote mode → prove live
+        /// view streams. [verify-on-HW: ZR over USB-C, 2026-07-17 — connects,
+        /// streams 24 fps, full metadata.]
+        private static func establishUSBSession(
+            on session: PTPIPClientSession,
+            onPhase: (CameraConnectionPhase, String) -> Void
+        ) throws {
+            try session.openSession()
+            // Application mode — NOT remote mode — is what keeps the camera
+            // BODY awake (remote mode locks it to "Connected to computer").
+            // iOS only ever uses application mode. Over USB the ZR's app-mode
+            // switch blocks on delivering a StoreRemoved event, so the switch
+            // is serviced with a concurrent event pump. The camera has no
+            // GetPairingInfo/ConfirmPairing over USB (absent from its USB
+            // OperationsSupported), so there is no pairing fallback here.
+            if try session.enableAppControlServicingEvents() != .ok {
+                // App mode still refused. Degrade to remote mode: the live
+                // feed works, though the camera body stays on "Connected to
+                // computer" (tracked follow-up). Better a working feed than a
+                // failed connect.
+                _ = try? session.executeTransaction(.changeCameraMode, parameters: [1])
+            }
+            try session.identify()
+            onPhase(.connected, session.identity.displayName)
+        }
+    #endif
+
     private static func connectFirstTimePairing(
         host: String,
         port: UInt16,
@@ -624,36 +675,32 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // The privacy-safe USB key is a Kotlin-local saved-record lookup;
             // PTP has no network host, so it is neither addressed nor sent here.
             _ = host
+            // USB has no Nikon pairing gate: `GetPairingInfo` is a Wi-Fi-only
+            // vendor flow, and issuing it on the cable is never answered and
+            // wedges the body's USB stack until a replug. Every strategy
+            // therefore runs the saved-profile establish here, and an
+            // app-control refusal is surfaced as a real error, not routed to
+            // pairing.
+            _ = strategy
+            // A timed-out earlier attempt can leave its response queued on the
+            // still-claimed bulk-in pipe, shifting every later read one
+            // transaction back. Start each attempt from an empty pipe.
+            transport.drainStaleInput()
             do {
-                switch strategy {
-                case .savedProfile:
-                    try establishSavedProfile(on: session, onPhase: onPhase)
-                    return session
-                case .firstTimePairing:
-                    try establishFirstTimePairing(on: session, onPhase: onPhase)
-                    return session
-                case .restoreProfileThenPairing:
-                    do {
-                        try establishSavedProfile(on: session, onPhase: onPhase)
-                        return session
-                    } catch {
-                        guard let sessionError = error as? PTPIPClientSessionError,
-                            sessionError == .savedProfileRequired
-                        else {
-                            throw error
-                        }
-                        // A new USB transport cannot be recreated by Swift, so reset
-                        // the PTP session on this already-claimed interface before
-                        // pairing. [VERIFY-ON-HW] Confirm the ZR accepts CloseSession
-                        // followed by OpenSession after an app-control refusal.
-                        _ = try? transport.executeTransactionSynchronously(
-                            operationCode: .closeSession,
-                            deadline: .seconds(2)
-                        )
-                        try establishFirstTimePairing(on: session, onPhase: onPhase)
-                        return session
-                    }
-                }
+                // GetDeviceInfo is the only operation valid outside a session,
+                // and every host stack (macOS ICC, Windows, libgphoto2) issues
+                // it before OpenSession while enumerating. Observed on the ZR:
+                // an OpenSession-first sequence is held unanswered while
+                // CloseSession still answers instantly — so match the
+                // universal order. Outside a session the TransactionID is 0.
+                _ = try transport.executeTransactionSynchronously(
+                    operationCode: .getDeviceInfo,
+                    transactionID: 0,
+                    dataPhase: .dataIn,
+                    deadline: .seconds(5)
+                )
+                try establishUSBSession(on: session, onPhase: onPhase)
+                return session
             } catch {
                 session.disconnect()
                 throw error
@@ -727,10 +774,38 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Nikon app-control gate. `true` when the camera accepted app control —
     /// `false` routes the caller to first-time pairing (core probe policy).
     private func enableAppControl() throws -> Bool {
-        let appMode = try executeTransaction(.changeApplicationMode, parameters: [1])
-        return PTPIPSavedProfileProbePolicy.resolve(
-            applicationModeResponse: appMode.operationResponse.responseCode) == .accepted
+        try enableAppControlResponse() == .ok
     }
+
+    /// `ChangeApplicationMode` returning the raw response so the USB path can
+    /// branch on Access_Denied vs OK (Session_Already_Open never applies to
+    /// this op).
+    func enableAppControlResponse() throws -> PTPResponseCode {
+        try executeTransaction(.changeApplicationMode, parameters: [1])
+            .operationResponse.responseCode
+    }
+
+    #if os(Android)
+        /// `ChangeApplicationMode` with the interrupt/event pipe serviced on a
+        /// side thread for the duration of the call. Entering application mode
+        /// makes the ZR emit a StoreRemoved event, and over USB it stalls the
+        /// switch (~5 s, then Access_Denied) until the host drains that event.
+        /// ImageCaptureCore on iOS always runs an event loop, so it never
+        /// stalls; our establish is single-threaded, so pump events here. The
+        /// event endpoint has its own lock — this never blocks the command
+        /// pipe carrying the app-mode request itself.
+        func enableAppControlServicingEvents() throws -> PTPResponseCode {
+            guard let usbTransport else { return try enableAppControlResponse() }
+            let pump = USBEventPumpFlag()
+            Thread.detachNewThread {
+                while !pump.stopRequested {
+                    usbTransport.servicePendingEvent(timeoutMilliseconds: 250)
+                }
+            }
+            defer { pump.requestStop() }
+            return try enableAppControlResponse()
+        }
+    #endif
 
     /// Polls `GetPairingInfo` until the camera produces a pairing challenge,
     /// with the same cadence as the iOS shell (10 attempts, 250 ms apart).
