@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
@@ -201,7 +202,9 @@ fun scopeSamplingDemand(
 
 /** Exact Android mirror of iOS `ScopeAssistSampling.thermalScopeInterval`. */
 internal fun scopePeriodNanos(activeScopeCount: Int, thermalTier: AndroidThermalTier): Long {
-    val baseFramesPerSecond = if (activeScopeCount > 3) 24.0 else 30.0
+    // iOS refreshes its scopes at ~10 Hz; ticking faster than the reference
+    // buys nothing visually and triples decode + raster + redraw work.
+    val baseFramesPerSecond = if (activeScopeCount > 3) 10.0 else 12.0
     val multiplier =
         when (thermalTier) {
             AndroidThermalTier.NOMINAL, AndroidThermalTier.FAIR -> 1.0
@@ -520,6 +523,7 @@ internal fun ScopePanels(
             }
         }
 
+    val rasterTargets = remember { TraceRasterTargets() }
     val snapshot =
         rememberScopeSnapshot(
             source,
@@ -534,6 +538,7 @@ internal fun ScopePanels(
             thermalTier,
             configuration.waveformMode,
             configuration.paradeMode,
+            rasterTargets,
         )
     val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
     val anchors =
@@ -550,6 +555,7 @@ internal fun ScopePanels(
             snapshot,
             histogramTrafficLightsEnabled,
             configuration,
+            rasterTargets,
         )
     } else {
         val layout = requireNotNull(panelLayout)
@@ -567,6 +573,7 @@ internal fun ScopePanels(
             placementRevision = placementRevision,
             hapticsEnabled = hapticsEnabled,
             onPanelFrameChanged = onPanelFrameChanged,
+            rasterTargets = rasterTargets,
         )
     }
 }
@@ -612,6 +619,7 @@ internal fun PlaybackScopePanels(
             }
         }
     val latestFrameKey by rememberUpdatedState(currentFrameKey)
+    val rasterTargets = remember { TraceRasterTargets() }
     val snapshot =
         rememberPlaybackScopeSnapshot(
             textureView = textureView,
@@ -628,6 +636,7 @@ internal fun PlaybackScopePanels(
             thermalTier = thermalTier,
             waveformMode = configuration.waveformMode,
             paradeMode = configuration.paradeMode,
+            rasterTargets = rasterTargets,
         )
     val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
     val anchors =
@@ -645,6 +654,7 @@ internal fun PlaybackScopePanels(
         configuration = configuration,
         onScaleChange = onScaleChange,
         placementStoreName = PLAYBACK_SCOPE_PLACEMENT_STORE,
+        rasterTargets = rasterTargets,
     )
 }
 
@@ -670,6 +680,7 @@ private fun PortraitScopePanels(
     snapshot: ScopeDrawData?,
     histogramTrafficLightsEnabled: Boolean,
     configuration: ScopeAssistConfiguration,
+    rasterTargets: TraceRasterTargets? = null,
 ) {
     val spacing = 8f
     val panelHeight = max(0f, (zone.height - spacing * (displayed.size - 1)) / displayed.size)
@@ -681,6 +692,7 @@ private fun PortraitScopePanels(
                 data = snapshot,
                 histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
                 configuration = configuration,
+                rasterTargets = rasterTargets,
                 // iOS portrait fit gives each enabled scope an equal full-width
                 // share and deliberately ignores landscape footprint scale.
                 fillsWidth = kind == ScopeKind.TRAFFIC_LIGHTS,
@@ -715,6 +727,7 @@ private fun FloatingScopePanels(
     placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
     onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
+    rasterTargets: TraceRasterTargets? = null,
 ) {
     val context = LocalContext.current.applicationContext
     val legacyStore =
@@ -759,6 +772,7 @@ private fun FloatingScopePanels(
                         data = snapshot,
                         histogramTrafficLightsEnabled = histogramTrafficLightsEnabled,
                         configuration = configuration,
+                        rasterTargets = rasterTargets,
                         fillsWidth = false,
                         modifier = modifier,
                     )
@@ -1067,6 +1081,7 @@ private fun ScopePanel(
     configuration: ScopeAssistConfiguration,
     fillsWidth: Boolean,
     modifier: Modifier = Modifier,
+    rasterTargets: TraceRasterTargets? = null,
 ) {
     if (kind == ScopeKind.TRAFFIC_LIGHTS) {
         TrafficLightsPanel(data?.trafficLights ?: TrafficLightsReading.EMPTY, fillsWidth, modifier)
@@ -1082,12 +1097,33 @@ private fun ScopePanel(
             stringResource(R.string.scope_vector_green),
             stringResource(R.string.scope_vector_yellow),
         )
+    val density = LocalDensity.current.density
     Box(
         modifier
             .background(ScopePalette.panelBackground, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape),
     ) {
-        Canvas(Modifier.fillMaxSize()) {
+        Canvas(
+            Modifier.fillMaxSize().onSizeChanged { panelSize ->
+                // Report the trace plot size so the rasterizer renders 1:1
+                // (plotRect insets: 6dp sides, 26dp top, 8dp bottom).
+                if (rasterTargets != null &&
+                    (kind == ScopeKind.WAVEFORM || kind == ScopeKind.PARADE)
+                ) {
+                    rasterTargets.strokeUnitPx = density
+                    val plotSize =
+                        IntSize(
+                            (panelSize.width - (12 * density)).toInt().coerceAtLeast(0),
+                            (panelSize.height - (34 * density)).toInt().coerceAtLeast(0),
+                        )
+                    if (kind == ScopeKind.WAVEFORM) {
+                        rasterTargets.wave.set(plotSize)
+                    } else {
+                        rasterTargets.parade.set(plotSize)
+                    }
+                }
+            },
+        ) {
             drawScope(
                 kind,
                 resolvedAnchors,
@@ -1362,6 +1398,7 @@ private fun rememberScopeSnapshot(
     thermalTier: AndroidThermalTier,
     waveformMode: ScopeWaveformMode,
     paradeMode: ScopeParadeMode,
+    rasterTargets: TraceRasterTargets,
 ): ScopeDrawData? {
     val data = remember { mutableStateOf<ScopeDrawData?>(null) }
     val ordered = ScopeKind.canonical.filter(selected::contains)
@@ -1394,6 +1431,7 @@ private fun rememberScopeSnapshot(
                 scopePeriodNanos(ordered.size, thermalTier),
                 waveformMode,
                 paradeMode,
+                rasterTargets,
             ) { data.value = it }
         }
     }
@@ -1417,6 +1455,7 @@ private fun rememberPlaybackScopeSnapshot(
     thermalTier: AndroidThermalTier,
     waveformMode: ScopeWaveformMode,
     paradeMode: ScopeParadeMode,
+    rasterTargets: TraceRasterTargets,
 ): ScopeDrawData? {
     val data = remember { mutableStateOf<ScopeDrawData?>(null) }
     val tap = remember(textureView) { PlaybackScopeFrameTap() }
@@ -1451,6 +1490,7 @@ private fun rememberPlaybackScopeSnapshot(
                 scopePeriodNanos = scopePeriodNanos(ordered.size, thermalTier),
                 waveformMode = waveformMode,
                 paradeMode = paradeMode,
+                rasterTargets = rasterTargets,
                 nextFrame = {
                     if (cleanFrameSource != null) {
                         cleanFrameSource.capture()
@@ -1482,6 +1522,7 @@ private suspend fun pumpScopes(
     scopePeriodNanos: Long,
     waveformMode: ScopeWaveformMode,
     paradeMode: ScopeParadeMode,
+    rasterTargets: TraceRasterTargets,
     present: (ScopeDrawData) -> Unit,
 ): Unit = coroutineScope {
     val latest = AtomicReference<LiveScopeInput?>(null)
@@ -1508,6 +1549,7 @@ private suspend fun pumpScopes(
             scopePeriodNanos = scopePeriodNanos,
             waveformMode = waveformMode,
             paradeMode = paradeMode,
+            rasterTargets = rasterTargets,
             nextFrame = {
                 val next = latest.get() ?: return@pumpReducedScopes null
                 if (next.generation == lastGeneration) return@pumpReducedScopes null
@@ -1538,6 +1580,7 @@ private suspend fun pumpReducedScopes(
     scopePeriodNanos: Long,
     waveformMode: ScopeWaveformMode,
     paradeMode: ScopeParadeMode,
+    rasterTargets: TraceRasterTargets,
     nextFrame: suspend () -> ReducedScopeFrame?,
     present: (ScopeDrawData) -> Unit,
 ) {
@@ -1616,11 +1659,17 @@ private suspend fun pumpReducedScopes(
             val trailForPanel = previousTraces.takeIf { demand.pointTrace }
             val waveImage =
                 traceForPanel?.takeIf { ScopeKind.WAVEFORM in selected }?.let {
-                    waveRaster.raster(ScopeKind.WAVEFORM, it, trailForPanel, waveformMode, paradeMode)
+                    waveRaster.raster(
+                        ScopeKind.WAVEFORM, it, trailForPanel, waveformMode, paradeMode,
+                        rasterTargets.wave.get(), rasterTargets.strokeUnitPx,
+                    )
                 }
             val paradeImage =
                 traceForPanel?.takeIf { ScopeKind.PARADE in selected }?.let {
-                    paradeRaster.raster(ScopeKind.PARADE, it, trailForPanel, waveformMode, paradeMode)
+                    paradeRaster.raster(
+                        ScopeKind.PARADE, it, trailForPanel, waveformMode, paradeMode,
+                        rasterTargets.parade.get(), rasterTargets.strokeUnitPx,
+                    )
                 }
             val histogram =
                 traces?.takeIf { demand.histogram }?.let { histogramDisplay(it, previousHistogram) }
@@ -1757,6 +1806,19 @@ internal interface PlaybackScopeFrameSource {
  * (current frame + trail), mirroring [JpegFrameDecoder]'s ring rationale.
  */
 /**
+ * Live plot sizes (in px) the trace rasterizer renders at so the panel blit
+ * is 1:1 — resampling additive dot fields dims them. Written from panel
+ * layout, read on the pump thread each tick.
+ */
+internal class TraceRasterTargets {
+    val wave = java.util.concurrent.atomic.AtomicReference(IntSize.Zero)
+    val parade = java.util.concurrent.atomic.AtomicReference(IntSize.Zero)
+
+    /** One screen dp in px — the unit the old direct point draw used. */
+    @Volatile var strokeUnitPx: Float = 2.75f
+}
+
+/**
  * Off-RenderThread waveform/parade trace rasterizer. Replaying tens of
  * thousands of additive `drawPoints` per channel on the shared RenderThread
  * stalls every UI frame behind the scope layer on weak GPUs (sub-10 fps
@@ -1786,20 +1848,27 @@ private class TraceRasterizer {
         trail: ScopeTraces?,
         waveformMode: ScopeWaveformMode,
         paradeMode: ScopeParadeMode,
+        target: IntSize,
+        strokeUnitPx: Float,
     ): ImageBitmap {
+        val width = if (target.width > 0) target.width else FALLBACK_WIDTH
+        val height = if (target.height > 0) target.height else FALLBACK_HEIGHT
         var bitmap = pool[next]
-        if (bitmap == null) {
-            bitmap = Bitmap.createBitmap(RASTER_WIDTH, RASTER_HEIGHT, Bitmap.Config.ARGB_8888)
+        if (bitmap == null || bitmap.width != width || bitmap.height != height) {
+            bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             pool[next] = bitmap
         }
         next = (next + 1) % pool.size
         bitmap.eraseColor(0)
         val canvas = android.graphics.Canvas(bitmap)
-        val plot = Rect(0f, 0f, RASTER_WIDTH.toFloat(), RASTER_HEIGHT.toFloat())
+        val plot = Rect(0f, 0f, width.toFloat(), height.toFloat())
+        unit = strokeUnitPx
         trail?.let { drawKind(canvas, kind, it, plot, ScopePalette.TRAIL_DECAY, waveformMode, paradeMode) }
         drawKind(canvas, kind, traces, plot, 1f, waveformMode, paradeMode)
         return bitmap.asImageBitmap()
     }
+
+    private var unit = 2.75f
 
     private fun ensureScratch(pointCount: Int): FloatArray {
         if (scratch.size < pointCount * 2) scratch = FloatArray(pointCount * 2)
@@ -1822,15 +1891,15 @@ private class TraceRasterizer {
                 if (waveformMode == ScopeWaveformMode.LUMA) {
                     // Luma trace: 2px additive ghost + 1px core, brighter every 4th dot.
                     val count = fillChannel(traces, 1, plot, plot.left, plot.width, out)
-                    points(canvas, out, count, ScopePalette.lumaGhost, 2f * RASTER_DENSITY, opacity)
-                    points(canvas, out, count, ScopePalette.luma, RASTER_DENSITY, opacity)
+                    points(canvas, out, count, ScopePalette.lumaGhost, 2f * unit, opacity)
+                    points(canvas, out, count, ScopePalette.luma, unit, opacity)
                     var hot = 0
                     for (index in 0 until count step 4) {
                         out[hot * 2] = out[index * 2]
                         out[hot * 2 + 1] = out[index * 2 + 1]
                         hot++
                     }
-                    points(canvas, out, hot, ScopePalette.lumaHot, RASTER_DENSITY, opacity)
+                    points(canvas, out, hot, ScopePalette.lumaHot, unit, opacity)
                 } else {
                     for ((offset, color) in
                         listOf(
@@ -1840,7 +1909,7 @@ private class TraceRasterizer {
                         )
                     ) {
                         val count = fillChannel(traces, offset, plot, plot.left, plot.width, out)
-                        points(canvas, out, count, color, RASTER_DENSITY, opacity)
+                        points(canvas, out, count, color, unit, opacity)
                     }
                 }
             ScopeKind.PARADE -> {
@@ -1863,7 +1932,7 @@ private class TraceRasterizer {
                 for ((laneIndex, lane) in lanes.withIndex()) {
                     val origin = plot.left + laneIndex * laneWidth
                     val count = fillChannel(traces, lane.first, plot, origin, laneWidth - 1, out)
-                    points(canvas, out, count, lane.second, RASTER_DENSITY, opacity)
+                    points(canvas, out, count, lane.second, unit, opacity)
                 }
             }
             else -> Unit
@@ -1893,12 +1962,10 @@ private class TraceRasterizer {
     }
 
     private companion object {
-        // ≥ the largest panel raster on the hardware floor; a small fixed
-        // ARGB target (0.9 MB) the blit scales into the live plot rect.
-        const val RASTER_WIDTH = 640
-        const val RASTER_HEIGHT = 360
-        // The dp-derived stroke width the panel used to draw at, in raster px.
-        const val RASTER_DENSITY = 2.5f
+        // Pre-first-layout fallback only; steady state renders at the exact
+        // reported plot size so the blit is 1:1.
+        const val FALLBACK_WIDTH = 320
+        const val FALLBACK_HEIGHT = 128
     }
 }
 
