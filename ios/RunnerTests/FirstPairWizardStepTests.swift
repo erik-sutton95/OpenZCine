@@ -99,4 +99,33 @@ struct FirstPairWizardStepTests {
 
         #expect(model.pairingDiscoveryCandidates == [rediscovered])
     }
+
+    @MainActor
+    @Test("Manual camera Wi-Fi details stage an exact join without claiming OCR")
+    func manualCameraWiFiDetails() {
+        let model = NativeAppModel()
+        model.isCameraWiFiScannerPresented = true
+
+        model.applyManualCameraWiFi(ssid: "NIKON-Z-FUTURE-42", key: "camera-passphrase")
+
+        #expect(model.pendingCameraWiFiJoinTarget == .specificSSID("NIKON-Z-FUTURE-42"))
+        #expect(model.cameraWiFiJoinPasswordDraft == "camera-passphrase")
+        #expect(model.cameraWiFiJoinHasPasswordDraft)
+        #expect(!model.cameraWiFiJoinKeyFromScan)
+        #expect(!model.isCameraWiFiScannerPresented)
+        #expect(model.connectionPhase == .readyToJoin)
+        #expect(model.isConnectionProgressPresented)
+    }
+
+    @MainActor
+    @Test("Scanned camera Wi-Fi details retain their verification source")
+    func scannedCameraWiFiDetails() {
+        let model = NativeAppModel()
+
+        model.applyScannedCameraWiFi(ssid: "NIKONZ_8_X12345", key: "b4c5d6e7")
+
+        #expect(model.pendingCameraWiFiJoinTarget == .specificSSID("NIKONZ_8_X12345"))
+        #expect(model.cameraWiFiJoinKeyFromScan)
+        #expect(model.cameraWiFiJoinHasPasswordDraft)
+    }
 }

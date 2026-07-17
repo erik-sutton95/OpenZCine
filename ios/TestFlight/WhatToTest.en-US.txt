@@ -1,14 +1,14 @@
 What's changed
 
 - Connecting to the camera over USB-C is now fast and reliable, even with a full memory card.
-- After plugging in, the camera row shows the card being prepared with a live percentage, and the Connect button switches from Preparing to ready the moment connecting will be instant.
+- After plugging in, the camera row shows the card being prepared with a live percentage, and the Connect button switches from Preparing to ready the moment connecting will be instant. The connection card explains progress and shows readable errors with technical details underneath.
 - Disconnecting inside the app and reconnecting over USB-C no longer re-reads the card, so reconnects are immediate.
 - Plugging in a USB-C camera only adds it to the camera list; connecting is always your tap.
-- While connecting, the progress card explains what is happening in plain language, and connection errors show a readable message with technical details underneath.
+- Wi-Fi setup now recognizes Nikon Z camera network names across models and localized camera menus. If scanning cannot validate the details, you can enter the camera's exact SSID and key manually.
 
 Please test
 
 - Plug the camera into the iPhone with USB-C, confirm it appears in the list without connecting on its own, wait for the row to show Ready, then tap Connect and confirm it connects almost instantly.
 - Tap Connect right after plugging in and confirm the progress card counts up while reading the camera's card instead of sitting on a plain spinner.
 - Disconnect from inside the app and reconnect over USB-C; confirm it connects immediately without re-reading the card. Then unplug and replug the cable and confirm the row walks through Preparing back to Ready.
-- Connect over Wi-Fi once and confirm that flow is unchanged.
+- Open the camera's Connection wizard and scan its Wi-Fi details. Confirm the app advances when both fields are visible. Also try Enter manually, copy the exact SSID and key from the camera, and confirm the same connection card appears before joining.

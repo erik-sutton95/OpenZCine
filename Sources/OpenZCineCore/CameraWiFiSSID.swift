@@ -1,9 +1,12 @@
 import Foundation
 
-/// Nikon ZR camera access-point SSID derivation and join policy.
+/// Nikon Z camera access-point identification, ZR derivation, and join policy.
 public enum CameraWiFiSSID {
-    /// Prefix of the camera's Wi‑Fi hotspot SSID (e.g. `NIKON_ZR_01234`).
+    /// ZR-specific prefix retained for deriving an SSID from the ZR's PTP friendly name.
     public static let nikonAccessPointPrefix = "NIKON_ZR_"
+
+    /// Brand prefix shared by Nikon Z access-point names across camera models.
+    public static let nikonAccessPointBrandPrefix = "NIKON"
 
     /// Prefix of the PTP-IP friendly camera name (e.g. `ZR_6001234`).
     public static let ptpFriendlyNamePrefix = "ZR_"
@@ -28,10 +31,64 @@ public enum CameraWiFiSSID {
         return deriveSSID(fromCameraName: record.displayName)
     }
 
+    /// Whether an SSID has the conservative shape of a Nikon Z camera access point.
+    ///
+    /// Nikon bodies do not share the ZR's exact underscore/model/serial layout. The stable contract
+    /// is a Nikon brand prefix, a Z-series marker, at least one serial/model digit, and only the
+    /// ASCII characters camera-generated network names use. This intentionally does not reconstruct
+    /// an unfamiliar model name; exact scanned or stored SSIDs remain authoritative.
+    public static func isNikonZAccessPoint(_ rawSSID: String) -> Bool {
+        let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (8...32).contains(ssid.utf8.count) else { return false }
+        let uppercase = ssid.uppercased()
+        guard uppercase.hasPrefix(nikonAccessPointBrandPrefix) else { return false }
+
+        let suffix = uppercase.dropFirst(nikonAccessPointBrandPrefix.count)
+        guard suffix.contains("Z"), suffix.contains(where: \.isNumber) else { return false }
+        return suffix.unicodeScalars.allSatisfy { scalar in
+            scalar.value <= 0x7F
+                && (CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "-")
+        }
+    }
+
+    /// Normalizes an OCR token only enough to repair the Nikon brand, then validates its full shape.
+    ///
+    /// Model and serial characters are preserved rather than guessed, so a future body cannot be
+    /// silently joined under a synthesized SSID. Nikon camera SSIDs are emitted in uppercase.
+    static func normalizedScannedNikonZAccessPoint(_ rawSSID: String) -> String? {
+        let trimmed = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= nikonAccessPointBrandPrefix.count else { return nil }
+
+        let uppercase = trimmed.uppercased()
+        let brandEnd = uppercase.index(
+            uppercase.startIndex,
+            offsetBy: nikonAccessPointBrandPrefix.count
+        )
+        let brand = String(uppercase[..<brandEnd])
+        guard correctedNikonBrand(brand) == nikonAccessPointBrandPrefix else { return nil }
+
+        let candidate = nikonAccessPointBrandPrefix + String(uppercase[brandEnd...])
+        guard isNikonZAccessPoint(candidate) else { return nil }
+        return candidate
+    }
+
     private static func serialSuffixForSSID(_ serial: String) -> String? {
         let digits = serial.filter(\.isNumber)
         guard digits.count >= 5 else { return nil }
         return String(digits.suffix(5))
+    }
+
+    private static func correctedNikonBrand(_ brand: String) -> String {
+        String(
+            brand.map { character -> Character in
+                switch character {
+                case "0": return "O"
+                case "1", "L": return "I"
+                case "5": return "S"
+                case "8": return "B"
+                default: return character
+                }
+            })
     }
 }
 
@@ -53,7 +110,7 @@ public enum CameraWiFiJoinPolicy {
         }
     }
 
-    /// Whether the phone is joined to a Nikon ZR camera Wi‑Fi hotspot.
+    /// Whether the phone is joined to a Nikon Z camera Wi‑Fi hotspot.
     ///
     /// Uses the connected SSID when available. Subnet-only matching is intentionally **not** used:
     /// `192.168.1.0/24` is a common home-router range and would false-positive when the camera AP
@@ -66,7 +123,7 @@ public enum CameraWiFiJoinPolicy {
         guard let ssid = connectedSSID?.trimmingCharacters(in: .whitespacesAndNewlines),
             !ssid.isEmpty
         else { return false }
-        return ssid.uppercased().hasPrefix(CameraWiFiSSID.nikonAccessPointPrefix.uppercased())
+        return CameraWiFiSSID.isNikonZAccessPoint(ssid)
     }
 
     /// Resolves the camera SSID without considering the current network.
@@ -132,8 +189,8 @@ public enum CameraWiFiJoinPolicy {
 
     /// Resolves a proactive join target when the phone is off the camera AP subnet.
     ///
-    /// Prefers a saved camera's SSID when available; otherwise matches any nearby Nikon ZR AP
-    /// via `NIKON_ZR_` prefix (no saved profile required).
+    /// Prefers a saved camera's exact SSID when available; otherwise matches a nearby Nikon Z AP
+    /// by its shared brand prefix (no saved profile required).
     public static func proactiveJoinTarget(
         localAddresses: [String],
         savedCameras: [PTPIPSavedCameraRecord],
@@ -152,7 +209,7 @@ public enum CameraWiFiJoinPolicy {
             }
         }
 
-        return .ssidPrefix(CameraWiFiSSID.nikonAccessPointPrefix)
+        return .ssidPrefix(CameraWiFiSSID.nikonAccessPointBrandPrefix)
     }
 
     /// Resolves which SSID or prefix should be used when looking up stored Wi‑Fi credentials.
