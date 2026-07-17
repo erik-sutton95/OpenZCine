@@ -160,12 +160,19 @@ internal fun landscapeSideRailPlan(
 /**
  * A live capture picker stays mounted while its real camera command is in
  * flight, then closes when its mode or chrome region is no longer available.
+ *
+ * Top-bar resolution/codec pickers (iOS `CameraPicker.isTopBar`) do **not**
+ * depend on the bottom capture strip — they stay open whenever live chrome is
+ * active, matching iOS's independent top-deck panel host.
  */
 internal fun retainMonitorPickerForChrome(
     mode: MonitorDisplayMode,
     cameraValuesVisible: Boolean,
     cameraCommandPending: Boolean,
-): Boolean = cameraCommandPending || (mode == MonitorDisplayMode.LIVE && cameraValuesVisible)
+    isTopBarPicker: Boolean = false,
+): Boolean =
+    cameraCommandPending ||
+        (mode == MonitorDisplayMode.LIVE && (cameraValuesVisible || isTopBarPicker))
 
 /** Settings-only affordance used when the landscape side rails are hidden. */
 @Composable
@@ -854,12 +861,17 @@ internal fun MonitorScreen(
             effectiveDisplayMode,
             cameraValuesVisible,
             pendingCommandControl,
+            activeMonitorPickerKind,
         ) {
-            if (activeMonitorPickerKind != null &&
+            val kind = activeMonitorPickerKind ?: return@LaunchedEffect
+            val topBar =
+                kind == MonitorPickerKind.RESOLUTION || kind == MonitorPickerKind.CODEC
+            if (
                 !retainMonitorPickerForChrome(
                     mode = effectiveDisplayMode,
                     cameraValuesVisible = cameraValuesVisible,
                     cameraCommandPending = pendingCommandControl != null,
+                    isTopBarPicker = topBar,
                 )
             ) {
                 activeMonitorPickerKind = null
@@ -2073,16 +2085,15 @@ private fun InfoPill(
         CameraTimecodeReadout(timecode = timecode, sizeSp = 20f, weight = FontWeight.Medium)
         if (!compact) {
             // Resolution/codec readouts are ALWAYS buttons like iOS's top-bar
-            // readout buttons — press feedback included — and the tap no-ops
-            // silently while locked or before the command projection has
-            // validated options, exactly as iOS's lock gate behaves.
+            // readout buttons — press feedback included. The tap no-ops only
+            // while locked / command-gated (`pickersEnabled`), matching iOS
+            // `interfaceLocked`. Option lists come from camera descriptors or
+            // the same static fallbacks iOS uses when descriptors are empty.
             ReadoutPill(
                 resolution,
                 active = activePicker == MonitorPickerKind.RESOLUTION,
                 onClick = {
-                    if (resolutionPickerAvailable && pickersEnabled) {
-                        onOpenPicker(MonitorPickerKind.RESOLUTION)
-                    }
+                    if (pickersEnabled) onOpenPicker(MonitorPickerKind.RESOLUTION)
                 },
             ) { tint ->
                 VideoGlyph(tint)
@@ -2092,9 +2103,7 @@ private fun InfoPill(
                     codec,
                     active = activePicker == MonitorPickerKind.CODEC,
                     onClick = {
-                        if (codecPickerAvailable && pickersEnabled) {
-                            onOpenPicker(MonitorPickerKind.CODEC)
-                        }
+                        if (pickersEnabled) onOpenPicker(MonitorPickerKind.CODEC)
                     },
                 ) { tint ->
                     FilmGlyph(tint)
@@ -2175,9 +2184,10 @@ private fun PortraitChrome(
     }
 
     // REC-options button (iOS PortraitRecOptionsButton): a glass circle at the
-    // feed's top-trailing corner, under the top bar, whose popover routes to
-    // the resolution/codec pickers. Only shown while a validated picker exists.
-    if (!isCommand && !locked && (resolutionPickerAvailable || codecPickerAvailable)) {
+    // feed's top-trailing corner, under the top bar. iOS always mounts it in
+    // non-command portrait (dimmed while locked) and always offers both menu
+    // rows; showPicker itself no-ops while locked.
+    if (!isCommand) {
         var recOptionsExpanded by remember { mutableStateOf(false) }
         val recOptionsFrame =
             ZoneFrame(
@@ -2186,7 +2196,7 @@ private fun PortraitChrome(
                 width = 44f,
                 height = 44f,
             )
-        Box(Modifier.zone(recOptionsFrame)) {
+        Box(Modifier.zone(recOptionsFrame).alpha(if (locked) 0.4f else 1f)) {
             AuxCircleButton(
                 Modifier.fillMaxSize(),
                 onClick = { recOptionsExpanded = true },
@@ -2196,8 +2206,8 @@ private fun PortraitChrome(
             RecOptionsPopover(
                 expanded = recOptionsExpanded,
                 onDismiss = { recOptionsExpanded = false },
-                resolutionAvailable = resolutionPickerAvailable,
-                codecAvailable = codecPickerAvailable,
+                resolutionAvailable = true,
+                codecAvailable = true,
                 onResolution = { onOpenMonitorPicker(MonitorPickerKind.RESOLUTION) },
                 onCodec = { onOpenMonitorPicker(MonitorPickerKind.CODEC) },
             )

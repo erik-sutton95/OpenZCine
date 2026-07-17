@@ -218,6 +218,57 @@ class MonitorCameraControlsTest {
                 cameraCommandPending = false,
             ),
         )
+        // Top-bar resolution/codec pickers stay open without the capture strip.
+        assertTrue(
+            retainMonitorPickerForChrome(
+                mode = MonitorDisplayMode.LIVE,
+                cameraValuesVisible = false,
+                cameraCommandPending = false,
+                isTopBarPicker = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `top pill pickers always open like iOS even without advertised options`() {
+        val empty = monitorTopPillPickers(dashboard(CameraPropertySnapshot()), strings)
+        assertEquals(
+            setOf(MonitorPickerKind.RESOLUTION, MonitorPickerKind.CODEC),
+            empty.keys,
+        )
+        assertEquals(
+            IOS_RESOLUTION_PICKER_FALLBACKS,
+            empty.getValue(MonitorPickerKind.RESOLUTION).modes.single().request.options,
+        )
+        assertEquals(
+            IOS_CODEC_PICKER_FALLBACKS,
+            empty.getValue(MonitorPickerKind.CODEC).modes.single().request.options,
+        )
+
+        val advertised =
+            monitorTopPillPickers(
+                dashboard(
+                    cameraSnapshot().copy(
+                        resolutionFrameRate = "6K · 25p",
+                        codec = "R3D NE",
+                        codecSelection = "R3D NE",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                resolutionFrameRates = listOf("4K · 60p", "6K · 25p"),
+                                codecs = listOf("H.265", "R3D NE"),
+                            ),
+                    ),
+                ),
+                strings,
+            )
+        assertEquals(
+            listOf("4K · 60p", "6K · 25p"),
+            advertised.getValue(MonitorPickerKind.RESOLUTION).modes.single().request.options,
+        )
+        assertEquals(
+            listOf("H.265", "R3D NE"),
+            advertised.getValue(MonitorPickerKind.CODEC).modes.single().request.options,
+        )
     }
 
     @Test

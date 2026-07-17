@@ -88,9 +88,9 @@ internal data class MonitorCaptureSettingPresentation(
 
 /**
  * Pickers behind the landscape top-pill resolution/codec readouts (and the
- * portrait REC-options popover) — iOS opens `.resolution`/`.codec` pickers
- * from those taps. Present only when the command projection already produced
- * a Swift-validated request; nothing is invented here either.
+ * portrait REC-options popover). Mirrors iOS: always present so a tap opens
+ * the drum; options prefer the command projection (camera-advertised when the
+ * body has reported them, otherwise the same static fallbacks iOS uses).
  */
 internal fun monitorTopPillPickers(
     dashboard: CommandDashboardPresentation,
@@ -100,25 +100,50 @@ internal fun monitorTopPillPickers(
     fun from(
         kind: MonitorPickerKind,
         tileKind: CommandTileKind,
+        control: CameraControl,
         subtitle: Int,
+        fallbacks: List<String>,
     ): Pair<MonitorPickerKind, MonitorPickerPresentation>? {
-        val tile = primary[tileKind] ?: return null
-        val request = tile.request?.takeIf { it.options.isNotEmpty() } ?: return null
+        val tile = primary[tileKind]
+        val cameraRequest = tile?.request?.takeIf { it.options.isNotEmpty() }
+        val options = cameraRequest?.options?.ifEmpty { null } ?: fallbacks
+        val current =
+            cameraRequest?.currentValue
+                ?: tile?.value?.takeIf { it != "—" }
+                ?: options.firstOrNull()
+                ?: return null
+        val request =
+            cameraRequest
+                ?: CommandControlRequest(
+                    title = tile?.title ?: strings.resolve(subtitle),
+                    control = control,
+                    currentValue = current,
+                    options = options,
+                )
+        val title = tile?.title ?: request.title
         return kind to
             MonitorPickerPresentation(
                 kind = kind,
-                title = tile.title,
+                title = title,
                 subtitle = strings.resolve(subtitle),
-                modes = listOf(MonitorPickerModePresentation(tile.title, request)),
+                modes = listOf(MonitorPickerModePresentation(title, request)),
             )
     }
     return listOfNotNull(
         from(
             MonitorPickerKind.RESOLUTION,
             CommandTileKind.RESOLUTION_FRAMERATE,
+            CameraControl.RESOLUTION_FRAMERATE,
             R.string.camera_subtitle_resolution,
+            IOS_RESOLUTION_PICKER_FALLBACKS,
         ),
-        from(MonitorPickerKind.CODEC, CommandTileKind.CODEC, R.string.camera_subtitle_codec),
+        from(
+            MonitorPickerKind.CODEC,
+            CommandTileKind.CODEC,
+            CameraControl.CODEC,
+            R.string.camera_subtitle_codec,
+            IOS_CODEC_PICKER_FALLBACKS,
+        ),
     ).toMap()
 }
 

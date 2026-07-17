@@ -3,6 +3,7 @@ package com.opencapture.openzcine.core
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 class FakeCameraSessionTest {
@@ -57,5 +58,26 @@ class FakeCameraSessionTest {
 
         session.setRecording(false)
         assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
+    }
+
+    @Test
+    fun `demo seeds resolution and codec options and applies them locally`() = runTest {
+        val session = FakeCameraSession(discoverable = zr)
+        assertEquals("6K · 25p", session.cameraProperties.value.resolutionFrameRate)
+        assertTrue(
+            session.cameraProperties.value.controlCapabilities.resolutionFrameRates.isNotEmpty(),
+        )
+        assertTrue(session.cameraProperties.value.controlCapabilities.codecs.isNotEmpty())
+
+        assertFailsWith<CameraControlException.NotConnected> {
+            session.applyControl(CameraControl.CODEC, "N-RAW")
+        }
+
+        session.connect()
+        session.applyControl(CameraControl.RESOLUTION_FRAMERATE, "4K · 60p")
+        session.applyControl(CameraControl.CODEC, "N-RAW")
+        assertEquals("4K · 60p", session.cameraProperties.value.resolutionFrameRate)
+        assertEquals("N-RAW", session.cameraProperties.value.codecSelection)
+        assertEquals("N-RAW", session.cameraProperties.value.codec)
     }
 }

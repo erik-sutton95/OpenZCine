@@ -373,6 +373,38 @@ internal fun commandDashboardPresentation(
         }
     }
 
+    /**
+     * Resolution / codec open like iOS even before the body advertises enums:
+     * use camera options when present, otherwise the same static fallbacks as
+     * `CameraPicker.options`. Hardware writes still validate against the live
+     * descriptor in the Swift core. When the body has not reported a current
+     * selection, centre on the first option (iOS seeds the drum the same way).
+     */
+    fun recordingModeEditable(
+        kind: CommandTileKind,
+        title: String,
+        value: String?,
+        control: CameraControl,
+        fallbacks: List<String>,
+        blockedReason: String,
+    ): CommandTilePresentation {
+        val cameraOptions = capabilities.options(control)
+        val options = cameraOptions.ifEmpty { fallbacks }
+        val currentValue = value.monitorValueOrNull() ?: options.firstOrNull()
+        return if (currentValue == null) {
+            CommandTilePresentation(kind, title, "—", unavailableReason = unavailable)
+        } else if (options.isEmpty()) {
+            CommandTilePresentation(kind, title, currentValue, unavailableReason = blockedReason)
+        } else {
+            CommandTilePresentation(
+                kind = kind,
+                title = title,
+                value = currentValue,
+                request = CommandControlRequest(title, control, currentValue, options),
+            )
+        }
+    }
+
     fun readOnly(
         kind: CommandTileKind? = null,
         title: String,
@@ -457,19 +489,21 @@ internal fun commandDashboardPresentation(
                     blockedReason = strings.resolve(R.string.command_reason_white_balance),
                 ),
             CommandTileKind.RESOLUTION_FRAMERATE to
-                advertisedEditable(
+                recordingModeEditable(
                     kind = CommandTileKind.RESOLUTION_FRAMERATE,
                     title = strings.resolve(R.string.command_title_resolution),
                     value = resolution,
                     control = CameraControl.RESOLUTION_FRAMERATE,
+                    fallbacks = IOS_RESOLUTION_PICKER_FALLBACKS,
                     blockedReason = strings.resolve(R.string.command_reason_recording_modes),
                 ),
             CommandTileKind.CODEC to
-                advertisedEditable(
+                recordingModeEditable(
                     kind = CommandTileKind.CODEC,
                     title = strings.resolve(R.string.command_title_codec),
                     value = codec,
                     control = CameraControl.CODEC,
+                    fallbacks = IOS_CODEC_PICKER_FALLBACKS,
                     blockedReason = strings.resolve(R.string.command_reason_codec_modes),
                 ),
             CommandTileKind.STABILIZATION to
@@ -751,6 +785,20 @@ internal fun cameraPropertyConfirmsSelection(
 private const val COLOR_TEMPERATURE_MODE = "Color temp"
 
 private val EXPOSURE_MODE_OPTIONS = listOf("Auto", "P", "A", "S", "M", "U1", "U2", "U3")
+
+/**
+ * iOS `CameraPicker.options` fallbacks for the resolution/codec drums when the
+ * body has not yet advertised `MovScreenSize` / `MovFileType` enums (demo feed
+ * and partial readback). Prefer camera-advertised lists when present; never
+ * invent packed PTP values — the Swift core still rejects unknown labels on
+ * real hardware writes.
+ */
+internal val IOS_RESOLUTION_PICKER_FALLBACKS =
+    listOf("6K · 24p", "6K · 25p", "6K · 30p", "6K · 50p", "4K · 60p")
+
+/** iOS `CameraPicker.options` codec fallback list (see [IOS_RESOLUTION_PICKER_FALLBACKS]). */
+internal val IOS_CODEC_PICKER_FALLBACKS =
+    listOf("R3D NE", "N-RAW", "ProRes RAW HQ", "ProRes 422 HQ", "H.265 10-bit")
 
 /**
  * The DISP 3 command dashboard: camera-backed health and primary controls at

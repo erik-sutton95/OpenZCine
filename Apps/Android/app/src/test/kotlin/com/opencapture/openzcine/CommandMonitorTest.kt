@@ -243,7 +243,21 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
-        assertTrue(presentation.tiles.all { it.value == "—" && it.request == null })
+        // Resolution/codec keep iOS CameraPicker fallback options so the drums
+        // still open; every other descriptor-backed tile stays write-blocked.
+        assertTrue(
+            presentation.tiles
+                .filter {
+                    it.kind != CommandTileKind.RESOLUTION_FRAMERATE &&
+                        it.kind != CommandTileKind.CODEC
+                }
+                .all { it.value == "—" && it.request == null },
+        )
+        val resolution =
+            presentation.tiles.first { it.kind == CommandTileKind.RESOLUTION_FRAMERATE }
+        assertEquals(IOS_RESOLUTION_PICKER_FALLBACKS, assertNotNull(resolution.request).options)
+        val codec = presentation.tiles.first { it.kind == CommandTileKind.CODEC }
+        assertEquals(IOS_CODEC_PICKER_FALLBACKS, assertNotNull(codec.request).options)
         assertTrue(
             presentation.sideSections
                 .flatMap(CommandSideSectionPresentation::cells)
