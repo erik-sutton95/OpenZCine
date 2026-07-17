@@ -120,8 +120,16 @@ public class PairingEnvironment(
     public val credentials: PairingCredentials,
 )
 
-/** Production [PairingEnvironment] over the real platform services. */
-public fun realPairingEnvironment(context: Context): PairingEnvironment {
+/**
+ * Production [PairingEnvironment] over the real platform services.
+ *
+ * [phaseLogger] receives progress and failure phases. Callers must discard or privately handle the
+ * detail value rather than placing it in an anonymous report.
+ */
+public fun realPairingEnvironment(
+    context: Context,
+    phaseLogger: (String, String) -> Unit = { _, _ -> },
+): PairingEnvironment {
     val joiner = CameraApJoiner(context.getSystemService(ConnectivityManager::class.java))
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
@@ -130,13 +138,14 @@ public fun realPairingEnvironment(context: Context): PairingEnvironment {
         joinCameraAp = { ssid, passphrase -> joiner.join(ssid, passphrase) },
         releaseCameraAp = joiner::release,
         hotspotCameras = discovery.cameras(),
-        createSession = { host -> SwiftCoreCameraSession(host) },
+        createSession = { host -> SwiftCoreCameraSession(host, phaseLogger) },
         usbCameraSource = usbCameraSource,
         createUsbSession = { opened ->
             SwiftCoreCameraSession(
                 host = opened.hostKey,
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
+                phaseLogger = phaseLogger,
             )
         },
         credentials = CameraWifiCredentialStore(context),

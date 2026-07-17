@@ -109,9 +109,11 @@ privacy-filtered activity-event snapshot or selected screenshots, or choose a
 [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) with richer
 optional details. Both create public GitHub issues. The anonymous route never uploads the local
 MetricKit report, raw breadcrumbs, arbitrary logs, original image bytes, or media. Its optional
-snapshot contains only closed event names; selected screenshots are re-rendered to remove embedded
-file metadata but their visible content remains public. Testers must not include passwords, pairing
-codes, private media, or security vulnerabilities in either route.
+snapshot contains only closed event and incident codes. The relay renders fixed operational traces
+for incidents without receiving raw stacks, exception messages, paths, addresses, or timestamps.
+Selected screenshots are re-rendered to remove embedded file metadata but their visible content
+remains public. Testers must not include passwords, pairing codes, private media, or security
+vulnerabilities in either route.
 
 ## GitHub Actions (fallback)
 

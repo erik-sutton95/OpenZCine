@@ -286,7 +286,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) for richer
   optional details. Both create labelled public GitHub issues. The anonymous path has optional,
   user-selected screenshots re-rendered without embedded file metadata and a closed,
-  privacy-filtered app-activity snapshot; it never uploads raw diagnostics, arbitrary logs, device
+  privacy-filtered app-activity snapshot. Closed error/warning codes expand server-side into fixed
+  operational traces so failure order is visible without uploading raw stacks, exception text,
+  paths, addresses, or timestamps. It never uploads raw diagnostics, arbitrary logs, device
   names, camera/device identifiers, network identifiers, or original image bytes. Visible screenshot
   content remains the reporter's responsibility to review. Feature requests remain account-backed
   GitHub Discussions.

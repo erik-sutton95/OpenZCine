@@ -47,9 +47,11 @@ created by the relay are public and labelled `bug`, `needs-triage`, and `source:
 larger than 3,211,264 bytes; every screenshot is at most 1,048,576 bytes and must declare
 `image/png`.
 
-The optional `activityLog` JSON field is an array of at most 200 closed OpenZCine event names. It
-does not accept arbitrary log text, timestamps, device names, paths, network values, or identifiers.
-The relay rejects unknown event values.
+The optional `activityLog` JSON field is an array of at most 200 closed OpenZCine event and
+incident codes. Error/warning incident codes are rendered with fixed operational stages such as
+`connection.attempt → transport-or-handshake → connection.failure`; those stages are relay-owned
+and are not raw runtime stack frames. The field does not accept exception messages, arbitrary log text,
+timestamps, device names, paths, network values, or identifiers. The relay rejects unknown values.
 
 Each screenshot is parsed server-side before storage. It must be a 1–2560px, 8-bit RGBA,
 non-interlaced PNG with valid CRCs; the Worker writes a newly canonical PNG containing only `IHDR`,

@@ -299,6 +299,7 @@ class SwiftCoreLiveFrameSourceTest {
     fun `pump end restarts while a collector remains subscribed`() = runTest {
         var starts = 0
         var stops = 0
+        val failurePhases = mutableListOf<String>()
         lateinit var listener: SwiftCore.LiveFrameListener
         val source =
             SwiftCoreLiveFrameSource(
@@ -311,6 +312,7 @@ class SwiftCoreLiveFrameSourceTest {
                 configurePreview = { true },
                 sharingScope = backgroundScope,
                 restartDelayMillis = 0L,
+                onFailurePhase = failurePhases::add,
             )
         val frames = mutableListOf<LiveFrame>()
         val collector = launch { source.frames.collect { frames += it } }
@@ -321,6 +323,7 @@ class SwiftCoreLiveFrameSourceTest {
 
         assertEquals(2, starts)
         assertEquals(1, stops)
+        assertEquals(listOf("liveViewStalled"), failurePhases)
         listener.onFrame(byteArrayOf(9), 9L, true)
         runCurrent()
 
@@ -382,6 +385,7 @@ class SwiftCoreLiveFrameSourceTest {
         val configured = mutableListOf<SwiftLiveViewRequest>()
         var starts = 0
         var stops = 0
+        val failurePhases = mutableListOf<String>()
         lateinit var listener: SwiftCore.LiveFrameListener
         val source =
             SwiftCoreLiveFrameSource(
@@ -400,6 +404,7 @@ class SwiftCoreLiveFrameSourceTest {
                 },
                 sharingScope = backgroundScope,
                 restartDelayMillis = 0L,
+                onFailurePhase = failurePhases::add,
             )
         val collector = launch { source.frames.collect() }
         runCurrent()
@@ -413,6 +418,7 @@ class SwiftCoreLiveFrameSourceTest {
         )
         assertEquals(2, starts)
         assertEquals(1, stops)
+        assertEquals(emptyList(), failurePhases)
         assertEquals(SwiftLiveViewRequest.DEFAULT, source.appliedPreviewRequest)
         val rejected = assertIs<SwiftLiveViewPreviewState.Rejected>(source.previewState.value)
         assertEquals(rejectedRequest, rejected.requested)

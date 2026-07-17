@@ -571,6 +571,30 @@ test("v2 relays only closed activity events with an opaque attachment contract",
   assert.equal(receivedSubmission.screenshots[0].slot, 1);
 });
 
+test("v2 accepts closed incidents and renders fixed privacy-safe operational traces", async () => {
+  const rendered = await renderV2Issue(
+    await v2Submission({
+      report: validV2Report({
+        activityLog: [
+          "connection.connected",
+          "warning.live-view.stalled",
+          "error.connection.event-channel-ended",
+          "connection.disconnected",
+        ],
+      }),
+    }),
+  );
+
+  assert.match(rendered.body, /\[WARNING\] warning\.live-view\.stalled/u);
+  assert.match(
+    rendered.body,
+    /at live-view\.streaming\n    at frame-delivery\.stalled\n    at live-view\.restart/u,
+  );
+  assert.match(rendered.body, /\[ERROR\] error\.connection\.event-channel-ended/u);
+  assert.equal(rendered.body.includes("exception message"), false);
+  assert.equal(rendered.body.includes("\/private\/"), false);
+});
+
 test("canonicalizes only a zlib-decoded RGBA image plane", async () => {
   const valid = await canonicalizePng(png());
   assert.deepEqual(pngChunkTypes(valid), ["IHDR", "IDAT", "IEND"]);
@@ -616,6 +640,13 @@ test("v2 rejects arbitrary activity text and oversized uploads after rate limiti
   assert.equal(state.relayCalls, 0);
   assert.throws(
     () => validateV2Report(validV2Report({ activityLog: ["not-a-closed-event"] })),
+    InvalidRequestError,
+  );
+  assert.throws(
+    () =>
+      validateV2Report(
+        validV2Report({ activityLog: ["error.connection.failed: Bob's iPhone"] }),
+      ),
     InvalidRequestError,
   );
 });

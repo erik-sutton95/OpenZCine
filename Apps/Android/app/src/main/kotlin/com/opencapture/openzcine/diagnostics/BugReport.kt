@@ -205,7 +205,7 @@ internal data class BugReportPayload(
 /**
  * Exact v2 JSON part for an anonymous report with optional attachments.
  *
- * The activity log is intentionally only a closed list of event names. It
+ * The activity log is intentionally only a closed list of event and incident codes. It
  * never includes the timestamped local diagnostics report, free-form values,
  * device names, or Android process metadata.
  */
@@ -373,7 +373,7 @@ private val PNG_SIGNATURE: ByteArray =
         0x0A,
     )
 
-/** Only closed event names can be placed in a public anonymous attachment. */
+/** Only closed event and incident codes can be placed in a public anonymous attachment. */
 internal fun isPrivacyFilteredActivityLog(events: List<String>): Boolean =
     events.size <= BugReportAttachmentLimits.MAXIMUM_ACTIVITY_EVENTS &&
         events.all { event -> AndroidDiagnosticEvent.fromWireValue(event) != null }
