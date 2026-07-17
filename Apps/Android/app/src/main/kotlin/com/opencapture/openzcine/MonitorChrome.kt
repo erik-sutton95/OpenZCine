@@ -160,14 +160,15 @@ fun ReadoutPill(
     value: String,
     active: Boolean = false,
     onClick: (() -> Unit)? = null,
-    icon: @Composable () -> Unit,
+    icon: @Composable (Color) -> Unit,
 ) {
-    // Active = the iOS readout-button treatment: accent-dim capsule + border
-    // + gold value while its picker is open.
+    // Active = the iOS readout-button treatment: accent-dim capsule + an
+    // accent-dim border (iOS strokes with accentDim, not full accent) with
+    // glyph and value going gold while its picker is open.
     val surface =
         if (active) {
             Modifier.background(LiveDesign.accentDim, CircleShape)
-                .border(1.dp, LiveDesign.accent, CircleShape)
+                .border(1.dp, LiveDesign.accentDim, CircleShape)
         } else {
             Modifier.chipGlass(CircleShape)
         }
@@ -181,9 +182,10 @@ fun ReadoutPill(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        icon()
+        icon(if (active) LiveDesign.accent else LiveDesign.muted)
         Text(
-            text = value,
+            // iOS collapses " · " to "·" in the tight top-bar pills.
+            text = value.replace(" · ", "·"),
             style = chromeStyle(15f, FontWeight.Medium, mono = true),
             color = if (active) LiveDesign.accent else LiveDesign.text,
             maxLines = 1,

@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -964,6 +965,21 @@ internal fun MonitorScreen(
         val timecodeRetention =
             remember(session, timecodeOwner) { MonitorTimecodeRetention(timecodeOwner) }
         val presentedTimecode = timecodeRetention.timecodeFor(sessionState)
+        // iOS top-bar semantics: readouts seed from the preview values and
+        // hold the last camera readback rather than blanking to "—"; FPS is
+        // the live-measured delivery rate ("READY" before the first frame);
+        // the media cell cycles capacity <-> estimated minutes.
+        val readoutRetention =
+            remember(session, timecodeOwner) { MonitorReadoutRetention(timecodeOwner) }
+        LaunchedEffect(cameraProperties) { readoutRetention.update(cameraProperties) }
+        val fpsSampler = remember(session, timecodeOwner) { MonitorFrameRateSampler() }
+        var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
+        val topBarMedia =
+            if (prefersMediaDuration) {
+                readoutRetention.media.durationLabel
+            } else {
+                readoutRetention.media.capacityLabel
+            }
         val watchRelayState =
             remember(
                 sessionState,
@@ -1332,6 +1348,7 @@ internal fun MonitorScreen(
                         onFrame = glass::submit,
                         onPresentedFrame = { frame, bitmap, baker ->
                             timecodeRetention.accept(frame.timecode)
+                            fpsSampler.accept(System.nanoTime())
                             wearRelay.ingestPresentedFrame(frame, bitmap, baker)
                             val isRealCameraFrame =
                                 realDecodedFrameCanTriggerGuide(
@@ -1422,7 +1439,9 @@ internal fun MonitorScreen(
                     locked = locked,
                     recording = recording,
                     timecode = presentedTimecode,
-                    cameraReadouts = cameraReadouts,
+                    // iOS portrait centers the same toggle-aware, retention-held
+                    // media readout the landscape pill shows.
+                    cameraReadouts = cameraReadouts.copy(media = topBarMedia),
                     assist = assist,
                     operatorSettings = operatorSettings,
                     commandPresentation = commandPresentation,
@@ -1529,10 +1548,10 @@ internal fun MonitorScreen(
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
                                     fpsReadoutVisible = operatorSettings.fpsReadoutVisible.value,
                                     signalBars = actualLinkHealth.presentation.signalBars,
-                                    resolution = cameraReadouts.resolution,
-                                    codec = cameraReadouts.codec,
-                                    media = cameraReadouts.media,
-                                    fps = cameraReadouts.framesPerSecond,
+                                    resolution = readoutRetention.resolution,
+                                    codec = readoutRetention.codec,
+                                    media = topBarMedia,
+                                    fps = fpsSampler.formatted,
                                     activePicker = activeMonitorPickerKind,
                                     resolutionPickerAvailable =
                                         MonitorPickerKind.RESOLUTION in topPillPickers,
@@ -1551,6 +1570,9 @@ internal fun MonitorScreen(
                                                         pendingCommandControl == null,
                                             )
                                         commandControlFeedback = null
+                                    },
+                                    onToggleMediaReadout = {
+                                        prefersMediaDuration = !prefersMediaDuration
                                     },
                                 )
                             }
@@ -1979,6 +2001,7 @@ private fun InfoPill(
     codecPickerAvailable: Boolean = false,
     pickersEnabled: Boolean = false,
     onOpenPicker: (MonitorPickerKind) -> Unit = {},
+    onToggleMediaReadout: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -2000,8 +2023,8 @@ private fun InfoPill(
                     } else {
                         null
                     },
-            ) {
-                VideoGlyph(LiveDesign.muted)
+            ) { tint ->
+                VideoGlyph(tint)
             }
             if (codecReadoutVisible) {
                 ReadoutPill(
@@ -2013,12 +2036,17 @@ private fun InfoPill(
                         } else {
                             null
                         },
-                ) {
-                    FilmGlyph(LiveDesign.muted)
+                ) { tint ->
+                    FilmGlyph(tint)
                 }
             }
             if (mediaReadoutVisible) {
-                ReadoutPill(media) { SdCardGlyph(LiveDesign.muted) }
+                // iOS media cell: tap cycles capacity <-> remaining minutes;
+                // deliberately NOT lock-gated (it is a readout mode, not a
+                // camera command).
+                ReadoutPill(media, onClick = onToggleMediaReadout) { tint ->
+                    SdCardGlyph(tint)
+                }
             }
         }
         if (fpsReadoutVisible) {
@@ -2073,7 +2101,10 @@ private fun PortraitChrome(
     LaunchedEffect(isFill, isCommand) {
         if (!isFill || isCommand) railExpanded = false
     }
-    if (operatorSettings.statusBarVisible.value) {
+    // iOS mounts the portrait info bar unconditionally — it shows in live,
+    // clean, AND command portrait, independent of the status-bar toggle
+    // (which governs only the landscape pill).
+    run {
         PortraitInfoBar(
             timecode = timecode,
             media = cameraReadouts.media,
