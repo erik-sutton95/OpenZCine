@@ -22,11 +22,13 @@ import kotlin.coroutines.coroutineContext
  * Debug-only [LiveFrameSource] that loops a local sample video (gitignored
  * `samples/` clips staged into debug assets, or `zc.demo.video` path).
  *
- * Strategy (tuned for low-end devices like SM-A12):
- * 1. Decode a modest set of evenly spaced frames with
- *    [MediaMetadataRetriever] (first frame first so the feed is never blank).
- * 2. Once the loop buffer is full, replay it at a steady rate with no further
- *    seeks — smooth looping without real-time MediaCodec complexity.
+ * Strategy:
+ * 1. Read the clip's native frame rate (falls back to 25 when metadata is
+ *    missing — matches the A002 sample and typical cinema proxies).
+ * 2. Decode one JPEG per clip frame with [MediaMetadataRetriever], emitting
+ *    each as it lands so the feed is never blank during the first pass.
+ * 3. Once the buffer is full, replay it in memory at the clip fps — no further
+ *    seeks, so the steady loop can hold true 25 fps even on low-end devices.
  *
  * The sample never ships in release; it stays outside the committed tree.
  */
@@ -34,7 +36,6 @@ class DemoVideoFrameSource(
     private val openSession: () -> ExtractionSession?,
     @Suppress("UNUSED_PARAMETER")
     private val includeDebugCameraLevel: Boolean = true,
-    private val playbackFps: Int = PLAYBACK_FPS,
 ) : LiveFrameSource {
     override val frames: Flow<LiveFrame> =
         flow {
@@ -44,6 +45,7 @@ class DemoVideoFrameSource(
                 return@flow
             }
             val loop = ArrayList<ByteArray>(MAX_LOOP_FRAMES)
+            var clipFps = DEFAULT_CLIP_FPS
             try {
                 val retriever = session.retriever
                 val durationMs =
@@ -54,14 +56,18 @@ class DemoVideoFrameSource(
                     Log.w(TAG, "sample video has no duration metadata")
                     return@flow
                 }
+                clipFps = resolveClipFps(retriever)
                 val sampleCount =
-                    ((durationMs / 1000.0) * SAMPLE_FPS)
+                    ((durationMs / 1000.0) * clipFps)
                         .toInt()
                         .coerceIn(MIN_LOOP_FRAMES, MAX_LOOP_FRAMES)
-                val stepUs = (durationMs * 1_000L) / sampleCount
+                // One sample per clip frame period so the loop preserves
+                // native cadence (e.g. 25 fps for a 25 fps clip).
+                val stepUs = 1_000_000L / clipFps
                 Log.i(
                     TAG,
-                    "demo video extracting $sampleCount frames from ${durationMs}ms clip",
+                    "demo video extracting $sampleCount frames " +
+                        "from ${durationMs}ms clip @ ${clipFps} fps",
                 )
                 val stream = ByteArrayOutputStream()
                 // Phase 1: extract and emit as we go so the first frame appears ASAP.
@@ -86,8 +92,10 @@ class DemoVideoFrameSource(
                             audioLevels = null,
                             focus = null,
                             level = null,
-                            timecode = demoTimecode(index.toLong(), SAMPLE_FPS),
-                            measuredFramesPerSecond = SAMPLE_FPS.toDouble(),
+                            // During extract, delivery rate is decode-bound;
+                            // report the target clip fps for chrome consistency.
+                            timecode = demoTimecode(index.toLong(), clipFps),
+                            measuredFramesPerSecond = clipFps.toDouble(),
                         ),
                     )
                     // Yield so the UI can present the first frames while we keep decoding.
@@ -103,9 +111,9 @@ class DemoVideoFrameSource(
                 Log.w(TAG, "sample video produced no frames")
                 return@flow
             }
-            Log.i(TAG, "demo video loop ready (${loop.size} frames @ ${playbackFps} fps)")
-            // Phase 2: smooth in-memory loop — no more seeks.
-            val periodNanos = 1_000_000_000L / playbackFps
+            Log.i(TAG, "demo video loop ready (${loop.size} frames @ ${clipFps} fps)")
+            // Phase 2: smooth in-memory loop at the clip's native frame rate.
+            val periodNanos = 1_000_000_000L / clipFps
             var frameIndex = 0L
             val startNanos = System.nanoTime()
             while (coroutineContext.isActive) {
@@ -117,8 +125,8 @@ class DemoVideoFrameSource(
                         audioLevels = null,
                         focus = null,
                         level = null,
-                        timecode = demoTimecode(frameIndex, playbackFps),
-                        measuredFramesPerSecond = playbackFps.toDouble(),
+                        timecode = demoTimecode(frameIndex, clipFps),
+                        measuredFramesPerSecond = clipFps.toDouble(),
                     ),
                 )
                 frameIndex++
@@ -160,12 +168,11 @@ class DemoVideoFrameSource(
 
     companion object {
         private const val TAG = "DemoVideoFrameSource"
-        /** Frames sampled during the initial extract pass (motion preview). */
-        private const val SAMPLE_FPS = 8
-        /** Steady loop rate after the buffer is full. */
-        private const val PLAYBACK_FPS = 12
+        /** Fallback when the container does not report a capture frame rate. */
+        private const val DEFAULT_CLIP_FPS = 25
         private const val MIN_LOOP_FRAMES = 8
-        private const val MAX_LOOP_FRAMES = 48
+        /** ~6s @ 25 fps with headroom for slightly longer samples. */
+        private const val MAX_LOOP_FRAMES = 180
         private const val MAX_LONG_EDGE = 960
         private const val ASSET_DEMO_DIR = "demo"
 
@@ -209,6 +216,19 @@ class DemoVideoFrameSource(
                 openSession = { openAssetSession(context, assetPath) },
                 includeDebugCameraLevel = includeDebugCameraLevel,
             )
+        }
+
+        /**
+         * Prefers the file's reported capture frame rate, then falls back to
+         * 25 (cinema-proxy default matching the A002 sample).
+         */
+        private fun resolveClipFps(retriever: MediaMetadataRetriever): Int {
+            val reported =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+                    ?.toFloatOrNull()
+                    ?.takeIf { it in 1f..120f }
+            if (reported != null) return reported.toInt().coerceAtLeast(1)
+            return DEFAULT_CLIP_FPS
         }
 
         /** Lists files under the debug demo asset folder; prefers [PREFERRED_SAMPLE_NAME]. */
