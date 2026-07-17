@@ -916,12 +916,26 @@ final class NativeCameraSession: @unchecked Sendable {
             throw NativeCameraSessionError.operationRejected(.openSession, openResponse)
         }
 
-        if requestPairing {
+        // USB has no pairing surface: GetPairingInfo/ConfirmPairing are absent from the camera's
+        // USB OperationsSupported, so polling them only times the connect out — the cable itself is
+        // the trust boundary. [verify-on-HW: ZR over USB-C]
+        let isUSB = transport.kind == .usb
+        if requestPairing, !isUSB {
             try await completePairing(onPairingChallenge: onPairingChallenge)
         } else {
-            establishmentSummary += "pairing=skipped "
+            establishmentSummary += isUSB ? "pairing=usb " : "pairing=skipped "
         }
-        let appModeResponse = try await enableCameraControl()
+        var appModeResponse = try await enableCameraControl()
+        if isUSB, appModeResponse != .ok {
+            // Over USB the ZR boots into PC-camera mode and denies the vendor app-control switch
+            // that Wi-Fi sessions get for free. Remote mode is accepted and unlocks control, though
+            // the camera body stays on its "Connected to computer" screen.
+            // [verify-on-HW: ZR over USB-C, 2026-07-17 — connects, streams, full metadata]
+            let remote = try await transact(operationCode: .changeCameraMode, parameters: [1])
+            let remoteResponse = remote.operationResponse.responseCode
+            establishmentSummary += "remoteMode=0x\(String(remoteResponse.rawValue, radix: 16)) "
+            if remoteResponse == .ok { appModeResponse = .ok }
+        }
         if !requestPairing {
             guard
                 PTPIPSavedProfileProbePolicy.resolve(
