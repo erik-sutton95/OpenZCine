@@ -3,6 +3,12 @@
   "main": "src/worker.mjs",
   "compatibility_date": "2026-07-16",
   "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "reports.openzcine.app",
+      "custom_domain": true
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -22,7 +28,7 @@
   "ratelimits": [
     {
       "name": "BUG_REPORT_RATE_LIMITER",
-      "namespace_id": "2001",
+      "namespace_id": "73910481",
       "simple": {
         "limit": 3,
         "period": 60

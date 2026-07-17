@@ -581,9 +581,14 @@ final class NativeAppModel {
     /// Operator Setup presented standalone from the startup home (no camera connection needed —
     /// e.g. signing in to Frame.io or clearing the media cache before a shoot).
     var isStandaloneSettingsPresented = false
+    /// Root-owned presentation state for the report flow, so it survives a camera-AP internet hop.
+    var isBugReportPresented = false
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
     /// internet. Drives the download screen's "Switching networks…" state.
     private(set) var internetHopActive = false
+    /// True only while a browser link is intentionally using an internet hop. On return to the
+    /// foreground, the app rejoins the camera AP through the normal saved-profile pipeline.
+    private(set) var externalInternetLinkHandoffActive = false
     /// Share context to restore after an internet hop re-hosts the media browser (the monitor
     /// panel's view state dies with the monitor): the clips whose share sheet initiated the hop.
     /// The standalone browser consumes this on mount — reopening a single cached clip, or the
@@ -2486,6 +2491,32 @@ final class NativeAppModel {
                 reconnectHost: hopReturn.host
             )
         }
+    }
+
+    /// Leaves the camera AP only when needed and waits for a validated internet route before an
+    /// external support, GitHub, or privacy link is opened.
+    func prepareExternalInternetLinkHandoff() async -> Bool {
+        guard isOnCameraAccessPoint else { return true }
+        beginInternetHop()
+        guard await waitForInternetPath(timeoutSeconds: 30) else {
+            endInternetHop()
+            return false
+        }
+        externalInternetLinkHandoffActive = true
+        return true
+    }
+
+    /// Completes a rejected browser handoff immediately so the camera is not left disconnected.
+    func completeExternalInternetLinkHandoff(browserAccepted: Bool) {
+        guard !browserAccepted else { return }
+        resumeExternalInternetLinkHandoffIfNeeded()
+    }
+
+    /// Rejoins the camera after the person returns from the external browser.
+    func resumeExternalInternetLinkHandoffIfNeeded() {
+        guard externalInternetLinkHandoffActive else { return }
+        externalInternetLinkHandoffActive = false
+        endInternetHop()
     }
 
     /// Re-applies the camera AP config (throttled) while waiting for a just-paired camera to return,
@@ -6455,6 +6486,10 @@ struct NativeAppRoot: View {
                 .environment(model)
             }
         }
+        .fullScreenCover(isPresented: bugReportPresented) {
+            BugReportFlowView(onDismiss: { model.isBugReportPresented = false })
+                .environment(model)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ZCBackground().ignoresSafeArea())
         .preferredColorScheme(.dark)
@@ -6489,6 +6524,7 @@ struct NativeAppRoot: View {
                 named: UIApplication.didBecomeActiveNotification)
             {
                 model.updateBluetoothShutter()
+                model.resumeExternalInternetLinkHandoffIfNeeded()
             }
         }
         .task {
@@ -6540,6 +6576,13 @@ struct NativeAppRoot: View {
         Binding(
             get: { model.isStandaloneSettingsPresented },
             set: { model.isStandaloneSettingsPresented = $0 }
+        )
+    }
+
+    private var bugReportPresented: Binding<Bool> {
+        Binding(
+            get: { model.isBugReportPresented },
+            set: { model.isBugReportPresented = $0 }
         )
     }
 

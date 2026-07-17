@@ -336,6 +336,23 @@ struct AnonymousBugReportTests {
     }
 
     @MainActor
+    @Test("Form explains when a camera Wi-Fi handoff cannot find internet")
+    func formCameraAccessPointRouteFailure() {
+        let form = BugReportFormModel(
+            baseContext: context,
+            submitter: TestBugReportSubmitter(result: .failure(.unavailable))
+        )
+
+        form.recordInternetRouteFailure()
+
+        #expect(
+            form.errorMessage
+                == "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+        )
+        #expect(!form.isSubmitting)
+    }
+
+    @MainActor
     @Test("Form blocks an oversized aggregate JSON body before contacting the relay")
     func formAggregateSizeValidation() async throws {
         let submitter = RetryRecordingBugReportSubmitter()
