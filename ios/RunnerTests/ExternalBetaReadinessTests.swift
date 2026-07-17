@@ -76,6 +76,22 @@ struct ExternalBetaDiagnosticsTests {
         )
     }
 
+    @Test("Internet route progress survives Settings and ignores stale completion")
+    @MainActor
+    func internetRouteProgress() {
+        let model = NativeAppModel()
+
+        model.beginInternetDestinationPreparation("Support")
+        #expect(model.internetDestinationPreparationTitle == "Support")
+
+        model.beginInternetDestinationPreparation("Report a Problem")
+        model.finishInternetDestinationPreparation("Support")
+        #expect(model.internetDestinationPreparationTitle == "Report a Problem")
+
+        model.finishInternetDestinationPreparation("Report a Problem")
+        #expect(model.internetDestinationPreparationTitle == nil)
+    }
+
     @Test("GitHub report handoff dismisses the chooser only after a browser accepts it")
     func githubReportHandoff() {
         var dismissalCount = 0

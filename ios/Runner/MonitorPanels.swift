@@ -3542,7 +3542,16 @@ struct OperatorSettingsPanel: View {
     }
 
     private func activateInternetDestination(_ destination: SettingsInternetDestination) {
+        let showsRouteProgress = model.isOnCameraAccessPoint
+        if showsRouteProgress {
+            model.beginInternetDestinationPreparation(destination.title)
+        }
         Task {
+            defer {
+                if showsRouteProgress {
+                    model.finishInternetDestinationPreparation(destination.title)
+                }
+            }
             let routeReady =
                 if destination.opensInAppReport {
                     await model.prepareBugReportInternetHandoff()

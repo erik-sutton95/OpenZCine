@@ -605,6 +605,10 @@ final class NativeAppModel {
     /// camera-AP hop. Unlike a browser handoff, ordinary foreground transitions must not end this
     /// hop because screenshot picking can briefly move the app inactive while the form is open.
     private(set) var bugReportInternetHandoffActive = false
+    /// The selected destination shown while iOS leaves the camera AP and settles on an
+    /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
+    /// panel collapse with the camera session.
+    private(set) var internetDestinationPreparationTitle: String?
     /// Share context to restore after an internet hop re-hosts the media browser (the monitor
     /// panel's view state dies with the monitor): the clips whose share sheet initiated the hop.
     /// The standalone browser consumes this on mount — reopening a single cached clip, or the
@@ -2542,6 +2546,18 @@ final class NativeAppModel {
         }
         bugReportInternetHandoffActive = true
         return true
+    }
+
+    /// Shows root-owned progress while an external destination waits for an internet route.
+    func beginInternetDestinationPreparation(_ title: String) {
+        internetDestinationPreparationTitle = title
+    }
+
+    /// Clears progress only for the task that originally set it, preventing an older handoff from
+    /// hiding a newer destination's status.
+    func finishInternetDestinationPreparation(_ title: String) {
+        guard internetDestinationPreparationTitle == title else { return }
+        internetDestinationPreparationTitle = nil
     }
 
     /// Completes a rejected browser handoff immediately so the camera is not left disconnected.
@@ -6486,6 +6502,12 @@ struct NativeAppRoot: View {
                 .environment(deliveryCoordinator)
                 .zIndex(150)
 
+            if let destinationTitle = model.internetDestinationPreparationTitle {
+                InternetDestinationPreparationOverlay(destinationTitle: destinationTitle)
+                    .transition(.opacity)
+                    .zIndex(160)
+            }
+
             if showsLaunchSplash {
                 LaunchSplashOverlay(isVisible: $showsLaunchSplash)
                     .transition(.opacity)
@@ -6654,6 +6676,45 @@ struct NativeAppRoot: View {
         )
     }
 
+}
+
+private struct InternetDestinationPreparationOverlay: View {
+    let destinationTitle: String
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.58)
+                .ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(LiveDesign.accent)
+
+                Text("Switching networks…")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+
+                Text("Waiting for an internet connection before opening \(destinationTitle).")
+                    .font(.system(size: 14))
+                    .foregroundStyle(LiveDesign.muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 34)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 430)
+            .background(LiveDesign.surface, in: RoundedRectangle(cornerRadius: 18))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(LiveDesign.hairlineStrong, lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 24, y: 12)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Switching networks")
+        .accessibilityValue("Waiting to open \(destinationTitle)")
+    }
 }
 
 // MARK: - Media library (Media page)
