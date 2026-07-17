@@ -1,14 +1,14 @@
 What's changed
 
-- Report a Problem in Operator Setup > System now lets you choose an anonymous public report or the signed-in GitHub bug form.
-- The anonymous form can optionally include a privacy-filtered app activity log or selected screenshots; attachments are public.
-- Feature requests still open the community discussion where you sign in.
-- On the camera's Wi-Fi access point, Support, Report a Problem, and Request a Feature now ask before switching networks, show progress while internet reconnects, then open the selected destination directly without reopening Settings.
-- Sharing Diagnostics remains a separate review-before-sharing option.
+- Connecting to the camera over USB-C is now fast and reliable, even with a full memory card.
+- After plugging in, the camera row shows the card being prepared with a live percentage, and the Connect button switches from Preparing to ready the moment connecting will be instant.
+- Disconnecting inside the app and reconnecting over USB-C no longer re-reads the card, so reconnects are immediate.
+- Plugging in a USB-C camera only adds it to the camera list; connecting is always your tap.
+- While connecting, the progress card explains what is happening in plain language, and connection errors show a readable message with technical details underneath.
 
 Please test
 
-- In Operator Setup > System, open Report a Problem and confirm both choices say that reports become public GitHub issues.
-- Choose Report Anonymously, enter a non-sensitive real bug, and confirm it completes without a GitHub sign-in screen before you return to System.
-- In the anonymous form, toggle each optional attachment control. Confirm the warning explains that screenshot pixels can still contain sensitive information even after file metadata is removed.
-- Reopen Report a Problem and choose Continue with GitHub, then open Request a Feature. On the camera's Wi-Fi access point, confirm Support, Report a Problem, and Request a Feature each show the network-switch warning, Cancel stays connected, and Continue shows a destination-specific progress prompt before opening the selected destination without reopening Settings or prompting to rejoin immediately. Confirm the camera reconnect prompt appears only after returning from a web page, submitting a report, or closing the report flow.
+- Plug the camera into the iPhone with USB-C, confirm it appears in the list without connecting on its own, wait for the row to show Ready, then tap Connect and confirm it connects almost instantly.
+- Tap Connect right after plugging in and confirm the progress card counts up while reading the camera's card instead of sitting on a plain spinner.
+- Disconnect from inside the app and reconnect over USB-C; confirm it connects immediately without re-reading the card. Then unplug and replug the cable and confirm the row walks through Preparing back to Ready.
+- Connect over Wi-Fi once and confirm that flow is unchanged.

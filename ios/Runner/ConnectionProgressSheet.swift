@@ -93,6 +93,13 @@ struct ConnectionProgressSheet: View {
 
     private var detail: String {
         if phase == .failed { return failureDetail }
+        // Live establishment step (safe to read, unlike `connectionMessage` — only the connect
+        // machinery writes it): real progress ("Reading the camera's card… 40%") beats a static
+        // phase title while a step is grinding.
+        let stage = model.connectionStageDetail
+        if !stage.isEmpty, phase != .connected, phase != .readyToJoin {
+            return stage
+        }
         return ConnectionProgressCopy.statusDetail(
             phase: phase,
             deviceName: deviceName,

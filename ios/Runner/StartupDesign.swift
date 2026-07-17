@@ -7,6 +7,11 @@ enum StartupConnectionCopy {
         guard !trimmed.isEmpty else { return trimmed }
 
         let lower = trimmed.lowercased()
+        if lower.contains("imagecapturecore") {
+            // Raw ICC error (e.g. -21400 on a stale USB session): the app retries with a session
+            // recycle automatically, so reaching the operator means even that failed.
+            return "The USB link got stuck. Unplug the cable, plug it back in, and try again."
+        }
         if lower.contains("ptp-ip") || lower.contains("ptp ip") {
             if lower.contains("no") && (lower.contains("service") || lower.contains("answered")) {
                 return "Couldn't reach the camera. Check Wi‑Fi and try again."
@@ -577,23 +582,27 @@ struct StartupCameraListRow: View {
     var isRecoveryTarget: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 8) {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
+        // Ticks once a second so the card-scan state (pill %, dimmed Preparing… button, subtitle)
+        // stays live between discovery passes — the scan progresses outside observable state.
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(StartupColors.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    statusPill
+                    connectButton
+                    optionsMenu
+                }
+                Text(subtitle)
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
+                    .foregroundStyle(StartupColors.muted)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                statusPill
-                connectButton
-                optionsMenu
+                    .minimumScaleFactor(0.75)
             }
-            Text(subtitle)
-                .font(.system(size: 13, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -653,8 +662,18 @@ struct StartupCameraListRow: View {
         }
     }
 
+    /// True while the plugged-in camera's card scan is still running — the window where a tap
+    /// would sit in "Reading the camera's card…" instead of connecting instantly.
+    private var isPreparingCard: Bool {
+        if let usbScan { return !usbScan.ready }
+        return false
+    }
+
     @ViewBuilder private var connectButton: some View {
-        if isPrimary {
+        // While the card scan runs, the button dims and says so — but stays tappable: a scan that
+        // silently failed would otherwise strand the row disabled forever, and an early tap still
+        // works (the progress sheet narrates the remaining scan).
+        if isPrimary, !isPreparingCard {
             Button {
                 connect()
             } label: {
@@ -666,9 +685,10 @@ struct StartupCameraListRow: View {
             Button {
                 connect()
             } label: {
-                Text(buttonLabel).fixedSize()
+                Text(isPreparingCard ? "Preparing…" : buttonLabel).fixedSize()
             }
             .buttonStyle(StartupOutlineButtonStyle())
+            .opacity(isPreparingCard ? 0.55 : 1)
             .disabled(isBusy)
         }
     }
@@ -682,6 +702,12 @@ struct StartupCameraListRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .overlay(Capsule().stroke(statusColor.opacity(0.5), lineWidth: 1))
+    }
+
+    /// USB card-scan state for this row's discovered camera; nil for Wi-Fi rows or once absent.
+    private var usbScan: (ready: Bool, percent: Int)? {
+        guard case .available(let discovered) = availability else { return nil }
+        return model.usbCardScan(for: discovered)
     }
 
     /// Discoverable rename / remove, mirroring the long-press context menu.
@@ -712,7 +738,11 @@ struct StartupCameraListRow: View {
         if isRecoveryTarget { return "Waiting for hotspot" }
         switch availability {
         case .connected: return "Connected"
-        case .available: return "Online"
+        case .available:
+            if let usbScan {
+                return usbScan.ready ? "Ready" : "Preparing card… \(usbScan.percent)%"
+            }
+            return "Online"
         case .offline: return "Offline"
         }
     }
@@ -720,7 +750,9 @@ struct StartupCameraListRow: View {
     private var statusColor: Color {
         if isRecoveryTarget { return StartupColors.accent }
         switch availability {
-        case .connected, .available: return StartupColors.ready
+        case .connected, .available:
+            if let usbScan, !usbScan.ready { return StartupColors.accent }
+            return StartupColors.ready
         case .offline: return StartupColors.dim
         }
     }
@@ -742,6 +774,9 @@ struct StartupCameraListRow: View {
     }
 
     private var subtitle: String {
+        if isPreparingCard {
+            return "USB-C · getting the card ready — connect will be instant once it's done"
+        }
         var parts: [String] = []
         if camera.isUSBTransport {
             parts.append("USB-C")

@@ -537,6 +537,10 @@ final class NativeAppModel {
     /// read the live `connectionMessage` for this — the discovery loop overwrites that field on
     /// every iteration, which put stale copy ("Found 1 camera.") on the failed card.
     var connectionFailureDetail = ""
+    /// Live establishment step ("Reading the camera's card… 40%", "Step: app-control switch…"),
+    /// written ONLY by the connect machinery — unlike `connectionMessage`, which the discovery loop
+    /// overwrites — so the progress sheet can show real progress instead of a frozen "Connecting".
+    var connectionStageDetail = ""
     @ObservationIgnored private var connectionProgressShowsFailure = false
     var cameraHost = "192.168.1.1"
     var connectionMessage = "Join your camera's Wi‑Fi network, then come back here to connect."
@@ -1891,7 +1895,16 @@ final class NativeAppModel {
                     knownMatchedHost: knownMatchedHost,
                     host: host
                 )
-                connectionFailureDetail = connectionMessage
+                // The friendly copy flattens every cause to one line; append the raw error and the
+                // establishment trace so a field failure names its exact step. Skip the raw error
+                // when the friendly pass had no mapping and echoed it verbatim (no doubled lines).
+                let establishmentTrace = establishmentDiagnostic.withLock { $0 }
+                var failureParts = [connectionMessage]
+                if !baseError.isEmpty, baseError != connectionMessage {
+                    failureParts.append(baseError)
+                }
+                if !establishmentTrace.isEmpty { failureParts.append(establishmentTrace) }
+                connectionFailureDetail = failureParts.joined(separator: "\n")
                 logConnection("failed host=\(host) \(self.connectionMessage)")
                 startDiscoveryLoop(resetResults: false)
             }
@@ -2165,9 +2178,6 @@ final class NativeAppModel {
     @ObservationIgnored private var pendingPairedReconnectSSID: String?
     /// Throttle for the paired-reconnect Wi‑Fi re-apply so it isn't fired every discovery cycle.
     @ObservationIgnored private var lastPairedRejoinAttemptAt: Date?
-    /// Saved USB cameras that already got their one silent auto-reconnect attempt for the current
-    /// plug-in. A key re-arms when the camera disappears from discovery (unplug).
-    @ObservationIgnored private var attemptedUSBAutoReconnectHostKeys: Set<String> = []
     private(set) var cameraPropertySnapshot = PTPCameraPropertySnapshot()
     private var propertyPollIndex = 0
     /// The `LiveViewImageSize` byte last written to the camera, so a thermal/warning step-down only
@@ -2645,28 +2655,9 @@ final class NativeAppModel {
             }
         }
 
-        // A saved USB-C camera reconnects silently the moment it is plugged in. One attempt per
-        // plug-in: an attempted host key re-arms only after the camera disappears (unplug), so a
-        // body that keeps failing to connect doesn't spin in a reconnect loop.
-        let attachedUSBHostKeys = Set(
-            cameras.filter(\.isUSB).compactMap { PTPIPPairedHosts.normalizedHost($0.ip) })
-        attemptedUSBAutoReconnectHostKeys.formIntersection(attachedUSBHostKeys)
-        if !isConnected, startupMode == .savedCameras,
-            let usbMatch = cameras.first(where: { camera in
-                guard camera.isUSB,
-                    let hostKey = PTPIPPairedHosts.normalizedHost(camera.ip),
-                    !attemptedUSBAutoReconnectHostKeys.contains(hostKey)
-                else { return false }
-                return CameraStartupPolicy.savedCamera(forDiscovered: camera, in: savedCameras)
-                    != nil
-            }),
-            let usbMatchHostKey = PTPIPPairedHosts.normalizedHost(usbMatch.ip)
-        {
-            attemptedUSBAutoReconnectHostKeys.insert(usbMatchHostKey)
-            connectionMessage = "Camera detected on USB-C. Reconnecting…"
-            connectToCamera(usbMatch)
-            return
-        }
+        // Plugging in a USB-C camera only LISTS it — connecting is always the operator's tap.
+        // (An auto-reconnect-on-plug used to live here; removed by request, it fought the
+        // deliberate connect flow now that USB establishment is fast.)
 
         guard !cameras.isEmpty else {
             if !isConnected {
@@ -2842,9 +2833,30 @@ final class NativeAppModel {
         guid: Data,
         strategy: CameraConnectionStrategy
     ) async throws -> (session: NativeCameraSession, requestedPairing: Bool) {
+        connectionStageDetail = ""
         let diagnosticBox = establishmentDiagnostic
-        let recordEstablishmentDiagnostic: @Sendable (String) -> Void = { summary in
-            diagnosticBox.withLock { $0 = summary }
+        let recordEstablishmentDiagnostic: @Sendable (String) -> Void = { [weak self] summary in
+            // "stage:" strings are live progress (shown so a stuck connect names its step —
+            // that's how the USB hang was pinned down); everything else is the failure trace.
+            if summary.hasPrefix("stage:") {
+                let stage = String(summary.dropFirst("stage:".count))
+                // Operator-friendly wording; the technical stage ids stay in the failure trace.
+                let friendly =
+                    switch stage {
+                    case "pairing": "Pairing with the camera…"
+                    case "app-control switch", "remote-mode fallback":
+                        "Taking control of the camera…"
+                    case "device info": "Almost connected…"
+                    default:
+                        stage.hasPrefix("first command") ? "Starting the session…" : "Connecting…"
+                    }
+                Task { @MainActor in
+                    guard let self, self.connectionPhase != .failed else { return }
+                    self.connectionStageDetail = friendly
+                }
+            } else {
+                diagnosticBox.withLock { $0 = summary }
+            }
         }
         switch strategy {
         case .savedProfile:
@@ -2946,21 +2958,68 @@ final class NativeAppModel {
                 "The camera isn't plugged in. Connect it to this device with a USB-C cable, then try again."
             )
         }
+        // The long pole over USB is ImageCaptureCore's card scan (pre-warmed at plug-in); show its
+        // live progress instead of a dead spinner while the session-open ack waits it out.
+        connectionStageDetail = "Reading the camera's card…"
+        let scanTicker = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                let percent = device.contentCatalogPercentCompleted
+                if percent > 0 {
+                    self?.connectionStageDetail = "Reading the camera's card… \(percent)%"
+                }
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+        }
         let usbTransport = USBCameraTransport(device: device)
         do {
             try await usbTransport.open()
         } catch {
+            scanTicker.cancel()
             usbTransport.close()
             throw error
         }
-        return try await NativeCameraSession.establish(
-            transport: usbTransport,
-            host: host,
-            cameraName: device.name,
-            requestPairing: requestPairing,
-            onPairingChallenge: onPairingChallenge,
-            onEstablishmentDiagnostic: onEstablishmentDiagnostic
-        )
+        scanTicker.cancel()
+        do {
+            return try await NativeCameraSession.establish(
+                transport: usbTransport,
+                host: host,
+                cameraName: device.name,
+                requestPairing: requestPairing,
+                onPairingChallenge: onPairingChallenge,
+                onEstablishmentDiagnostic: onEstablishmentDiagnostic
+            )
+        } catch {
+            // An adopted warm session can be a stale corpse (camera slept, ICC housekeeping) that
+            // fails its first command with a raw ICC error. Recycle the session once — real close,
+            // fresh open, full retry — before surfacing a failure. (establish() already closed the
+            // failed transport, which parks the device; the recycle open un-parks it cleanly.)
+            connectionStageDetail = "Refreshing the connection…"
+            connectionLogger.info(
+                "USB establish failed once, recycling session: \(error.localizedDescription, privacy: .private(mask: .hash))"
+            )
+            let retryTransport = USBCameraTransport(device: device)
+            do {
+                try await retryTransport.open(recycleFirst: true)
+            } catch let openError {
+                retryTransport.close()
+                throw openError
+            }
+            return try await NativeCameraSession.establish(
+                transport: retryTransport,
+                host: host,
+                cameraName: device.name,
+                requestPairing: requestPairing,
+                onPairingChallenge: onPairingChallenge,
+                onEstablishmentDiagnostic: onEstablishmentDiagnostic
+            )
+        }
+    }
+
+    /// Card-scan state for a discovered USB camera (nil for Wi-Fi rows): drives the row's
+    /// "Preparing card… N%" → "Ready" pill so the operator knows when a tap connects instantly.
+    func usbCardScan(for camera: DiscoveredCamera) -> (ready: Bool, percent: Int)? {
+        guard camera.isUSB else { return nil }
+        return USBCameraDeviceBrowser.shared.cardScanProgress(forHostKey: camera.ip)
     }
 
     private func isRejectedInitiator(_ error: Error) -> Bool {
