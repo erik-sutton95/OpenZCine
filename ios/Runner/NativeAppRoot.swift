@@ -309,6 +309,14 @@ struct LUTFileStore {
     }
 }
 
+enum ExternalInternetLinkReturnPolicy {
+    /// Rejoin only after an active browser handoff actually backgrounded the app. Presentation
+    /// transitions alone can produce active-state churn while the destination is still opening.
+    static func shouldReconnect(handoffActive: Bool, sawBackground: Bool) -> Bool {
+        handoffActive && sawBackground
+    }
+}
+
 @MainActor
 @Observable
 final class NativeAppModel {
@@ -589,6 +597,14 @@ final class NativeAppModel {
     /// True only while a browser link is intentionally using an internet hop. On return to the
     /// foreground, the app rejoins the camera AP through the normal saved-profile pipeline.
     private(set) var externalInternetLinkHandoffActive = false
+    /// Set only after an accepted external-browser handoff actually backgrounds OpenZCine. This
+    /// prevents transient activation changes during presentation from prompting an immediate
+    /// camera-AP rejoin over the page the person just opened.
+    @ObservationIgnored private var externalInternetLinkSawBackground = false
+    /// True while the root-owned anonymous/GitHub report flow is using the internet side of a
+    /// camera-AP hop. Unlike a browser handoff, ordinary foreground transitions must not end this
+    /// hop because screenshot picking can briefly move the app inactive while the form is open.
+    private(set) var bugReportInternetHandoffActive = false
     /// Share context to restore after an internet hop re-hosts the media browser (the monitor
     /// panel's view state dies with the monitor): the clips whose share sheet initiated the hop.
     /// The standalone browser consumes this on mount — reopening a single cached clip, or the
@@ -2387,7 +2403,7 @@ final class NativeAppModel {
     /// download reach the internet from camera-AP transport. The download screen unblocks itself
     /// reactively when reachability flips; ``endInternetHop()`` (fired when that screen
     /// dismisses) arms the rejoin + reconnect.
-    func beginInternetHop() {
+    func beginInternetHop(rehostActivePanel: Bool = true) {
         guard !internetHopActive else { return }
         internetHopActive = true
         // Capture identity before teardown. The host falls back to the camera-AP convention
@@ -2404,20 +2420,21 @@ final class NativeAppModel {
                 return
             }
             internetHopReturn = (host, ssid)
-            // The monitor collapses when the session drops; re-host the panel that started the
-            // hop as a standalone root cover so the operator's context survives it.
-            if activePanel == .media {
-                activePanel = nil
-                isStandaloneMediaLibraryPresented = true
-            } else {
-                if activePanel == .settings {
-                    // Frame.io sign-in from Settings → Storage hops for internet; keep the
-                    // Storage tab on screen (root cover) through the disconnect + rejoin.
+            if rehostActivePanel {
+                // Long-running downloads and account sign-in keep their initiating surface alive
+                // as a root cover. Support/report actions deliberately skip this: their selected
+                // destination becomes the next surface after the camera session drops.
+                if activePanel == .media {
                     activePanel = nil
-                    isStandaloneSettingsPresented = true
+                    isStandaloneMediaLibraryPresented = true
+                } else {
+                    if activePanel == .settings {
+                        activePanel = nil
+                        isStandaloneSettingsPresented = true
+                    }
+                    pendingHopShareResumeClips = nil
                 }
-                // No media re-host → the existing browser (and its share sheet) survive in
-                // place; nothing to restore on mount.
+            } else {
                 pendingHopShareResumeClips = nil
             }
             // Nothing may pull the phone back onto the camera AP mid-download.
@@ -2496,26 +2513,70 @@ final class NativeAppModel {
     /// Leaves the camera AP only when needed and waits for a validated internet route before an
     /// external support, GitHub, or privacy link is opened.
     func prepareExternalInternetLinkHandoff() async -> Bool {
+        if bugReportInternetHandoffActive {
+            bugReportInternetHandoffActive = false
+            externalInternetLinkHandoffActive = true
+            externalInternetLinkSawBackground = false
+            return true
+        }
         guard isOnCameraAccessPoint else { return true }
-        beginInternetHop()
+        beginInternetHop(rehostActivePanel: false)
         guard await waitForInternetPath(timeoutSeconds: 30) else {
             endInternetHop()
             return false
         }
         externalInternetLinkHandoffActive = true
+        externalInternetLinkSawBackground = false
+        return true
+    }
+
+    /// Leaves the camera AP for the in-app report flow without preserving or reopening Settings.
+    /// The report becomes the root-owned destination after internet reachability is confirmed.
+    func prepareBugReportInternetHandoff() async -> Bool {
+        if bugReportInternetHandoffActive { return true }
+        guard isOnCameraAccessPoint else { return true }
+        beginInternetHop(rehostActivePanel: false)
+        guard await waitForInternetPath(timeoutSeconds: 30) else {
+            endInternetHop()
+            return false
+        }
+        bugReportInternetHandoffActive = true
         return true
     }
 
     /// Completes a rejected browser handoff immediately so the camera is not left disconnected.
     func completeExternalInternetLinkHandoff(browserAccepted: Bool) {
         guard !browserAccepted else { return }
-        resumeExternalInternetLinkHandoffIfNeeded()
+        guard externalInternetLinkHandoffActive else { return }
+        externalInternetLinkHandoffActive = false
+        externalInternetLinkSawBackground = false
+        endInternetHop()
+    }
+
+    /// Records that an accepted external page really took OpenZCine into the background. A mere
+    /// inactive/active transition is not enough evidence that the person finished with the page.
+    func noteExternalInternetLinkHandoffEnteredBackground() {
+        guard externalInternetLinkHandoffActive else { return }
+        externalInternetLinkSawBackground = true
     }
 
     /// Rejoins the camera after the person returns from the external browser.
     func resumeExternalInternetLinkHandoffIfNeeded() {
-        guard externalInternetLinkHandoffActive else { return }
+        guard
+            ExternalInternetLinkReturnPolicy.shouldReconnect(
+                handoffActive: externalInternetLinkHandoffActive,
+                sawBackground: externalInternetLinkSawBackground
+            )
+        else { return }
         externalInternetLinkHandoffActive = false
+        externalInternetLinkSawBackground = false
+        endInternetHop()
+    }
+
+    /// Rejoins the camera when the in-app report flow finishes or is explicitly closed.
+    func resumeBugReportInternetHandoffIfNeeded() {
+        guard bugReportInternetHandoffActive else { return }
+        bugReportInternetHandoffActive = false
         endInternetHop()
     }
 
@@ -6487,8 +6548,14 @@ struct NativeAppRoot: View {
             }
         }
         .fullScreenCover(isPresented: bugReportPresented) {
-            BugReportFlowView(onDismiss: { model.isBugReportPresented = false })
-                .environment(model)
+            BugReportFlowView(
+                onDismiss: {
+                    model.isBugReportPresented = false
+                    model.resumeBugReportInternetHandoffIfNeeded()
+                },
+                onBrowserHandoff: { model.isBugReportPresented = false }
+            )
+            .environment(model)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ZCBackground().ignoresSafeArea())
@@ -6505,6 +6572,7 @@ struct NativeAppRoot: View {
             for await _ in NotificationCenter.default.notifications(
                 named: UIApplication.didEnterBackgroundNotification)
             {
+                model.noteExternalInternetLinkHandoffEnteredBackground()
                 model.enterBackground()
             }
         }

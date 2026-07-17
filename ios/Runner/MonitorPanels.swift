@@ -2881,6 +2881,58 @@ enum OperatorSettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+/// The internet-backed destination selected from Operator Setup.
+///
+/// Keeping the selection as a value lets the camera-AP confirmation survive the tap and route to
+/// the exact page or in-app report flow after the camera session has been disconnected.
+enum SettingsInternetDestination: String, CaseIterable, Identifiable {
+    case support
+    case reportProblem
+    case featureRequest
+    case sourceCode
+    case privacyPolicy
+    case termsOfUse
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .support: "Support"
+        case .reportProblem: "Report a Problem"
+        case .featureRequest: "Request a Feature"
+        case .sourceCode: "Source Code"
+        case .privacyPolicy: "Privacy Policy"
+        case .termsOfUse: "Terms of Use"
+        }
+    }
+
+    var webURL: URL? {
+        switch self {
+        case .support: SupportLinkCatalog.support
+        case .reportProblem: nil
+        case .featureRequest: SupportLinkCatalog.featureRequest
+        case .sourceCode: SupportLinkCatalog.source
+        case .privacyPolicy: SupportLinkCatalog.privacy
+        case .termsOfUse: SupportLinkCatalog.terms
+        }
+    }
+
+    var opensInAppReport: Bool { self == .reportProblem }
+
+    var confirmationMessage: String {
+        "To open \(title), OpenZCine will disconnect from the camera's Wi-Fi and switch to cellular or another internet-connected Wi-Fi network. You can reconnect to the camera after you finish."
+    }
+
+    static func demoValue(_ rawValue: String?) -> SettingsInternetDestination? {
+        switch rawValue {
+        case "support": .support
+        case "report": .reportProblem
+        case "feature": .featureRequest
+        default: nil
+        }
+    }
+}
+
 struct OperatorSettingsPanel: View {
     /// Real device safe-area insets (carries the landscape Dynamic Island lane) so the full-screen
     /// surface can fill the physical screen yet keep its content clear of the cutout.
@@ -2899,6 +2951,7 @@ struct OperatorSettingsPanel: View {
     @State private var diagnosticsShareItem: DiagnosticsShareItem?
     @State private var diagnosticsErrorMessage: String?
     @State private var externalLinkErrorMessage: String?
+    @State private var pendingInternetDestination: SettingsInternetDestination?
     @State private var isPreparingDiagnostics = false
     /// Standalone setup is already a root cover, so its report flow is presented above that cover.
     /// Camera-backed setup uses the root-owned presentation instead, which survives an AP hop.
@@ -2975,8 +3028,14 @@ struct OperatorSettingsPanel: View {
             DiagnosticsShareSheet(url: item.url)
         }
         .fullScreenCover(isPresented: $standaloneBugReportPresented) {
-            BugReportFlowView(onDismiss: { standaloneBugReportPresented = false })
-                .environment(model)
+            BugReportFlowView(
+                onDismiss: {
+                    standaloneBugReportPresented = false
+                    model.resumeBugReportInternetHandoffIfNeeded()
+                },
+                onBrowserHandoff: { standaloneBugReportPresented = false }
+            )
+            .environment(model)
         }
         .alert(
             "Couldn’t Share Diagnostics",
@@ -3003,8 +3062,30 @@ struct OperatorSettingsPanel: View {
                     ?? "Check cellular or another Wi-Fi network and try again."
             )
         }
+        .alert(
+            "Leave camera Wi-Fi?",
+            isPresented: Binding(
+                get: { pendingInternetDestination != nil },
+                set: { if !$0 { pendingInternetDestination = nil } }
+            ),
+            presenting: pendingInternetDestination
+        ) { destination in
+            Button("Cancel", role: .cancel) { pendingInternetDestination = nil }
+            Button("Continue") {
+                pendingInternetDestination = nil
+                activateInternetDestination(destination)
+            }
+        } message: { destination in
+            Text(destination.confirmationMessage)
+        }
         .onAppear {
-            if DemoHarness.openBugReport { presentBugReport() }
+            if let destination = SettingsInternetDestination.demoValue(
+                DemoHarness.internetHandoffConfirmation
+            ) {
+                pendingInternetDestination = destination
+            } else if DemoHarness.openBugReport {
+                presentBugReport()
+            }
         }
     }
 
@@ -3344,7 +3425,7 @@ struct OperatorSettingsPanel: View {
                 help: "Connection guides, camera controls, media workflows, and troubleshooting.",
                 showTopDivider: false
             ) {
-                systemLinkButton("Open", url: SupportLinkCatalog.support, label: "Open Support")
+                systemLinkButton("Open", destination: .support, label: "Open Support")
             }
             SettingsInlineRow(
                 title: "Report a Problem",
@@ -3352,7 +3433,7 @@ struct OperatorSettingsPanel: View {
                     "Choose an anonymous in-app report or the richer signed-in GitHub form. Either creates a public GitHub issue."
             ) {
                 SettingsActionPill(title: "Report") {
-                    presentBugReport()
+                    requestInternetDestination(.reportProblem)
                 }
                 .accessibilityLabel("Report a Problem")
             }
@@ -3361,7 +3442,7 @@ struct OperatorSettingsPanel: View {
                 help: "Start an idea in the project’s feature-request discussion category."
             ) {
                 systemLinkButton(
-                    "Request", url: SupportLinkCatalog.featureRequest, label: "Request a Feature")
+                    "Request", destination: .featureRequest, label: "Request a Feature")
             }
             SettingsInlineRow(
                 title: "Share Diagnostics",
@@ -3395,15 +3476,15 @@ struct OperatorSettingsPanel: View {
                 showTopDivider: false
             ) {
                 systemLinkButton(
-                    "Open", url: SupportLinkCatalog.source, label: "Open Source Code")
+                    "Open", destination: .sourceCode, label: "Open Source Code")
             }
             SettingsInlineRow(title: "Privacy", help: "Read the OpenZCine privacy policy.") {
                 systemLinkButton(
-                    "Open", url: SupportLinkCatalog.privacy, label: "Open Privacy Policy")
+                    "Open", destination: .privacyPolicy, label: "Open Privacy Policy")
             }
             SettingsInlineRow(title: "Terms", help: "Read the OpenZCine terms of use.") {
                 systemLinkButton(
-                    "Open", url: SupportLinkCatalog.terms, label: "Open Terms of Use")
+                    "Open", destination: .termsOfUse, label: "Open Terms of Use")
             }
         }
 
@@ -3440,21 +3521,44 @@ struct OperatorSettingsPanel: View {
         }
     }
 
-    private func systemLinkButton(_ title: String, url: URL, label: String) -> some View {
-        Button(title) { openExternalURL(url) }
+    private func systemLinkButton(
+        _ title: String,
+        destination: SettingsInternetDestination,
+        label: String
+    ) -> some View {
+        Button(title) { requestInternetDestination(destination) }
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(LiveDesign.accent)
             .buttonStyle(.zcTapTarget)
             .accessibilityLabel(label)
     }
 
-    private func openExternalURL(_ url: URL) {
+    private func requestInternetDestination(_ destination: SettingsInternetDestination) {
+        guard !model.isOnCameraAccessPoint else {
+            pendingInternetDestination = destination
+            return
+        }
+        activateInternetDestination(destination)
+    }
+
+    private func activateInternetDestination(_ destination: SettingsInternetDestination) {
         Task {
-            guard await model.prepareExternalInternetLinkHandoff() else {
+            let routeReady =
+                if destination.opensInAppReport {
+                    await model.prepareBugReportInternetHandoff()
+                } else {
+                    await model.prepareExternalInternetLinkHandoff()
+                }
+            guard routeReady else {
                 externalLinkErrorMessage =
                     "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
                 return
             }
+            if destination.opensInAppReport {
+                presentBugReport()
+                return
+            }
+            guard let url = destination.webURL else { return }
             openURL(url) { accepted in
                 model.completeExternalInternetLinkHandoff(browserAccepted: accepted)
             }
@@ -3680,9 +3784,14 @@ struct BugReportFlowView: View {
     @State private var destination: Destination = .chooser
 
     private let onDismiss: () -> Void
+    private let onBrowserHandoff: () -> Void
 
-    init(onDismiss: @escaping () -> Void) {
+    init(
+        onDismiss: @escaping () -> Void,
+        onBrowserHandoff: @escaping () -> Void
+    ) {
         self.onDismiss = onDismiss
+        self.onBrowserHandoff = onBrowserHandoff
     }
 
     var body: some View {
@@ -3690,6 +3799,7 @@ struct BugReportFlowView: View {
         case .chooser:
             BugReportPathChooserView(
                 onDismiss: onDismiss,
+                onBrowserHandoff: onBrowserHandoff,
                 onAnonymous: { destination = .anonymous }
             )
         case .anonymous:
@@ -3710,13 +3820,16 @@ private struct BugReportPathChooserView: View {
     @State private var externalLinkErrorMessage: String?
 
     private let onDismiss: () -> Void
+    private let onBrowserHandoff: () -> Void
     private let onAnonymous: () -> Void
 
     init(
         onDismiss: @escaping () -> Void,
+        onBrowserHandoff: @escaping () -> Void,
         onAnonymous: @escaping () -> Void
     ) {
         self.onDismiss = onDismiss
+        self.onBrowserHandoff = onBrowserHandoff
         self.onAnonymous = onAnonymous
     }
 
@@ -3881,7 +3994,7 @@ private struct BugReportPathChooserView: View {
                 if dismissWhenAccepted {
                     BugReportGitHubHandoff.dismissAfterAcceptedBrowserOpen(
                         accepted,
-                        dismiss: onDismiss
+                        dismiss: onBrowserHandoff
                     )
                 }
             }
@@ -4392,14 +4505,13 @@ struct BugReportFormView: View {
     }
 
     private func submitReport() async {
-        let usedInternetHop = appModel.isOnCameraAccessPoint
-        guard await appModel.prepareExternalInternetLinkHandoff() else {
+        guard await appModel.prepareBugReportInternetHandoff() else {
             model.recordInternetRouteFailure()
             return
         }
         await model.submit()
-        if usedInternetHop {
-            appModel.resumeExternalInternetLinkHandoffIfNeeded()
+        if model.receipt != nil {
+            appModel.resumeBugReportInternetHandoffIfNeeded()
         }
     }
 

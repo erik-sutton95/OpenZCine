@@ -36,6 +36,46 @@ struct ExternalBetaDiagnosticsTests {
         )
     }
 
+    @Test("Camera AP destinations preserve the selected route behind one consent prompt")
+    func cameraAccessPointDestinations() {
+        #expect(SettingsInternetDestination.reportProblem.opensInAppReport)
+        #expect(SettingsInternetDestination.reportProblem.webURL == nil)
+        #expect(SettingsInternetDestination.support.webURL == SupportLinkCatalog.support)
+        #expect(
+            SettingsInternetDestination.featureRequest.webURL == SupportLinkCatalog.featureRequest
+        )
+        #expect(SettingsInternetDestination.demoValue("report") == .reportProblem)
+
+        for destination in SettingsInternetDestination.allCases {
+            #expect(destination.confirmationMessage.contains(destination.title))
+            #expect(destination.confirmationMessage.contains("disconnect from the camera"))
+            #expect(destination.confirmationMessage.contains("cellular"))
+            #expect(destination.confirmationMessage.contains("internet-connected Wi-Fi"))
+        }
+    }
+
+    @Test("External pages reconnect only after the accepted browser handoff backgrounds the app")
+    func externalBrowserReturnPolicy() {
+        #expect(
+            !ExternalInternetLinkReturnPolicy.shouldReconnect(
+                handoffActive: true,
+                sawBackground: false
+            )
+        )
+        #expect(
+            ExternalInternetLinkReturnPolicy.shouldReconnect(
+                handoffActive: true,
+                sawBackground: true
+            )
+        )
+        #expect(
+            !ExternalInternetLinkReturnPolicy.shouldReconnect(
+                handoffActive: false,
+                sawBackground: true
+            )
+        )
+    }
+
     @Test("GitHub report handoff dismisses the chooser only after a browser accepts it")
     func githubReportHandoff() {
         var dismissalCount = 0

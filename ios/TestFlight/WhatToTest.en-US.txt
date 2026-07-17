@@ -3,7 +3,7 @@ What's changed
 - Report a Problem in Operator Setup > System now lets you choose an anonymous public report or the signed-in GitHub bug form.
 - The anonymous form can optionally include a privacy-filtered app activity log or selected screenshots; attachments are public.
 - Feature requests still open the community discussion where you sign in.
-- When the camera is connected through its Wi-Fi access point, opening Support, Report a Problem, or Request a Feature temporarily leaves that network so the web page can load, then reconnects to the camera when you return to OpenZCine.
+- On the camera's Wi-Fi access point, Support, Report a Problem, and Request a Feature now ask before switching to cellular or internet-connected Wi-Fi, then open the selected destination directly without reopening Settings.
 - Sharing Diagnostics remains a separate review-before-sharing option.
 
 Please test
@@ -11,4 +11,4 @@ Please test
 - In Operator Setup > System, open Report a Problem and confirm both choices say that reports become public GitHub issues.
 - Choose Report Anonymously, enter a non-sensitive real bug, and confirm it completes without a GitHub sign-in screen before you return to System.
 - In the anonymous form, toggle each optional attachment control. Confirm the warning explains that screenshot pixels can still contain sensitive information even after file metadata is removed.
-- Reopen Report a Problem and choose Continue with GitHub, then open Request a Feature. Confirm each opens the appropriate GitHub page. While connected to a camera over its Wi-Fi access point, also open Support, Report a Problem, and Request a Feature, then return to OpenZCine and confirm the camera reconnects.
+- Reopen Report a Problem and choose Continue with GitHub, then open Request a Feature. On the camera's Wi-Fi access point, confirm Support, Report a Problem, and Request a Feature each show the network-switch warning, Cancel stays connected, and Continue opens the selected destination without reopening Settings or prompting to rejoin immediately. Confirm the camera reconnect prompt appears only after returning from a web page, submitting a report, or closing the report flow.
