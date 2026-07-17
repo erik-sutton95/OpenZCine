@@ -8,9 +8,7 @@ What's changed
 
 Please test
 
-- Plug the camera into the iPhone with USB-C, wait for the camera row to show Ready, then tap Connect and confirm it connects almost instantly.
+- Plug the camera into the iPhone with USB-C, confirm it appears in the list without connecting on its own, wait for the row to show Ready, then tap Connect and confirm it connects almost instantly.
 - Tap Connect right after plugging in and confirm the progress card counts up while reading the camera's card instead of sitting on a plain spinner.
-- Disconnect from inside the app and reconnect over USB-C; confirm it connects immediately without re-reading the card.
-- Unplug the cable and plug it back in; confirm the row walks through Preparing back to Ready and then connects.
-- Confirm plugging in the camera does not start a connection on its own.
+- Disconnect from inside the app and reconnect over USB-C; confirm it connects immediately without re-reading the card. Then unplug and replug the cable and confirm the row walks through Preparing back to Ready.
 - Connect over Wi-Fi once and confirm that flow is unchanged.
