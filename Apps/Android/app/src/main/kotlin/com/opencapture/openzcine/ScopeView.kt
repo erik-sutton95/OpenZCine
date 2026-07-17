@@ -524,6 +524,8 @@ internal fun ScopePanels(
         }
 
     val rasterTargets = remember { TraceRasterTargets() }
+    rasterTargets.waveformBrightness = configuration.waveformBrightness
+    rasterTargets.paradeBrightness = configuration.paradeBrightness
     val snapshot =
         rememberScopeSnapshot(
             source,
@@ -620,6 +622,8 @@ internal fun PlaybackScopePanels(
         }
     val latestFrameKey by rememberUpdatedState(currentFrameKey)
     val rasterTargets = remember { TraceRasterTargets() }
+    rasterTargets.waveformBrightness = configuration.waveformBrightness
+    rasterTargets.paradeBrightness = configuration.paradeBrightness
     val snapshot =
         rememberPlaybackScopeSnapshot(
             textureView = textureView,
@@ -1662,6 +1666,7 @@ private suspend fun pumpReducedScopes(
                     waveRaster.raster(
                         ScopeKind.WAVEFORM, it, trailForPanel, waveformMode, paradeMode,
                         rasterTargets.wave.get(), rasterTargets.strokeUnitPx,
+                        rasterTargets.waveformBrightness,
                     )
                 }
             val paradeImage =
@@ -1669,6 +1674,7 @@ private suspend fun pumpReducedScopes(
                     paradeRaster.raster(
                         ScopeKind.PARADE, it, trailForPanel, waveformMode, paradeMode,
                         rasterTargets.parade.get(), rasterTargets.strokeUnitPx,
+                        rasterTargets.paradeBrightness,
                     )
                 }
             val histogram =
@@ -1816,6 +1822,11 @@ internal class TraceRasterTargets {
 
     /** One screen dp in px — the unit the old direct point draw used. */
     @Volatile var strokeUnitPx: Float = 2.75f
+
+    /** Live brightness percents; iOS folds these into the dot colours BEFORE
+     *  additive accumulation, so the rasterizer needs them per tick. */
+    @Volatile var waveformBrightness: Int = ScopeAssistConfiguration.DEFAULT_BRIGHTNESS
+    @Volatile var paradeBrightness: Int = ScopeAssistConfiguration.DEFAULT_BRIGHTNESS
 }
 
 /**
@@ -1850,6 +1861,7 @@ private class TraceRasterizer {
         paradeMode: ScopeParadeMode,
         target: IntSize,
         strokeUnitPx: Float,
+        brightnessPercent: Int,
     ): ImageBitmap {
         val width = if (target.width > 0) target.width else FALLBACK_WIDTH
         val height = if (target.height > 0) target.height else FALLBACK_HEIGHT
@@ -1863,8 +1875,16 @@ private class TraceRasterizer {
         val canvas = android.graphics.Canvas(bitmap)
         val plot = Rect(0f, 0f, width.toFloat(), height.toFloat())
         unit = strokeUnitPx
-        trail?.let { drawKind(canvas, kind, it, plot, ScopePalette.TRAIL_DECAY, waveformMode, paradeMode) }
-        drawKind(canvas, kind, traces, plot, 1f, waveformMode, paradeMode)
+        // iOS Metal folds brightness into the premultiplied dot colours and
+        // accumulates one/one additively; the pass split reproduces gains > 1.
+        val opacity =
+            ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(brightnessPercent)
+        trail?.let {
+            drawKind(
+                canvas, kind, it, plot, ScopePalette.TRAIL_DECAY * opacity, waveformMode, paradeMode,
+            )
+        }
+        drawKind(canvas, kind, traces, plot, opacity, waveformMode, paradeMode)
         return bitmap.asImageBitmap()
     }
 
@@ -2096,33 +2116,18 @@ private fun DrawScope.drawScope(
         }
     when (kind) {
         ScopeKind.WAVEFORM, ScopeKind.PARADE -> {
-            val brightness =
-                if (kind == ScopeKind.WAVEFORM) {
-                    ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(
-                        configuration.waveformBrightness,
-                    )
-                } else {
-                    ScopeAssistConfiguration.waveformParadeBrightnessMultiplier(
-                        configuration.paradeBrightness,
-                    )
-                }
-            // The trace (current + trail) was rasterized off the RenderThread
-            // by TraceRasterizer; the panel pays for one scaled image blit per
-            // pass instead of replaying every additive point. Brightness > 1
-            // adds a second additive pass, mirroring scopeTracePassOpacities.
+            // The trace layer (current + trail, brightness pre-folded like
+            // iOS's premultiplied Metal vertices) composites src-over the
+            // panel exactly as the MTKView layer does over iOS's panel.
             val image = if (kind == ScopeKind.WAVEFORM) data?.waveTrace else data?.paradeTrace
             image?.let { trace ->
-                scopeTracePassOpacities(brightness).forEach { passOpacity ->
-                    drawImage(
-                        trace,
-                        srcOffset = IntOffset.Zero,
-                        srcSize = IntSize(trace.width, trace.height),
-                        dstOffset = IntOffset(plot.left.roundToInt(), plot.top.roundToInt()),
-                        dstSize = IntSize(plot.width.roundToInt(), plot.height.roundToInt()),
-                        alpha = passOpacity,
-                        blendMode = androidx.compose.ui.graphics.BlendMode.Plus,
-                    )
-                }
+                drawImage(
+                    trace,
+                    srcOffset = IntOffset.Zero,
+                    srcSize = IntSize(trace.width, trace.height),
+                    dstOffset = IntOffset(plot.left.roundToInt(), plot.top.roundToInt()),
+                    dstSize = IntSize(plot.width.roundToInt(), plot.height.roundToInt()),
+                )
             }
             val guides =
                 if (kind == ScopeKind.WAVEFORM) configuration.waveformGuides else configuration.paradeGuides
