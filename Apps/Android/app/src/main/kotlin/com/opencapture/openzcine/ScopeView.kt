@@ -411,6 +411,10 @@ private object ScopePalette {
 private class ScopeDrawData(
     val traces: ScopeTraces? = null,
     val trailTraces: ScopeTraces? = null,
+    /** Pre-rasterized waveform trace (current + trail), blitted like the vectorscope. */
+    val waveTrace: ImageBitmap? = null,
+    /** Pre-rasterized parade trace (current + trail). */
+    val paradeTrace: ImageBitmap? = null,
     /** Blended + smoothed display bins per channel (histogram kind only). */
     val histogram: HistogramDisplay? = null,
     val vector: VectorDensityImage? = null,
@@ -528,6 +532,8 @@ internal fun ScopePanels(
             configuration.vectorscopeBrightness,
             vectorLut,
             thermalTier,
+            configuration.waveformMode,
+            configuration.paradeMode,
         )
     val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
     val anchors =
@@ -620,6 +626,8 @@ internal fun PlaybackScopePanels(
             vectorscopeBrightness = configuration.vectorscopeBrightness,
             vectorLut = vectorLut,
             thermalTier = thermalTier,
+            waveformMode = configuration.waveformMode,
+            paradeMode = configuration.paradeMode,
         )
     val needsAnchors = displayed.any { it != ScopeKind.TRAFFIC_LIGHTS }
     val anchors =
@@ -1352,6 +1360,8 @@ private fun rememberScopeSnapshot(
     vectorscopeBrightness: Int,
     vectorLut: ScopeVectorLutRequest?,
     thermalTier: AndroidThermalTier,
+    waveformMode: ScopeWaveformMode,
+    paradeMode: ScopeParadeMode,
 ): ScopeDrawData? {
     val data = remember { mutableStateOf<ScopeDrawData?>(null) }
     val ordered = ScopeKind.canonical.filter(selected::contains)
@@ -1366,6 +1376,8 @@ private fun rememberScopeSnapshot(
         vectorscopeBrightness,
         vectorLut,
         thermalTier,
+        waveformMode,
+        paradeMode,
     ) {
         data.value = null
         withContext(Dispatchers.Default) {
@@ -1380,6 +1392,8 @@ private fun rememberScopeSnapshot(
                 vectorscopeBrightness,
                 vectorLut,
                 scopePeriodNanos(ordered.size, thermalTier),
+                waveformMode,
+                paradeMode,
             ) { data.value = it }
         }
     }
@@ -1401,6 +1415,8 @@ private fun rememberPlaybackScopeSnapshot(
     vectorscopeBrightness: Int,
     vectorLut: ScopeVectorLutRequest?,
     thermalTier: AndroidThermalTier,
+    waveformMode: ScopeWaveformMode,
+    paradeMode: ScopeParadeMode,
 ): ScopeDrawData? {
     val data = remember { mutableStateOf<ScopeDrawData?>(null) }
     val tap = remember(textureView) { PlaybackScopeFrameTap() }
@@ -1417,6 +1433,8 @@ private fun rememberPlaybackScopeSnapshot(
         vectorscopeBrightness,
         vectorLut,
         thermalTier,
+        waveformMode,
+        paradeMode,
     ) {
         data.value = null
         if (cleanFrameSource != null) cleanFrameSource.reset() else tap.reset()
@@ -1431,6 +1449,8 @@ private fun rememberPlaybackScopeSnapshot(
                 vectorscopeBrightness = vectorscopeBrightness,
                 vectorLut = vectorLut,
                 scopePeriodNanos = scopePeriodNanos(ordered.size, thermalTier),
+                waveformMode = waveformMode,
+                paradeMode = paradeMode,
                 nextFrame = {
                     if (cleanFrameSource != null) {
                         cleanFrameSource.capture()
@@ -1460,6 +1480,8 @@ private suspend fun pumpScopes(
     vectorscopeBrightness: Int,
     vectorLut: ScopeVectorLutRequest?,
     scopePeriodNanos: Long,
+    waveformMode: ScopeWaveformMode,
+    paradeMode: ScopeParadeMode,
     present: (ScopeDrawData) -> Unit,
 ): Unit = coroutineScope {
     val latest = AtomicReference<LiveScopeInput?>(null)
@@ -1484,6 +1506,8 @@ private suspend fun pumpScopes(
             vectorscopeBrightness = vectorscopeBrightness,
             vectorLut = vectorLut,
             scopePeriodNanos = scopePeriodNanos,
+            waveformMode = waveformMode,
+            paradeMode = paradeMode,
             nextFrame = {
                 val next = latest.get() ?: return@pumpReducedScopes null
                 if (next.generation == lastGeneration) return@pumpReducedScopes null
@@ -1512,6 +1536,8 @@ private suspend fun pumpReducedScopes(
     vectorscopeBrightness: Int,
     vectorLut: ScopeVectorLutRequest?,
     scopePeriodNanos: Long,
+    waveformMode: ScopeWaveformMode,
+    paradeMode: ScopeParadeMode,
     nextFrame: suspend () -> ReducedScopeFrame?,
     present: (ScopeDrawData) -> Unit,
 ) {
@@ -1536,6 +1562,8 @@ private suspend fun pumpReducedScopes(
     try {
         val stats = ScopeTickStats { if (BuildConfig.DEBUG) Log.d(TAG, it) }
         val vectorBitmaps = VectorBitmapRing()
+        val waveRaster = TraceRasterizer()
+        val paradeRaster = TraceRasterizer()
         var previousTraces: ScopeTraces? = null
         var previousHistogram: ScopeTraces? = null
         var previousVector: VectorDensityImage? = null
@@ -1585,13 +1613,24 @@ private suspend fun pumpReducedScopes(
                 }
 
             val traceForPanel = traces.takeIf { demand.pointTrace }
+            val trailForPanel = previousTraces.takeIf { demand.pointTrace }
+            val waveImage =
+                traceForPanel?.takeIf { ScopeKind.WAVEFORM in selected }?.let {
+                    waveRaster.raster(ScopeKind.WAVEFORM, it, trailForPanel, waveformMode, paradeMode)
+                }
+            val paradeImage =
+                traceForPanel?.takeIf { ScopeKind.PARADE in selected }?.let {
+                    paradeRaster.raster(ScopeKind.PARADE, it, trailForPanel, waveformMode, paradeMode)
+                }
             val histogram =
                 traces?.takeIf { demand.histogram }?.let { histogramDisplay(it, previousHistogram) }
             val trafficLights = traces?.trafficLights?.takeIf { demand.trafficLights }
             present(
                 ScopeDrawData(
                     traces = traceForPanel,
-                    trailTraces = previousTraces.takeIf { demand.pointTrace },
+                    trailTraces = trailForPanel,
+                    waveTrace = waveImage,
+                    paradeTrace = paradeImage,
                     histogram = histogram,
                     vector = vector,
                     vectorTrail = previousVector.takeIf { demand.vector },
@@ -1717,6 +1756,152 @@ internal interface PlaybackScopeFrameSource {
  * the bitmap being written is never one the RenderThread may still read
  * (current frame + trail), mirroring [JpegFrameDecoder]'s ring rationale.
  */
+/**
+ * Off-RenderThread waveform/parade trace rasterizer. Replaying tens of
+ * thousands of additive `drawPoints` per channel on the shared RenderThread
+ * stalls every UI frame behind the scope layer on weak GPUs (sub-10 fps
+ * globally on the Android hardware floor). Instead the pump renders each tick
+ * into a pooled software bitmap here on the Default dispatcher — exactly the
+ * vectorscope's model — and the panel canvas blits ONE image per pass.
+ * Brightness is applied at blit time so the popup slider never restarts the
+ * pump; the trail is baked at [ScopePalette.TRAIL_DECAY] relative opacity,
+ * matching the previous two-pass point draw.
+ */
+private class TraceRasterizer {
+    // 3-deep like VectorBitmapRing: the slot being erased is never the one
+    // the panel is still compositing.
+    private val pool = arrayOfNulls<Bitmap>(3)
+    private var next = 0
+    private val paint =
+        Paint().apply {
+            isAntiAlias = false
+            strokeCap = Paint.Cap.SQUARE
+            blendMode = BlendMode.PLUS
+        }
+    private var scratch = FloatArray(0)
+
+    fun raster(
+        kind: ScopeKind,
+        traces: ScopeTraces,
+        trail: ScopeTraces?,
+        waveformMode: ScopeWaveformMode,
+        paradeMode: ScopeParadeMode,
+    ): ImageBitmap {
+        var bitmap = pool[next]
+        if (bitmap == null) {
+            bitmap = Bitmap.createBitmap(RASTER_WIDTH, RASTER_HEIGHT, Bitmap.Config.ARGB_8888)
+            pool[next] = bitmap
+        }
+        next = (next + 1) % pool.size
+        bitmap.eraseColor(0)
+        val canvas = android.graphics.Canvas(bitmap)
+        val plot = Rect(0f, 0f, RASTER_WIDTH.toFloat(), RASTER_HEIGHT.toFloat())
+        trail?.let { drawKind(canvas, kind, it, plot, ScopePalette.TRAIL_DECAY, waveformMode, paradeMode) }
+        drawKind(canvas, kind, traces, plot, 1f, waveformMode, paradeMode)
+        return bitmap.asImageBitmap()
+    }
+
+    private fun ensureScratch(pointCount: Int): FloatArray {
+        if (scratch.size < pointCount * 2) scratch = FloatArray(pointCount * 2)
+        return scratch
+    }
+
+    private fun drawKind(
+        canvas: android.graphics.Canvas,
+        kind: ScopeKind,
+        traces: ScopeTraces,
+        plot: Rect,
+        opacity: Float,
+        waveformMode: ScopeWaveformMode,
+        paradeMode: ScopeParadeMode,
+    ) {
+        if (traces.pointCount == 0) return
+        val out = ensureScratch(traces.pointCount)
+        when (kind) {
+            ScopeKind.WAVEFORM ->
+                if (waveformMode == ScopeWaveformMode.LUMA) {
+                    // Luma trace: 2px additive ghost + 1px core, brighter every 4th dot.
+                    val count = fillChannel(traces, 1, plot, plot.left, plot.width, out)
+                    points(canvas, out, count, ScopePalette.lumaGhost, 2f * RASTER_DENSITY, opacity)
+                    points(canvas, out, count, ScopePalette.luma, RASTER_DENSITY, opacity)
+                    var hot = 0
+                    for (index in 0 until count step 4) {
+                        out[hot * 2] = out[index * 2]
+                        out[hot * 2 + 1] = out[index * 2 + 1]
+                        hot++
+                    }
+                    points(canvas, out, hot, ScopePalette.lumaHot, RASTER_DENSITY, opacity)
+                } else {
+                    for ((offset, color) in
+                        listOf(
+                            Pair(2, ScopePalette.overlayRed),
+                            Pair(3, ScopePalette.overlayGreen),
+                            Pair(4, ScopePalette.overlayBlue),
+                        )
+                    ) {
+                        val count = fillChannel(traces, offset, plot, plot.left, plot.width, out)
+                        points(canvas, out, count, color, RASTER_DENSITY, opacity)
+                    }
+                }
+            ScopeKind.PARADE -> {
+                val lanes =
+                    if (paradeMode == ScopeParadeMode.RGB) {
+                        listOf(
+                            Pair(2, ScopePalette.paradeRed),
+                            Pair(3, ScopePalette.paradeGreen),
+                            Pair(4, ScopePalette.paradeBlue),
+                        )
+                    } else {
+                        listOf(
+                            Pair(1, ScopePalette.luma),
+                            Pair(2, ScopePalette.paradeRed),
+                            Pair(3, ScopePalette.paradeGreen),
+                            Pair(4, ScopePalette.paradeBlue),
+                        )
+                    }
+                val laneWidth = plot.width / lanes.size
+                for ((laneIndex, lane) in lanes.withIndex()) {
+                    val origin = plot.left + laneIndex * laneWidth
+                    val count = fillChannel(traces, lane.first, plot, origin, laneWidth - 1, out)
+                    points(canvas, out, count, lane.second, RASTER_DENSITY, opacity)
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun points(
+        canvas: android.graphics.Canvas,
+        xy: FloatArray,
+        count: Int,
+        color: Color,
+        widthPx: Float,
+        opacity: Float,
+    ) {
+        if (count == 0) return
+        paint.strokeWidth = widthPx
+        scopeTracePassOpacities(opacity).forEach { passOpacity ->
+            paint.color =
+                android.graphics.Color.argb(
+                    scopeTraceAlpha(color.alpha, passOpacity),
+                    (color.red * 255).roundToInt(),
+                    (color.green * 255).roundToInt(),
+                    (color.blue * 255).roundToInt(),
+                )
+            canvas.drawPoints(xy, 0, count * 2, paint)
+        }
+    }
+
+    private companion object {
+        // ≥ the largest panel raster on the hardware floor; a small fixed
+        // ARGB target (0.9 MB) the blit scales into the live plot rect.
+        const val RASTER_WIDTH = 640
+        const val RASTER_HEIGHT = 360
+        // The dp-derived stroke width the panel used to draw at, in raster px.
+        const val RASTER_DENSITY = 2.5f
+    }
+}
+
 private class VectorBitmapRing {
     private val crispPool = arrayOfNulls<Bitmap>(3)
     private val softPool = arrayOfNulls<Bitmap>(3)
@@ -1854,10 +2039,24 @@ private fun DrawScope.drawScope(
                         configuration.paradeBrightness,
                     )
                 }
-            data?.trailTraces?.let {
-                drawTrace(kind, it, plot, ScopePalette.TRAIL_DECAY * brightness, configuration)
+            // The trace (current + trail) was rasterized off the RenderThread
+            // by TraceRasterizer; the panel pays for one scaled image blit per
+            // pass instead of replaying every additive point. Brightness > 1
+            // adds a second additive pass, mirroring scopeTracePassOpacities.
+            val image = if (kind == ScopeKind.WAVEFORM) data?.waveTrace else data?.paradeTrace
+            image?.let { trace ->
+                scopeTracePassOpacities(brightness).forEach { passOpacity ->
+                    drawImage(
+                        trace,
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(trace.width, trace.height),
+                        dstOffset = IntOffset(plot.left.roundToInt(), plot.top.roundToInt()),
+                        dstSize = IntSize(plot.width.roundToInt(), plot.height.roundToInt()),
+                        alpha = passOpacity,
+                        blendMode = androidx.compose.ui.graphics.BlendMode.Plus,
+                    )
+                }
             }
-            data?.traces?.let { drawTrace(kind, it, plot, brightness, configuration) }
             val guides =
                 if (kind == ScopeKind.WAVEFORM) configuration.waveformGuides else configuration.paradeGuides
             drawAxisGuides(anchors, plot, guides)
@@ -1866,7 +2065,7 @@ private fun DrawScope.drawScope(
             val lights = data?.trafficLights?.takeIf { histogramTrafficLightsEnabled }
             drawHistogramClipZone(plot, lights)
             data?.histogram?.let { drawHistogram(it, plot) }
-            drawHistogramGuides(anchors, plot)
+            drawHistogramGuides(plot)
             lights?.let(::drawHistogramTrafficLights)
         }
         ScopeKind.VECTORSCOPE -> {
@@ -1889,34 +2088,7 @@ private fun DrawScope.drawScope(
 // Waveform / parade points render through the native canvas: one batched
 // `drawPoints(FloatArray)` per pass over a reused scratch array — no per-point
 // object allocation (the Compose `drawPoints(List<Offset>)` overload boxes).
-private val pointScratch = ThreadLocal.withInitial { FloatArray(0) }
 
-private fun DrawScope.drawPointPass(
-    xy: FloatArray,
-    count: Int,
-    color: Color,
-    widthPx: Float,
-    opacity: Float,
-) {
-    if (count == 0) return
-    drawIntoCanvas { canvas ->
-        val paint = Paint()
-        paint.isAntiAlias = false
-        paint.strokeCap = Paint.Cap.SQUARE
-        paint.strokeWidth = widthPx
-        paint.blendMode = BlendMode.PLUS
-        scopeTracePassOpacities(opacity).forEach { passOpacity ->
-            paint.color =
-                android.graphics.Color.argb(
-                    scopeTraceAlpha(color.alpha, passOpacity),
-                    (color.red * 255).roundToInt(),
-                    (color.green * 255).roundToInt(),
-                    (color.blue * 255).roundToInt(),
-                )
-            canvas.nativeCanvas.drawPoints(xy, 0, count * 2, paint)
-        }
-    }
-}
 
 /** Converts a possibly boosted trace opacity into Android's non-wrapping 8-bit alpha. */
 internal fun scopeTraceAlpha(colorAlpha: Float, opacity: Float): Int =
@@ -1953,82 +2125,7 @@ private fun fillChannel(
     return traces.pointCount
 }
 
-private fun DrawScope.drawTrace(
-    kind: ScopeKind,
-    traces: ScopeTraces,
-    plot: Rect,
-    opacity: Float,
-    configuration: ScopeAssistConfiguration,
-) {
-    if (traces.pointCount == 0) return
-    var scratch = pointScratch.get() ?: FloatArray(0)
-    if (scratch.size < traces.pointCount * 2) {
-        scratch = FloatArray(traces.pointCount * 2)
-        pointScratch.set(scratch)
-    }
-    when (kind) {
-        ScopeKind.WAVEFORM -> {
-            if (configuration.waveformMode == ScopeWaveformMode.LUMA) {
-                // Luma trace: 2px additive ghost + 1px core, brighter every 4th dot.
-                val count = fillChannel(traces, 1, plot, plot.left, plot.width, scratch)
-                drawPointPass(scratch, count, ScopePalette.lumaGhost, 2.dp.toPx(), opacity)
-                drawPointPass(scratch, count, ScopePalette.luma, 1.dp.toPx(), opacity)
-                var hot = 0
-                for (index in 0 until count step 4) {
-                    scratch[hot * 2] = scratch[index * 2]
-                    scratch[hot * 2 + 1] = scratch[index * 2 + 1]
-                    hot++
-                }
-                drawPointPass(scratch, hot, ScopePalette.lumaHot, 1.dp.toPx(), opacity)
-            } else {
-                waveformRgbChannels(traces, plot, scratch, opacity)
-            }
-        }
-        ScopeKind.PARADE -> {
-            val lanes =
-                if (configuration.paradeMode == ScopeParadeMode.RGB) {
-                    listOf(
-                        Pair(2, ScopePalette.paradeRed),
-                        Pair(3, ScopePalette.paradeGreen),
-                        Pair(4, ScopePalette.paradeBlue),
-                    )
-                } else {
-                    listOf(
-                        Pair(1, ScopePalette.luma),
-                        Pair(2, ScopePalette.paradeRed),
-                        Pair(3, ScopePalette.paradeGreen),
-                        Pair(4, ScopePalette.paradeBlue),
-                    )
-                }
-            val laneWidth = plot.width / lanes.size
-            for ((laneIndex, lane) in lanes.withIndex()) {
-                val origin = plot.left + laneIndex * laneWidth
-                val count = fillChannel(traces, lane.first, plot, origin, laneWidth - 1, scratch)
-                drawPointPass(scratch, count, lane.second, 1.dp.toPx(), opacity)
-            }
-        }
-        else -> Unit
-    }
-}
 
-/** RGB waveform mode overlays source channels over the same horizontal scan. */
-private fun DrawScope.waveformRgbChannels(
-    traces: ScopeTraces,
-    plot: Rect,
-    scratch: FloatArray,
-    opacity: Float,
-) {
-    val channels =
-        listOf(
-            Pair(2, ScopePalette.overlayRed),
-            Pair(3, ScopePalette.overlayGreen),
-            Pair(4, ScopePalette.overlayBlue),
-        )
-    for ((offset, color) in channels) {
-        val count = fillChannel(traces, offset, plot, plot.left, plot.width, scratch)
-        drawPointPass(scratch, count, color, 1.dp.toPx(), opacity)
-    }
-}
 
 /** Boundary lines (code 0/255) plus the three fixed anchor lines. */
 private fun DrawScope.drawAxisGuides(anchors: ScopeAnchors, plot: Rect, guides: ScopeGuideLines) {
@@ -2087,7 +2184,9 @@ private fun DrawScope.drawHistogramTrafficLights(reading: TrafficLightsReading) 
     val blockWidth = 7.5.dp.toPx()
     val blockHeight = 15.dp.toPx()
     val gap = 3.dp.toPx()
-    val top = 12.dp.toPx()
+    // iOS sits the columns just below the HISTO / RGBL title row; the title
+    // band is the 26dp plot clearance, hugged up slightly.
+    val top = 24.dp.toPx()
     val left = 11.dp.toPx()
     val right = size.width - 11.dp.toPx() - blockWidth
     val corner = CornerRadius(2.dp.toPx())
@@ -2147,22 +2246,19 @@ private fun histogramPath(bins: FloatArray, plot: Rect, peak: Float, closed: Boo
     return path
 }
 
-/** Quarter grid, 0/255 boundaries, and the three anchors as vertical lines. */
-private fun DrawScope.drawHistogramGuides(anchors: ScopeAnchors, plot: Rect) {
+/**
+ * Quarter grid plus the 0/255 boundary lines — iOS draws no anchor verticals
+ * inside the histogram (`drawHistogramReferenceGrid`/`drawHistogramBoundaries`).
+ */
+private fun DrawScope.drawHistogramGuides(plot: Rect) {
     for (step in 1..3) {
         val y = plot.top + plot.height * step / 4
         drawLine(rgba(220, 235, 225, 0.06f), Offset(plot.left, y), Offset(plot.right, y), 1.dp.toPx())
     }
-    fun vertical(fraction: Float, color: Color, width: Float, effect: PathEffect? = null) {
+    for (fraction in floatArrayOf(0f, 1f)) {
         val x = plot.left + fraction * plot.width
-        drawLine(color, Offset(x, plot.top), Offset(x, plot.bottom), width, pathEffect = effect)
+        drawLine(ScopePalette.boundary, Offset(x, plot.top), Offset(x, plot.bottom), 1.25.dp.toPx())
     }
-    vertical(0f, ScopePalette.boundary, 1.25.dp.toPx())
-    vertical(1f, ScopePalette.boundary, 1.25.dp.toPx())
-    val dashed = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
-    vertical(anchors.crushLine, ScopePalette.clip, 1.dp.toPx(), dashed)
-    vertical(anchors.midGray, ScopePalette.middle, 1.dp.toPx())
-    vertical(anchors.clipLine, ScopePalette.clip, 1.dp.toPx(), dashed)
 }
 
 /**
