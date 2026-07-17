@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -40,10 +41,15 @@ import kotlinx.coroutines.flow.flow
  * stub, so release builds physically cannot activate demo behaviour — the
  * Android equivalent of the iOS `#if DEBUG` isolation.
  *
- * Activate the synthetic feed:
+ * Activate the demo feed:
  * ```
  * adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
  * ```
+ * Prefers a local sample video when available (gitignored `samples/` clips
+ * staged into debug assets; prefers `A002_C057_0704BT.MP4`). Override with
+ * `--es zc.demo.video /path/on/device.mp4`. Falls back to the synthetic
+ * colour-bar generator when no sample is present.
+ *
  * Add `--es zc.demo.levelSource none` to omit the fixture horizon and exercise
  * the visibly labelled device-tilt fallback instead.
  *
@@ -83,6 +89,13 @@ object DemoHarness {
 
     /** Boolean intent extra that switches the synthetic demo feed on. */
     const val EXTRA_DEMO_FEED = "zc.demo.feed"
+
+    /**
+     * Optional on-device path to a sample video used as the demo live feed
+     * (`--es zc.demo.video /sdcard/Download/clip.mp4`). When unset, debug
+     * assets under `demo/` (staged from repo `samples/`) are preferred.
+     */
+    const val EXTRA_DEMO_VIDEO = "zc.demo.video"
 
     /**
      * Debug-only virtual-horizon source selector. `none` omits synthetic
@@ -217,9 +230,12 @@ object DemoHarness {
      * launch: `zc.session.host` makes the shell session a real
      * [SwiftCoreCameraSession] (null frame source — the shell streams the
      * session's own live view once connected); `zc.demo.feed` pairs a fake
-     * session with the synthetic 25 fps frame source.
+     * session with a sample-video or synthetic 25 fps frame source.
      */
-    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource?>? {
+    fun demoLiveFeed(
+        intent: Intent,
+        context: Context? = null,
+    ): Pair<CameraSession, LiveFrameSource?>? {
         intent.getStringExtra(EXTRA_SESSION_HOST)?.let { host ->
             if (!SwiftCore.isAvailable) {
                 Log.w(TAG, "libOpenZCineAndroid.so not bundled — run `just android-core` first")
@@ -235,7 +251,23 @@ object DemoHarness {
                 CameraIdentity(name = "Demo Feed", model = "OpenZCine Demo", serialNumber = "DEMO"),
             )
         val includeDebugCameraLevel = intent.getStringExtra(EXTRA_DEMO_LEVEL_SOURCE) != "none"
-        return session to DemoFrameSource(includeDebugCameraLevel = includeDebugCameraLevel)
+        val videoPath = intent.getStringExtra(EXTRA_DEMO_VIDEO)
+        val videoSource =
+            context?.let {
+                DemoVideoFrameSource.resolve(
+                    context = it,
+                    explicitPath = videoPath,
+                    includeDebugCameraLevel = includeDebugCameraLevel,
+                )
+            }
+        val frameSource =
+            videoSource
+                ?: DemoFrameSource(includeDebugCameraLevel = includeDebugCameraLevel).also {
+                    if (context != null) {
+                        Log.i(TAG, "demo feed ← synthetic colour bars (no sample video)")
+                    }
+                }
+        return session to frameSource
     }
 
     /**

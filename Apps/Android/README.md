@@ -201,6 +201,12 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
     --es zc.scopes wave,parade,lights
   ```
 
+  Demo live view prefers a local sample clip when present: drop an `.mp4` under
+  gitignored repo-root `samples/` (e.g. `samples/A002_C057_0704BT.MP4`); debug
+  builds stage it into assets automatically. Override with
+  `--es zc.demo.video /path/on/device.mp4`. Without a sample, the synthetic
+  colour-bar generator is used.
+
 - **Feed effects (view assists):** `FeedEffectsRenderer` bakes LUT preview, false colour,
   focus peaking, and zebras into the live feed in one AGSL pass. All colour math is resolved by
   the shared Swift core (`Sources/OpenZCineAndroidFacade/FeedEffectsWire.swift`): camera-aware

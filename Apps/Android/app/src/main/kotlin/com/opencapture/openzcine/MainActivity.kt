@@ -146,7 +146,7 @@ class MainActivity : ComponentActivity() {
         window.isNavigationBarContrastEnforced = false
         window.attributes.layoutInDisplayCutoutMode =
             WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        val demo = DemoHarness.demoLiveFeed(intent)
+        val demo = DemoHarness.demoLiveFeed(intent, applicationContext)
         val debugAssistEffects = DemoHarness.assistEffects(intent)
         val debugScopes = DemoHarness.scopeKinds(intent)
         val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
