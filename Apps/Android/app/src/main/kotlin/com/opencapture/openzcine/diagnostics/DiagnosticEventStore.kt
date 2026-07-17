@@ -18,11 +18,25 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     GUIDE_COMPLETED("live-guide.completed"),
     GUIDE_SKIPPED("live-guide.skipped"),
     DIAGNOSTICS_EXPORTED("diagnostics.exported"),
+    CONNECTION_FAILED("error.connection.failed"),
+    CONNECTION_EVENT_CHANNEL_ENDED("error.connection.event-channel-ended"),
+    LIVE_VIEW_FAILED("error.live-view.failed"),
+    LIVE_VIEW_STALLED("warning.live-view.stalled"),
     ;
 
     companion object {
         fun fromWireValue(value: String): AndroidDiagnosticEvent? =
             entries.firstOrNull { it.wireValue == value }
+
+        /** Maps only closed failure phases; the accompanying free-form detail is discarded. */
+        fun fromFailurePhase(phase: String): AndroidDiagnosticEvent? =
+            when (phase) {
+                "failed" -> CONNECTION_FAILED
+                "eventChannelEnded" -> CONNECTION_EVENT_CHANNEL_ENDED
+                "liveViewFailed" -> LIVE_VIEW_FAILED
+                "liveViewStalled" -> LIVE_VIEW_STALLED
+                else -> null
+            }
     }
 }
 
@@ -123,7 +137,8 @@ internal class DiagnosticEventStore(
      * Timestamps, raw local file lines, and every diagnostic-report field are
      * deliberately left behind. A hand-edited value such as "Bob's iPhone"
      * cannot enter because [recentEvents] accepts only [AndroidDiagnosticEvent]
-     * wire values.
+     * wire values. Error and warning values are closed incident codes; the
+     * relay derives their fixed operational traces without receiving raw text.
      */
     @Synchronized
     fun privacyFilteredActivityLog(): List<String> =
@@ -192,7 +207,7 @@ internal object DiagnosticReportRenderer {
                 "names and network addresses, media names and paths, account identities and tokens,",
                 "credentials, camera frames, arbitrary exception text, and user-entered text.",
                 "No diagnostics are uploaded automatically by OpenZCine.",
-                "Anonymous reports can include only a separately selected privacy-filtered list of app-event names.",
+                "Anonymous reports can include only separately selected closed app-event and incident codes.",
                 "",
                 "Generated: ${isoTimestamp(metadata.generatedAtMillis)}",
                 "App: OpenZCine $version (build ${metadata.buildNumber.coerceAtLeast(0)})",

@@ -27,7 +27,8 @@ import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.withContext
 
-private class LiveViewEndedException : IllegalStateException("The native live-view pump ended.")
+private class LiveViewEndedException(val generation: Long) :
+    IllegalStateException("The native live-view pump ended.")
 
 private data class StreamFrame(
     val generation: Long,
@@ -159,6 +160,7 @@ class SwiftCoreLiveFrameSource(
     private val restartDelayMillis: Long = 250L,
     private val onRecordingState: (Boolean) -> Unit = {},
     private val onCommandRoundTrip: () -> Unit = {},
+    private val onFailurePhase: (String) -> Unit = {},
     private val stopDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val beforeStartReservation: suspend () -> Unit = {},
 ) : LiveFrameSource {
@@ -171,6 +173,7 @@ class SwiftCoreLiveFrameSource(
     private var requestedPreviewVersion = 0L
     private var appliedPreview: SwiftLiveViewRequest? = null
     private var nativePumpState: NativePumpState = NativePumpState.Idle
+    private var intentionalRestartGeneration: Long? = null
     private val previewUpdates = Channel<Unit>(Channel.CONFLATED)
     private val pumpStateUpdates = Channel<Unit>(Channel.CONFLATED)
     private val _previewState = MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle)
@@ -391,12 +394,13 @@ class SwiftCoreLiveFrameSource(
                         }
 
                         override fun onEnded() {
-                            close(LiveViewEndedException())
+                            close(LiveViewEndedException(generation))
                         }
                         },
                     )
                 } catch (error: Throwable) {
                     failPumpStart(generation)
+                    onFailurePhase("liveViewFailed")
                     throw error
                 }
                 if (completePumpStart(reservation)) {
@@ -409,6 +413,16 @@ class SwiftCoreLiveFrameSource(
             .buffer(Channel.CONFLATED)
             .retryWhen { cause, _ ->
                 if (cause !is LiveViewEndedException) return@retryWhen false
+                val intentionalRestart =
+                    synchronized(previewRequestLock) {
+                        if (intentionalRestartGeneration == cause.generation) {
+                            intentionalRestartGeneration = null
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                if (!intentionalRestart) onFailurePhase("liveViewStalled")
                 delay(restartDelayMillis)
                 true
             }
@@ -664,6 +678,7 @@ class SwiftCoreLiveFrameSource(
                     is NativePumpState.Running -> {
                         activeStreamGeneration.compareAndSet(state.generation, 0L)
                         nativePumpState = NativePumpState.Stopping(state.generation)
+                        intentionalRestartGeneration = state.generation
                         stopGeneration = state.generation
                     }
                     is NativePumpState.Idle,

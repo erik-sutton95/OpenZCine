@@ -270,6 +270,7 @@ class SwiftCoreCameraSession internal constructor(
         SwiftCoreLiveFrameSource(
             onRecordingState = ::applyCameraRecordingState,
             onCommandRoundTrip = ::updateRoundTripMeasurement,
+            onFailurePhase = { phase -> phaseLogger(phase, "") },
         )
 
     /**

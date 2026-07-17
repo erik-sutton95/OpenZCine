@@ -121,6 +121,23 @@ class DiagnosticEventStoreTest {
     }
 
     @Test
+    fun `closed failure phases become privacy-safe incident codes`() {
+        assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_FAILED,
+            AndroidDiagnosticEvent.fromFailurePhase("failed"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_EVENT_CHANNEL_ENDED,
+            AndroidDiagnosticEvent.fromFailurePhase("eventChannelEnded"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.LIVE_VIEW_STALLED,
+            AndroidDiagnosticEvent.fromFailurePhase("liveViewStalled"),
+        )
+        assertEquals(null, AndroidDiagnosticEvent.fromFailurePhase("Bob's iPhone"))
+    }
+
+    @Test
     fun `report includes only coarse process exits and explicit privacy notice`() {
         val report =
             DiagnosticReportRenderer.render(

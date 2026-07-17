@@ -25,6 +25,9 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case monitorDismissed = "monitor.dismissed"
     case liveViewStarted = "live-view.started"
     case liveViewFailed = "live-view.failed"
+    case connectionFailed = "error.connection.failed"
+    case connectionEventChannelEnded = "error.connection.event-channel-ended"
+    case liveViewStalled = "warning.live-view.stalled"
     case recordingStarted = "recording.started"
     case recordingStopped = "recording.stopped"
     case guidePresented = "live-guide.presented"
@@ -337,7 +340,7 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
         return url
     }
 
-    /// Returns a bounded, closed-vocabulary event snapshot suitable for an opted-in public report.
+    /// Returns a bounded, closed-vocabulary event and incident snapshot for an opted-in report.
     ///
     /// Unlike ``makeReport()``, this never includes timestamps, MetricKit data, or device metadata.
     func anonymousActivityLog() async -> [String] {

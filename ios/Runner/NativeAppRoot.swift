@@ -317,6 +317,12 @@ enum ExternalInternetLinkReturnPolicy {
     }
 }
 
+enum EventChannelDiagnosticPolicy {
+    static func shouldRecordUnexpectedEnd(isCancelled: Bool, ownsSession: Bool) -> Bool {
+        !isCancelled && ownsSession
+    }
+}
+
 @MainActor
 @Observable
 final class NativeAppModel {
@@ -1154,6 +1160,7 @@ final class NativeAppModel {
     }
 
     private func surfaceCameraWiFiJoinFailure(_ message: String) {
+        AppDiagnostics.shared.record(.connectionFailed)
         connectionProgressShowsFailure = true
         connectionPhase = .failed
         connectionMessage = message
@@ -1712,6 +1719,7 @@ final class NativeAppModel {
                 return
             } catch {
                 guard connectionGeneration == generation else { return }
+                AppDiagnostics.shared.record(.connectionFailed)
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
@@ -1859,6 +1867,7 @@ final class NativeAppModel {
                     )
                     return
                 }
+                AppDiagnostics.shared.record(.connectionFailed)
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
@@ -3166,6 +3175,7 @@ final class NativeAppModel {
                     connectToCamera(preservingMonitorSurface: true)
                     return
                 case .stalled(let reason):
+                    AppDiagnostics.shared.record(.liveViewStalled)
                     if streamedHealthily { stallAttempt = 0 }
                     if stallAttempt >= maxStallRestarts {
                         // The stream keeps dying right after each restart — escalate to a full
@@ -3381,8 +3391,22 @@ final class NativeAppModel {
                     }
                 } catch let error as NativeCameraSessionError {
                     if case .timeout = error { continue }
+                    guard
+                        EventChannelDiagnosticPolicy.shouldRecordUnexpectedEnd(
+                            isCancelled: Task.isCancelled,
+                            ownsSession: self.cameraSession === session
+                        )
+                    else { return }
+                    AppDiagnostics.shared.record(.connectionEventChannelEnded)
                     return
                 } catch {
+                    guard
+                        EventChannelDiagnosticPolicy.shouldRecordUnexpectedEnd(
+                            isCancelled: Task.isCancelled,
+                            ownsSession: self.cameraSession === session
+                        )
+                    else { return }
+                    AppDiagnostics.shared.record(.connectionEventChannelEnded)
                     return
                 }
             }
