@@ -344,6 +344,7 @@ struct StartupSavedCamerasView: View {
             .refreshable {
                 await model.refreshCameraDiscovery()
             }
+            .fadeOverflowBottom()
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1673,6 +1674,7 @@ struct StartupFirstPairWizardView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) { cards }
             }
+            .fadeOverflowBottom()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
@@ -1717,6 +1719,48 @@ struct StartupFirstPairWizardView: View {
 
     private var primaryWizardActionTitle: String {
         step == .connectNetwork ? "Connect my camera" : "Continue"
+    }
+}
+
+/// Fades out the bottom edge of a vertical scroll viewport while more content lies below the
+/// fold — the "there's more" affordance (Android: `Modifier.fadeOverflowBottom`). Apply to the
+/// `ScrollView` itself.
+struct StartupOverflowFade: ViewModifier {
+    var fadeHeight: CGFloat
+    @State private var canScrollFurther = false
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height - geometry.containerSize.height
+                        - geometry.contentOffset.y > 2
+                } action: { _, more in
+                    canScrollFurther = more
+                }
+                .mask(
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(
+                            colors: [.black, canScrollFurther ? .clear : .black],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                        .frame(height: fadeHeight)
+                    }
+                )
+                .animation(.easeInOut(duration: 0.18), value: canScrollFurther)
+        } else {
+            // Pre-18 systems can't observe scroll geometry cheaply (same trade-off as the assist
+            // toolbar); skip the affordance rather than fade a bottom that may not overflow.
+            content
+        }
+    }
+}
+
+extension View {
+    /// See `StartupOverflowFade`.
+    func fadeOverflowBottom(height: CGFloat = 28) -> some View {
+        modifier(StartupOverflowFade(fadeHeight: height))
     }
 }
 
