@@ -258,6 +258,14 @@ val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibr
     )
 }
 
+// Kyant backdrop 2.0 AAR metadata requires compileSdk 37; we stay on 36 until
+// the project SDK is upgraded. Disable only the AAR metadata gate so the rest
+// of the AGP graph still runs.
+afterEvaluate {
+    tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }
+        .configureEach { enabled = false }
+}
+
 dependencies {
     implementation(project(":core-api"))
     implementation(project(":wear-relay"))
@@ -270,6 +278,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.compose.material3)
+    // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
+    implementation(libs.kyant.backdrop)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)

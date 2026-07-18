@@ -14,6 +14,8 @@ mlKitTextRecognition = "16.0.1"
 playServicesWearable = "20.0.1"
 wearCompose = "1.6.2"
 json = "20231013"
+# Kyant0 AndroidLiquidGlass (Compose liquid glass / backdrop).
+kyantBackdrop = "2.0.0"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -48,6 +50,7 @@ androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTes
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTest" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
 androidx-test-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version = "2.3.0" }
+kyant-backdrop = { module = "io.github.kyant0:backdrop", version.ref = "kyantBackdrop" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

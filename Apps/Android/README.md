@@ -171,13 +171,12 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   physical fallback check covers the latter. Debug-frame metadata is visibly and semantically
   marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
   camera pass.
-- **Liquid-glass chrome:** on API 33+ (**FULL**), monitor chrome is a grab-pass + panel-shader
-  treatment (`GlassChrome.kt`): double-buffered 1/6-res grab; pill AGSL multi-scale frost +
-  circle-map lens (refraction profile inspired by [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)).
-  On older APIs — and after frame-budget demote — chrome is **FLAT**: a more opaque solid fill
-  with no grab/blur stand-in (same policy as pre–iOS 26). Debug:
-  `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier flat`
-  (`full`/`flat`; lowers only).
+- **Liquid-glass chrome:** on API 33+ (**FULL**), monitor chrome uses
+  [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)
+  (`io.github.kyant0:backdrop`) 1:1 — `rememberLayerBackdrop` on the live feed,
+  `drawBackdrop { vibrancy(); blur(); lens() }` on chrome. On older APIs — and after
+  frame-budget demote — chrome is **FLAT**: a more opaque solid fill (same policy as
+  pre–iOS 26). Debug: `--es zc.glass.tier flat` (`full`/`flat`; lowers only).
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
   monitor-owned clean-frame sampler at 30 Hz (24 Hz above three active scopes), with the same
   thermal slowdown tiers as iOS. The shared core owns all axis/curve and Traffic

@@ -1,105 +1,55 @@
 package com.opencapture.openzcine
 
-import android.graphics.Bitmap
-import android.graphics.BitmapShader
-import android.graphics.Canvas
-import android.graphics.Matrix
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.RuntimeShader
-import android.graphics.Shader
 import android.os.Build
 import android.util.Log
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.dp
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
 
-// Custom GPU liquid-glass treatment for the monitor chrome (OPE-47).
+// Liquid glass via Kyant0/AndroidLiquidGlass (io.github.kyant0:backdrop).
 //
-// Architecture (matches a classic grab-pass + panel blur):
+// 1:1 with the library catalog pattern:
+//   • Parent content records into a LayerBackdrop (Modifier.layerBackdrop).
+//   • Glass pills use Modifier.drawBackdrop { vibrancy(); blur(); lens() }.
+//   • Effect order is color-filter → blur → lens (library requirement).
 //
-//  1. [GlassBackdrop] is a simple GRAB pass: each feed frame is downscaled
-//     once into a double-buffered viewport texture (feed + black surround).
-//     No CPU blur, no in-place mutation of the published texture — write to
-//     the back buffer, then atomically publish. That is what killed the
-//     flickering (decode thread was box-blurring the same bitmap the GPU
-//     was sampling).
-//  2. Panel shaders sample that grab pass and blur in AGSL (API 33+ FULL).
-//     One shared grab, many samplers — never a per-pill screen capture.
-//  3. Older devices / demoted chrome use FLAT: a more opaque solid fill with
-//     no grab sampling and no fake frost (same policy as pre–iOS 26).
+// Older / demoted devices: FLAT more-opaque fill — no fake frost.
+// See https://github.com/Kyant0/AndroidLiquidGlass and
+// https://kyant.gitbook.io/backdrop
 
 private const val TAG = "ZCGlass"
 
 /**
- * Grab-pass resolution: 1/6 of the viewport. Higher than 1/8 so AGSL frost
- * reads smoother when upsampled (inspired by Kyant0/AndroidLiquidGlass quality
- * targets while keeping the shared grab cheap).
- */
-private const val GRAB_DOWNSCALE = 6
-
-/**
- * Lens band height and max sample shift (dp). Matches the Kyant "lens"
- * proportions used in LiquidButton (height ~12dp, amount ~24dp), scaled for
- * our monitor chrome.
- */
-private const val REFRACTION_HEIGHT_DP = 12f
-private const val REFRACTION_AMOUNT_DP = 24f
-
-/**
- * AGSL multi-tap frost radius in screen px. Dual-ring sampling softens like a
- * real Gaussian more than a single 5-tap cross.
- */
-private const val SHADER_BLUR_SPREAD_DP = 14f
-
-/** Warm glass tint (LiveDesign.glass RGB); lighter alpha so frost shows through. */
-private const val GLASS_TINT_R = 0.105f
-private const val GLASS_TINT_G = 0.092f
-private const val GLASS_TINT_B = 0.073f
-private const val GLASS_TINT_A = 0.30f
-
-/**
  * Glass quality tiers.
  *
- * - [FULL]: grab pass + AGSL frost / refraction (API 33+).
- * - [FLAT]: more opaque solid fill — the floor on older systems and after
- *   demote. No grab, no blur stand-in.
+ * - [FULL]: Kyant layer-backdrop + blur + lens (API 33+ RuntimeShader lens).
+ * - [FLAT]: more opaque solid fill (older API / demoted / no layer backdrop).
  */
 enum class GlassTier {
-    /** Flat more-opaque chrome fill (older API / demoted / no feed grab). */
     FLAT,
-
-    /** Grab pass + AGSL frost + edge refraction + specular (API 33+). */
     FULL,
 }
 
 /**
- * API 33+ → FULL, else → FLAT. Debug [override] (`full`/`flat`/`blur`) can only
- * lower the tier — `"blur"` maps to FLAT (no mid-tier fake frost).
+ * API 33+ → FULL (lens needs RuntimeShader). Else → FLAT.
+ * Debug override `zc.glass.tier` can only lower; legacy `"blur"` → FLAT.
  */
 fun resolveTier(sdkInt: Int, override: String? = null): GlassTier {
     val capability = if (sdkInt >= 33) GlassTier.FULL else GlassTier.FLAT
@@ -113,8 +63,7 @@ fun resolveTier(sdkInt: Int, override: String? = null): GlassTier {
 }
 
 /**
- * Sustained frame-budget detector. When more than [maxOverBudget] of a
- * [window]-frame block exceed [budgetNanos], answers demote-now.
+ * Sustained frame-budget detector: demote FULL → FLAT under sustained jank.
  */
 class FrameBudgetWindow(
     private val budgetNanos: Long = 48_000_000L,
@@ -142,138 +91,106 @@ class FrameBudgetWindow(
 }
 
 /**
- * Shared **grab pass** — one low-res viewport texture of the live feed
- * (plus black letterbox), rebuilt once per decoded frame.
+ * Monitor glass session: tier + Kyant [LayerBackdrop] for chrome sampling.
  *
- * Double-buffered: the decode thread always writes the *back* buffer, then
- * publishes it. The GPU only ever samples the published front, so there is
- * no tear/flicker from in-place mutation or CPU box-blur mid-sample.
+ * Create the backdrop with [com.kyant.backdrop.backdrops.rememberLayerBackdrop]
+ * and attach it to the live feed (or full monitor content) via
+ * [com.kyant.backdrop.backdrops.layerBackdrop].
  */
-class GlassBackdrop {
-    private val bilinear = Paint(Paint.FILTER_BITMAP_FLAG)
-    private var intermediate: Bitmap? = null
-    private val pool = arrayOfNulls<Bitmap>(2)
-    private var writeIndex = 0
-    private var rootWidth = 0f
-    private var rootHeight = 0f
-    private var feedRect = RectF()
-    private var aspectFill = false
-
-    /**
-     * Published grab texture. Stable until the next [submit] finishes; never
-     * written after publish.
-     */
-    @Volatile
-    var texture: Bitmap? = null
+class MonitorGlass(
+    initialTier: GlassTier,
+    val layerBackdrop: LayerBackdrop? = null,
+) {
+    var tier: GlassTier by mutableStateOf(initialTier)
         private set
 
-    /**
-     * Monotonic grab generation. Pills read this in draw so a new grab costs
-     * one draw invalidation — no recomposition of the tree beyond invalidation.
-     */
-    var frame: Int by mutableIntStateOf(0)
-        private set
+    /** No-op: Kyant records the layer; no per-frame bitmap grab. */
+    @Suppress("UNUSED_PARAMETER")
+    fun submit(bitmap: android.graphics.Bitmap) = Unit
 
-    fun uvScaleX(): Float = texture?.let { it.width / rootWidth } ?: 0f
-
-    fun uvScaleY(): Float = texture?.let { it.height / rootHeight } ?: 0f
-
-    fun overlapsFeed(left: Float, top: Float, right: Float, bottom: Float): Boolean =
-        left < feedRect.right &&
-            right > feedRect.left &&
-            top < feedRect.bottom &&
-            bottom > feedRect.top
-
-    /** (Re)configures viewport + feed-zone geometry, in root px. */
-    fun setLayout(
-        rootWidthPx: Float,
-        rootHeightPx: Float,
-        feedRectPx: RectF,
-        aspectFill: Boolean = false,
-    ) {
-        synchronized(this) {
-            feedRect = feedRectPx
-            this.aspectFill = aspectFill
-            if (rootWidth == rootWidthPx && rootHeight == rootHeightPx && pool[0] != null) return
-            rootWidth = rootWidthPx
-            rootHeight = rootHeightPx
-            val w = max(1, (rootWidthPx / GRAB_DOWNSCALE).roundToInt())
-            val h = max(1, (rootHeightPx / GRAB_DOWNSCALE).roundToInt())
-            pool[0] = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            pool[1] = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            writeIndex = 0
-            texture = null
-            frame = 0
+    fun demote() {
+        if (tier == GlassTier.FLAT) return
+        runCatching {
+            Log.w(TAG, "sustained frame-budget overrun — degrading glass FULL -> FLAT")
         }
+        tier = GlassTier.FLAT
+    }
+}
+
+/**
+ * Glass session for the monitor shell. Null / FLAT → opaque solid fill.
+ */
+val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
+
+/** Warm surface tint drawn over the frosted backdrop (dark monitor chrome). */
+private val GlassSurfaceTint = Color(0.105f, 0.092f, 0.073f, 0.28f)
+
+/**
+ * iOS `liquidGlass` entry point — Kyant `drawBackdrop` on API 33+ FULL,
+ * opaque flat fill otherwise.
+ */
+@Composable
+fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
+    val glass = LocalMonitorGlass.current
+    val backdrop = glass?.layerBackdrop
+    val tier = glass?.tier ?: GlassTier.FLAT
+    if (backdrop == null || tier == GlassTier.FLAT || Build.VERSION.SDK_INT < 33) {
+        return background(LiveDesign.glassOpaque, shape)
+            .border(1.dp, LiveDesign.hairlineStrong, shape)
     }
 
-    /**
-     * Grab pass: composite the feed frame into the back buffer, then publish.
-     * Decode-thread only. No CPU blur — panels blur when they sample.
-     */
-    fun submit(bitmap: Bitmap) {
-        synchronized(this) {
-            val back = pool[writeIndex] ?: return
-            val content =
-                glassBackdropContentRect(
-                    feedWidth = feedRect.width(),
-                    feedHeight = feedRect.height(),
-                    sourceWidth = bitmap.width,
-                    sourceHeight = bitmap.height,
-                    aspectFill = aspectFill,
-                ) ?: return
-            val contentW = content.width.toFloat()
-            val contentH = content.height.toFloat()
-            val contentLeft = feedRect.left + content.left
-            val contentTop = feedRect.top + content.top
-            val sx = back.width / rootWidth
-            val sy = back.height / rootHeight
+    // 1:1 Kyant catalog effect chain (DialogContent / LiquidButton style):
+    // vibrancy → blur → lens.
+    return this.drawBackdrop(
+        backdrop = backdrop,
+        shape = { shape },
+        effects = {
+            vibrancy()
+            blur(8f.dp.toPx())
+            // Lens requires CornerBasedShape (RoundedCornerShape / CircleShape).
+            if (shape is CornerBasedShape) {
+                lens(
+                    refractionHeight = 12f.dp.toPx(),
+                    refractionAmount = 24f.dp.toPx(),
+                    depthEffect = true,
+                )
+            }
+        },
+        highlight = { Highlight.Default },
+        onDrawSurface = {
+            drawRect(GlassSurfaceTint)
+        },
+    )
+}
 
-            // Two-step bilinear downsample into the feed rect (letterbox stays black).
-            val midW = max(1, (contentW * sx * 4f).roundToInt())
-            val midH = max(1, (contentH * sy * 4f).roundToInt())
-            val mid =
-                intermediate?.takeIf { it.width == midW && it.height == midH }
-                    ?: Bitmap.createBitmap(midW, midH, Bitmap.Config.ARGB_8888)
-                        .also { intermediate = it }
-            Canvas(mid).drawBitmap(
-                bitmap,
-                null,
-                RectF(0f, 0f, midW.toFloat(), midH.toFloat()),
-                bilinear,
-            )
+/**
+ * Nested chips inside a glass slab: opaque flat (no second backdrop sample).
+ */
+fun Modifier.chipGlass(shape: Shape = ChromeShape): Modifier =
+    background(LiveDesign.glassOpaque, shape).border(1.dp, LiveDesign.hairline, shape)
 
-            val canvas = Canvas(back)
-            canvas.drawColor(android.graphics.Color.BLACK)
-            val saveCount = canvas.save()
-            canvas.clipRect(
-                feedRect.left * sx,
-                feedRect.top * sy,
-                feedRect.right * sx,
-                feedRect.bottom * sy,
-            )
-            canvas.drawBitmap(
-                mid,
-                null,
-                RectF(
-                    contentLeft * sx,
-                    contentTop * sy,
-                    (contentLeft + contentW) * sx,
-                    (contentTop + contentH) * sy,
-                ),
-                bilinear,
-            )
-            canvas.restoreToCount(saveCount)
-
-            // Publish completed grab; next write goes to the other buffer.
-            texture = back
-            writeIndex = 1 - writeIndex
-            frame++
+/**
+ * Runs the frame-budget demote loop for a [MonitorGlass] session.
+ * Stops once the tier is FLAT.
+ */
+@Composable
+fun MonitorGlassBudgetLoop(glass: MonitorGlass) {
+    LaunchedEffect(glass) {
+        val budget = FrameBudgetWindow()
+        var last = 0L
+        while (glass.tier != GlassTier.FLAT) {
+            withFrameNanos { now ->
+                if (last != 0L && budget.frame(now - last)) glass.demote()
+                last = now
+            }
         }
     }
 }
 
-/** Uses the feed renderer's exact pixel-rounded transform for glass sampling. */
+/**
+ * Feed content-rect helper retained for glass-era layout tests (analysis
+ * placement still uses the same fit/fill math as the old grab pass).
+ */
 internal fun glassBackdropContentRect(
     feedWidth: Float,
     feedHeight: Float,
@@ -288,275 +205,3 @@ internal fun glassBackdropContentRect(
         sourceHeight = sourceHeight,
         aspectFill = aspectFill,
     )
-
-/**
- * Per-screen glass state: active [tier] + shared grab-pass [backdrop].
- */
-class MonitorGlass(initialTier: GlassTier) {
-    var tier: GlassTier by mutableStateOf(initialTier)
-        private set
-
-    val backdrop = GlassBackdrop()
-
-    /** Grab-pass update; no-op when FLAT (no sampling). */
-    fun submit(bitmap: Bitmap) {
-        if (tier == GlassTier.FULL) backdrop.submit(bitmap)
-    }
-
-    /** FULL → FLAT. Opaque fill is the floor. */
-    fun demote() {
-        if (tier == GlassTier.FLAT) return
-        runCatching {
-            Log.w(TAG, "sustained frame-budget overrun — degrading glass $tier -> ${GlassTier.FLAT}")
-        }
-        tier = GlassTier.FLAT
-    }
-}
-
-/**
- * Glass state for monitor chrome. Null / FLAT → opaque solid fill (no grab).
- */
-val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
-
-/**
- * AGSL panel shader: sample grab → multi-scale frost → liquid lens → tint.
- *
- * Frost + lens are done here (not in the grab producer). Lens uses a
- * circle-map refraction profile inspired by Kyant0/AndroidLiquidGlass
- * (Apache-2.0) — smoother than a linear rim shift.
- */
-private val GLASS_SHADER_SRC =
-    """
-    uniform shader grab;
-    uniform float2 size;
-    uniform float radius;
-    uniform float2 origin;
-    uniform float2 uvScale;
-    uniform float refractionHeight;
-    uniform float refractionAmount;
-    uniform float blurSpread;
-    uniform float4 tint;
-
-    float sdRoundedRect(float2 p, float2 halfSize, float r) {
-        float2 q = abs(p) - (halfSize - float2(r));
-        float outside = length(max(q, 0.0)) - r;
-        float inside = min(max(q.x, q.y), 0.0);
-        return outside + inside;
-    }
-
-    float2 gradSdRoundedRect(float2 p, float2 halfSize, float r) {
-        float2 q = abs(p) - (halfSize - float2(r));
-        if (q.x >= 0.0 || q.y >= 0.0) {
-            return sign(p) * normalize(max(q, 0.001));
-        }
-        float gx = step(q.y, q.x);
-        return sign(p) * float2(gx, 1.0 - gx);
-    }
-
-    // Dual-ring cross: approximates a soft Gaussian (better than single 5-tap).
-    half3 sampleFrost(float2 screenPx) {
-        float2 c = (screenPx + origin) * uvScale;
-        float2 s1 = float2(blurSpread, blurSpread) * uvScale;
-        float2 s2 = s1 * 2.0;
-        half3 acc = grab.eval(c).rgb * 0.28;
-        acc += grab.eval(c + float2(s1.x, 0.0)).rgb * 0.12;
-        acc += grab.eval(c - float2(s1.x, 0.0)).rgb * 0.12;
-        acc += grab.eval(c + float2(0.0, s1.y)).rgb * 0.12;
-        acc += grab.eval(c - float2(0.0, s1.y)).rgb * 0.12;
-        acc += grab.eval(c + float2(s2.x, 0.0)).rgb * 0.06;
-        acc += grab.eval(c - float2(s2.x, 0.0)).rgb * 0.06;
-        acc += grab.eval(c + float2(0.0, s2.y)).rgb * 0.06;
-        acc += grab.eval(c - float2(0.0, s2.y)).rgb * 0.06;
-        return acc;
-    }
-
-    // Kyant-style lens falloff: 1 - sqrt(1 - x^2) → convex glass edge.
-    float circleMap(float x) {
-        return 1.0 - sqrt(max(0.0, 1.0 - x * x));
-    }
-
-    half4 main(float2 coord) {
-        float2 halfSize = size * 0.5;
-        float2 p = coord - halfSize;
-        float sd = sdRoundedRect(p, halfSize, radius);
-
-        float2 samplePx = coord;
-        if (refractionHeight > 0.0 && refractionAmount != 0.0 && -sd < refractionHeight) {
-            float clamped = min(sd, 0.0);
-            float d = circleMap(1.0 - (-clamped) / refractionHeight) * refractionAmount;
-            float gradR = min(radius * 1.5, min(halfSize.x, halfSize.y));
-            float2 grad = normalize(gradSdRoundedRect(p, halfSize, gradR) + 0.15 * normalize(p + 0.001));
-            // refractionAmount is negative in Kyant; we store positive and invert here.
-            samplePx = coord - d * grad;
-        }
-
-        half3 bg = sampleFrost(samplePx);
-
-        // Vibrancy (Kyant: saturation * 1.5) so frost stays lively under tint.
-        half lum = dot(bg, half3(0.299, 0.587, 0.114));
-        half3 vib = mix(half3(lum), bg, 1.45);
-        half3 body = mix(vib, half3(tint.r, tint.g, tint.b), half(tint.a));
-
-        float yNorm = clamp(coord.y / max(size.y, 1.0), 0.0, 1.0);
-        float topSpec = pow(1.0 - yNorm, 2.6) * 0.26;
-        float edge = exp(-abs(sd) * 0.45) * 0.16 * (1.0 - yNorm * 0.45);
-        half3 spec = half3(0.968, 0.937, 0.882) * half(topSpec + edge);
-
-        return half4(body + spec, 1.0);
-    }
-    """
-        .trimIndent()
-
-private val RimHighlight =
-    Brush.verticalGradient(
-        listOf(
-            Color(0.968f, 0.937f, 0.882f, 0.55f),
-            Color(0.968f, 0.937f, 0.882f, 0.08f),
-        ),
-    )
-
-/**
- * Per-pill draw state. Uniforms re-set only when geometry / published grab
- * identity changes — not every fragment.
- */
-private class GlassPillNode(useAgsl: Boolean) {
-    var origin = Offset.Zero
-    val runtime: RuntimeShader? =
-        if (useAgsl && Build.VERSION.SDK_INT >= 33) RuntimeShader(GLASS_SHADER_SRC) else null
-    val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-    val matrix = Matrix()
-    var shader: BitmapShader? = null
-    private var boundTexture: Bitmap? = null
-    private var boundOrigin = Offset.Unspecified
-    private var boundWidth = -1f
-    private var boundHeight = -1f
-    private var boundRefract = Float.NaN
-
-    fun rebindNeeded(
-        texture: Bitmap,
-        width: Float,
-        height: Float,
-        refract: Float,
-    ): Boolean =
-        texture !== boundTexture ||
-            origin != boundOrigin ||
-            width != boundWidth ||
-            height != boundHeight ||
-            refract != boundRefract
-
-    fun shaderFor(texture: Bitmap): BitmapShader {
-        if (texture === boundTexture) shader?.let { return it }
-        return BitmapShader(texture, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-            .also {
-                if (Build.VERSION.SDK_INT >= 33) {
-                    it.filterMode = BitmapShader.FILTER_MODE_LINEAR
-                }
-                shader = it
-            }
-    }
-
-    fun markBound(texture: Bitmap, width: Float, height: Float, refract: Float) {
-        boundTexture = texture
-        boundOrigin = origin
-        boundWidth = width
-        boundHeight = height
-        boundRefract = refract
-    }
-}
-
-/**
- * iOS `liquidGlass` entry point.
- *
- * - FULL (API 33+): AGSL samples the grab pass, blurs + refracts in-shader.
- * - FLAT / no LocalMonitorGlass: more opaque solid fill — no grab, no fake frost.
- */
-@Composable
-fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
-    val glass = LocalMonitorGlass.current
-    if (glass == null || glass.tier == GlassTier.FLAT) {
-        return background(LiveDesign.glassOpaque, shape)
-            .border(1.dp, LiveDesign.hairlineStrong, shape)
-    }
-    // FULL: grab + AGSL (requires API 33 RuntimeShader).
-    val node = remember(glass) { GlassPillNode(useAgsl = true) }
-    return onGloballyPositioned { node.origin = it.positionInRoot() }
-        .drawBehind { drawGlassPanel(node, glass.backdrop, shape) }
-        .border(1.dp, RimHighlight, shape)
-}
-
-/**
- * Nested chips inside a glass slab: opaque flat fill (no second grab sample).
- */
-fun Modifier.chipGlass(shape: Shape = ChromeShape): Modifier =
-    background(LiveDesign.glassOpaque, shape).border(1.dp, LiveDesign.hairline, shape)
-
-private fun DrawScope.drawGlassPanel(
-    node: GlassPillNode,
-    backdrop: GlassBackdrop,
-    shape: Shape,
-) {
-    val radius =
-        if (shape === CircleShape) size.minDimension / 2f
-        else min(LiveDesign.CORNER_RADIUS_DP.dp.toPx(), size.minDimension / 2f)
-    // Reading frame invalidates draw when a new grab publishes.
-    val grabGeneration = backdrop.frame
-    val texture = backdrop.texture
-    if (grabGeneration <= 0 || texture == null) {
-        drawRoundRect(
-            color = LiveDesign.glassOpaque,
-            cornerRadius = CornerRadius(radius, radius),
-        )
-        return
-    }
-    val refractPx = REFRACTION_AMOUNT_DP.dp.toPx()
-    if (node.rebindNeeded(texture, size.width, size.height, refractPx)) {
-        val source = node.shaderFor(texture)
-        val runtime = node.runtime
-        if (runtime != null && Build.VERSION.SDK_INT >= 33) {
-            bindPanelShader(runtime, node, backdrop, source, radius, refractPx)
-        } else {
-            // Should not reach: FULL is API 33+ only. Opaque fallback.
-            node.paint.shader = null
-            node.paint.color =
-                android.graphics.Color.argb(
-                    (0.90f * 255).toInt(),
-                    (0.105f * 255).toInt(),
-                    (0.092f * 255).toInt(),
-                    (0.073f * 255).toInt(),
-                )
-        }
-        node.markBound(texture, size.width, size.height, refractPx)
-    }
-    drawIntoCanvas {
-        it.nativeCanvas.drawRoundRect(0f, 0f, size.width, size.height, radius, radius, node.paint)
-    }
-}
-
-@RequiresApi(33)
-private fun DrawScope.bindPanelShader(
-    runtime: RuntimeShader,
-    node: GlassPillNode,
-    backdrop: GlassBackdrop,
-    source: BitmapShader,
-    radius: Float,
-    refractPx: Float,
-) {
-    node.matrix.reset()
-    source.setLocalMatrix(node.matrix)
-    runtime.setFloatUniform("size", size.width, size.height)
-    runtime.setFloatUniform("radius", radius)
-    runtime.setFloatUniform("origin", node.origin.x, node.origin.y)
-    runtime.setFloatUniform("uvScale", backdrop.uvScaleX(), backdrop.uvScaleY())
-    runtime.setFloatUniform("refractionHeight", REFRACTION_HEIGHT_DP.dp.toPx())
-    runtime.setFloatUniform("refractionAmount", refractPx)
-    runtime.setFloatUniform("blurSpread", SHADER_BLUR_SPREAD_DP.dp.toPx())
-    runtime.setFloatUniform(
-        "tint",
-        GLASS_TINT_R,
-        GLASS_TINT_G,
-        GLASS_TINT_B,
-        GLASS_TINT_A,
-    )
-    runtime.setInputShader("grab", source)
-    node.paint.shader = runtime
-}

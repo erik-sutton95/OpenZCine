@@ -33,7 +33,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -44,7 +43,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -77,6 +75,8 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.openzcine.bridge.MonitorZones
@@ -344,21 +344,18 @@ internal fun MonitorScreen(
         (swiftLiveFrameSource?.previewState ?: noPreviewApplication).collectAsState()
     MonitorSessionRecoveryEffect(session, enabled = sessionRecoveryEnabled)
 
-    // Shared glass state: FULL grab+AGSL, or FLAT opaque fill on older /
-    // demoted devices. Frame-budget overruns drop FULL → FLAT only.
-    val glass = remember {
-        MonitorGlass(resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride))
-    }
-    LaunchedEffect(glass) {
-        val budget = FrameBudgetWindow()
-        var last = 0L
-        while (glass.tier != GlassTier.FLAT) {
-            withFrameNanos { now ->
-                if (last != 0L && budget.frame(now - last)) glass.demote()
-                last = now
-            }
+    // Kyant layer-backdrop glass (AndroidLiquidGlass). The feed content is
+    // recorded via Modifier.layerBackdrop; chrome samples it with drawBackdrop.
+    // Older / demoted devices fall back to FLAT opaque fill.
+    val layerBackdrop = rememberLayerBackdrop()
+    val glass =
+        remember(glassTierOverride, layerBackdrop) {
+            MonitorGlass(
+                resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride),
+                layerBackdrop = layerBackdrop,
+            )
         }
-    }
+    MonitorGlassBudgetLoop(glass)
 
     // Shell state, iOS-model-equivalent: a typed DISP mode and the interface
     // lock. Order/enablement live in OperatorSettings and remain observable
@@ -1128,33 +1125,6 @@ internal fun MonitorScreen(
                 )
             }
 
-        // Backdrop geometry for the glass pipeline: the viewport and the feed
-        // zone in root px. The blurred texture covers the whole viewport
-        // (black letterbox included), so pills over black sample the same
-        // map. setLayout is idempotent per geometry, so calling it on every
-        // recomposition is free.
-        val backdropFeedRect =
-            with(density) {
-                android.graphics.RectF(
-                    zones.feed.x.dp.toPx(),
-                    zones.feed.y.dp.toPx(),
-                    (zones.feed.x + zones.feed.width).dp.toPx(),
-                    (zones.feed.y + zones.feed.height).dp.toPx(),
-                )
-            }
-        // setLayout resets the backdrop's draw-observed frame counter when
-        // dimensions change. Commit that mutation after composition so a
-        // concurrent decode-thread submit cannot conflict with the initial
-        // landscape/portrait subcomposition during rotation.
-        SideEffect {
-            glass.backdrop.setLayout(
-                rootWidthPx = constraints.maxWidth.toFloat(),
-                rootHeightPx = constraints.maxHeight.toFloat(),
-                feedRectPx = backdropFeedRect,
-                aspectFill = isPortraitFill,
-            )
-        }
-
         // Feed at the shared zone-map frame. Fit keeps the whole frame;
         // portrait fill centre-crops the image and every feed-aligned overlay
         // through the same content-rect resolver. Command unmounts the feed.
@@ -1318,6 +1288,14 @@ internal fun MonitorScreen(
         if (!isCommand) {
             Box(
                 Modifier.zone(zones.feed)
+                    // Kyant: record this layer so glass chrome can sample it.
+                    .then(
+                        if (glass.tier == GlassTier.FULL && glass.layerBackdrop != null) {
+                            Modifier.layerBackdrop(glass.layerBackdrop)
+                        } else {
+                            Modifier
+                        },
+                    )
                     .clipToBounds()
                     .onSizeChanged { feedPointerSize = it }
                     // Canvas content is not exposed as an accessibility node
@@ -1357,7 +1335,6 @@ internal fun MonitorScreen(
                             scaleX = localFraming.horizontalPresentationScale
                             scaleY = localFraming.verticalPresentationScale
                         },
-                        onFrame = glass::submit,
                         onPresentedFrame = { frame, bitmap, baker ->
                             timecodeRetention.accept(frame.timecode)
                             fpsSampler.accept(System.nanoTime())
