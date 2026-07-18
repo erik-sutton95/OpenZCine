@@ -95,8 +95,16 @@ extension View {
         minTapTarget(minSize)
     }
 
-    /// Applies SwiftUI's native Liquid Glass (iOS 26+) in `shape`, falling back to the app's
-    /// manual glass treatment on earlier systems. The single entry point for chrome glass styling.
+    /// Applies chrome glass in `shape` — the single entry point for glass styling on iOS.
+    ///
+    /// **Policy:** On iOS 26+ this is always native Liquid Glass (`Glass.regular`), for every
+    /// chrome surface (monitor bars, pickers, settings cards, media chrome). There is no
+    /// quality-tier demotion (no clear/identity/surface swap under thermal load or scroll).
+    /// Apple's Liquid Glass path is the optimized one for this platform; do not replace it
+    /// with flat fills or `ultraThinMaterial` for "performance" tiers.
+    ///
+    /// Pre-iOS 26 keeps the hand-rolled tint + hairline + soft shadow so the deployment
+    /// floor (iOS 17) still builds; that is a version gate only, not a runtime quality ladder.
     @ViewBuilder
     func liquidGlass(in shape: some Shape, tint: Color? = nil, interactive: Bool = false)
         -> some View
@@ -112,6 +120,9 @@ extension View {
 }
 
 /// Builds the native Liquid Glass descriptor for chrome surfaces (iOS 26+).
+///
+/// Always `Glass.regular` (optionally tinted / interactive). Do not introduce a
+/// clear/identity demotion path — iOS chrome stays Liquid Glass on every surface.
 @available(iOS 26.0, *)
 enum ZCGlass {
     static func make(tint: Color?, interactive: Bool) -> Glass {

@@ -326,9 +326,7 @@ struct MediaDeliveryGlobalOverlay: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .frame(maxWidth: 420)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(LiveDesign.hairline.opacity(0.65), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+        .liquidGlass(in: Capsule())
     }
 
     private func expandedPanel(state: MediaDeliveryOverlayState) -> some View {
@@ -414,15 +412,9 @@ struct MediaDeliveryOverlay: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: 420)
-        .background(
-            .ultraThinMaterial,
+        .liquidGlass(
             in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .strokeBorder(LiveDesign.hairline.opacity(0.65), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 }
 
