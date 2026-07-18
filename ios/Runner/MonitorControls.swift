@@ -981,19 +981,28 @@ struct SettingsActionPill: View {
     }
 }
 
+/// Chrome treatment for settings row cards. Prefer `.surface` inside scroll regions with many cards —
+/// native Liquid Glass is expensive to recomposite while scrolling.
+enum SettingsRowChrome {
+    case liquidGlass
+    case surface
+}
+
 /// A card whose rows are divider-separated with no per-row borders (the mockup's wide row card).
-/// Always Liquid Glass on iOS — no surface/flat demotion for scroll regions.
 struct SettingsRowCard<Content: View>: View {
     var title: String? = nil
     var onReset: (() -> Void)? = nil
+    var chrome: SettingsRowChrome = .liquidGlass
     @ViewBuilder let content: Content
 
     init(
         title: String? = nil, onReset: (() -> Void)? = nil,
+        chrome: SettingsRowChrome = .liquidGlass,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.onReset = onReset
+        self.chrome = chrome
         self.content = content()
     }
 
@@ -1022,7 +1031,23 @@ struct SettingsRowCard<Content: View>: View {
         .padding(.horizontal, 13)
         .padding(.bottom, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .liquidGlass(in: cardShape)
+        .modifier(SettingsRowChromeStyle(chrome: chrome, shape: cardShape))
+    }
+}
+
+private struct SettingsRowChromeStyle: ViewModifier {
+    let chrome: SettingsRowChrome
+    let shape: RoundedRectangle
+
+    func body(content: Content) -> some View {
+        switch chrome {
+        case .liquidGlass:
+            content.liquidGlass(in: shape)
+        case .surface:
+            content
+                .background(LiveDesign.surface, in: shape)
+                .overlay(shape.stroke(LiveDesign.hairline, lineWidth: 1))
+        }
     }
 }
 
