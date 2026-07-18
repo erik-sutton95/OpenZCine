@@ -56,26 +56,31 @@ import kotlin.math.roundToInt
 private const val TAG = "ZCGlass"
 
 /**
- * Grab-pass resolution: 1/8 of the viewport (~200×90 on A12). Tiny enough
- * that a 5-tap AGSL frost is cheap; large enough that the upscale is smooth.
+ * Grab-pass resolution: 1/6 of the viewport. Higher than 1/8 so AGSL frost
+ * reads smoother when upsampled (inspired by Kyant0/AndroidLiquidGlass quality
+ * targets while keeping the shared grab cheap).
  */
-private const val GRAB_DOWNSCALE = 8
-
-/** Refraction geometry, dp. */
-private const val REFRACTION_BEVEL_DP = 10f
-private const val REFRACTION_AMOUNT_DP = 14f
+private const val GRAB_DOWNSCALE = 6
 
 /**
- * AGSL multi-tap frost radius in screen px. At 1/8 grab scale this is ~2–3
- * grab texels — soft glass, not mush.
+ * Lens band height and max sample shift (dp). Matches the Kyant "lens"
+ * proportions used in LiquidButton (height ~12dp, amount ~24dp), scaled for
+ * our monitor chrome.
  */
-private const val SHADER_BLUR_SPREAD_DP = 12f
+private const val REFRACTION_HEIGHT_DP = 12f
+private const val REFRACTION_AMOUNT_DP = 24f
 
-/** Warm glass tint (LiveDesign.glass RGB), translucent so frost shows through. */
+/**
+ * AGSL multi-tap frost radius in screen px. Dual-ring sampling softens like a
+ * real Gaussian more than a single 5-tap cross.
+ */
+private const val SHADER_BLUR_SPREAD_DP = 14f
+
+/** Warm glass tint (LiveDesign.glass RGB); lighter alpha so frost shows through. */
 private const val GLASS_TINT_R = 0.105f
 private const val GLASS_TINT_G = 0.092f
 private const val GLASS_TINT_B = 0.073f
-private const val GLASS_TINT_A = 0.38f
+private const val GLASS_TINT_A = 0.30f
 
 /**
  * Glass quality tiers.
@@ -314,10 +319,11 @@ class MonitorGlass(initialTier: GlassTier) {
 val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
 
 /**
- * AGSL panel shader: samples the grab pass, multi-tap blurs, then optionally
- * refracts + adds specular. Blur lives here — never in the grab producer.
+ * AGSL panel shader: sample grab → multi-scale frost → liquid lens → tint.
  *
- * FULL always enables the lens (refraction uniform > 0).
+ * Frost + lens are done here (not in the grab producer). Lens uses a
+ * circle-map refraction profile inspired by Kyant0/AndroidLiquidGlass
+ * (Apache-2.0) — smoother than a linear rim shift.
  */
 private val GLASS_SHADER_SRC =
     """
@@ -326,55 +332,74 @@ private val GLASS_SHADER_SRC =
     uniform float radius;
     uniform float2 origin;
     uniform float2 uvScale;
-    uniform float bevel;
-    uniform float refraction;
+    uniform float refractionHeight;
+    uniform float refractionAmount;
     uniform float blurSpread;
     uniform float4 tint;
 
-    float roundedBoxSDF(float2 p, float2 halfSize, float r) {
-        float2 q = abs(p) - halfSize + r;
-        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    float sdRoundedRect(float2 p, float2 halfSize, float r) {
+        float2 q = abs(p) - (halfSize - float2(r));
+        float outside = length(max(q, 0.0)) - r;
+        float inside = min(max(q.x, q.y), 0.0);
+        return outside + inside;
     }
 
-    // 5-tap cross Gaussian of the grab pass (center + 4 axes).
+    float2 gradSdRoundedRect(float2 p, float2 halfSize, float r) {
+        float2 q = abs(p) - (halfSize - float2(r));
+        if (q.x >= 0.0 || q.y >= 0.0) {
+            return sign(p) * normalize(max(q, 0.001));
+        }
+        float gx = step(q.y, q.x);
+        return sign(p) * float2(gx, 1.0 - gx);
+    }
+
+    // Dual-ring cross: approximates a soft Gaussian (better than single 5-tap).
     half3 sampleFrost(float2 screenPx) {
         float2 c = (screenPx + origin) * uvScale;
-        float2 s = float2(blurSpread, blurSpread) * uvScale;
-        half3 acc = grab.eval(c).rgb * 0.36;
-        acc += grab.eval(c + float2(s.x, 0.0)).rgb * 0.16;
-        acc += grab.eval(c - float2(s.x, 0.0)).rgb * 0.16;
-        acc += grab.eval(c + float2(0.0, s.y)).rgb * 0.16;
-        acc += grab.eval(c - float2(0.0, s.y)).rgb * 0.16;
+        float2 s1 = float2(blurSpread, blurSpread) * uvScale;
+        float2 s2 = s1 * 2.0;
+        half3 acc = grab.eval(c).rgb * 0.28;
+        acc += grab.eval(c + float2(s1.x, 0.0)).rgb * 0.12;
+        acc += grab.eval(c - float2(s1.x, 0.0)).rgb * 0.12;
+        acc += grab.eval(c + float2(0.0, s1.y)).rgb * 0.12;
+        acc += grab.eval(c - float2(0.0, s1.y)).rgb * 0.12;
+        acc += grab.eval(c + float2(s2.x, 0.0)).rgb * 0.06;
+        acc += grab.eval(c - float2(s2.x, 0.0)).rgb * 0.06;
+        acc += grab.eval(c + float2(0.0, s2.y)).rgb * 0.06;
+        acc += grab.eval(c - float2(0.0, s2.y)).rgb * 0.06;
         return acc;
+    }
+
+    // Kyant-style lens falloff: 1 - sqrt(1 - x^2) → convex glass edge.
+    float circleMap(float x) {
+        return 1.0 - sqrt(max(0.0, 1.0 - x * x));
     }
 
     half4 main(float2 coord) {
         float2 halfSize = size * 0.5;
         float2 p = coord - halfSize;
-        float sd = roundedBoxSDF(p, halfSize, radius);
-        float t = clamp(1.0 + sd / max(bevel, 0.001), 0.0, 1.0);
+        float sd = sdRoundedRect(p, halfSize, radius);
 
-        float2 q = abs(p) - halfSize + radius;
-        float2 n;
-        if (q.x > 0.0 && q.y > 0.0) {
-            n = normalize(max(q, 0.001)) * sign(p);
-        } else if (q.x > q.y) {
-            n = float2(sign(p.x), 0.0);
-        } else {
-            n = float2(0.0, sign(p.y));
+        float2 samplePx = coord;
+        if (refractionHeight > 0.0 && refractionAmount != 0.0 && -sd < refractionHeight) {
+            float clamped = min(sd, 0.0);
+            float d = circleMap(1.0 - (-clamped) / refractionHeight) * refractionAmount;
+            float gradR = min(radius * 1.5, min(halfSize.x, halfSize.y));
+            float2 grad = normalize(gradSdRoundedRect(p, halfSize, gradR) + 0.15 * normalize(p + 0.001));
+            // refractionAmount is negative in Kyant; we store positive and invert here.
+            samplePx = coord - d * grad;
         }
 
-        // Lens: shift sample inward near the rim when refraction > 0.
-        float2 samplePx = coord - n * (refraction * t * t);
         half3 bg = sampleFrost(samplePx);
 
+        // Vibrancy (Kyant: saturation * 1.5) so frost stays lively under tint.
         half lum = dot(bg, half3(0.299, 0.587, 0.114));
-        half3 vib = mix(half3(lum), bg, 1.22);
+        half3 vib = mix(half3(lum), bg, 1.45);
         half3 body = mix(vib, half3(tint.r, tint.g, tint.b), half(tint.a));
 
         float yNorm = clamp(coord.y / max(size.y, 1.0), 0.0, 1.0);
-        float topSpec = pow(1.0 - yNorm, 2.4) * 0.22;
-        float edge = exp(-abs(sd) * 0.55) * 0.14 * (1.0 - yNorm * 0.5);
+        float topSpec = pow(1.0 - yNorm, 2.6) * 0.26;
+        float edge = exp(-abs(sd) * 0.45) * 0.16 * (1.0 - yNorm * 0.45);
         half3 spec = half3(0.968, 0.937, 0.882) * half(topSpec + edge);
 
         return half4(body + spec, 1.0);
@@ -522,8 +547,8 @@ private fun DrawScope.bindPanelShader(
     runtime.setFloatUniform("radius", radius)
     runtime.setFloatUniform("origin", node.origin.x, node.origin.y)
     runtime.setFloatUniform("uvScale", backdrop.uvScaleX(), backdrop.uvScaleY())
-    runtime.setFloatUniform("bevel", REFRACTION_BEVEL_DP.dp.toPx())
-    runtime.setFloatUniform("refraction", refractPx)
+    runtime.setFloatUniform("refractionHeight", REFRACTION_HEIGHT_DP.dp.toPx())
+    runtime.setFloatUniform("refractionAmount", refractPx)
     runtime.setFloatUniform("blurSpread", SHADER_BLUR_SPREAD_DP.dp.toPx())
     runtime.setFloatUniform(
         "tint",

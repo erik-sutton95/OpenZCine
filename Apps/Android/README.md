@@ -172,9 +172,10 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
   camera pass.
 - **Liquid-glass chrome:** on API 33+ (**FULL**), monitor chrome is a grab-pass + panel-shader
-  treatment (`GlassChrome.kt`): double-buffered 1/8-res grab, AGSL frost/refraction in the pill
-  shader. On older APIs — and after frame-budget demote — chrome is **FLAT**: a more opaque solid
-  fill with no grab/blur stand-in (same policy as pre–iOS 26). Debug:
+  treatment (`GlassChrome.kt`): double-buffered 1/6-res grab; pill AGSL multi-scale frost +
+  circle-map lens (refraction profile inspired by [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)).
+  On older APIs — and after frame-budget demote — chrome is **FLAT**: a more opaque solid fill
+  with no grab/blur stand-in (same policy as pre–iOS 26). Debug:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier flat`
   (`full`/`flat`; lowers only).
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
