@@ -1,18 +1,20 @@
 package com.opencapture.openzcine
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -28,6 +30,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -40,9 +46,13 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
 /**
- * iOS `WhiteBalanceTintPad`: 13×13 fine-tune grid (amber↔blue / green↔magenta)
- * with four step arrows, drag-to-jog (commit on release), and double-tap reset
- * to Neutral. Dimmed when the active WB mode has no tune property.
+ * iOS `WhiteBalanceTintPad` — 1:1 geometry and interaction:
+ * - 108pt pad, 28pt circular chevron arrows, 8pt arrow/pad gap, 20pt pad↔copy gap
+ * - Crosshair inset 18pt; axis letters at 10pt from edges
+ * - Gold 13pt thumb; drag commits on release; double-tap Neutral
+ *
+ * Intrinsic height is fixed (not weight-compressed) so the magenta arrow is
+ * never clipped by a short parent.
  */
 @Composable
 internal fun WhiteBalanceTintPad(
@@ -69,10 +79,13 @@ internal fun WhiteBalanceTintPad(
         stringResource(R.string.camera_wb_tint_description) + " " +
             stringResource(R.string.camera_wb_tint_value, label)
 
+    // Intrinsic size: arrows + pad + gaps. Do not fill/weight-compress — that
+    // is what clipped the magenta chevron on the A12 landscape picker.
     Row(
         modifier =
             modifier
                 .fillMaxWidth()
+                .wrapContentHeight()
                 .alpha(if (available) 1f else 0.35f)
                 .semantics { contentDescription = a11y },
         verticalAlignment = Alignment.CenterVertically,
@@ -82,8 +95,8 @@ internal fun WhiteBalanceTintPad(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TintArrow(
-                symbol = "‹",
+            TintChevronArrow(
+                direction = ChevronDirection.LEFT,
                 enabled = enabled,
                 contentDescription = stringResource(R.string.camera_wb_tint_shift_blue),
             ) {
@@ -94,8 +107,8 @@ internal fun WhiteBalanceTintPad(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TintArrow(
-                    symbol = "ˆ",
+                TintChevronArrow(
+                    direction = ChevronDirection.UP,
                     enabled = enabled,
                     contentDescription = stringResource(R.string.camera_wb_tint_shift_green),
                 ) {
@@ -125,7 +138,6 @@ internal fun WhiteBalanceTintPad(
                                     val x = (change.position.x / sidePx).coerceIn(0f, 1f)
                                     val y = (change.position.y / sidePx).coerceIn(0f, 1f)
                                     ab = cellFromNormalized(x)
-                                    // Screen y grows downward; grid y is green(+) up.
                                     gm = cellFromNormalized(1f - y)
                                 },
                                 onDragEnd = {
@@ -137,8 +149,7 @@ internal fun WhiteBalanceTintPad(
                             )
                         },
                 ) {
-                    // Crosshair axes (short of the letter caps).
-                    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                    Canvas(Modifier.fillMaxSize()) {
                         val stroke = 1.dp.toPx()
                         val inset = 18.dp.toPx()
                         drawLine(
@@ -154,30 +165,50 @@ internal fun WhiteBalanceTintPad(
                             stroke,
                         )
                     }
-                    AxisLetter("G", Color(0xFF3DCC6A), Alignment.TopCenter)
-                    AxisLetter("M", Color(0xFFE85A9A), Alignment.BottomCenter)
-                    AxisLetter("B", Color(0xFF3D8BFF), Alignment.CenterStart)
-                    AxisLetter("A", Color(0xFFFF9A3D), Alignment.CenterEnd)
+                    // iOS axisLetter positions: G/M/B/A at 10pt from edges on axes.
+                    AxisLetter(
+                        letter = "G",
+                        color = Color.Green.copy(alpha = 0.85f),
+                        xFrac = 0.5f,
+                        yFrac = 10f / PAD_SIDE_DP,
+                    )
+                    AxisLetter(
+                        letter = "M",
+                        color = Color(0xFFFF2D95).copy(alpha = 0.85f),
+                        xFrac = 0.5f,
+                        yFrac = (PAD_SIDE_DP - 10f) / PAD_SIDE_DP,
+                    )
+                    AxisLetter(
+                        letter = "B",
+                        color = Color.Blue.copy(alpha = 0.85f),
+                        xFrac = 10f / PAD_SIDE_DP,
+                        yFrac = 0.5f,
+                    )
+                    AxisLetter(
+                        letter = "A",
+                        color = Color(0xFFFF9500).copy(alpha = 0.85f),
+                        xFrac = (PAD_SIDE_DP - 10f) / PAD_SIDE_DP,
+                        yFrac = 0.5f,
+                    )
 
-                    val thumbX =
-                        thumbOffset(ab, range.first, range.last, sidePx)
-                    val thumbY =
-                        sidePx - thumbOffset(gm, range.first, range.last, sidePx)
+                    val thumbX = thumbOffset(ab, range.first, range.last, sidePx)
+                    val thumbY = sidePx - thumbOffset(gm, range.first, range.last, sidePx)
+                    val halfThumb = with(density) { 6.5.dp.toPx() }
                     Box(
                         Modifier
                             .offset {
                                 IntOffset(
-                                    (thumbX - with(density) { 6.5.dp.toPx() }).roundToInt(),
-                                    (thumbY - with(density) { 6.5.dp.toPx() }).roundToInt(),
+                                    (thumbX - halfThumb).roundToInt(),
+                                    (thumbY - halfThumb).roundToInt(),
                                 )
                             }
                             .size(13.dp)
-                            .shadow(3.dp, CircleShape)
+                            .shadow(3.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.4f))
                             .background(LiveDesign.accent, CircleShape),
                     )
                 }
-                TintArrow(
-                    symbol = "ˇ",
+                TintChevronArrow(
+                    direction = ChevronDirection.DOWN,
                     enabled = enabled,
                     contentDescription = stringResource(R.string.camera_wb_tint_shift_magenta),
                 ) {
@@ -185,8 +216,8 @@ internal fun WhiteBalanceTintPad(
                     onCommit(WhiteBalanceTintGrid.label(ab, gm))
                 }
             }
-            TintArrow(
-                symbol = "›",
+            TintChevronArrow(
+                direction = ChevronDirection.RIGHT,
                 enabled = enabled,
                 contentDescription = stringResource(R.string.camera_wb_tint_shift_amber),
             ) {
@@ -195,9 +226,10 @@ internal fun WhiteBalanceTintPad(
             }
         }
 
+        // iOS trailing copy column — leading-aligned, no vertical compression.
         Column(
             verticalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f, fill = true),
         ) {
             Text(
                 label,
@@ -219,9 +251,12 @@ internal fun WhiteBalanceTintPad(
     }
 }
 
+private enum class ChevronDirection { LEFT, RIGHT, UP, DOWN }
+
+/** 28dp glass-bright circle with a 13pt bold chevron — iOS SF Symbol look. */
 @Composable
-private fun TintArrow(
-    symbol: String,
+private fun TintChevronArrow(
+    direction: ChevronDirection,
     enabled: Boolean,
     contentDescription: String,
     onClick: () -> Unit,
@@ -234,28 +269,67 @@ private fun TintArrow(
             .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            symbol,
-            color = LiveDesign.text,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-        )
+        Canvas(Modifier.size(13.dp)) {
+            val stroke =
+                Stroke(
+                    width = 2.2.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                )
+            val w = size.width
+            val h = size.height
+            val path =
+                Path().apply {
+                    when (direction) {
+                        ChevronDirection.LEFT -> {
+                            moveTo(w * 0.62f, h * 0.18f)
+                            lineTo(w * 0.32f, h * 0.5f)
+                            lineTo(w * 0.62f, h * 0.82f)
+                        }
+                        ChevronDirection.RIGHT -> {
+                            moveTo(w * 0.38f, h * 0.18f)
+                            lineTo(w * 0.68f, h * 0.5f)
+                            lineTo(w * 0.38f, h * 0.82f)
+                        }
+                        ChevronDirection.UP -> {
+                            moveTo(w * 0.18f, h * 0.62f)
+                            lineTo(w * 0.5f, h * 0.32f)
+                            lineTo(w * 0.82f, h * 0.62f)
+                        }
+                        ChevronDirection.DOWN -> {
+                            moveTo(w * 0.18f, h * 0.38f)
+                            lineTo(w * 0.5f, h * 0.68f)
+                            lineTo(w * 0.82f, h * 0.38f)
+                        }
+                    }
+                }
+            drawPath(path, LiveDesign.text, style = stroke)
+        }
     }
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.BoxScope.AxisLetter(
+private fun BoxScope.AxisLetter(
     letter: String,
     color: Color,
-    alignment: Alignment,
+    xFrac: Float,
+    yFrac: Float,
 ) {
+    val density = LocalDensity.current
+    // Approximate iOS .position(x,y) with center-aligned text.
     Text(
         letter,
         modifier =
             Modifier
-                .align(alignment)
-                .padding(2.dp),
-        color = color.copy(alpha = 0.85f),
+                .align(Alignment.TopStart)
+                .offset {
+                    val w = with(density) { PAD_SIDE_DP.dp.toPx() }
+                    IntOffset(
+                        (w * xFrac - with(density) { 4.dp.toPx() }).roundToInt(),
+                        (w * yFrac - with(density) { 6.dp.toPx() }).roundToInt(),
+                    )
+                },
+        color = color,
         fontSize = 9.sp,
         fontWeight = FontWeight.Bold,
     )
@@ -269,10 +343,12 @@ private fun thumbOffset(value: Int, lower: Int, upper: Int, sidePx: Float): Floa
 private fun cellFromNormalized(t: Float): Int {
     val range = WhiteBalanceTintGrid.cellRange
     val clamped = t.coerceIn(0f, 1f)
-    val value =
-        range.first +
-            clamped * (range.last - range.first)
+    val value = range.first + clamped * (range.last - range.first)
     return WhiteBalanceTintGrid.clamp(value.roundToInt())
 }
 
+/** iOS `side: CGFloat = 108`. */
 private const val PAD_SIDE_DP = 108f
+
+/** Full pad cluster height: 28 + 8 + 108 + 8 + 28 (arrows + gaps + pad). */
+internal val WhiteBalanceTintPadClusterHeightDp = 28f + 8f + PAD_SIDE_DP + 8f + 28f

@@ -7,13 +7,22 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -21,32 +30,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.items
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.settings.PanelCloseButton
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.bridge.MonitorZones
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import kotlin.math.max
 import kotlin.math.min
@@ -336,25 +342,44 @@ internal fun monitorPickerFrame(
     anchor: MonitorPickerAnchor,
 ): ZoneFrame {
     val outerMargin = if (isPortrait) 12f else 8f
+    // Portrait keeps a gap under the info bar. Landscape mirrors iOS: the
+    // bottom-anchored picker may grow upward through the info-bar band so the
+    // WB tint pad (header + 180dp arrow cluster + mode tabs) still fits on
+    // short handsets (~384dp tall landscape, e.g. SM-A12).
     val topLimit =
-        max(
-            viewport.y + outerMargin,
-            zones.infoBar.y + zones.infoBar.height + if (isPortrait) 8f else 4f,
-        )
+        if (isPortrait) {
+            max(
+                viewport.y + outerMargin,
+                zones.infoBar.y + zones.infoBar.height + 8f,
+            )
+        } else {
+            viewport.y + outerMargin
+        }
     val anchorFrame =
         when (anchor) {
             MonitorPickerAnchor.CAPTURE_STRIP -> zones.captureStrip
             MonitorPickerAnchor.CONTROLS_GRID -> zones.controlsGrid
         }
+    // Landscape seats just above the bottom chrome. Prefer the higher strip
+    // (assist vs capture) so short handsets reclaim the dead band the zone map
+    // sometimes leaves above the glass pills.
+    val landscapeStripTop =
+        listOfNotNull(zones.captureStrip?.y, zones.assistStrip?.y).minOrNull()
     val bottomLimit =
         when {
-            anchor == MonitorPickerAnchor.CAPTURE_STRIP && anchorFrame != null ->
+            isPortrait && anchor == MonitorPickerAnchor.CAPTURE_STRIP && anchorFrame != null ->
                 anchorFrame.y - 10f
             isPortrait -> zones.systemCluster.y - 10f
-            else -> zones.feed.y + zones.feed.height - 10f
+            landscapeStripTop != null -> landscapeStripTop - 4f
+            anchor == MonitorPickerAnchor.CAPTURE_STRIP && anchorFrame != null ->
+                anchorFrame.y - 4f
+            else -> zones.feed.y + zones.feed.height - 4f
         }
     val availableHeight = max(0f, bottomLimit - topLimit)
-    val height = min(if (isPortrait) 320f else 300f, availableHeight)
+    // Landscape max raised so the tint pad (header + 180dp arrow cluster + mode
+    // tabs) is never forced under ~300dp of panel height. Drum pickers fill
+    // leftover space.
+    val height = min(if (isPortrait) 320f else 360f, availableHeight)
     val width =
         if (isPortrait) {
             max(0f, viewport.width - outerMargin * 2f)
@@ -537,62 +562,153 @@ internal fun MonitorControlPickerPanel(
     val modeIndex = selectedMode.coerceIn(0, picker.modes.lastIndex)
     val mode = picker.modes[modeIndex]
     val pending = pendingControl != null
-    Column(
+    val isTintMode = mode.request.control == CameraControl.WHITE_BALANCE_TINT
+    // iOS: bottom-trailing box of fixed max size; glass panel fills it. Tint
+    // mode bottom-aligns content and never weight-compresses the 180dp pad.
+    Box(
         modifier =
             modifier
-                .zone(frame)
-                .clipToBounds()
-                .glass(ChromeShape)
-                .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-                .semantics {
-                    contentDescription = pickerDescription
-                },
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+                .offset(frame.x.dp, frame.y.dp)
+                .size(frame.width.dp, frame.height.dp),
+        contentAlignment = if (isTintMode) Alignment.BottomStart else Alignment.TopStart,
     ) {
-        // iOS `PickerHeader`: kerned heavy name + mono uppercase subtitle,
-        // baseline-aligned, then the circular glass close button.
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .then(if (isTintMode) Modifier.wrapContentHeight() else Modifier.fillMaxSize())
+                    .heightIn(max = frame.height.dp)
+                    .clip(ChromeShape)
+                    .glass(ChromeShape)
+                    .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
+                    // iOS GlassPanel: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20).
+                    // Tint uses a slightly tighter vertical pad on short landscape panels so the
+                    // 180dp arrow cluster + mode tabs both stay fully reachable (A12-class).
+                    .padding(
+                        horizontal = 20.dp,
+                        vertical = if (isTintMode) 12.dp else 16.dp,
+                    )
+                    .semantics {
+                        contentDescription = pickerDescription
+                    },
+            verticalArrangement =
+                Arrangement.spacedBy(if (isTintMode) 10.dp else 14.dp),
         ) {
+            // iOS `PickerHeader`: kerned heavy name + mono uppercase subtitle,
+            // baseline-aligned, then the circular glass close button.
             Row(
-                Modifier.weight(1f),
+                Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.Bottom,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                Row(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text(
+                        picker.title,
+                        style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
+                        color = LiveDesign.text,
+                        maxLines = 1,
+                    )
+                    Text(
+                        picker.subtitle.uppercase(),
+                        style =
+                            chromeStyle(11f, FontWeight.SemiBold, mono = true)
+                                .copy(letterSpacing = 1.5.sp),
+                        color = LiveDesign.faint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    )
+                }
+                PanelCloseButton(onDismiss)
+            }
+
+            feedback?.let {
                 Text(
-                    picker.title,
-                    style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
-                    color = LiveDesign.text,
-                    maxLines = 1,
-                )
-                Text(
-                    picker.subtitle.uppercase(),
-                    style =
-                        chromeStyle(11f, FontWeight.SemiBold, mono = true)
-                            .copy(letterSpacing = 1.5.sp),
-                    color = LiveDesign.faint,
-                    maxLines = 1,
+                    it.message,
+                    style = chromeStyle(11f, FontWeight.Medium),
+                    color = if (it.isError) LiveDesign.rec else LiveDesign.good,
+                    maxLines = 2,
                     overflow = TextOverflow.Clip,
-                    modifier = Modifier.padding(bottom = 2.dp),
                 )
             }
-            PanelCloseButton(onDismiss)
-        }
+            if (!controlsEnabled) {
+                Text(
+                    stringResource(R.string.camera_controls_unavailable),
+                    style = chromeStyle(11f, FontWeight.Medium),
+                    color = LiveDesign.muted,
+                    maxLines = 2,
+                )
+            }
 
-        if (picker.modes.size > 1) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                picker.modes.forEachIndexed { index, candidate ->
-                    val selected = index == modeIndex
-                    TextButton(
-                        onClick = { selectedMode = index },
-                        enabled = !pending,
+            // iOS order: body (pad/drum) first, then the mode bar beneath it.
+            if (isTintMode) {
+                val tintAvailable = mode.request.options.isNotEmpty()
+                // Intrinsic height only — weight(1f) clipped the magenta chevron.
+                WhiteBalanceTintPad(
+                    currentLabel = mode.request.currentValue.ifBlank { "Neutral" },
+                    available = tintAvailable,
+                    interactive = controlsEnabled && !pending && tintAvailable,
+                    onCommit = { label ->
+                        if (label != mode.request.currentValue) onSelect(mode.request, label)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (pendingControl == mode.request.control) {
+                    Text(
+                        stringResource(R.string.camera_applying_change),
+                        style = chromeStyle(11f, FontWeight.Medium),
+                        color = LiveDesign.muted,
+                    )
+                }
+            } else {
+                val options = commandControlOptions(mode.request, pendingControl, controlsEnabled)
+                val selectedLabel =
+                    options.firstOrNull { it.selected }?.label
+                        ?: options.firstOrNull()?.label
+                        ?: ""
+                val optionDescription =
+                    stringResource(R.string.camera_picker_options_description, mode.label)
+                Column(
+                    Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    AccentDrumWheel(
+                        options = options.map { it.label },
+                        selection = selectedLabel,
+                        interactive = controlsEnabled && !pending,
                         modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .semantics { contentDescription = optionDescription },
+                        onSettle = { settled ->
+                            if (settled != selectedLabel) onSelect(mode.request, settled)
+                        },
+                    )
+                    if (pendingControl == mode.request.control) {
+                        Text(
+                            stringResource(R.string.camera_applying_change),
+                            style = chromeStyle(11f, FontWeight.Medium),
+                            color = LiveDesign.muted,
+                        )
+                    }
+                }
+            }
+
+            if (picker.modes.size > 1) {
+                // iOS modeBar: compact uppercase chips (not Material TextButton
+                // 48dp mins that crushed the magenta chevron on short panels).
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    picker.modes.forEachIndexed { index, candidate ->
+                        val selected = index == modeIndex
+                        Box(
                             Modifier
                                 .background(
                                     if (selected) LiveDesign.accentDim else Color.Transparent,
@@ -602,91 +718,19 @@ internal fun MonitorControlPickerPanel(
                                     1.dp,
                                     if (selected) LiveDesign.accent else LiveDesign.hairline,
                                     ChromeShape,
-                                ),
-                    ) {
-                        Text(
-                            candidate.label,
-                            style = chromeStyle(11f, FontWeight.Bold, mono = true),
-                            color = if (selected) LiveDesign.accent else LiveDesign.muted,
-                        )
+                                )
+                                .chromeClickable(enabled = !pending) { selectedMode = index }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                candidate.label.uppercase(),
+                                style = chromeStyle(12f, FontWeight.Bold),
+                                color = if (selected) LiveDesign.accent else LiveDesign.muted,
+                                maxLines = 1,
+                            )
+                        }
                     }
-                }
-            }
-        }
-
-        feedback?.let {
-            Text(
-                it.message,
-                style = chromeStyle(11f, FontWeight.Medium),
-                color = if (it.isError) LiveDesign.rec else LiveDesign.good,
-                maxLines = 2,
-                overflow = TextOverflow.Clip,
-            )
-        }
-        if (!controlsEnabled) {
-            Text(
-                stringResource(R.string.camera_controls_unavailable),
-                style = chromeStyle(11f, FontWeight.Medium),
-                color = LiveDesign.muted,
-                maxLines = 2,
-            )
-        }
-
-        // iOS: WB "Tint" tab swaps the drum for `WhiteBalanceTintPad`.
-        // Every other mode uses `AccentDrumWheel`.
-        if (mode.request.control == CameraControl.WHITE_BALANCE_TINT) {
-            // Dim when the body advertised no fine-tune options for the active
-            // WB mode (iOS `whiteBalanceTintAvailable`); still show the pad.
-            val tintAvailable = mode.request.options.isNotEmpty()
-            WhiteBalanceTintPad(
-                currentLabel = mode.request.currentValue.ifBlank { "Neutral" },
-                available = tintAvailable,
-                interactive = controlsEnabled && !pending && tintAvailable,
-                onCommit = { label ->
-                    if (label != mode.request.currentValue) onSelect(mode.request, label)
-                },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            )
-            if (pendingControl == mode.request.control) {
-                Text(
-                    stringResource(R.string.camera_applying_change),
-                    style = chromeStyle(11f, FontWeight.Medium),
-                    color = LiveDesign.muted,
-                )
-            }
-        } else {
-            // iOS `AccentDrumWheel`: the option set is a snapping vertical drum
-            // that applies on settle, not a flat list of buttons.
-            val options = commandControlOptions(mode.request, pendingControl, controlsEnabled)
-            val selectedLabel =
-                options.firstOrNull { it.selected }?.label
-                    ?: options.firstOrNull()?.label
-                    ?: ""
-            val optionDescription =
-                stringResource(R.string.camera_picker_options_description, mode.label)
-            Column(
-                Modifier.fillMaxWidth().weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                AccentDrumWheel(
-                    options = options.map { it.label },
-                    selection = selectedLabel,
-                    interactive = controlsEnabled && !pending,
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .semantics { contentDescription = optionDescription },
-                    onSettle = { settled ->
-                        if (settled != selectedLabel) onSelect(mode.request, settled)
-                    },
-                )
-                if (pendingControl == mode.request.control) {
-                    Text(
-                        stringResource(R.string.camera_applying_change),
-                        style = chromeStyle(11f, FontWeight.Medium),
-                        color = LiveDesign.muted,
-                    )
                 }
             }
         }

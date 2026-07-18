@@ -347,6 +347,33 @@ class MonitorCameraControlsTest {
     }
 
     @Test
+    fun `landscape picker is tall enough for the WB tint pad cluster`() {
+        // SM-A12-class short landscape (~853×384 dp). Tint needs header +
+        // 180dp pad cluster (28+8+108+8+28) + mode tabs + GlassPanel padding.
+        val viewport = ZoneFrame(0f, 0f, 853f, 384f)
+        val zones =
+            portraitZones(captureStrip = ZoneFrame(430f, 320f, 363f, 48f)).copy(
+                feed = ZoneFrame(59f, 0f, 734f, 384f),
+                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            )
+
+        val frame =
+            monitorPickerFrame(
+                viewport,
+                zones,
+                isPortrait = false,
+                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
+            )
+
+        // 16+16 padding + ~28 header + 14 gap + 180 pad + 14 gap + ~36 tabs ≈ 304.
+        assertTrue(
+            frame.height >= 300f,
+            "picker height ${frame.height} must fit tint pad (≥ 300dp)",
+        )
+        assertTrue(frame.y + frame.height <= requireNotNull(zones.captureStrip).y - 4f)
+    }
+
+    @Test
     fun `portrait fill rail stays inside feed and above capture strip`() {
         val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
         val collapsed =
