@@ -171,13 +171,12 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   physical fallback check covers the latter. Debug-frame metadata is visibly and semantically
   marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
   camera pass.
-- **Liquid-glass chrome:** monitor chrome glass is a custom GPU treatment (`GlassChrome.kt`) —
-  one shared 1/8-res backdrop per feed frame (box-blurred once on the decode thread, ~20k px),
-  sampled by every pill. API 33+ **FULL** adds AGSL edge refraction + specular rim + warm tint
-  (one GPU texture fetch per fragment, no per-node `RenderEffect`). **BLUR** is the floor on
-  every API (pre-blurred texture + light surface fill) — there is no solid-fill FLAT tier. A
-  frame-budget counter may demote FULL → BLUR under sustained overruns, never below BLUR. Debug
-  override: `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
+- **Liquid-glass chrome:** monitor chrome glass is a grab-pass + panel-shader treatment
+  (`GlassChrome.kt`). Each feed frame is downscaled once into a **double-buffered** 1/8-res
+  grab texture (no CPU blur, no in-place mutation of the published buffer). Panel AGSL samples
+  that grab and **blurs in the shader** (5-tap frost); **FULL** also refracts + specular-rims.
+  **BLUR** is the floor (no FLAT). Frame-budget demote is FULL → BLUR only. Debug:
+  `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
   (`full`/`blur`; lowers only).
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
   monitor-owned clean-frame sampler at 30 Hz (24 Hz above three active scopes), with the same
