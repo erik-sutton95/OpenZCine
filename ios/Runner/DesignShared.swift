@@ -95,8 +95,10 @@ extension View {
         minTapTarget(minSize)
     }
 
-    /// Applies SwiftUI's native Liquid Glass (iOS 26+) in `shape`, falling back to the app's
-    /// manual glass treatment on earlier systems. The single entry point for chrome glass styling.
+    /// Applies SwiftUI's native Liquid Glass (iOS 26+) in `shape`.
+    ///
+    /// On older systems there is **no** blur / material stand-in — chrome falls
+    /// back to a flat, more opaque fill so panels stay readable without faking frost.
     @ViewBuilder
     func liquidGlass(in shape: some Shape, tint: Color? = nil, interactive: Bool = false)
         -> some View
@@ -104,9 +106,8 @@ extension View {
         if #available(iOS 26.0, *) {
             glassEffect(ZCGlass.make(tint: tint, interactive: interactive), in: shape)
         } else {
-            background(LiveDesign.glass, in: shape)
-                .overlay(shape.stroke(LiveDesign.hairline, lineWidth: 1))
-                .shadow(color: .black.opacity(0.28), radius: 14, x: 0, y: 8)
+            background(tint ?? LiveDesign.glassOpaque, in: shape)
+                .overlay(shape.stroke(LiveDesign.hairlineStrong, lineWidth: 1))
         }
     }
 }

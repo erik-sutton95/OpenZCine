@@ -274,7 +274,7 @@ class FocusFeedComposeTest {
                     frameSource = source,
                     assist = AssistState(FeedEffects.NONE, null),
                     operatorSettings = settings,
-                    glassTierOverride = "blur",
+                    glassTierOverride = "flat",
                 )
             }
         }

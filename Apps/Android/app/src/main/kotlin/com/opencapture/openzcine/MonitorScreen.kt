@@ -279,7 +279,7 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * read-only rather than receiving guessed options.
  *
  * Chrome glass runs the GPU treatment (GlassChrome.kt) at this device's
- * [resolveTier] ceiling (FULL or BLUR floor — never flat);
+ * [resolveTier] ceiling (FULL on API 33+, else FLAT opaque fill);
  * [glassTierOverride] (`zc.glass.tier` debug intent extra) can only lower.
  *
  * [assist] is shared with Operator Settings so toolbar and settings changes
@@ -344,17 +344,15 @@ internal fun MonitorScreen(
         (swiftLiveFrameSource?.previewState ?: noPreviewApplication).collectAsState()
     MonitorSessionRecoveryEffect(session, enabled = sessionRecoveryEnabled)
 
-    // Shared glass state: the active tier plus the one blurred backdrop
-    // texture every glass pill samples. The frame-clock loop is the perf
-    // safety net — sustained overruns of the 48 ms p90 budget drop FULL →
-    // BLUR (the floor; never flat).
+    // Shared glass state: FULL grab+AGSL, or FLAT opaque fill on older /
+    // demoted devices. Frame-budget overruns drop FULL → FLAT only.
     val glass = remember {
         MonitorGlass(resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride))
     }
     LaunchedEffect(glass) {
         val budget = FrameBudgetWindow()
         var last = 0L
-        while (glass.tier != GlassTier.BLUR) {
+        while (glass.tier != GlassTier.FLAT) {
             withFrameNanos { now ->
                 if (last != 0L && budget.frame(now - last)) glass.demote()
                 last = now

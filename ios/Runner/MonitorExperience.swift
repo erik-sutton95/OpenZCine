@@ -6,6 +6,8 @@ enum LiveDesign {
     static let background = Color(red: 0.072, green: 0.064, blue: 0.053)
     static let surface = Color(red: 0.145, green: 0.128, blue: 0.102)
     static let glass = Color(red: 0.105, green: 0.092, blue: 0.073).opacity(0.64)
+    /// Pre–Liquid Glass fallback: solid-looking chrome fill (no fake frost/blur).
+    static let glassOpaque = Color(red: 0.105, green: 0.092, blue: 0.073).opacity(0.90)
     static let glassBright = Color(red: 0.178, green: 0.155, blue: 0.122).opacity(0.68)
     static let hairline = Color(red: 0.968, green: 0.937, blue: 0.882).opacity(0.14)
     static let hairlineStrong = Color(red: 0.968, green: 0.937, blue: 0.882).opacity(0.22)

@@ -48,10 +48,10 @@ import kotlin.math.roundToInt
 //     the back buffer, then atomically publish. That is what killed the
 //     flickering (decode thread was box-blurring the same bitmap the GPU
 //     was sampling).
-//  2. Panel shaders sample that grab pass and blur in AGSL (API 33+). FULL
-//     adds edge refraction + specular; BLUR is frost-only. One shared grab,
-//     many samplers — never a per-pill screen capture.
-//  3. BLUR is the floor (no FLAT). Frame-budget overruns demote FULL → BLUR.
+//  2. Panel shaders sample that grab pass and blur in AGSL (API 33+ FULL).
+//     One shared grab, many samplers — never a per-pill screen capture.
+//  3. Older devices / demoted chrome use FLAT: a more opaque solid fill with
+//     no grab sampling and no fake frost (same policy as pre–iOS 26).
 
 private const val TAG = "ZCGlass"
 
@@ -78,27 +78,30 @@ private const val GLASS_TINT_B = 0.073f
 private const val GLASS_TINT_A = 0.38f
 
 /**
- * Glass quality tiers. **BLUR is the floor** — no solid-fill FLAT.
- * [resolveTier] picks the ceiling; [MonitorGlass.demote] may drop FULL → BLUR.
+ * Glass quality tiers.
+ *
+ * - [FULL]: grab pass + AGSL frost / refraction (API 33+).
+ * - [FLAT]: more opaque solid fill — the floor on older systems and after
+ *   demote. No grab, no blur stand-in.
  */
 enum class GlassTier {
-    /** Grab pass + AGSL frost (or bilinear soft-sample pre-API 33). */
-    BLUR,
+    /** Flat more-opaque chrome fill (older API / demoted / no feed grab). */
+    FLAT,
 
     /** Grab pass + AGSL frost + edge refraction + specular (API 33+). */
     FULL,
 }
 
 /**
- * API 33+ → FULL, else → BLUR. Debug [override] (`full`/`blur`) can only lower.
- * Legacy `"flat"` maps to BLUR.
+ * API 33+ → FULL, else → FLAT. Debug [override] (`full`/`flat`/`blur`) can only
+ * lower the tier — `"blur"` maps to FLAT (no mid-tier fake frost).
  */
 fun resolveTier(sdkInt: Int, override: String? = null): GlassTier {
-    val capability = if (sdkInt >= 33) GlassTier.FULL else GlassTier.BLUR
+    val capability = if (sdkInt >= 33) GlassTier.FULL else GlassTier.FLAT
     val requested =
         when (override?.lowercase()) {
             "full" -> GlassTier.FULL
-            "blur", "flat" -> GlassTier.BLUR
+            "flat", "blur" -> GlassTier.FLAT
             else -> capability
         }
     return if (requested.ordinal < capability.ordinal) requested else capability
@@ -290,23 +293,23 @@ class MonitorGlass(initialTier: GlassTier) {
 
     val backdrop = GlassBackdrop()
 
-    /** Grab-pass update from a decoded feed frame (decode thread). */
+    /** Grab-pass update; no-op when FLAT (no sampling). */
     fun submit(bitmap: Bitmap) {
-        backdrop.submit(bitmap)
+        if (tier == GlassTier.FULL) backdrop.submit(bitmap)
     }
 
-    /** FULL → BLUR only. BLUR is the floor. */
+    /** FULL → FLAT. Opaque fill is the floor. */
     fun demote() {
-        if (tier == GlassTier.BLUR) return
+        if (tier == GlassTier.FLAT) return
         runCatching {
-            Log.w(TAG, "sustained frame-budget overrun — degrading glass $tier -> ${GlassTier.BLUR}")
+            Log.w(TAG, "sustained frame-budget overrun — degrading glass $tier -> ${GlassTier.FLAT}")
         }
-        tier = GlassTier.BLUR
+        tier = GlassTier.FLAT
     }
 }
 
 /**
- * Glass state for monitor chrome. Null → BLUR-floor surface tint (no feed grab).
+ * Glass state for monitor chrome. Null / FLAT → opaque solid fill (no grab).
  */
 val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
 
@@ -314,7 +317,7 @@ val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
  * AGSL panel shader: samples the grab pass, multi-tap blurs, then optionally
  * refracts + adds specular. Blur lives here — never in the grab producer.
  *
- * `refractAmount` 0 disables the lens (BLUR tier); >0 enables FULL lens.
+ * FULL always enables the lens (refraction uniform > 0).
  */
 private val GLASS_SHADER_SRC =
     """
@@ -387,8 +390,6 @@ private val RimHighlight =
         ),
     )
 
-private val BlurSurfaceTint = Color(GLASS_TINT_R, GLASS_TINT_G, GLASS_TINT_B, 0.42f)
-
 /**
  * Per-pill draw state. Uniforms re-set only when geometry / published grab
  * identity changes — not every fragment.
@@ -441,40 +442,33 @@ private class GlassPillNode(useAgsl: Boolean) {
 /**
  * iOS `liquidGlass` entry point.
  *
- * - FULL / BLUR (API 33+): AGSL samples the grab pass and blurs in-shader.
- * - BLUR pre-33: bilinear sample of the low-res grab (soft frost stand-in).
- * - No LocalMonitorGlass: BLUR-floor surface tint only.
+ * - FULL (API 33+): AGSL samples the grab pass, blurs + refracts in-shader.
+ * - FLAT / no LocalMonitorGlass: more opaque solid fill — no grab, no fake frost.
  */
 @Composable
 fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
     val glass = LocalMonitorGlass.current
-    if (glass == null) {
-        return background(BlurSurfaceTint, shape).border(1.dp, RimHighlight, shape)
+    if (glass == null || glass.tier == GlassTier.FLAT) {
+        return background(LiveDesign.glassOpaque, shape)
+            .border(1.dp, LiveDesign.hairlineStrong, shape)
     }
-    val tier = glass.tier
-    val useAgsl = Build.VERSION.SDK_INT >= 33
-    val node = remember(glass, useAgsl) { GlassPillNode(useAgsl = useAgsl) }
-    val liquid = tier == GlassTier.FULL
+    // FULL: grab + AGSL (requires API 33 RuntimeShader).
+    val node = remember(glass) { GlassPillNode(useAgsl = true) }
     return onGloballyPositioned { node.origin = it.positionInRoot() }
-        .drawBehind { drawGlassPanel(node, glass.backdrop, shape, liquid) }
-        .then(
-            // AGSL already composites tint; pre-33 BLUR needs a translucent fill.
-            if (useAgsl) Modifier else Modifier.background(BlurSurfaceTint, shape),
-        )
+        .drawBehind { drawGlassPanel(node, glass.backdrop, shape) }
         .border(1.dp, RimHighlight, shape)
 }
 
 /**
- * Nested chips inside a glass slab: surface tint only (no second grab sample).
+ * Nested chips inside a glass slab: opaque flat fill (no second grab sample).
  */
 fun Modifier.chipGlass(shape: Shape = ChromeShape): Modifier =
-    background(BlurSurfaceTint, shape).border(1.dp, LiveDesign.hairline, shape)
+    background(LiveDesign.glassOpaque, shape).border(1.dp, LiveDesign.hairline, shape)
 
 private fun DrawScope.drawGlassPanel(
     node: GlassPillNode,
     backdrop: GlassBackdrop,
     shape: Shape,
-    liquid: Boolean,
 ) {
     val radius =
         if (shape === CircleShape) size.minDimension / 2f
@@ -484,24 +478,27 @@ private fun DrawScope.drawGlassPanel(
     val texture = backdrop.texture
     if (grabGeneration <= 0 || texture == null) {
         drawRoundRect(
-            color = BlurSurfaceTint,
+            color = LiveDesign.glassOpaque,
             cornerRadius = CornerRadius(radius, radius),
         )
         return
     }
-    val refractPx =
-        if (liquid) REFRACTION_AMOUNT_DP.dp.toPx() else 0f
+    val refractPx = REFRACTION_AMOUNT_DP.dp.toPx()
     if (node.rebindNeeded(texture, size.width, size.height, refractPx)) {
         val source = node.shaderFor(texture)
         val runtime = node.runtime
         if (runtime != null && Build.VERSION.SDK_INT >= 33) {
             bindPanelShader(runtime, node, backdrop, source, radius, refractPx)
         } else {
-            // Pre-33 floor: bilinear sample of the low-res grab (no AGSL).
-            node.matrix.setScale(1f / backdrop.uvScaleX(), 1f / backdrop.uvScaleY())
-            node.matrix.postTranslate(-node.origin.x, -node.origin.y)
-            source.setLocalMatrix(node.matrix)
-            node.paint.shader = source
+            // Should not reach: FULL is API 33+ only. Opaque fallback.
+            node.paint.shader = null
+            node.paint.color =
+                android.graphics.Color.argb(
+                    (0.90f * 255).toInt(),
+                    (0.105f * 255).toInt(),
+                    (0.092f * 255).toInt(),
+                    (0.073f * 255).toInt(),
+                )
         }
         node.markBound(texture, size.width, size.height, refractPx)
     }

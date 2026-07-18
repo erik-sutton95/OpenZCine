@@ -29,6 +29,8 @@ object LiveDesign {
     val background = Color(0.072f, 0.064f, 0.053f)
     val surface = Color(0.145f, 0.128f, 0.102f)
     val glass = Color(0.105f, 0.092f, 0.073f, 0.64f)
+    /** Pre-liquid / demoted chrome: flat more-opaque fill (no fake frost). */
+    val glassOpaque = Color(0.105f, 0.092f, 0.073f, 0.90f)
     val glassBright = Color(0.178f, 0.155f, 0.122f, 0.68f)
     val hairline = Color(0.968f, 0.937f, 0.882f, 0.14f)
     val hairlineStrong = Color(0.968f, 0.937f, 0.882f, 0.22f)
