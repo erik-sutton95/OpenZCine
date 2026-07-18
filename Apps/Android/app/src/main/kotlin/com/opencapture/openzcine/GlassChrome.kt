@@ -54,9 +54,10 @@ import kotlin.math.roundToInt
 //     rim + warm tint, all on the GPU. One texture fetch per fragment.
 //  4. Tier BLUR (API 31–32): sample the pre-blurred texture straight under a
 //     light surface fill.
-//  5. Tier FLAT: hand-rolled translucent fill, no backdrop work.
-//  6. [FrameBudgetWindow] auto-degrades one tier when frame timing blows the
-//     budget for a sustained window — a counter and a threshold, nothing more.
+//  5. There is no FLAT tier — BLUR is the floor. Frame-budget overruns may
+//     demote FULL → BLUR only.
+//  6. [FrameBudgetWindow] auto-degrades FULL → BLUR when frame timing blows
+//     the budget for a sustained window — a counter and a threshold only.
 
 private const val TAG = "ZCGlass"
 
@@ -80,8 +81,8 @@ private const val REFRACTION_AMOUNT_DP = 14f
 
 /**
  * Warm glass tint composited in the FULL AGSL path (matches LiveDesign.glass
- * RGB). Kept lighter than the FLAT fill so the blurred feed reads through
- * like iOS liquid glass / ultraThinMaterial.
+ * RGB). Kept lighter than an opaque fill so the blurred feed reads through
+ * like iOS liquid glass.
  */
 private const val GLASS_TINT_R = 0.105f
 private const val GLASS_TINT_G = 0.092f
@@ -89,15 +90,15 @@ private const val GLASS_TINT_B = 0.073f
 private const val GLASS_TINT_A = 0.38f
 
 /**
- * Glass quality tiers, ascending. [resolveTier] picks the platform ceiling;
- * [MonitorGlass.demote] steps down one tier under sustained frame-budget
- * overruns.
+ * Glass quality tiers, ascending. **BLUR is the floor** — there is no flat
+ * solid-fill tier. [resolveTier] picks the platform ceiling; [MonitorGlass.demote]
+ * may drop FULL → BLUR under sustained frame-budget overruns, never below BLUR.
  */
 enum class GlassTier {
-    /** Hand-rolled translucent fill + hairline — the original treatment, zero extra cost. */
-    FLAT,
-
-    /** Shared pre-blurred backdrop under the pill fill, no refraction. */
+    /**
+     * Shared pre-blurred backdrop under a light surface fill (minimum Android
+     * chrome treatment on every API level we ship).
+     */
     BLUR,
 
     /** Shared backdrop + per-pill AGSL edge refraction (needs `RuntimeShader`, API 33). */
@@ -105,27 +106,17 @@ enum class GlassTier {
 }
 
 /**
- * The tier this device runs: platform capability (API 33+ FULL, 31–32 BLUR,
- * below FLAT) clamped by an optional debug [override] (`full`/`blur`/`flat`,
- * the `zc.glass.tier` intent extra). The override can only lower the tier —
- * FULL physically needs `RuntimeShader`.
- *
- * BLUR would technically run on API 29 (it is just a bitmap draw), but
- * devices that old are also the weakest; keeping them on FLAT skips the
- * per-frame backdrop production entirely.
+ * The tier this device runs: API 33+ → FULL, else → BLUR (the floor). Optional
+ * debug [override] (`full`/`blur`, the `zc.glass.tier` intent extra) can only
+ * lower the tier — FULL needs `RuntimeShader`. Legacy `"flat"` overrides are
+ * treated as BLUR.
  */
 fun resolveTier(sdkInt: Int, override: String? = null): GlassTier {
-    val capability =
-        when {
-            sdkInt >= 33 -> GlassTier.FULL
-            sdkInt >= 31 -> GlassTier.BLUR
-            else -> GlassTier.FLAT
-        }
+    val capability = if (sdkInt >= 33) GlassTier.FULL else GlassTier.BLUR
     val requested =
         when (override?.lowercase()) {
             "full" -> GlassTier.FULL
-            "blur" -> GlassTier.BLUR
-            "flat" -> GlassTier.FLAT
+            "blur", "flat" -> GlassTier.BLUR
             else -> capability
         }
     return if (requested.ordinal < capability.ordinal) requested else capability
@@ -373,7 +364,7 @@ internal fun glassBackdropContentRect(
  * [LocalMonitorGlass].
  */
 class MonitorGlass(initialTier: GlassTier) {
-    /** Active tier; drops via [demote], never re-promotes within a process. */
+    /** Active tier; [demote] may drop FULL → BLUR, never re-promotes, never below BLUR. */
     var tier: GlassTier by mutableStateOf(initialTier)
         private set
 
@@ -381,26 +372,28 @@ class MonitorGlass(initialTier: GlassTier) {
     val backdrop = GlassBackdrop()
 
     /**
-     * Feeds one decoded frame into the backdrop; free when the tier is FLAT.
-     * FULL and BLUR both bake a small CPU box-blur once per frame (~20k px)
-     * so the AGSL path stays a single GPU texture fetch + refraction.
+     * Feeds one decoded frame into the backdrop. FULL and BLUR both bake a
+     * small CPU box-blur once per frame (~20k px) so the AGSL path stays a
+     * single GPU texture fetch + refraction.
      */
     fun submit(bitmap: Bitmap) {
-        if (tier != GlassTier.FLAT) backdrop.submit(bitmap, bakeCpuBlur = true)
+        backdrop.submit(bitmap, bakeCpuBlur = true)
     }
 
-    /** Steps down one tier after a sustained frame-budget overrun. */
+    /** Drops FULL → BLUR after a sustained frame-budget overrun. BLUR is the floor. */
     fun demote() {
-        if (tier == GlassTier.FLAT) return
-        val downgraded = GlassTier.entries[tier.ordinal - 1]
-        Log.w(TAG, "sustained frame-budget overrun — degrading glass $tier -> $downgraded")
-        tier = downgraded
+        if (tier == GlassTier.BLUR) return
+        // runCatching: unit tests stub android.util.Log.
+        runCatching {
+            Log.w(TAG, "sustained frame-budget overrun — degrading glass $tier -> ${GlassTier.BLUR}")
+        }
+        tier = GlassTier.BLUR
     }
 }
 
 /**
- * Glass state for the monitor chrome. Null (the default, and every screen
- * that never provides it) keeps [glass] on the hand-rolled FLAT treatment.
+ * Glass state for the monitor chrome. Null (screens without a feed backdrop)
+ * still paints the BLUR-floor surface tint — never an unfrosted solid flat.
  */
 val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
 
@@ -546,9 +539,10 @@ private class GlassPillNode(refract: Boolean) {
  * - FULL: shared pre-blurred backdrop + AGSL refraction/specular/tint on the
  *   GPU (one texture fetch per fragment). Tint is in-shader so Compose never
  *   paints a heavy opaque fill on top of the frost.
- * - BLUR: shared pre-blurred backdrop under a lighter surface fill + rim.
- * - FLAT (and any screen without [LocalMonitorGlass]): the original
- *   hand-rolled fill + uniform hairline.
+ * - BLUR (floor): shared pre-blurred backdrop under a light surface fill + rim.
+ *   Also used when no [LocalMonitorGlass] is provided (no feed to sample).
+ *
+ * There is no solid-fill FLAT tier.
  *
  * All drawing stays inside the pill geometry (a native rounded-rect fill),
  * so the glass never repaints outside its bounds and the zone-frame tap
@@ -557,10 +551,12 @@ private class GlassPillNode(refract: Boolean) {
 @Composable
 fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
     val glass = LocalMonitorGlass.current
-    val tier = glass?.tier ?: GlassTier.FLAT
-    if (glass == null || tier == GlassTier.FLAT) {
-        return background(LiveDesign.glass, shape).border(1.dp, LiveDesign.hairline, shape)
+    // No feed backdrop (settings/media/etc.): still the BLUR-floor surface,
+    // never an unfrosted opaque solid.
+    if (glass == null) {
+        return background(BlurSurfaceTint, shape).border(1.dp, RimHighlight, shape)
     }
+    val tier = glass.tier
     val node = remember(glass, tier) { GlassPillNode(refract = tier == GlassTier.FULL) }
     val liquid = tier == GlassTier.FULL
     return onGloballyPositioned { node.origin = it.positionInRoot() }
@@ -579,12 +575,12 @@ fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
 
 /**
  * Glass for chips nested INSIDE a glass slab (the info deck's readout
- * capsules): always the flat treatment. Matches iOS, where nested chips are
- * tinted overlays on the slab, not stacked glass — and it keeps the
- * refracting-node count at the slab level (6 nodes, not 10).
+ * capsules): BLUR-floor tint only, not a second refracting layer. Matches
+ * iOS nested chips (tinted overlays on the slab, not stacked glass) and
+ * keeps the AGSL node count at the slab level.
  */
 fun Modifier.chipGlass(shape: Shape = ChromeShape): Modifier =
-    background(LiveDesign.glass, shape).border(1.dp, LiveDesign.hairline, shape)
+    background(BlurSurfaceTint, shape).border(1.dp, LiveDesign.hairline, shape)
 
 /**
  * Draws the shared backdrop clipped to the pill's rounded rect. Reading

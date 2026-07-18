@@ -11,18 +11,29 @@ class GlassTierTest {
     fun platformCeilingPicksTheTier() {
         assertEquals(GlassTier.FULL, resolveTier(33))
         assertEquals(GlassTier.FULL, resolveTier(36))
+        // BLUR is the floor on every API — no FLAT tier.
         assertEquals(GlassTier.BLUR, resolveTier(31))
         assertEquals(GlassTier.BLUR, resolveTier(32))
-        assertEquals(GlassTier.FLAT, resolveTier(29))
+        assertEquals(GlassTier.BLUR, resolveTier(29))
     }
 
     @Test
     fun overrideLowersButNeverRaises() {
         assertEquals(GlassTier.BLUR, resolveTier(33, "blur"))
-        assertEquals(GlassTier.FLAT, resolveTier(33, "flat"))
-        // FULL needs RuntimeShader — an API 31 device stays at its BLUR ceiling.
+        // Legacy "flat" overrides map to the BLUR floor.
+        assertEquals(GlassTier.BLUR, resolveTier(33, "flat"))
+        // FULL needs RuntimeShader — an API 31 device stays at BLUR.
         assertEquals(GlassTier.BLUR, resolveTier(31, "full"))
-        assertEquals(GlassTier.FLAT, resolveTier(29, "full"))
+        assertEquals(GlassTier.BLUR, resolveTier(29, "full"))
+    }
+
+    @Test
+    fun demoteStopsAtBlurFloor() {
+        val glass = MonitorGlass(GlassTier.FULL)
+        glass.demote()
+        assertEquals(GlassTier.BLUR, glass.tier)
+        glass.demote()
+        assertEquals(GlassTier.BLUR, glass.tier)
     }
 
     @Test

@@ -278,9 +278,9 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * typed CameraSession/Swift command seam; descriptor-dependent controls stay
  * read-only rather than receiving guessed options.
  *
- * Chrome glass runs the tiered GPU treatment (GlassChrome.kt) at this
- * device's [resolveTier] ceiling; [glassTierOverride] (`zc.glass.tier`
- * debug intent extra) forces a lower tier for testing.
+ * Chrome glass runs the GPU treatment (GlassChrome.kt) at this device's
+ * [resolveTier] ceiling (FULL or BLUR floor — never flat);
+ * [glassTierOverride] (`zc.glass.tier` debug intent extra) can only lower.
  *
  * [assist] is shared with Operator Settings so toolbar and settings changes
  * immediately drive the same feed-effects and scope state.
@@ -346,15 +346,15 @@ internal fun MonitorScreen(
 
     // Shared glass state: the active tier plus the one blurred backdrop
     // texture every glass pill samples. The frame-clock loop is the perf
-    // safety net — sustained overruns of the 48 ms p90 budget drop one tier
-    // (FULL → BLUR → FLAT) and stop the backdrop work with it.
+    // safety net — sustained overruns of the 48 ms p90 budget drop FULL →
+    // BLUR (the floor; never flat).
     val glass = remember {
         MonitorGlass(resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride))
     }
     LaunchedEffect(glass) {
         val budget = FrameBudgetWindow()
         var last = 0L
-        while (glass.tier != GlassTier.FLAT) {
+        while (glass.tier != GlassTier.BLUR) {
             withFrameNanos { now ->
                 if (last != 0L && budget.frame(now - last)) glass.demote()
                 last = now

@@ -174,11 +174,11 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
 - **Liquid-glass chrome:** monitor chrome glass is a custom GPU treatment (`GlassChrome.kt`) —
   one shared 1/8-res backdrop per feed frame (box-blurred once on the decode thread, ~20k px),
   sampled by every pill. API 33+ **FULL** adds AGSL edge refraction + specular rim + warm tint
-  (one GPU texture fetch per fragment, no per-node `RenderEffect`). API 31–32 **BLUR** samples
-  the pre-blurred texture under a light surface fill. Below that is the hand-rolled **FLAT**
-  fill. A frame-budget counter auto-degrades one tier under sustained overruns. Debug override:
-  `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
-  (`full`/`blur`/`flat`; lowers only).
+  (one GPU texture fetch per fragment, no per-node `RenderEffect`). **BLUR** is the floor on
+  every API (pre-blurred texture + light surface fill) — there is no solid-fill FLAT tier. A
+  frame-budget counter may demote FULL → BLUR under sustained overruns, never below BLUR. Debug
+  override: `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
+  (`full`/`blur`; lowers only).
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
   monitor-owned clean-frame sampler at 30 Hz (24 Hz above three active scopes), with the same
   thermal slowdown tiers as iOS. The shared core owns all axis/curve and Traffic

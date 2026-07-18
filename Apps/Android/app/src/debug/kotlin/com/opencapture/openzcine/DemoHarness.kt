@@ -125,14 +125,15 @@ object DemoHarness {
      */
     const val EXTRA_USB_STATE = "zc.demo.usbState"
 
-    /** String intent extra forcing a glass tier (`full`/`blur`/`flat`) for testing. */
+    /** String intent extra forcing a glass tier (`full`/`blur`) for testing. */
     const val EXTRA_GLASS_TIER = "zc.glass.tier"
 
     /**
-     * Glass-tier override: `--es zc.glass.tier blur` (or `flat`/`full`) pins
-     * the chrome glass to that tier so each fallback can be exercised on one
-     * device. Null (the default, and always in release) lets [resolveTier]
-     * pick the platform ceiling. The override can only lower the tier.
+     * Glass-tier override: `--es zc.glass.tier blur` (or `full`) pins the
+     * chrome glass to that tier. BLUR is the floor — there is no flat tier
+     * (legacy `flat` maps to BLUR). Null (the default, and always in release)
+     * lets [resolveTier] pick the platform ceiling. The override can only
+     * lower the tier.
      */
     fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
 

@@ -57,7 +57,7 @@ class RecordCameraFlowComposeTest {
                     assist = AssistState(FeedEffects.NONE, null),
                     operatorSettings = operatorSettings,
                     liveViewEnabled = false,
-                    glassTierOverride = GLASS_TIER_FLAT,
+                    glassTierOverride = GLASS_TIER_BLUR,
                 )
             }
         }
@@ -99,7 +99,7 @@ class RecordCameraFlowComposeTest {
     }
 
     private companion object {
-        const val GLASS_TIER_FLAT = "flat"
+        const val GLASS_TIER_BLUR = "blur"
         const val START_RECORDING = "Start recording"
         const val STOP_RECORDING = "Stop recording"
         const val CONFIRM_START = "Start"
