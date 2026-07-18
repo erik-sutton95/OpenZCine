@@ -172,9 +172,11 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
   camera pass.
 - **Liquid-glass chrome:** monitor chrome glass is a custom GPU treatment (`GlassChrome.kt`) —
-  one shared blurred backdrop texture per feed frame, sampled by every pill (AGSL edge refraction
-  on API 33+, plain pre-blurred fill on 31–32, the hand-rolled flat fill below). A frame-budget
-  counter auto-degrades one tier under sustained overruns. Debug override:
+  one shared 1/8-res backdrop per feed frame (box-blurred once on the decode thread, ~20k px),
+  sampled by every pill. API 33+ **FULL** adds AGSL edge refraction + specular rim + warm tint
+  (one GPU texture fetch per fragment, no per-node `RenderEffect`). API 31–32 **BLUR** samples
+  the pre-blurred texture under a light surface fill. Below that is the hand-rolled **FLAT**
+  fill. A frame-budget counter auto-degrades one tier under sustained overruns. Debug override:
   `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
   (`full`/`blur`/`flat`; lowers only).
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one

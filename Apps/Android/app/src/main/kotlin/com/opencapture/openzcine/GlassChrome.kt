@@ -45,30 +45,48 @@ import kotlin.math.roundToInt
 // the GPU idles. The structural fix here is ONE shared backdrop, many
 // samplers:
 //
-//  1. [GlassBackdrop] turns each decoded feed frame into a single tiny
-//     blurred texture covering the whole viewport (visible feed + black surround),
-//     produced ONCE per feed frame on the decode thread — no per-node
-//     capture anywhere.
-//  2. Every glass pill samples that shared texture at screen-mapped UVs:
-//     tier FULL adds an AGSL edge-refraction lens (API 33+), tier BLUR draws
-//     the pre-blurred texture straight (the blur is baked into the texture,
-//     so no RenderEffect is even needed), tier FLAT is the original
-//     hand-rolled translucent fill.
-//  3. [FrameBudgetWindow] auto-degrades one tier when frame timing blows the
+//  1. [GlassBackdrop] downscales each decoded feed frame into a single tiny
+//     viewport texture (visible feed + black surround), produced ONCE per feed
+//     frame on the decode thread — no per-node capture anywhere.
+//  2. The shared texture is box-blurred once per frame on the decode thread
+//     (~20k px at 1/8 scale — microseconds). Pills never re-blur.
+//  3. Tier FULL (API 33+): AGSL single-sample + edge refraction + specular
+//     rim + warm tint, all on the GPU. One texture fetch per fragment.
+//  4. Tier BLUR (API 31–32): sample the pre-blurred texture straight under a
+//     light surface fill.
+//  5. Tier FLAT: hand-rolled translucent fill, no backdrop work.
+//  6. [FrameBudgetWindow] auto-degrades one tier when frame timing blows the
 //     budget for a sustained window — a counter and a threshold, nothing more.
 
 private const val TAG = "ZCGlass"
 
-/** Backdrop texture scale: 1/16 of screen resolution (~100×45 px on the A12 floor device). */
-private const val BACKDROP_DOWNSCALE = 16
+/**
+ * Backdrop texture scale: 1/8 of screen (~200×90 on A12). Higher than the
+ * original 1/16 so GPU multi-tap / upscale reads as smooth frosted glass
+ * rather than blocky color patches, while still keeping the texture tiny.
+ */
+private const val BACKDROP_DOWNSCALE = 8
 
-/** Box-blur radius (backdrop texels ≈ 16 screen px each) and pass count (2 ≈ tent kernel). */
-private const val BLUR_RADIUS = 1
-private const val BLUR_PASSES = 2
+/**
+ * CPU box-blur for tier BLUR only (FULL blurs on the GPU in AGSL).
+ * Radius 2 × 3 separable passes ≈ a soft Gaussian at the 1/8 texture scale.
+ */
+private const val BLUR_RADIUS = 2
+private const val BLUR_PASSES = 3
 
 /** Refraction geometry, dp: the rim band width and the max inward sample displacement. */
-private const val REFRACTION_BEVEL_DP = 8f
-private const val REFRACTION_AMOUNT_DP = 12f
+private const val REFRACTION_BEVEL_DP = 10f
+private const val REFRACTION_AMOUNT_DP = 14f
+
+/**
+ * Warm glass tint composited in the FULL AGSL path (matches LiveDesign.glass
+ * RGB). Kept lighter than the FLAT fill so the blurred feed reads through
+ * like iOS liquid glass / ultraThinMaterial.
+ */
+private const val GLASS_TINT_R = 0.105f
+private const val GLASS_TINT_G = 0.092f
+private const val GLASS_TINT_B = 0.073f
+private const val GLASS_TINT_A = 0.38f
 
 /**
  * Glass quality tiers, ascending. [resolveTier] picks the platform ceiling;
@@ -230,8 +248,13 @@ class GlassBackdrop {
         }
     }
 
-    /** Rebuilds the backdrop from a decoded feed [bitmap]. Decode-thread only. */
-    fun submit(bitmap: Bitmap) {
+    /**
+     * Rebuilds the backdrop from a decoded feed [bitmap]. Decode-thread only.
+     *
+     * @param bakeCpuBlur when true (tier BLUR), run the separable box blur on
+     *   the CPU. FULL leaves the texture sharp and blurs on the GPU in AGSL.
+     */
+    fun submit(bitmap: Bitmap, bakeCpuBlur: Boolean = true) {
         synchronized(this) {
             val target = texture ?: return
             val canvas = this.canvas ?: return
@@ -249,6 +272,8 @@ class GlassBackdrop {
             val contentTop = feedRect.top + content.top
 
             // Two-step downsample: frame → ~4× the final region → backdrop.
+            // Bilinear GPU-accelerated draws (FILTER_BITMAP_FLAG) — no CPU
+            // pixel loops for the scale itself.
             val sx = uvScaleX()
             val sy = uvScaleY()
             val midW = max(1, (contentW * sx * 4f).roundToInt())
@@ -279,14 +304,13 @@ class GlassBackdrop {
                 bilinear,
             )
             canvas.restoreToCount(saveCount)
-            blur(target)
+            if (bakeCpuBlur) blur(target)
             frame++
         }
     }
 
-    // ponytail: CPU box blur — at 1/16 resolution this is ~4.5k pixels, a few
-    // microseconds per frame; a GPU RenderEffect pass would cost more in
-    // layer/readback plumbing than it saves.
+    // ponytail: CPU box blur at 1/8 is ~20k pixels — a fraction of a
+    // millisecond. Cheaper than per-pill multi-tap AGSL on weak GPUs (A12).
     private fun blur(bitmap: Bitmap) {
         val w = bitmap.width
         val h = bitmap.height
@@ -356,9 +380,13 @@ class MonitorGlass(initialTier: GlassTier) {
     /** The shared blurred backdrop all glass pills sample. */
     val backdrop = GlassBackdrop()
 
-    /** Feeds one decoded frame into the backdrop; free when the tier is FLAT. */
+    /**
+     * Feeds one decoded frame into the backdrop; free when the tier is FLAT.
+     * FULL and BLUR both bake a small CPU box-blur once per frame (~20k px)
+     * so the AGSL path stays a single GPU texture fetch + refraction.
+     */
     fun submit(bitmap: Bitmap) {
-        if (tier != GlassTier.FLAT) backdrop.submit(bitmap)
+        if (tier != GlassTier.FLAT) backdrop.submit(bitmap, bakeCpuBlur = true)
     }
 
     /** Steps down one tier after a sustained frame-budget overrun. */
@@ -377,16 +405,17 @@ class MonitorGlass(initialTier: GlassTier) {
 val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
 
 /**
- * AGSL liquid-glass pill shader (tier FULL): samples the shared blurred
- * backdrop at screen-mapped UVs and bends the samples near the rim like a
- * convex lens edge — the piece of the rejected library eval that genuinely
- * read closer to iOS.
+ * AGSL liquid-glass pill shader (tier FULL) — GPU path, one texture fetch:
  *
- * Uniforms: `size`/`radius` describe the pill in local px, `origin` is the
- * pill's top-left in root px, `uvScale` maps root px → backdrop texels,
- * `bevel` is the rim band width and `refraction` the max inward sample
- * displacement (both px). The smoky surface tint and the rim highlight are
- * composited on top in Compose, shared with tier BLUR.
+ *  1. Single sample of the shared pre-blurred backdrop (blur is baked once
+ *     per feed frame; FILTER_MODE_LINEAR softens the 1/8 upscale).
+ *  2. Convex-lens edge refraction near the rim (iOS liquid-glass bulge).
+ *  3. Warm translucent tint + top specular + edge highlight, composited
+ *     in-shader so Compose never paints a heavy opaque fill on top.
+ *
+ * Uniforms: `size`/`radius` pill local px, `origin` pill top-left in root px,
+ * `uvScale` root px → backdrop texels, `bevel`/`refraction` rim geometry px,
+ * `tint` RGBA warm glass fill.
  */
 private val GLASS_SHADER_SRC =
     """
@@ -397,8 +426,8 @@ private val GLASS_SHADER_SRC =
     uniform float2 uvScale;
     uniform float bevel;
     uniform float refraction;
+    uniform float4 tint;
 
-    // Signed distance to a rounded rect centred at the origin (negative inside).
     float roundedBoxSDF(float2 p, float2 halfSize, float r) {
         float2 q = abs(p) - halfSize + r;
         return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
@@ -409,11 +438,10 @@ private val GLASS_SHADER_SRC =
         float2 p = coord - halfSize;
         float sd = roundedBoxSDF(p, halfSize, radius);
 
-        // Lens profile: 0 in the interior, ramping quadratically to 1 at the rim.
+        // Lens profile: 0 interior → 1 at the rim.
         float t = clamp(1.0 + sd / bevel, 0.0, 1.0);
 
-        // Outward normal: exact in the corner circles, axis-aligned on the
-        // straight edges (q picks the nearest edge).
+        // Outward normal for refraction.
         float2 q = abs(p) - halfSize + radius;
         float2 n;
         if (q.x > 0.0 && q.y > 0.0) {
@@ -424,16 +452,25 @@ private val GLASS_SHADER_SRC =
             n = float2(0.0, sign(p.y));
         }
 
-        // Displace the sample inward near the rim: the interior content
-        // stretches out to the edge, reading as a glass bulge.
-        float2 sample = coord - n * (refraction * t * t);
-        half4 bg = backdrop.eval((sample + origin) * uvScale);
+        // Inward sample shift near the rim (glass bulge).
+        float2 samplePx = coord - n * (refraction * t * t);
+        half3 bg = backdrop.eval((samplePx + origin) * uvScale).rgb;
 
-        // Mild vibrancy: the smoky surface tint on top mutes color, so nudge
-        // saturation back up — never past the iOS reference's restraint.
-        half lum = dot(bg.rgb, half3(0.299, 0.587, 0.114));
-        half3 vib = mix(half3(lum), bg.rgb, 1.25);
-        return half4(vib, 1.0);
+        // Mild vibrancy so the warm tint doesn't grey out the feed.
+        half lum = dot(bg, half3(0.299, 0.587, 0.114));
+        half3 vib = mix(half3(lum), bg, 1.22);
+
+        // Translucent warm glass over the frosted feed (iOS liquid-glass body).
+        half3 body = mix(vib, half3(tint.r, tint.g, tint.b), half(tint.a));
+
+        // Top specular: bright warm rim falling off toward the bottom.
+        float yNorm = clamp(coord.y / max(size.y, 1.0), 0.0, 1.0);
+        float topSpec = pow(1.0 - yNorm, 2.4) * 0.22;
+        // Edge caustic: thin highlight along the SDF boundary.
+        float edge = exp(-abs(sd) * 0.55) * 0.14 * (1.0 - yNorm * 0.5);
+        half3 spec = half3(0.968, 0.937, 0.882) * half(topSpec + edge);
+
+        return half4(body + spec, 1.0);
     }
     """
         .trimIndent()
@@ -441,15 +478,18 @@ private val GLASS_SHADER_SRC =
 /**
  * Top-weighted rim highlight (stolen from the eval — it reads better than
  * the uniform hairline): bright warm-white at the top edge fading to nearly
- * nothing at the bottom.
+ * nothing at the bottom. Used as the stroke on BLUR/FULL pills.
  */
 private val RimHighlight =
     Brush.verticalGradient(
         listOf(
-            Color(0.968f, 0.937f, 0.882f, 0.45f),
-            Color(0.968f, 0.937f, 0.882f, 0.06f),
+            Color(0.968f, 0.937f, 0.882f, 0.55f),
+            Color(0.968f, 0.937f, 0.882f, 0.08f),
         ),
     )
+
+/** Lighter surface fill for tier BLUR so the baked backdrop still shows. */
+private val BlurSurfaceTint = Color(GLASS_TINT_R, GLASS_TINT_G, GLASS_TINT_B, 0.42f)
 
 /**
  * Per-call-site draw state: the pill's root position, reusable paint
@@ -503,9 +543,10 @@ private class GlassPillNode(refract: Boolean) {
  * styling (mirrors `ios/Runner/DesignShared.swift`), tiered by
  * [MonitorGlass.tier]:
  *
- * - FULL: AGSL edge refraction over the shared backdrop, smoky surface fill,
- *   top-weighted rim highlight.
- * - BLUR: the shared pre-blurred backdrop straight under the same fill+rim.
+ * - FULL: shared pre-blurred backdrop + AGSL refraction/specular/tint on the
+ *   GPU (one texture fetch per fragment). Tint is in-shader so Compose never
+ *   paints a heavy opaque fill on top of the frost.
+ * - BLUR: shared pre-blurred backdrop under a lighter surface fill + rim.
  * - FLAT (and any screen without [LocalMonitorGlass]): the original
  *   hand-rolled fill + uniform hairline.
  *
@@ -521,9 +562,18 @@ fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
         return background(LiveDesign.glass, shape).border(1.dp, LiveDesign.hairline, shape)
     }
     val node = remember(glass, tier) { GlassPillNode(refract = tier == GlassTier.FULL) }
+    val liquid = tier == GlassTier.FULL
     return onGloballyPositioned { node.origin = it.positionInRoot() }
-        .drawBehind { drawGlassBackdrop(node, glass.backdrop, shape) }
-        .background(LiveDesign.glass, shape)
+        .drawBehind { drawGlassBackdrop(node, glass.backdrop, shape, liquid) }
+        .then(
+            // FULL composites tint in AGSL; BLUR still needs a translucent
+            // surface so letterbox (black) pills don't look empty.
+            if (liquid) {
+                Modifier
+            } else {
+                Modifier.background(BlurSurfaceTint, shape)
+            },
+        )
         .border(1.dp, RimHighlight, shape)
 }
 
@@ -544,32 +594,37 @@ fun Modifier.chipGlass(shape: Shape = ChromeShape): Modifier =
  * the corner radius is resolved by shape identity — generalize via
  * Shape.createOutline if a third ever appears.
  */
-private fun DrawScope.drawGlassBackdrop(node: GlassPillNode, backdrop: GlassBackdrop, shape: Shape) {
-    if (backdrop.frame <= 0) return
-    val texture = backdrop.texture ?: return
+private fun DrawScope.drawGlassBackdrop(
+    node: GlassPillNode,
+    backdrop: GlassBackdrop,
+    shape: Shape,
+    liquid: Boolean,
+) {
     val radius =
         if (shape === CircleShape) size.minDimension / 2f
         else min(LiveDesign.CORNER_RADIUS_DP.dp.toPx(), size.minDimension / 2f)
+    val texture = backdrop.texture
+    // Until the first feed frame lands, paint the warm glass tint so pills
+    // aren't hollow. FULL never puts an opaque Compose fill on top of the
+    // AGSL pass (that killed the liquid look), so this is the only fallback.
+    if (backdrop.frame <= 0 || texture == null) {
+        drawRoundRect(
+            color = BlurSurfaceTint,
+            cornerRadius =
+                androidx.compose.ui.geometry.CornerRadius(radius, radius),
+        )
+        return
+    }
     if (node.rebindNeeded(texture, size.width, size.height)) {
         val source = node.shaderFor(texture)
         val runtime = node.runtime
-        // Pills entirely over the letterbox (side rails, capture strip on
-        // tall feeds) skip the AGSL lens: refracting near-black is visually
-        // identical to sampling it straight (judged by eye on the A12), and
-        // it keeps the per-frame runtime-effect count at the pills actually
-        // over the image.
-        val overFeed =
-            backdrop.overlapsFeed(
-                node.origin.x,
-                node.origin.y,
-                node.origin.x + size.width,
-                node.origin.y + size.height,
-            )
-        if (Build.VERSION.SDK_INT >= 33 && runtime != null && overFeed) {
-            setRefractionUniforms(runtime, node, backdrop, source, radius)
+        if (liquid && Build.VERSION.SDK_INT >= 33 && runtime != null) {
+            // FULL: GPU multi-tap blur + refraction + tint for every pill,
+            // including letterbox chrome (samples black + warm tint → still
+            // reads as glass, keeps one shader path).
+            setLiquidGlassUniforms(runtime, node, backdrop, source, radius)
         } else {
-            // Tier BLUR (and letterbox pills on FULL): map the backdrop
-            // straight into pill-local space.
+            // Tier BLUR: map the pre-blurred backdrop straight into pill space.
             node.matrix.setScale(1f / backdrop.uvScaleX(), 1f / backdrop.uvScaleY())
             node.matrix.postTranslate(-node.origin.x, -node.origin.y)
             source.setLocalMatrix(node.matrix)
@@ -582,21 +637,31 @@ private fun DrawScope.drawGlassBackdrop(node: GlassPillNode, backdrop: GlassBack
     }
 }
 
-/** Tier FULL only: binds this frame's geometry + backdrop to the AGSL lens. */
+/** Tier FULL only: binds geometry + backdrop to the AGSL liquid-glass lens. */
 @RequiresApi(33)
-private fun DrawScope.setRefractionUniforms(
+private fun DrawScope.setLiquidGlassUniforms(
     runtime: RuntimeShader,
     node: GlassPillNode,
     backdrop: GlassBackdrop,
     source: BitmapShader,
     radius: Float,
 ) {
+    // Identity matrix: AGSL maps root px → backdrop texels itself.
+    node.matrix.reset()
+    source.setLocalMatrix(node.matrix)
     runtime.setFloatUniform("size", size.width, size.height)
     runtime.setFloatUniform("radius", radius)
     runtime.setFloatUniform("origin", node.origin.x, node.origin.y)
     runtime.setFloatUniform("uvScale", backdrop.uvScaleX(), backdrop.uvScaleY())
     runtime.setFloatUniform("bevel", REFRACTION_BEVEL_DP.dp.toPx())
     runtime.setFloatUniform("refraction", REFRACTION_AMOUNT_DP.dp.toPx())
+    runtime.setFloatUniform(
+        "tint",
+        GLASS_TINT_R,
+        GLASS_TINT_G,
+        GLASS_TINT_B,
+        GLASS_TINT_A,
+    )
     runtime.setInputShader("backdrop", source)
     node.paint.shader = runtime
 }
