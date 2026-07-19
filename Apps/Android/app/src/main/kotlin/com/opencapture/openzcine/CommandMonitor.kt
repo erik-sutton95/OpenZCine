@@ -3,11 +3,14 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,10 +26,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
@@ -36,6 +38,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -53,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
@@ -62,6 +67,7 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.core.CameraTemperatureStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.openzcine.settings.PanelCloseButton
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -807,7 +813,8 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
 @Composable
 internal fun CommandDashboard(
     recording: Boolean,
-    timecode: LiveFrameTimecode?,
+    timecodeRetention: MonitorTimecodeRetention,
+    sessionState: CameraSessionState,
     presentation: CommandDashboardPresentation,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
@@ -829,7 +836,11 @@ internal fun CommandDashboard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RecordChip(recording)
-                CommandTimecode(timecode, sizeSp = 44f)
+                RetainedCameraTimecodeReadout(
+                    retention = timecodeRetention,
+                    sessionState = sessionState,
+                    sizeSp = 44f,
+                )
             }
             CommandHealthStrip(presentation)
             CommandGrid(
@@ -859,7 +870,8 @@ internal fun CommandDashboard(
 @Composable
 internal fun PortraitCommandDashboard(
     presentation: CommandDashboardPresentation,
-    timecode: LiveFrameTimecode?,
+    timecodeRetention: MonitorTimecodeRetention,
+    sessionState: CameraSessionState,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
     onOpenControl: (CommandControlRequest) -> Unit,
@@ -882,8 +894,9 @@ internal fun PortraitCommandDashboard(
                 contentAlignment = Alignment.Center,
             ) {
                 FitScale(maxWidth) {
-                    CommandTimecode(
-                        timecode = timecode,
+                    RetainedCameraTimecodeReadout(
+                        retention = timecodeRetention,
+                        sessionState = sessionState,
                         sizeSp = 52f,
                     )
                 }
@@ -1446,7 +1459,11 @@ private fun CommandSmallTile(
     }
 }
 
-/** Accessible picker for the fixed set of Swift-validated control labels. */
+/**
+ * Command-mode control surface — same glass drum / tint pad as live pickers
+ * (iOS `PickerPanel` dead-centred when `displayMode == .command`), not a
+ * Material dialog.
+ */
 @Composable
 internal fun CommandControlDialog(
     request: CommandControlRequest,
@@ -1458,105 +1475,120 @@ internal fun CommandControlDialog(
 ) {
     val pending = pendingControl != null
     val options = commandControlOptions(request, pendingControl, controlsEnabled)
-    val selectedSuffix = stringResource(R.string.camera_option_selected_suffix)
     val isTintPad = request.control == CameraControl.WHITE_BALANCE_TINT
-    AlertDialog(
-        onDismissRequest = {
-            if (!pending) onDismiss()
-        },
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(request.title)
+    val dismissAllowed = !pending
+    BackHandler(enabled = dismissAllowed, onBack = onDismiss)
+
+    var revealed by remember(request.control, request.title) { mutableStateOf(false) }
+    LaunchedEffect(request.control, request.title) { revealed = true }
+    val travel = 320.dp
+    val revealOffset by
+        animateDpAsState(
+            targetValue = if (revealed) 0.dp else travel,
+            animationSpec = IosPanelRevealSpec,
+            label = "commandPickerReveal",
+        )
+
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier.fillMaxSize()
+                .chromeClickable(enabled = dismissAllowed, onClick = onDismiss),
+        )
+        Column(
+            modifier =
+                Modifier
+                    .align(Alignment.Center)
+                    .offset(y = revealOffset)
+                    .alpha(if (revealed) 1f else 0f)
+                    .width(420.dp)
+                    .heightIn(max = 360.dp)
+                    // Scene overlay glass (blurs chrome + feed); shape from drawBackdrop.
+                    .overlayGlass(ChromeShape)
+                    .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
+                    .pointerInput(Unit) { detectTapGestures(onTap = {}) }
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text(
+                        request.title,
+                        style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
+                        color = LiveDesign.text,
+                        maxLines = 1,
+                    )
+                    Text(
+                        stringResource(R.string.command_current_value, request.currentValue)
+                            .uppercase(),
+                        style =
+                            chromeStyle(11f, FontWeight.SemiBold, mono = true)
+                                .copy(letterSpacing = 1.5.sp),
+                        color = LiveDesign.faint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    )
+                }
+                PanelCloseButton(onClick = { if (dismissAllowed) onDismiss() })
+            }
+            feedback?.let {
                 Text(
-                    stringResource(R.string.command_current_value, request.currentValue),
-                    style = chromeStyle(13f, FontWeight.Medium, mono = true),
+                    it.message,
+                    style = chromeStyle(11f, FontWeight.Medium),
+                    color = if (it.isError) LiveDesign.rec else LiveDesign.good,
+                    maxLines = 2,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+            if (!controlsEnabled) {
+                Text(
+                    stringResource(R.string.camera_controls_unavailable),
+                    style = chromeStyle(11f, FontWeight.Medium),
+                    color = LiveDesign.muted,
+                    maxLines = 2,
+                )
+            }
+            if (isTintPad) {
+                val tintAvailable = options.isNotEmpty()
+                WhiteBalanceTintPad(
+                    currentLabel = request.currentValue.ifBlank { "Neutral" },
+                    available = tintAvailable,
+                    interactive = controlsEnabled && !pending && tintAvailable,
+                    onCommit = { label ->
+                        if (label != request.currentValue) onSelect(label)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                val selectedLabel =
+                    options.firstOrNull { it.selected }?.label
+                        ?: options.firstOrNull()?.label
+                        ?: ""
+                AccentDrumWheel(
+                    options = options.map { it.label },
+                    selection = selectedLabel,
+                    interactive = controlsEnabled && !pending,
+                    modifier = Modifier.fillMaxWidth(),
+                    onSettle = { settled ->
+                        if (settled != selectedLabel) onSelect(settled)
+                    },
+                )
+            }
+            if (pending) {
+                Text(
+                    stringResource(R.string.camera_applying_change),
+                    style = chromeStyle(11f, FontWeight.Medium),
                     color = LiveDesign.muted,
                 )
             }
-        },
-        text = {
-            Column(
-                Modifier.heightIn(max = 320.dp).then(
-                    if (isTintPad) Modifier else Modifier.verticalScroll(rememberScrollState()),
-                ),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                if (feedback != null) {
-                    Text(
-                        feedback.message,
-                        color = if (feedback.isError) LiveDesign.rec else LiveDesign.good,
-                        style = chromeStyle(12f, FontWeight.Medium),
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
-                }
-                if (!controlsEnabled) {
-                    Text(
-                        stringResource(R.string.camera_controls_unavailable),
-                        color = LiveDesign.muted,
-                        style = chromeStyle(12f, FontWeight.Medium),
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
-                }
-                if (isTintPad) {
-                    // iOS command/monitor Tint surface is the 2-D pad, not a
-                    // 169-row list of grid labels.
-                    val tintAvailable = options.isNotEmpty()
-                    WhiteBalanceTintPad(
-                        currentLabel = request.currentValue.ifBlank { "Neutral" },
-                        available = tintAvailable,
-                        interactive = controlsEnabled && !pending && tintAvailable,
-                        onCommit = { label ->
-                            if (label != request.currentValue) onSelect(label)
-                        },
-                    )
-                } else {
-                options.forEach { option ->
-                    val optionDescription =
-                        stringResource(
-                            R.string.camera_option_description,
-                            request.title,
-                            option.label,
-                        ) + if (option.selected) selectedSuffix else ""
-                    TextButton(
-                        onClick = { onSelect(option.label) },
-                        enabled = option.enabled,
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    if (option.selected) LiveDesign.accentDim else Color.Transparent,
-                                    ChromeShape,
-                                )
-                                .border(
-                                    1.dp,
-                                    if (option.selected) LiveDesign.accent else LiveDesign.hairline,
-                                    ChromeShape,
-                                )
-                                .semantics {
-                                    contentDescription = optionDescription
-                                },
-                    ) {
-                        Text(
-                            option.label,
-                            style = chromeStyle(16f, FontWeight.Medium, mono = true),
-                            color = if (option.selected) LiveDesign.accent else LiveDesign.text,
-                        )
-                    }
-                }
-                }
-                if (pending) {
-                    Text(
-                        stringResource(R.string.camera_applying_change),
-                        style = chromeStyle(12f, FontWeight.Medium),
-                        color = LiveDesign.muted,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss, enabled = !pending) {
-                Text(stringResource(R.string.action_done))
-            }
-        },
-    )
+        }
+    }
 }

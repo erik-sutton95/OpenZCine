@@ -114,29 +114,30 @@ internal fun liveFeedContentRect(
     )
 }
 
-/** One immutable image-and-metadata record accepted by the latest-wins feed. */
-@Immutable
-private data class LiveFeedPresentation(
-    val image: ImageBitmap,
-    val sourceWidth: Int,
-    val sourceHeight: Int,
-    val colorMode: LiveFeedColorMode,
-    val focus: LiveFocusInfo?,
-    val level: LiveCameraLevel?,
-)
-
 /**
  * Presentation data paired with the bitmap that the feed actually accepted
- * after latest-wins conflation. It prevents focus and virtual-horizon overlays
- * from drifting onto a different decoded frame by publishing one immutable
- * image-and-metadata record, rather than a sequence of mutable fields.
+ * after latest-wins conflation.
+ *
+ * **Split state on purpose:** [frameEpoch] invalidates only the feed Canvas
+ * draw. Geometry / focus / level use separate Snapshot fields that only write
+ * when values change — a single `mutableStateOf(presentation)` was forcing the
+ * entire monitor chrome tree to recompose at feed rate (~25 Hz) on every
+ * frame and janking the UI thread on A12-class devices.
  */
 @Stable
 public class LiveFeedPresentationState {
-    private var presentation: LiveFeedPresentation? by mutableStateOf(null)
+    /** Bumped when the feed Canvas should redraw; feed Canvas is the only intended reader. */
+    private var frameEpoch by mutableLongStateOf(0L)
+    private var latestBitmap: Bitmap? = null
+    /** Cap Compose draw invalidations so UI thread keeps free time for input. */
+    private var lastDrawPublishNanos: Long = 0L
     private var textureSourceGeometry: FeedTextureSourceGeometry? by mutableStateOf(null)
     private var presentedColorMode: LiveFeedColorMode by mutableStateOf(LiveFeedColorMode.UNKNOWN)
     private var focusGestureGeometrySignature: FocusGestureGeometrySignature? = null
+    private var retainedSourceWidth by mutableIntStateOf(0)
+    private var retainedSourceHeight by mutableIntStateOf(0)
+    private var retainedFocus: LiveFocusInfo? by mutableStateOf(null)
+    private var retainedLevel: LiveCameraLevel? by mutableStateOf(null)
 
     /** Changes only when source or camera focus-coordinate geometry changes. */
     internal var focusGestureGeometryGeneration: Long by mutableLongStateOf(0L)
@@ -146,25 +147,33 @@ public class LiveFeedPresentationState {
     internal val feedTextureSourceGeometry: FeedTextureSourceGeometry?
         get() = textureSourceGeometry
 
-    /** The exact image whose metadata the other accessors describe. */
-    internal val image: ImageBitmap?
-        get() = presentation?.image
+    /**
+     * Latest decoded bitmap. Reading this also observes [frameEpoch] so the
+     * feed Canvas redraws without publishing a new presentation object.
+     */
+    internal val bitmap: Bitmap?
+        get() {
+            // Touch frameEpoch so Canvas invalidates on every present.
+            @Suppress("UNUSED_EXPRESSION")
+            frameEpoch
+            return latestBitmap
+        }
 
     /** Width of the decoded image currently on screen, or zero before a frame. */
     public val sourceWidth: Int
-        get() = presentation?.sourceWidth ?: 0
+        get() = retainedSourceWidth
 
     /** Height of the decoded image currently on screen, or zero before a frame. */
     public val sourceHeight: Int
-        get() = presentation?.sourceHeight ?: 0
+        get() = retainedSourceHeight
 
     /** Camera-origin focus metadata paired with the visible image. */
     public val focus: LiveFocusInfo?
-        get() = presentation?.focus
+        get() = retainedFocus
 
     /** Camera-origin virtual-horizon metadata paired with the visible image. */
     public val level: LiveCameraLevel?
-        get() = presentation?.level
+        get() = retainedLevel
 
     /** Electrical color contract of the decoded frame currently on screen. */
     internal val colorMode: LiveFeedColorMode
@@ -187,15 +196,18 @@ public class LiveFeedPresentationState {
             focusGestureGeometryGeneration += 1
         }
         if (presentedColorMode != colorMode) presentedColorMode = colorMode
-        presentation =
-            LiveFeedPresentation(
-                image = bitmap.asImageBitmap(),
-                sourceWidth = bitmap.width,
-                sourceHeight = bitmap.height,
-                colorMode = colorMode,
-                focus = frame.focus,
-                level = frame.level,
-            )
+        if (retainedSourceWidth != bitmap.width) retainedSourceWidth = bitmap.width
+        if (retainedSourceHeight != bitmap.height) retainedSourceHeight = bitmap.height
+        if (retainedFocus != frame.focus) retainedFocus = frame.focus
+        if (retainedLevel != frame.level) retainedLevel = frame.level
+        latestBitmap = bitmap
+        // Always keep the newest bitmap; only invalidate Compose draw at ~20 Hz
+        // so the UI thread is not saturated by 25–30 full-frame Skia blits/s.
+        val now = System.nanoTime()
+        if (lastDrawPublishNanos == 0L || now - lastDrawPublishNanos >= MIN_DRAW_INTERVAL_NANOS) {
+            lastDrawPublishNanos = now
+            frameEpoch += 1
+        }
         val nextTextureGeometry =
             retainedFeedTextureSourceGeometry(
                 current = textureSourceGeometry,
@@ -212,9 +224,20 @@ public class LiveFeedPresentationState {
             focusGestureGeometrySignature = null
             focusGestureGeometryGeneration += 1
         }
-        presentation = null
+        latestBitmap = null
+        lastDrawPublishNanos = 0L
+        frameEpoch += 1
+        if (retainedSourceWidth != 0) retainedSourceWidth = 0
+        if (retainedSourceHeight != 0) retainedSourceHeight = 0
+        if (retainedFocus != null) retainedFocus = null
+        if (retainedLevel != null) retainedLevel = null
         textureSourceGeometry = null
         presentedColorMode = LiveFeedColorMode.UNKNOWN
+    }
+
+    private companion object {
+        /** ~20 fps max Compose feed redraws — leaves headroom for chrome input. */
+        const val MIN_DRAW_INTERVAL_NANOS: Long = 50_000_000L
     }
 }
 
@@ -254,6 +277,10 @@ public class LiveFeedEffectsPresentationState {
  *   ring fills, the steady state is zero per-frame allocation — the JPEG is
  *   decoded straight into an existing buffer. Sustains the 25 fps stream with
  *   ~2/3 of the frame budget idle on the test device.
+ * - **Subsample via [maxLongSide]**: full 1080p texture upload every frame was
+ *   janking the UI thread on A12-class (gfxinfo ~50 ms draw). Cap the long
+ *   side near display resolution so Skia uploads ~¼ the pixels without
+ *   visible quality loss on a phone monitor.
  * - **ImageDecoder**: allocates a fresh (often hardware) bitmap per frame —
  *   25 allocations/s of ~2.7 MB each is pure GC churn with no quality upside
  *   for a monitor feed.
@@ -261,16 +288,17 @@ public class LiveFeedEffectsPresentationState {
  *   [LiveFeedView]); no decoder on the SM-A127F and rarely present on any
  *   SoC, so it can only ever be an opportunistic fast path — not worth a
  *   second pipeline for the spike.
- * - **SurfaceView / AndroidExternalSurface**: a software-canvas blit plus its
- *   own lifecycle and pacing. A Compose draw-scope state read invalidates
- *   *draw only* (no recomposition, no layout), which measures equivalently
- *   smooth here with far less code; revisit only if profiling shows the
- *   texture upload hurting.
  *
  * The ring is 3 deep so the bitmap being decoded into is never the one the
  * RenderThread may still be drawing (current frame + one in flight).
  */
-class JpegFrameDecoder {
+class JpegFrameDecoder(
+    /**
+     * Maximum long-side pixels for the decoded bitmap. `0` keeps the source
+     * resolution; default [DEFAULT_MAX_LONG_SIDE] matches phone feed size.
+     */
+    private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE,
+) {
     private val pool = arrayOfNulls<Bitmap>(3)
     private var next = 0
     private val options =
@@ -284,13 +312,22 @@ class JpegFrameDecoder {
 
     /** Decodes [jpeg] into the next pooled bitmap; null if the data is invalid. */
     fun decode(jpeg: ByteArray): Bitmap? {
+        options.inSampleSize = 1
+        if (maxLongSide > 0) {
+            options.inJustDecodeBounds = true
+            options.inBitmap = null
+            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
+            options.inSampleSize =
+                jpegSampleSizeForLongSide(options.outWidth, options.outHeight, maxLongSide)
+            options.inJustDecodeBounds = false
+        }
+        // Prefer pool reuse; IllegalArgumentException resets the ring slot.
         options.inBitmap = pool[next]
         val decoded =
             try {
                 BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
             } catch (_: IllegalArgumentException) {
-                // Pooled bitmap incompatible (feed size changed) — decode fresh
-                // and let the ring re-fill at the new size.
+                // Pooled bitmap incompatible (size/sample change) — decode fresh.
                 options.inBitmap = null
                 BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
             } ?: return null
@@ -298,6 +335,26 @@ class JpegFrameDecoder {
         next = (next + 1) % pool.size
         return decoded
     }
+
+    companion object {
+        /**
+         * Phone feed long side (≈540p after sample-2 of 1080p). Full 1080p
+         * uploads were ~50 ms UI-thread draw on SM-A127F (gfxinfo).
+         */
+        const val DEFAULT_MAX_LONG_SIDE: Int = 960
+    }
+}
+
+/** Power-of-two [BitmapFactory.Options.inSampleSize] so long side ≤ [maxLongSide]. */
+internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int): Int {
+    if (maxLongSide <= 0 || width <= 0 || height <= 0) return 1
+    val longSide = maxOf(width, height)
+    var sample = 1
+    // Grow sample until decoded long side is at most maxLongSide.
+    while (longSide / sample > maxLongSide) {
+        sample *= 2
+    }
+    return sample
 }
 
 /**
@@ -534,19 +591,21 @@ fun LiveFeedView(
         )
     } else {
         Canvas(modifier) {
-            val image = presentationState?.image ?: fallbackFrame.value ?: return@Canvas
+            val androidBitmap =
+                presentationState?.bitmap
+                    ?: fallbackFrame.value?.asAndroidBitmap()
+                    ?: return@Canvas
             val content =
                 liveFeedContentRect(
                     containerWidth = size.width,
                     containerHeight = size.height,
-                    sourceWidth = image.width,
-                    sourceHeight = image.height,
+                    sourceWidth = androidBitmap.width,
+                    sourceHeight = androidBitmap.height,
                     aspectFill = aspectFill,
                 ) ?: return@Canvas
             val dstSize = IntSize(content.width, content.height)
             val dstOffset = IntOffset(content.left, content.top)
             val activeRenderer = renderer
-            val androidBitmap = image.asAndroidBitmap()
             val frameIsOriginalSdr = decodedLiveFeedColorMode(androidBitmap) == LiveFeedColorMode.SDR
             if (Build.VERSION.SDK_INT >= 33 && activeRenderer != null && frameIsOriginalSdr) {
                 activeRenderer.draw(
@@ -558,7 +617,17 @@ fun LiveFeedView(
                     dstHeight = dstSize.height.toFloat(),
                 )
             } else {
-                drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
+                // Native blit — skips Compose ImageBitmap wrapper/upload each frame.
+                drawIntoCanvas { canvas ->
+                    val dst =
+                        android.graphics.Rect(
+                            dstOffset.x,
+                            dstOffset.y,
+                            dstOffset.x + dstSize.width,
+                            dstOffset.y + dstSize.height,
+                        )
+                    canvas.nativeCanvas.drawBitmap(androidBitmap, null, dst, null)
+                }
             }
         }
     }

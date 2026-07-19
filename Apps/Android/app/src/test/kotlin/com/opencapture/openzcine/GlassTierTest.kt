@@ -29,11 +29,18 @@ class GlassTierTest {
 
     @Test
     fun demoteStopsAtFlatFloor() {
-        val glass = MonitorGlass(GlassTier.FULL)
+        val glass = MonitorGlass(GlassTier.FULL, allowDemote = true)
         glass.demote()
         assertEquals(GlassTier.FLAT, glass.tier)
         glass.demote()
         assertEquals(GlassTier.FLAT, glass.tier)
+    }
+
+    @Test
+    fun demoteIsNoOpWhenNotAllowed() {
+        val glass = MonitorGlass(GlassTier.FULL, allowDemote = false)
+        glass.demote()
+        assertEquals(GlassTier.FULL, glass.tier)
     }
 
     @Test

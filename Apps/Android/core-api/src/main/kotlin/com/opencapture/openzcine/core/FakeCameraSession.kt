@@ -13,9 +13,9 @@ import kotlinx.coroutines.flow.update
  * when one is provided, otherwise falls back to
  * [CameraSessionState.Disconnected] (the "no camera found" outcome).
  *
- * Seeds resolution/codec readouts and option lists so demo chrome can open
- * the same drums iOS shows in `CameraDisplayState.preview` / demo sessions.
- * [applyControl] applies those two controls locally (no PTP).
+ * Seeds the same capture-bar + top-deck readouts/options iOS shows in
+ * `CameraDisplayState.preview` / demo sessions so every capture cell is
+ * actionable offline. [applyControl] applies those controls locally (no PTP).
  *
  * @property discoverable The camera this fake "finds", or `null` to
  *   simulate an empty network.
@@ -70,6 +70,42 @@ public class FakeCameraSession(
             throw CameraControlException.NotConnected
         }
         when (control) {
+            CameraControl.ISO ->
+                mutableProperties.update {
+                    it.copy(iso = label.toLongOrNull() ?: it.iso)
+                }
+            CameraControl.BASE_ISO ->
+                mutableProperties.update { it.copy(baseIso = label) }
+            CameraControl.SHUTTER ->
+                mutableProperties.update {
+                    if (label.contains('°')) {
+                        it.copy(shutterAngle = label, shutterMode = CameraShutterMode.ANGLE)
+                    } else {
+                        it.copy(shutterSpeed = label, shutterMode = CameraShutterMode.SPEED)
+                    }
+                }
+            CameraControl.SHUTTER_MODE ->
+                mutableProperties.update {
+                    it.copy(
+                        shutterMode =
+                            when (label) {
+                                "Speed" -> CameraShutterMode.SPEED
+                                else -> CameraShutterMode.ANGLE
+                            },
+                    )
+                }
+            CameraControl.SHUTTER_LOCK ->
+                mutableProperties.update {
+                    it.copy(shutterLocked = label.equals("Locked", ignoreCase = true))
+                }
+            CameraControl.IRIS ->
+                mutableProperties.update { it.copy(iris = label) }
+            CameraControl.FOCUS_MODE ->
+                mutableProperties.update { it.copy(focusMode = label) }
+            CameraControl.FOCUS_AREA ->
+                mutableProperties.update { it.copy(focusArea = label) }
+            CameraControl.FOCUS_SUBJECT ->
+                mutableProperties.update { it.copy(focusSubject = label) }
             CameraControl.RESOLUTION_FRAMERATE ->
                 mutableProperties.update { it.copy(resolutionFrameRate = label) }
             CameraControl.CODEC ->
@@ -101,17 +137,83 @@ public class FakeCameraSession(
     }
 
     private companion object {
-        /** Mirrors iOS demo seeds + `CameraPicker.options` for resolution/codec. */
+        /**
+         * Mirrors iOS `CameraDisplayState.preview` + `CameraPicker.options` so
+         * the capture strip reads ISO 800 · 180° · f/2.8 · 5560K · AF-C and
+         * every picker drum has options offline.
+         */
         val DEMO_PROPERTIES =
             CameraPropertySnapshot(
+                iso = 800,
+                baseIso = "Low",
+                shutterMode = CameraShutterMode.ANGLE,
+                shutterLocked = false,
+                shutterAngle = "180°",
+                shutterSpeed = "1/50",
+                iris = "f/2.8",
+                focusMode = "AF-C",
+                focusArea = "Wide-L",
+                focusSubject = "People",
                 resolutionFrameRate = "6K · 25p",
                 codec = "R3D NE",
                 codecSelection = "R3D NE",
-                whiteBalanceMode = "Auto",
-                whiteBalanceKelvin = 5_600,
+                whiteBalanceMode = "Color temp",
+                whiteBalanceKelvin = 5_560,
                 whiteBalanceTint = "Neutral",
                 controlCapabilities =
                     CameraControlCapabilities(
+                        isoValues =
+                            listOf(
+                                "200",
+                                "250",
+                                "320",
+                                "400",
+                                "500",
+                                "640",
+                                "800",
+                                "1000",
+                                "1250",
+                                "1600",
+                                "2000",
+                                "2500",
+                                "3200",
+                            ),
+                        baseIso = listOf("Low", "High"),
+                        // Active angle circuit (iOS hardcoded angle ladder for demo).
+                        shutterValues =
+                            listOf(
+                                "5.6°",
+                                "11.2°",
+                                "22.5°",
+                                "45°",
+                                "72°",
+                                "86.4°",
+                                "90°",
+                                "108°",
+                                "144°",
+                                "172°",
+                                "180°",
+                                "216°",
+                                "288°",
+                                "346°",
+                                "360°",
+                            ),
+                        shutterModes = listOf("Angle", "Speed"),
+                        shutterLocks = listOf("Unlocked", "Locked"),
+                        irisValues =
+                            listOf(
+                                "f/1.4",
+                                "f/2.0",
+                                "f/2.8",
+                                "f/4.0",
+                                "f/5.6",
+                                "f/8.0",
+                                "f/11.0",
+                            ),
+                        focusModes =
+                            listOf("MF", "AF-S", "AF-C", "AF-F", "Wide-L", "Auto Subject"),
+                        focusAreas = listOf("Wide-L", "Normal", "Pinpoint", "Subject"),
+                        focusSubjects = listOf("People", "Animal", "Vehicle", "Off"),
                         resolutionFrameRates =
                             listOf(
                                 "6K · 24p",
@@ -128,14 +230,24 @@ public class FakeCameraSession(
                                 "ProRes 422 HQ",
                                 "H.265 10-bit",
                             ),
+                        // Nikon K dial steps (~10 mired; 5560 not 5600) + presets.
                         whiteBalanceValues =
                             listOf(
+                                "2500K", "2560K", "2630K", "2700K", "2780K", "2860K",
+                                "2940K", "3030K", "3130K", "3230K", "3330K", "3450K",
+                                "3570K", "3700K", "3850K", "4000K", "4170K", "4350K",
+                                "4550K", "4760K", "5000K", "5260K", "5560K", "5880K",
+                                "6250K", "6670K", "7140K", "7690K", "8330K", "9090K",
+                                "10000K",
                                 "Auto",
                                 "Natural auto",
                                 "Sunny",
                                 "Cloudy",
-                                "5600K",
-                                "3200K",
+                                "Shade",
+                                "Incandescent",
+                                "Fluorescent",
+                                "Flash",
+                                "Preset",
                             ),
                         // Sparse sample of the 13×13 grid so the Tint tab is
                         // present; the pad can still emit any valid label.

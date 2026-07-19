@@ -53,6 +53,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameTimecode
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
@@ -167,6 +168,27 @@ fun CameraTimecodeReadout(
     }
 }
 
+/**
+ * Leaf timecode readout that alone observes [MonitorTimecodeRetention] state.
+ * Call sites must not read the retention in a large parent body — that was
+ * recomposing the entire monitor chrome on every live frame (~25 Hz).
+ */
+@Composable
+internal fun RetainedCameraTimecodeReadout(
+    retention: MonitorTimecodeRetention,
+    sessionState: CameraSessionState,
+    sizeSp: Float,
+    weight: FontWeight = FontWeight.Normal,
+    modifier: Modifier = Modifier,
+) {
+    CameraTimecodeReadout(
+        timecode = retention.timecodeFor(sessionState),
+        sizeSp = sizeSp,
+        weight = weight,
+        modifier = modifier,
+    )
+}
+
 /** STBY/REC pill: state dot + label in a glass capsule (iOS `RecordChip`). */
 @Composable
 fun RecordChip(recording: Boolean) {
@@ -187,6 +209,8 @@ fun RecordChip(recording: Boolean) {
                 ),
             style = chromeStyle(11f, FontWeight.Bold, mono = true),
             color = if (recording) LiveDesign.text else LiveDesign.muted,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
@@ -228,6 +252,7 @@ fun ReadoutPill(
             style = chromeStyle(15f, FontWeight.Medium, mono = true),
             color = if (active) LiveDesign.accent else LiveDesign.text,
             maxLines = 1,
+            softWrap = false,
         )
     }
 }
@@ -252,11 +277,15 @@ fun FpsChip(signalBars: Int, fps: String) {
             stringResource(R.string.monitor_fps),
             style = chromeStyle(8f, FontWeight.Bold, mono = true),
             color = LiveDesign.faint,
+            maxLines = 1,
         )
+        // Mirror iOS: two-decimal FPS must never wrap to "25.0" / "0".
         Text(
             fps,
             style = chromeStyle(12f, FontWeight.Medium, mono = true),
             color = LiveDesign.text,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
@@ -265,15 +294,39 @@ fun FpsChip(signalBars: Int, fps: String) {
  * One exposure readout: small label over a large mono value (iOS
  * `CaptureSettingButton`). [widestValue] reserves the cell's width so the bar
  * never shifts when a value changes — the iOS `widestValue` hidden-overlay trick.
+ *
+ * Active pickers tint label + value accent (iOS `isActive`); WB presets can
+ * render as [wbIcon] instead of text; [controlLocked] shows a lock glyph.
  */
 @Composable
-fun CaptureSettingCell(label: String, value: String, widestValue: String = value) {
+internal fun CaptureSettingCell(
+    label: String,
+    value: String,
+    widestValue: String = value,
+    active: Boolean = false,
+    controlLocked: Boolean = false,
+    wbIcon: CaptureWbIcon? = null,
+) {
+    val labelColor = if (active) LiveDesign.accent.copy(alpha = 0.85f) else LiveDesign.faint
+    val valueColor = if (active) LiveDesign.accent else LiveDesign.text
     Column(
         modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Text(label, style = chromeStyle(9f, FontWeight.SemiBold), color = LiveDesign.faint)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, style = chromeStyle(9f, FontWeight.SemiBold), color = labelColor)
+            if (controlLocked) {
+                PadlockGlyph(
+                    tint = LiveDesign.accent.copy(alpha = 0.9f),
+                    filled = true,
+                    modifier = Modifier.size(7.5.dp, 9.dp),
+                )
+            }
+        }
         Box(contentAlignment = Alignment.Center) {
             Text(
                 widestValue,
@@ -281,12 +334,16 @@ fun CaptureSettingCell(label: String, value: String, widestValue: String = value
                 color = Color.Transparent,
                 maxLines = 1,
             )
-            Text(
-                value,
-                style = chromeStyle(19f, FontWeight.Medium, mono = true),
-                color = LiveDesign.text,
-                maxLines = 1,
-            )
+            if (wbIcon != null) {
+                CaptureWbGlyph(icon = wbIcon, tint = valueColor)
+            } else {
+                Text(
+                    value,
+                    style = chromeStyle(19f, FontWeight.Medium, mono = true),
+                    color = valueColor,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

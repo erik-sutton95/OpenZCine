@@ -39,11 +39,30 @@ internal data class MonitorBatteryPresentation(
  */
 internal class MonitorTimecodeRetention(private val cameraIdentity: CameraIdentity?) {
     private var retainedTimecode: LiveFrameTimecode? by mutableStateOf(null)
+    private var lastPublishNanos: Long = 0L
 
-    /** Retains the exact timecode state paired with the latest displayed frame. */
+    /**
+     * Retains the exact timecode state paired with the latest displayed frame.
+     * Skips Snapshot write when unchanged, and caps UI publishes at ~10 Hz so
+     * the top bar does not recompose on every live frame (~25 Hz).
+     */
     fun accept(timecode: LiveFrameTimecode?): Unit {
-        retainedTimecode =
+        val next =
             if (cameraIdentity == null) null else authoritativeTimecode(timecode)
+        if (next == retainedTimecode) return
+        val now = System.nanoTime()
+        // Always publish the first value and any second-boundary jump immediately.
+        val secondChanged =
+            retainedTimecode == null ||
+                next == null ||
+                retainedTimecode!!.hour != next.hour ||
+                retainedTimecode!!.minute != next.minute ||
+                retainedTimecode!!.second != next.second
+        if (!secondChanged && lastPublishNanos != 0L && now - lastPublishNanos < 100_000_000L) {
+            return
+        }
+        lastPublishNanos = now
+        retainedTimecode = next
     }
 
     /** Returns the retained value only while the same camera is still connected. */

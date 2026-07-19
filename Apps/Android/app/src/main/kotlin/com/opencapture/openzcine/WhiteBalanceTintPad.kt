@@ -7,7 +7,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,7 +32,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -43,6 +45,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.Paint as AndroidPaint
+import android.graphics.Rect as AndroidRect
+import android.graphics.Typeface
 import kotlin.math.roundToInt
 
 /**
@@ -152,6 +157,7 @@ internal fun WhiteBalanceTintPad(
                     Canvas(Modifier.fillMaxSize()) {
                         val stroke = 1.dp.toPx()
                         val inset = 18.dp.toPx()
+                        val edge = 10.dp.toPx()
                         drawLine(
                             LiveDesign.hairline,
                             Offset(size.width / 2f, inset),
@@ -164,32 +170,24 @@ internal fun WhiteBalanceTintPad(
                             Offset(size.width - inset, size.height / 2f),
                             stroke,
                         )
+                        // iOS axisLetter uses `.position(x,y)` — glyph centre on the
+                        // axis point. Paint + getTextBounds centres the actual cap
+                        // ink (not the loose Text layout box, which sits low).
+                        drawAxisLetter("G", Color.Green.copy(alpha = 0.85f), size.width / 2f, edge)
+                        drawAxisLetter(
+                            "M",
+                            Color(0xFFFF2D95).copy(alpha = 0.85f),
+                            size.width / 2f,
+                            size.height - edge,
+                        )
+                        drawAxisLetter("B", Color.Blue.copy(alpha = 0.85f), edge, size.height / 2f)
+                        drawAxisLetter(
+                            "A",
+                            Color(0xFFFF9500).copy(alpha = 0.85f),
+                            size.width - edge,
+                            size.height / 2f,
+                        )
                     }
-                    // iOS axisLetter positions: G/M/B/A at 10pt from edges on axes.
-                    AxisLetter(
-                        letter = "G",
-                        color = Color.Green.copy(alpha = 0.85f),
-                        xFrac = 0.5f,
-                        yFrac = 10f / PAD_SIDE_DP,
-                    )
-                    AxisLetter(
-                        letter = "M",
-                        color = Color(0xFFFF2D95).copy(alpha = 0.85f),
-                        xFrac = 0.5f,
-                        yFrac = (PAD_SIDE_DP - 10f) / PAD_SIDE_DP,
-                    )
-                    AxisLetter(
-                        letter = "B",
-                        color = Color.Blue.copy(alpha = 0.85f),
-                        xFrac = 10f / PAD_SIDE_DP,
-                        yFrac = 0.5f,
-                    )
-                    AxisLetter(
-                        letter = "A",
-                        color = Color(0xFFFF9500).copy(alpha = 0.85f),
-                        xFrac = (PAD_SIDE_DP - 10f) / PAD_SIDE_DP,
-                        yFrac = 0.5f,
-                    )
 
                     val thumbX = thumbOffset(ab, range.first, range.last, sidePx)
                     val thumbY = sidePx - thumbOffset(gm, range.first, range.last, sidePx)
@@ -308,31 +306,27 @@ private fun TintChevronArrow(
     }
 }
 
-@Composable
-private fun BoxScope.AxisLetter(
-    letter: String,
-    color: Color,
-    xFrac: Float,
-    yFrac: Float,
-) {
-    val density = LocalDensity.current
-    // Approximate iOS .position(x,y) with center-aligned text.
-    Text(
-        letter,
-        modifier =
-            Modifier
-                .align(Alignment.TopStart)
-                .offset {
-                    val w = with(density) { PAD_SIDE_DP.dp.toPx() }
-                    IntOffset(
-                        (w * xFrac - with(density) { 4.dp.toPx() }).roundToInt(),
-                        (w * yFrac - with(density) { 6.dp.toPx() }).roundToInt(),
-                    )
-                },
-        color = color,
-        fontSize = 9.sp,
-        fontWeight = FontWeight.Bold,
-    )
+/**
+ * Draw a bold 9sp axis letter with its **glyph ink** centred on `(x, y)`.
+ *
+ * Compose `Text` layout boxes include font ascent/descent padding that sits
+ * capital letters slightly below the geometric centre — enough that G/M/B/A
+ * all looked a touch low vs the crosshair. `getTextBounds` tracks the real
+ * ink, matching iOS SwiftUI `.position` optical placement.
+ */
+private fun DrawScope.drawAxisLetter(letter: String, color: Color, x: Float, y: Float) {
+    val paint =
+        AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG).apply {
+            this.color = color.toArgb()
+            textSize = 9.sp.toPx()
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = AndroidPaint.Align.CENTER
+        }
+    val bounds = AndroidRect()
+    paint.getTextBounds(letter, 0, letter.length, bounds)
+    // bounds are relative to the baseline; centre the ink box on (x, y).
+    val baseline = y - (bounds.top + bounds.bottom) / 2f
+    drawContext.canvas.nativeCanvas.drawText(letter, x, baseline, paint)
 }
 
 private fun thumbOffset(value: Int, lower: Int, upper: Int, sidePx: Float): Float {

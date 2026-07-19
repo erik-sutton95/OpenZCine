@@ -22,6 +22,7 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.highlight.HighlightStyle
 
 // Liquid glass via Kyant0/AndroidLiquidGlass (io.github.kyant0:backdrop).
 //
@@ -63,13 +64,16 @@ fun resolveTier(sdkInt: Int, override: String? = null): GlassTier {
 }
 
 /**
- * Sustained frame-budget detector: demote FULL → FLAT under sustained jank.
+ * Sustained frame-budget detector used only when [MonitorGlass.allowDemote]
+ * is true. Defaults are intentionally loose: live-view decode pacing on
+ * mid-range phones routinely sits near 30–50 ms even without glass, so a
+ * tight 48 ms / 10 % window demoted FULL → FLAT within ~20 s on Galaxy A12.
  */
 class FrameBudgetWindow(
-    private val budgetNanos: Long = 48_000_000L,
-    private val window: Int = 240,
-    private val maxOverBudget: Int = 24,
-    private val warmup: Int = 60,
+    private val budgetNanos: Long = 100_000_000L,
+    private val window: Int = 600,
+    private val maxOverBudget: Int = 360,
+    private val warmup: Int = 120,
 ) {
     private var skipped = 0
     private var seen = 0
@@ -91,25 +95,49 @@ class FrameBudgetWindow(
 }
 
 /**
- * Monitor glass session: tier + Kyant [LayerBackdrop] for chrome sampling.
+ * Monitor glass session: tier + Kyant [LayerBackdrop]s for sampling.
  *
- * Create the backdrop with [com.kyant.backdrop.backdrops.rememberLayerBackdrop]
- * and attach it to the live feed (or full monitor content) via
- * [com.kyant.backdrop.backdrops.layerBackdrop].
+ * **Two recorded layers** (Kyant coordinates-dependent pattern):
+ * - [layerBackdrop] / feed: live-view only — bottom bars and chips sample this.
+ * - [overlayBackdrop] / scene: feed + chrome — pickers and assist options
+ *   sample this so UI behind a popup actually blurs (not only the video).
+ *
+ * Attach with [com.kyant.backdrop.backdrops.layerBackdrop]. Popups must be
+ * **siblings outside** the scene recording so they do not loop.
+ *
+ * @param allowDemote When true, [MonitorGlassBudgetLoop] may lower FULL → FLAT
+ *   under sustained jank. API gating still uses [resolveTier].
  */
 class MonitorGlass(
     initialTier: GlassTier,
     val layerBackdrop: LayerBackdrop? = null,
+    /**
+     * Full-scene recording for overlay glass (pickers). Falls back to
+     * [layerBackdrop] when null.
+     */
+    val overlayBackdrop: LayerBackdrop? = null,
+    val allowDemote: Boolean = false,
 ) {
     var tier: GlassTier by mutableStateOf(initialTier)
         private set
+
+    init {
+        runCatching {
+            Log.i(
+                TAG,
+                "glass session tier=$initialTier allowDemote=$allowDemote " +
+                    "sdk=${Build.VERSION.SDK_INT} feedBackdrop=${layerBackdrop != null} " +
+                    "overlayBackdrop=${overlayBackdrop != null}",
+            )
+        }
+    }
 
     /** No-op: Kyant records the layer; no per-frame bitmap grab. */
     @Suppress("UNUSED_PARAMETER")
     fun submit(bitmap: android.graphics.Bitmap) = Unit
 
     fun demote() {
-        if (tier == GlassTier.FLAT) return
+        if (!allowDemote || tier == GlassTier.FLAT) return
         runCatching {
             Log.w(TAG, "sustained frame-budget overrun — degrading glass FULL -> FLAT")
         }
@@ -122,41 +150,93 @@ class MonitorGlass(
  */
 val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
 
-/** Warm surface tint drawn over the frosted backdrop (dark monitor chrome). */
-private val GlassSurfaceTint = Color(0.105f, 0.092f, 0.073f, 0.28f)
+/**
+ * Surface over the frosted backdrop for FULL glass (outer frames / bars).
+ * Kept darker to match iOS `Glass.regular` panels.
+ */
+private val GlassSurfaceTint = Color(0.105f, 0.092f, 0.073f, 0.56f)
+
+/**
+ * Nested chips inside a glass panel (top-bar STBY / resolution / codec / FPS).
+ * Independent of [GlassSurfaceTint]: stacked on the already-dark outer panel,
+ * so chips must stay lighter than the frame. 0.74 with surface 0.56 made pills
+ * too dark — ease chips only.
+ */
+private val ChipGlassFill = Color(0.105f, 0.092f, 0.073f, 0.48f)
+
+/**
+ * Specular edge highlight for FULL glass. Tuned on device: mid was faint, 2×
+ * (0.84 / white 0.52) a touch strong — settle just under that.
+ */
+private val GlassEdgeHighlight =
+    Highlight(
+        width = 0.45.dp,
+        blurRadius = 0.3.dp,
+        alpha = 0.70f,
+        style =
+            HighlightStyle.Default(
+                color = Color.White.copy(alpha = 0.42f),
+                falloff = 1.7f,
+            ),
+    )
 
 /**
  * iOS `liquidGlass` entry point — Kyant `drawBackdrop` on API 33+ FULL,
- * opaque flat fill otherwise.
+ * opaque flat fill otherwise. Samples the **feed** backdrop (bars over video).
  */
 @Composable
 fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
     val glass = LocalMonitorGlass.current
-    val backdrop = glass?.layerBackdrop
-    val tier = glass?.tier ?: GlassTier.FLAT
+    return glassBackdrop(
+        backdrop = glass?.layerBackdrop,
+        tier = glass?.tier ?: GlassTier.FLAT,
+        shape = shape,
+    )
+}
+
+/**
+ * Glass for popups / sheets that must blur **chrome + feed** (iOS picker /
+ * assist panels). Samples [MonitorGlass.overlayBackdrop] when present.
+ */
+@Composable
+fun Modifier.overlayGlass(shape: Shape = ChromeShape): Modifier {
+    val glass = LocalMonitorGlass.current
+    return glassBackdrop(
+        backdrop = glass?.overlayBackdrop ?: glass?.layerBackdrop,
+        tier = glass?.tier ?: GlassTier.FLAT,
+        shape = shape,
+    )
+}
+
+@Composable
+private fun Modifier.glassBackdrop(
+    backdrop: LayerBackdrop?,
+    tier: GlassTier,
+    shape: Shape,
+): Modifier {
     if (backdrop == null || tier == GlassTier.FLAT || Build.VERSION.SDK_INT < 33) {
         return background(LiveDesign.glassOpaque, shape)
             .border(1.dp, LiveDesign.hairlineStrong, shape)
     }
 
-    // 1:1 Kyant catalog effect chain (DialogContent / LiquidButton style):
-    // vibrancy → blur → lens.
+    // Approximate iOS Glass.regular: vibrancy → soft blur → lens edge, then a
+    // light warm darken (not LiveDesign.glassOpaque / 0.64 slab).
     return this.drawBackdrop(
         backdrop = backdrop,
         shape = { shape },
         effects = {
             vibrancy()
-            blur(8f.dp.toPx())
+            blur(12f.dp.toPx())
             // Lens requires CornerBasedShape (RoundedCornerShape / CircleShape).
             if (shape is CornerBasedShape) {
                 lens(
-                    refractionHeight = 12f.dp.toPx(),
-                    refractionAmount = 24f.dp.toPx(),
+                    refractionHeight = 10f.dp.toPx(),
+                    refractionAmount = 20f.dp.toPx(),
                     depthEffect = true,
                 )
             }
         },
-        highlight = { Highlight.Default },
+        highlight = { GlassEdgeHighlight },
         onDrawSurface = {
             drawRect(GlassSurfaceTint)
         },
@@ -164,17 +244,21 @@ fun Modifier.glass(shape: Shape = ChromeShape): Modifier {
 }
 
 /**
- * Nested chips inside a glass slab: opaque flat (no second backdrop sample).
+ * Nested chips inside a glass slab (iOS nested `glassCapsule` / `liquidGlass`).
+ * Soft fill + muted hairline — not [LiveDesign.glassOpaque], and not the full
+ * [LiveDesign.hairlineStrong] stroke that reads as a double rim vs iOS.
  */
 fun Modifier.chipGlass(shape: Shape = ChromeShape): Modifier =
-    background(LiveDesign.glassOpaque, shape).border(1.dp, LiveDesign.hairline, shape)
+    background(ChipGlassFill, shape)
+        .border(0.5.dp, LiveDesign.hairline.copy(alpha = 0.10f), shape)
 
 /**
- * Runs the frame-budget demote loop for a [MonitorGlass] session.
- * Stops once the tier is FLAT.
+ * Optional frame-budget demote loop. No-op unless [MonitorGlass.allowDemote]
+ * is true (off by default — see [MonitorGlass]).
  */
 @Composable
 fun MonitorGlassBudgetLoop(glass: MonitorGlass) {
+    if (!glass.allowDemote || glass.tier == GlassTier.FLAT) return
     LaunchedEffect(glass) {
         val budget = FrameBudgetWindow()
         var last = 0L

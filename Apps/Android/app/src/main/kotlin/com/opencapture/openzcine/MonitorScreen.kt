@@ -87,6 +87,7 @@ import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
@@ -344,15 +345,27 @@ internal fun MonitorScreen(
         (swiftLiveFrameSource?.previewState ?: noPreviewApplication).collectAsState()
     MonitorSessionRecoveryEffect(session, enabled = sessionRecoveryEnabled)
 
-    // Kyant layer-backdrop glass (AndroidLiquidGlass). The feed content is
-    // recorded via Modifier.layerBackdrop; chrome samples it with drawBackdrop.
-    // Older / demoted devices fall back to FLAT opaque fill.
-    val layerBackdrop = rememberLayerBackdrop()
+    // Kyant layer-backdrop glass (AndroidLiquidGlass):
+    //  • feedBackdrop — live view only; bars/chips sample with Modifier.glass.
+    //  • sceneBackdrop — feed + chrome; pickers/assist use Modifier.overlayGlass
+    //    so UI under a popup actually blurs (sibling-overlay pattern).
+    // Older APIs fall back to FLAT opaque fill (see resolveTier).
+    val feedBackdrop = rememberLayerBackdrop()
+    val sceneBackdrop =
+        rememberLayerBackdrop {
+            drawRect(LiveDesign.background)
+            drawContent()
+        }
     val glass =
-        remember(glassTierOverride, layerBackdrop) {
+        remember(glassTierOverride, feedBackdrop, sceneBackdrop) {
+            val tier = resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride)
             MonitorGlass(
-                resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride),
-                layerBackdrop = layerBackdrop,
+                tier,
+                layerBackdrop = feedBackdrop,
+                overlayBackdrop = sceneBackdrop,
+                // Pin FULL only when the operator explicitly forces it; otherwise
+                // allow frame-budget demote so low-end testing is realistic.
+                allowDemote = glassTierOverride?.lowercase() != "full",
             )
         }
     MonitorGlassBudgetLoop(glass)
@@ -475,6 +488,9 @@ internal fun MonitorScreen(
     }
     var pendingCommandControl by remember { mutableStateOf<CameraControl?>(null) }
     var commandControlFeedback by remember { mutableStateOf<CommandControlFeedback?>(null) }
+    // iOS `captureBarFrame`: measured glass pill so the exposure picker
+    // trailing-aligns to the content-hugging bar (not the wider zone slot).
+    var measuredCaptureBar by remember { mutableStateOf<ZoneFrame?>(null) }
     LaunchedEffect(effectiveDisplayMode) {
         if (displayMode != effectiveDisplayMode) displayMode = effectiveDisplayMode
     }
@@ -973,7 +989,8 @@ internal fun MonitorScreen(
         val timecodeOwner = monitorTimecodeOwner(sessionState)
         val timecodeRetention =
             remember(session, timecodeOwner) { MonitorTimecodeRetention(timecodeOwner) }
-        val presentedTimecode = timecodeRetention.timecodeFor(sessionState)
+        // Do not read timecodeRetention here — that recomposes the whole monitor
+        // chrome at feed rate. Leaf RetainedCameraTimecodeReadout observes it.
         // iOS top-bar semantics: readouts seed from the preview values and
         // hold the last camera readback rather than blanking to "—"; FPS is
         // the live-measured delivery rate ("READY" before the first frame);
@@ -1285,10 +1302,19 @@ internal fun MonitorScreen(
                 if (focusPointLocked) R.string.focus_unlock_position
                 else R.string.focus_lock_position,
             )
+        // Full-scene recording so overlay glass (pickers) blurs chrome + feed.
+        // Kyant sibling pattern: this box records; popups are drawn *outside* it.
+        val sceneLayer =
+            if (glass.tier == GlassTier.FULL && glass.overlayBackdrop != null) {
+                Modifier.layerBackdrop(glass.overlayBackdrop)
+            } else {
+                Modifier
+            }
+        Box(Modifier.fillMaxSize().then(sceneLayer)) {
         if (!isCommand) {
             Box(
                 Modifier.zone(zones.feed)
-                    // Kyant: record this layer so glass chrome can sample it.
+                    // Feed-only recording for bar/chip glass (over the video).
                     .then(
                         if (glass.tier == GlassTier.FULL && glass.layerBackdrop != null) {
                             Modifier.layerBackdrop(glass.layerBackdrop)
@@ -1427,7 +1453,8 @@ internal fun MonitorScreen(
                     isFill = isPortraitFill,
                     locked = locked,
                     recording = recording,
-                    timecode = presentedTimecode,
+                    timecodeRetention = timecodeRetention,
+                    sessionState = sessionState,
                     // iOS portrait centers the same toggle-aware, retention-held
                     // media readout the landscape pill shows.
                     cameraReadouts = cameraReadouts.copy(media = topBarMedia),
@@ -1471,6 +1498,14 @@ internal fun MonitorScreen(
                             )
                         commandControlFeedback = null
                     },
+                    onShutterLongPress = {
+                        toggleShutterLockOnCamera(
+                            captureSettings = captureSettings,
+                            cameraProperties = cameraProperties,
+                            applyCameraControl = applyCameraControl,
+                        )
+                    },
+                    onCaptureBarBounds = { measuredCaptureBar = it },
                     onOpenCommandControl = {
                         activeAssistOptions = null
                         activeMonitorPickerKind = null
@@ -1493,7 +1528,8 @@ internal fun MonitorScreen(
                     val top = maxOf(14f, safeTop)
                     CommandDashboard(
                         recording = recording,
-                        timecode = presentedTimecode,
+                        timecodeRetention = timecodeRetention,
+                        sessionState = sessionState,
                         presentation = commandPresentation,
                         controlsEnabled = commandControlsEnabled,
                         pendingControl = pendingCommandControl,
@@ -1531,7 +1567,8 @@ internal fun MonitorScreen(
                                 InfoPill(
                                     compact = isClean,
                                     recording = recording,
-                                    timecode = presentedTimecode,
+                                    timecodeRetention = timecodeRetention,
+                                    sessionState = sessionState,
                                     recReadoutVisible = operatorSettings.recReadoutVisible.value,
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
@@ -1610,6 +1647,14 @@ internal fun MonitorScreen(
                                                 )
                                             commandControlFeedback = null
                                         },
+                                        onShutterLongPress = {
+                                            toggleShutterLockOnCamera(
+                                                captureSettings = captureSettings,
+                                                cameraProperties = cameraProperties,
+                                                applyCameraControl = applyCameraControl,
+                                            )
+                                        },
+                                        onBarBoundsInRoot = { measuredCaptureBar = it },
                                         maxContentWidth = strip.width.dp,
                                     )
                                 }
@@ -1836,22 +1881,36 @@ internal fun MonitorScreen(
                 }
             }
         }
+        } // end sceneLayer (feed + chrome under popups)
 
         if (!isCommand && !isClean) {
             activeMonitorPicker?.let { picker ->
-                val anchor =
-                    if (zones.captureStrip != null) {
-                        MonitorPickerAnchor.CAPTURE_STRIP
-                    } else {
-                        MonitorPickerAnchor.CONTROLS_GRID
-                    }
+                // iOS: resolution/codec drop *down* from the top deck on landscape;
+                // every other picker (and all portrait pickers) rise from the capture strip.
+                val isTopDropDown =
+                    !isPortrait && picker.kind.isTopBarPicker()
                 val pickerFrame =
-                    monitorPickerFrame(
-                        viewport = physicalViewport,
-                        zones = zones,
-                        isPortrait = isPortrait,
-                        anchor = anchor,
-                    )
+                    if (isTopDropDown) {
+                        monitorTopBarPickerFrame(
+                            viewport = physicalViewport,
+                            zones = zones,
+                            isCommandCenter = false,
+                        )
+                    } else {
+                        val anchor =
+                            if (zones.captureStrip != null) {
+                                MonitorPickerAnchor.CAPTURE_STRIP
+                            } else {
+                                MonitorPickerAnchor.CONTROLS_GRID
+                            }
+                        monitorPickerFrame(
+                            viewport = physicalViewport,
+                            zones = zones,
+                            isPortrait = isPortrait,
+                            anchor = anchor,
+                            measuredCaptureBar = measuredCaptureBar,
+                        )
+                    }
                 if (pickerFrame.width > 0f && pickerFrame.height >= 120f) {
                     CompositionLocalProvider(LocalMonitorGlass provides glass) {
                         MonitorControlPickerPanel(
@@ -1867,6 +1926,7 @@ internal fun MonitorScreen(
                                     commandControlFeedback = null
                                 }
                             },
+                            slideFromTop = isTopDropDown,
                         )
                     }
                 }
@@ -1959,14 +2019,16 @@ internal fun MonitorScreen(
         )
     }
     activeCommandControl?.let { request ->
-        CommandControlDialog(
-            request = request,
-            controlsEnabled = commandControlsEnabled,
-            pendingControl = pendingCommandControl,
-            feedback = commandControlFeedback,
-            onSelect = { label -> applyCameraControl(request, label) },
-            onDismiss = { activeCommandControl = null },
-        )
+        CompositionLocalProvider(LocalMonitorGlass provides glass) {
+            CommandControlDialog(
+                request = request,
+                controlsEnabled = commandControlsEnabled,
+                pendingControl = pendingCommandControl,
+                feedback = commandControlFeedback,
+                onSelect = { label -> applyCameraControl(request, label) },
+                onDismiss = { activeCommandControl = null },
+            )
+        }
     }
 }
 
@@ -2034,7 +2096,8 @@ private fun RecOptionItem(text: String, onClick: () -> Unit) {
 private fun InfoPill(
     compact: Boolean,
     recording: Boolean,
-    timecode: LiveFrameTimecode?,
+    timecodeRetention: MonitorTimecodeRetention,
+    sessionState: CameraSessionState,
     recReadoutVisible: Boolean,
     codecReadoutVisible: Boolean,
     mediaReadoutVisible: Boolean,
@@ -2057,7 +2120,12 @@ private fun InfoPill(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (recReadoutVisible) RecordChip(recording)
-        CameraTimecodeReadout(timecode = timecode, sizeSp = 20f, weight = FontWeight.Medium)
+        RetainedCameraTimecodeReadout(
+            retention = timecodeRetention,
+            sessionState = sessionState,
+            sizeSp = 20f,
+            weight = FontWeight.Medium,
+        )
         if (!compact) {
             // Resolution/codec readouts are ALWAYS buttons like iOS's top-bar
             // readout buttons — press feedback included. The tap no-ops only
@@ -2114,7 +2182,8 @@ private fun PortraitChrome(
     isFill: Boolean,
     locked: Boolean,
     recording: Boolean,
-    timecode: LiveFrameTimecode?,
+    timecodeRetention: MonitorTimecodeRetention,
+    sessionState: CameraSessionState,
     cameraReadouts: MonitorCameraReadouts,
     assist: AssistState,
     operatorSettings: OperatorSettings,
@@ -2132,6 +2201,8 @@ private fun PortraitChrome(
     onOpenMedia: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenMonitorPicker: (MonitorPickerKind) -> Unit,
+    onShutterLongPress: (() -> Unit)? = null,
+    onCaptureBarBounds: ((ZoneFrame) -> Unit)? = null,
     resolutionPickerAvailable: Boolean = false,
     codecPickerAvailable: Boolean = false,
     onOpenCommandControl: (CommandControlRequest) -> Unit,
@@ -2150,7 +2221,8 @@ private fun PortraitChrome(
     // (which governs only the landscape pill).
     run {
         PortraitInfoBar(
-            timecode = timecode,
+            timecodeRetention = timecodeRetention,
+            sessionState = sessionState,
             media = cameraReadouts.media,
             cameraBatteryPercent = cameraReadouts.batteryPercent,
             cameraExternalPower = cameraReadouts.externalPower,
@@ -2223,7 +2295,8 @@ private fun PortraitChrome(
         if (isCommand) {
             PortraitCommandDashboard(
                 presentation = commandPresentation,
-                timecode = timecode,
+                timecodeRetention = timecodeRetention,
+                sessionState = sessionState,
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
                 onOpenControl = onOpenCommandControl,
@@ -2272,6 +2345,8 @@ private fun PortraitChrome(
                     controlsEnabled = commandControlsEnabled,
                     pendingControl = pendingCommandControl,
                     onOpenPicker = onOpenMonitorPicker,
+                    onShutterLongPress = onShutterLongPress,
+                    onBarBoundsInRoot = onCaptureBarBounds,
                     maxContentWidth = strip.width.dp,
                 )
             }
@@ -2356,7 +2431,8 @@ private fun PortraitChrome(
  */
 @Composable
 private fun PortraitInfoBar(
-    timecode: LiveFrameTimecode?,
+    timecodeRetention: MonitorTimecodeRetention,
+    sessionState: CameraSessionState,
     media: String,
     cameraBatteryPercent: Int?,
     cameraExternalPower: Boolean?,
@@ -2373,7 +2449,11 @@ private fun PortraitInfoBar(
             modifier = Modifier.align(Alignment.Center),
         )
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            CameraTimecodeReadout(timecode = timecode, sizeSp = 15f)
+            RetainedCameraTimecodeReadout(
+                retention = timecodeRetention,
+                sessionState = sessionState,
+                sizeSp = 15f,
+            )
             Spacer(Modifier.weight(1f))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -2437,6 +2517,29 @@ private fun DotViewfinderGlyph(
         cornerPath(w, h - corner, w, h, w - corner, h)
         cornerPath(corner, h, 0f, h, 0f, h - corner)
     }
+}
+
+/**
+ * iOS shutter long-press: toggle `MovieTVLockSetting` (0.45s hold on the
+ * SHUTTER capture cell). Uses the lock mode request already projected into
+ * the capture strip when the camera advertises it.
+ */
+internal fun toggleShutterLockOnCamera(
+    captureSettings: List<MonitorCaptureSettingPresentation>,
+    cameraProperties: CameraPropertySnapshot,
+    applyCameraControl: (CommandControlRequest, String) -> Unit,
+) {
+    val lockRequest =
+        captureSettings
+            .firstOrNull { it.kind == MonitorPickerKind.SHUTTER }
+            ?.picker
+            ?.modes
+            ?.firstOrNull { it.request.control == CameraControl.SHUTTER_LOCK }
+            ?.request
+            ?: return
+    val locked = cameraProperties.shutterLocked == true
+    val next = if (locked) "Unlocked" else "Locked"
+    applyCameraControl(lockRequest, next)
 }
 
 /**

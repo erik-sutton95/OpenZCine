@@ -67,10 +67,12 @@ import com.opencapture.openzcine.FeedPeakingColor
 import com.opencapture.openzcine.FeedPeakingSensitivity
 import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
+import com.opencapture.openzcine.IosPanelRevealSpec
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.glass
+import com.opencapture.openzcine.overlayGlass
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
@@ -271,16 +273,16 @@ private fun AssistOptionsOverlay(
         val maxPanelHeight = (maxHeight - 24.dp).coerceAtLeast(0.dp)
         var panelSize by remember(tool) { mutableStateOf(IntSize.Zero) }
         var revealed by remember(tool) { mutableStateOf(false) }
+        // iOS parks the panel fully below the screen (height + slack) then slides
+        // up with panelRevealCurve — not a short 24dp nudge.
+        val panelHeightDp =
+            with(density) { panelSize.height.toDp() }.takeIf { panelSize.height > 0 } ?: 280.dp
+        val travel = panelHeightDp + 40.dp
         val revealOffset by
             animateDpAsState(
-                targetValue = if (revealed) 0.dp else 24.dp,
-                // iOS reveal: 0.20s ease-out slide-up.
-                animationSpec =
-                    tween(
-                        durationMillis = 200,
-                        easing = androidx.compose.animation.core.CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
-                    ),
-                label = "playback assist panel reveal",
+                targetValue = if (revealed) 0.dp else travel,
+                animationSpec = IosPanelRevealSpec,
+                label = "assist panel reveal",
             )
         LaunchedEffect(tool) { revealed = true }
         val viewportWidthPx = with(density) { maxWidth.toPx() }
@@ -315,12 +317,14 @@ private fun AssistOptionsOverlay(
                 .heightIn(max = maxPanelHeight)
                 .onSizeChanged { panelSize = it }
                 .alpha(if (revealed) 1f else 0f)
-                .glass(ChromeShape)
+                // Scene overlay: blur chrome + feed under assist options.
+                .overlayGlass(ChromeShape)
                 .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
                 // The panel is a sibling above the backdrop. This no-op detector keeps blank panel
                 // chrome from dismissing while child controls retain their own gestures.
                 .pointerInput(Unit) { detectTapGestures(onTap = {}) }
-                .padding(14.dp),
+                // iOS AssistPanel GlassPanel pad 16 all sides.
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
@@ -699,7 +703,11 @@ private fun LutDrumWheel(
             initialFirstVisibleItemIndex =
                 entries.indexOfFirst(LutWheelEntry::selected).coerceAtLeast(0),
         )
-    val fling = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(listState)
+    val fling =
+        androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(
+            lazyListState = listState,
+            snapPosition = androidx.compose.foundation.gestures.snapping.SnapPosition.Center,
+        )
     val centeredIndex by remember {
         androidx.compose.runtime.derivedStateOf {
             val layout = listState.layoutInfo
@@ -708,6 +716,10 @@ private fun LutDrumWheel(
                 .minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) }
                 ?.index ?: 0
         }
+    }
+    LaunchedEffect(entries) {
+        val index = entries.indexOfFirst(LutWheelEntry::selected).coerceAtLeast(0)
+        listState.scrollToItem(index)
     }
     // Apply the row the wheel settles on — iOS applies on drum settle.
     LaunchedEffect(listState, entries) {
@@ -723,7 +735,7 @@ private fun LutDrumWheel(
             state = listState,
             flingBehavior = fling,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = rowHeightDp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxWidth().height(wheelHeight),
         ) {
             items(entries.size) { index ->
                 val entry = entries[index]
