@@ -178,12 +178,27 @@ The shells follow modern SwiftUI idioms exclusively:
 - **Swift Testing** (`import Testing`) for all new unit tests.
 - Swift 6.0 strict concurrency: annotate actors, isolate state correctly, no data races.
 
-### Screenshot-verify every UI change (MANDATORY — no exceptions)
+### Deploy + screenshot-verify every UI change (MANDATORY — no exceptions)
 
-Any SwiftUI or Compose layout change is **not done** until it has been visually verified on the
-relevant simulator, emulator, or physical device. Build → launch → capture a screenshot → inspect
-**all four edges** and confirm every interface element is fully visible. The iOS app is
-**landscape-locked and only ~400pt tall**, so rotate its raw simulator shot to read it.
+Any SwiftUI or Compose **visual** change (layout, chrome, glass, colors, typography, spacing) is
+**not done** until it has been **installed and launched** on a connected target — not merely
+compiled. A successful `assembleDebug` / `xcodebuild` without install is insufficient.
+
+**Deploy targets (use what is plugged/booted):**
+
+| Platform | Install / launch |
+| -------- | ---------------- |
+| Android phone | `just android-install <serial>` then start the activity (demo extras if useful) |
+| iOS simulator | Build+run on the booted sim (XcodeBuildMCP `build_run_sim` or project `just`/`xcodebuild` flow) |
+| iOS device | Build+run on the connected device when that is the review target |
+
+**Orientation (critical):** OpenZCine is a **landscape-first camera monitor**. Always verify
+visual and interaction work in **landscape** first (and as the default for Android device
+screenshots). Portrait is secondary. Never sign off a UI change from portrait-only testing.
+
+After install: capture a screenshot → inspect **all four edges** and confirm every interface
+element is fully visible. The iOS app is **landscape-locked and only ~400pt tall**, so rotate its
+raw simulator shot to read it.
 
 - **Bottom:** nothing flush against or past the bottom edge. Leave clearance for the iOS home
   indicator and Android gesture/navigation insets.
@@ -192,9 +207,10 @@ relevant simulator, emulator, or physical device. Build → launch → capture a
 - **Truncation/overflow:** no `…` truncation, no text wrapping mid-word into a vertical sliver, no
   card taller than its container.
 
-If ANY element clips, overflows, or truncates: fix it and re-screenshot until the frame is clean.
-**Never report a UI change as complete or "matches the mockup" without this pass.** Prefer the real
-device size and, when a screen has multiple states, screenshot the tightest one.
+If ANY element clips, overflows, or truncates: fix it, **redeploy**, and re-screenshot until the
+frame is clean. **Never report a UI change as complete or "matches the mockup" without this
+pass.** Prefer the real device size and, when a screen has multiple states, screenshot the
+tightest one. Glass / material / edge-highlight tuning counts as a UI change — always redeploy.
 
 ## Testing requirements
 

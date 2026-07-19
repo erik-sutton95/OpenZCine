@@ -12,6 +12,13 @@
 verification, UI screenshot requirements, and subagent coordination. Keep shared guidance there
 instead of duplicating it in this client-specific file.
 
+**UI / chrome / glass tweaks:** always `just android-install` (connected phone) and/or build-run
+on the booted iOS simulator or connected iPhone after the change — compile-only is not done. See
+`AGENTS.md` → "Deploy + screenshot-verify every UI change".
+
+**Landscape-first:** the app is primarily used in landscape. Always open pickers, drums, and
+chrome in **landscape** when verifying on Android; portrait-only checks are not enough.
+
 ## Claude Code workspace
 
 - Team commands, agents, hooks, skills, and settings live under `.claude/` and are tracked.
