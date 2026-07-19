@@ -315,7 +315,7 @@ struct PTPIPClientSessionTests {
             bootstrap.controls.irisValues == [
                 "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0", "f/16.0", "f/22.0",
             ])
-        #expect(bootstrap.controls.whiteBalanceValues.contains("5600K"))
+        #expect(bootstrap.controls.whiteBalanceValues.contains("5560K"))
         #expect(bootstrap.controls.focusAreas.contains("Subject"))
         #expect(bootstrap.controls.audioSensitivities.last == "20")
         #expect(bootstrap.controls.audioInputs == ["Microphone", "Line"])

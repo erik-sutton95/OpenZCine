@@ -111,7 +111,7 @@ public struct CameraDisplayState: Equatable, Sendable {
             CameraValue(label: "ISO", value: "800"),
             CameraValue(label: "SHUTTER", value: "180°"),
             CameraValue(label: "IRIS", value: "f/2.8"),
-            CameraValue(label: "WB", value: "5600K"),
+            CameraValue(label: "WB", value: "5560K"),
             CameraValue(label: "FOCUS", value: "AF-C"),
         ],
         mediaStatus: MediaStatus(gigabytesFree: 521, percentFree: 47, minutesRemaining: 47)

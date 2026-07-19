@@ -855,7 +855,7 @@ final class FakeZRServer: @unchecked Sendable {
         case .movieWhiteBalance:
             return Data(ByteCoding.uint16LE(0x8012))  // Color temp
         case .movieWBColorTemp:
-            return Data(ByteCoding.uint16LE(5_600))
+            return Data(ByteCoding.uint16LE(UInt16(WhiteBalanceKelvinPolicy.defaultKelvin)))
         case .movieRecordScreenSize:
             let raw =
                 options.screenSizeModesByFileType[activeMovieFileTypeRaw]?.first
@@ -960,11 +960,13 @@ final class FakeZRServer: @unchecked Sendable {
                 valueByteCount: 2,
                 values: [280, 400, 560, 800, 1_100, 1_600, 2_200].map(ByteCoding.uint16LE))
         case .movieWBColorTemp:
+            // Nikon K [Choose color temperature] discrete steps (2500–10000 K).
             return enumDescriptor(
                 property: property,
                 valueByteCount: 2,
-                values: [3_200, 4_300, 5_400, 5_500, 5_600, 5_700, 6_500].map(
-                    ByteCoding.uint16LE))
+                values: WhiteBalanceKelvinPolicy.kelvinSteps.map {
+                    ByteCoding.uint16LE(UInt16($0))
+                })
         case .movieWhiteBalance:
             return enumDescriptor(
                 property: property,

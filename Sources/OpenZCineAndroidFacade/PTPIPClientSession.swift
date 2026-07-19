@@ -168,9 +168,12 @@ private enum AndroidNikonZRControlFallback {
         AndroidRawControlMode(label: "Low", raw: 1),
         AndroidRawControlMode(label: "High", raw: 2),
     ]
-    static let whiteBalanceKelvin: [AndroidRawControlMode<UInt16>] = [
-        3_200, 4_300, 5_400, 5_500, 5_600, 5_700, 6_500,
-    ].map { AndroidRawControlMode(label: "\($0)K", raw: UInt16($0)) }
+    /// Nikon K [Choose color temperature] discrete steps (2500–10000 K).
+    /// Keep in lockstep with `WhiteBalanceKelvinPolicy.kelvinSteps`.
+    static let whiteBalanceKelvin: [AndroidRawControlMode<UInt16>] =
+        WhiteBalanceKelvinPolicy.kelvinSteps.map {
+            AndroidRawControlMode(label: "\($0)K", raw: UInt16($0))
+        }
     static let whiteBalanceModes: [AndroidRawControlMode<UInt16>] = [
         AndroidRawControlMode(label: "Auto", raw: 0x0002),
         AndroidRawControlMode(label: "Natural auto", raw: 0x8016),
@@ -1914,7 +1917,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
         if control.requiresCapabilityValidation,
             !currentAndroidCapabilityOptions(for: control).contains(label)
         {
-            return []
+            // Kelvin long-press fine-adjust (±10) lands off the dial ladder
+            // (e.g. 5570K / 5600K). Accept any documented-range temperature.
+            let isFineKelvin =
+                control == .whiteBalance && WhiteBalanceKelvinPolicy.isKelvinLabel(label)
+            if !isFineKelvin {
+                return []
+            }
         }
         switch control {
         case .iso, .focusMode:
@@ -2092,19 +2101,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
     }
 
     private func whiteBalanceDescriptorWrites(label: String) -> [PTPCameraPropertyWrite] {
-        if let kelvin = androidControlCatalog.whiteBalanceKelvin.first(where: {
-            $0.label == label
-        })?.raw {
-            guard
-                let mode = androidControlCatalog.whiteBalanceModes.first(where: {
-                    $0.label == "Color temp"
-                })?.raw
-            else { return [] }
+        // Accept any Kelvin in the documented 2500–10000 range (dial steps *and*
+        // long-press ±10 fine-adjust values such as 5570K that are not on the
+        // discrete dial ladder). Catalog membership alone would reject fine-tune.
+        if let kelvin = WhiteBalanceKelvinPolicy.kelvin(from: label),
+            let mode = androidControlCatalog.whiteBalanceModes.first(where: {
+                $0.label == "Color temp"
+            })?.raw
+        {
             return [
                 PTPCameraPropertyWrite(
                     property: .movieWhiteBalance, data: Data(ByteCoding.uint16LE(mode))),
                 PTPCameraPropertyWrite(
-                    property: .movieWBColorTemp, data: Data(ByteCoding.uint16LE(kelvin))),
+                    property: .movieWBColorTemp,
+                    data: Data(ByteCoding.uint16LE(UInt16(kelvin)))),
             ]
         }
         return uint16DescriptorWrite(
