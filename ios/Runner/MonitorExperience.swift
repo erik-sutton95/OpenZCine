@@ -833,7 +833,7 @@ struct CaptureSettingButton: View {
         case "SHUTTER": "1/16000"  // X/XXXXX
         case "IRIS": "f/2.8"  // f/X.X
         case "FOCUS": "Wide-L"
-        case "WB": "5600K"  // Kelvin readouts; presets render as icons (narrower)
+        case "WB": "5560K"  // Kelvin dial step; presets render as icons (narrower)
         default: value.value
         }
     }

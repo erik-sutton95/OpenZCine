@@ -6293,7 +6293,9 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .iso: ["500", "640", "800", "1000", "1250", "1600", "3200", "6400"]
         case .shutter: ["150.0°", "172.8°", "180.0°", "210.0°", "270.0°", "1/50", "1/100"]
         case .iris: ["f/1.4", "f/2.0", "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0"]
-        case .whiteBalance: ["3200K", "4300K", "5400K", "5500K", "5600K", "5700K", "6500K"]
+        // Nikon K [Choose color temperature]: 2500–10000 K discrete steps
+        // (`WhiteBalanceKelvinPolicy` — ZR K [Choose color temperature] dial).
+        case .whiteBalance: WhiteBalanceKelvinPolicy.kelvinOptions
         case .focus: ["MF", "AF-S", "AF-C", "AF-F", "Wide-L", "Auto Subject"]
         case .resolution: ["6K · 24p", "6K · 25p", "6K · 30p", "6K · 50p", "4K · 60p"]
         case .codec: ["R3D NE", "N-RAW", "ProRes RAW HQ", "ProRes 422 HQ", "H.265 10-bit"]
@@ -6349,8 +6351,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             [
                 PickerMode(
                     title: "Kelvin",
-                    options: ["3200K", "4300K", "5400K", "5500K", "5600K", "5700K", "6500K"],
-                    base: "5600K"),
+                    options: WhiteBalanceKelvinPolicy.kelvinOptions,
+                    base: WhiteBalanceKelvinPolicy.defaultLabel),
                 // Nikon ZR white-balance presets (labels match PTPCameraPropertyDecoders.wbModeNames
                 // so they round-trip with the camera's reported mode).
                 PickerMode(

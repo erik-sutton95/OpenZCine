@@ -111,6 +111,7 @@
 		FE72B160881FCAA3A5BAE57C /* FrameioAuthCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58822FE5CB612396F3D33712 /* FrameioAuthCoordinator.swift */; };
 		FEEDC0DEC0FFEE00BAADF002 /* ThermalLoadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDC0DEC0FFEE00BAADF001 /* ThermalLoadPolicy.swift */; };
 		ISO00000000000000000002 /* ISOPickerPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = ISO00000000000000000003 /* ISOPickerPolicy.swift */; };
+		WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */; };
 		LVSP00000000000000000002 /* LiveViewSignposts.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVSP00000000000000000001 /* LiveViewSignposts.swift */; };
 		MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */; };
 		PTPT00000000000000000002 /* PTPIPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTPT00000000000000000001 /* PTPIPTransport.swift */; };
@@ -284,6 +285,7 @@
 		FC0D15A11A2B3C4D5E6F7002 /* MonitorDisplayToneMap.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorDisplayToneMap.swift; path = ../Sources/OpenZCineCore/MonitorDisplayToneMap.swift; sourceTree = SOURCE_ROOT; };
 		FEEDC0DEC0FFEE00BAADF001 /* ThermalLoadPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ThermalLoadPolicy.swift; path = ../Sources/OpenZCineCore/ThermalLoadPolicy.swift; sourceTree = SOURCE_ROOT; };
 		ISO00000000000000000003 /* ISOPickerPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ISOPickerPolicy.swift; path = ../Sources/OpenZCineCore/ISOPickerPolicy.swift; sourceTree = SOURCE_ROOT; };
+		WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WhiteBalanceKelvinPolicy.swift; path = ../Sources/OpenZCineCore/WhiteBalanceKelvinPolicy.swift; sourceTree = SOURCE_ROOT; };
 		LVSP00000000000000000001 /* LiveViewSignposts.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveViewSignposts.swift; sourceTree = "<group>"; };
 		MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalFeedFrameBaker.swift; sourceTree = "<group>"; };
 		PTPT00000000000000000001 /* PTPIPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTPIPTransport.swift; sourceTree = "<group>"; };
@@ -436,6 +438,7 @@
 				C0DE00000000000000000015 /* PTPDeviceInfo.swift */,
 				C0DE0000000000000000001B /* CameraDiscovery.swift */,
 				ISO00000000000000000003 /* ISOPickerPolicy.swift */,
+				WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */,
 				R3D00000000000000000007 /* MediaClipFilename.swift */,
 				DELTA00000000000000000002 /* MediaClipDiscoveryDelta.swift */,
 				R3D00000000000000000009 /* MediaResolutionBucket.swift */,
@@ -687,6 +690,7 @@
 				C0DE000000000000000000A2 /* MonitorPortraitLayout.swift in Sources */,
 				C0DE000000000000000000C2 /* MonitorZoneLayout.swift in Sources */,
 				ISO00000000000000000002 /* ISOPickerPolicy.swift in Sources */,
+				WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */,
 				R3D00000000000000000006 /* MediaClipFilename.swift in Sources */,
 				DELTA00000000000000000001 /* MediaClipDiscoveryDelta.swift in Sources */,
 				R3D00000000000000000008 /* MediaResolutionBucket.swift in Sources */,

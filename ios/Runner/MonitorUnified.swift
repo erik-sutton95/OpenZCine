@@ -93,7 +93,11 @@ struct MonitorInfoBar: View {
                         .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.text)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
+                // Top-bar readout pills stay one line; deck compression must
+                // shrink type, never stack characters.
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
 
