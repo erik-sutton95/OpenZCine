@@ -223,38 +223,21 @@ private enum AndroidNikonZRControlFallback {
         AndroidRawControlMode(label: "ON", raw: 1),
         AndroidRawControlMode(label: "SPORT", raw: 2),
     ]
-}
 
-/// Nikon ZR RAW image area is selected by the camera's frame-size mode, not a separate writable
-/// crop property. These labels make that camera-provided meaning visible only for documented,
-/// exact ZR RAW modes; every other advertised mode keeps its generic resolution/rate label.
-private enum AndroidNikonZRRawCropPresentation {
-    static func label(
-        for mode: PTPCameraScreenSizeMode,
-        currentCodec: String?,
-        usesNikonZRFallbacks: Bool
-    ) -> String {
-        guard usesNikonZRFallbacks,
-            let currentCodec,
-            ["N-RAW", "R3D NE"].contains(currentCodec),
-            let imageArea = imageArea(for: mode.raw)
-        else {
-            return mode.label
-        }
-        return "[\(imageArea)] \(mode.label)"
-    }
+    // MovScreenSize has NO write fallbacks. Invented packs reboot real ZRs; only the body's
+    // DevicePropDesc enum entries may become write targets (see refreshAndroidScreenSizeDescriptor).
 
-    private static func imageArea(for rawScreenSize: UInt64) -> String? {
-        let size = PTPCameraPropertyDecoders.screenSize(rawScreenSize)
-        switch (size.width, size.height) {
-        case (6_048, 3_402), (4_032, 2_268):
-            return "FX"
-        case (3_984, 2_240):
-            return "DX"
-        default:
-            return nil
-        }
-    }
+    /// Proven Nikon ZR `MovFileType` (0xD0AF) packed values from the Flutter lab capture.
+    static let fileTypes: [PTPCameraFileTypeMode] = PTPCameraPropertyDecoders.fileTypeModes(
+        fromEnum: [
+            0x0000_0801,  // H.264
+            0x0001_0800,  // H.265
+            0x0001_0A00,  // H.265 10-bit
+            0x0010_0A00,  // ProRes 422 HQ
+            0x0011_0C00,  // ProRes RAW HQ
+            0x0031_0C03,  // R3D NE 12-bit R3D
+            0x0002_0C02,  // N-RAW
+        ])
 }
 
 /// Exact camera-advertised values retained inside the Swift session.
@@ -290,16 +273,21 @@ private struct AndroidRawControlCatalog: Sendable {
         usesNikonZRFallbacks: Bool
     ) -> AndroidCameraControlCapabilities {
         guard isComplete else { return .empty }
-        let currentCodec = recognizedCurrentCodec(properties.fileType)
-        let showsDualBaseCircuits = currentCodec.map(ISOPickerPolicy.showsDualBaseCircuits) ?? false
+        // Descriptor-recognized short codec only — crop labels and e-VR gating stay fail-closed
+        // for unknown file types. ISO may also use the live readback short label when the enum
+        // domain has not listed the active codec yet.
+        let recognizedCodec = recognizedCurrentCodec(properties.fileType)
+        let isoCodec =
+            recognizedCodec ?? properties.fileType.map(MonitorTextFormat.codecShortLabel)
+        let showsDualBaseCircuits = isoCodec.map(ISOPickerPolicy.showsDualBaseCircuits) ?? false
         let currentScreenSizeLabel: String?
         if isScreenSizeReadbackCurrent,
             let rawScreenSize = properties.rawScreenSize,
-            let mode = screenSizes.first(where: { $0.raw == rawScreenSize })
+            let mode = screenSizeModeMatching(raw: rawScreenSize)
         {
             currentScreenSizeLabel = screenSizeLabel(
                 for: mode,
-                currentCodec: currentCodec,
+                currentCodec: recognizedCodec,
                 usesNikonZRFallbacks: usesNikonZRFallbacks)
         } else {
             currentScreenSizeLabel = nil
@@ -312,19 +300,27 @@ private struct AndroidRawControlCatalog: Sendable {
             resolutionFrameRate = nil
         } else if let currentScreenSizeLabel {
             resolutionFrameRate = currentScreenSizeLabel
-        } else if screenSizes.isEmpty {
-            // Some bodies expose a current D0A0 value without a writable enum descriptor. Keep the
-            // established read-only monitor presentation for that case.
+        } else if let raw = properties.rawScreenSize {
+            // Camera is the source of truth: always surface the live packing even when it is not
+            // (yet) in the enum list. Label from the raw bytes so body-side dial changes appear
+            // immediately; write path still only uses camera-advertised catalog packs (iOS).
+            let size = PTPCameraPropertyDecoders.screenSize(raw)
+            let base = MonitorTextFormat.resolutionLabel(
+                pixelWidth: size.width,
+                pixelHeight: size.height,
+                frameRate: Double(size.fps))
+            resolutionFrameRate = NikonZRRawCropPresentation.label(
+                baseLabel: base,
+                rawScreenSize: raw,
+                currentCodec: recognizedCodec ?? properties.fileType,
+                isNikonZR: usesNikonZRFallbacks)
+        } else {
             resolutionFrameRate =
                 MonitorTextFormat.resolutionLabel(
                     fromProperty: properties.resolution,
                     frameRate: properties.fps ?? 0,
                     fallback: ""
                 ).nilIfEmpty
-        } else {
-            // A fresh value that does not belong to the refreshed descriptor domain is not a safe
-            // selection to display or write.
-            resolutionFrameRate = nil
         }
         let activeShutterValues: [String] =
             switch properties.shutterMode {
@@ -333,22 +329,33 @@ private struct AndroidRawControlCatalog: Sendable {
             case nil: []
             }
         let irisValues: [String]
-        if apertures.isEmpty, allowsApertureFallback, properties.lens != nil {
+        if !apertures.isEmpty {
+            irisValues = apertures.map(\.label)
+        } else if usesNikonZRFallbacks, allowsApertureFallback {
+            // Empty/omitted f-number enum on ZR — shared-core + lens ladder is safe.
+            // A read-only/unwritable descriptor leaves allowsApertureFallback false so
+            // we fail closed rather than inventing writes the body will reject.
             irisValues = PTPCameraPropertyDecoders.availableApertures(forLens: properties.lens)
         } else {
-            irisValues = apertures.map(\.label)
+            irisValues = []
         }
         let isoValues: [String]
-        if usesNikonZRFallbacks, currentCodec != nil {
+        if usesNikonZRFallbacks, isoCodec != nil {
             if showsDualBaseCircuits {
                 switch properties.baseISO {
                 case "Low": isoValues = ISOPickerPolicy.lowBaseOptions
                 case "High": isoValues = ISOPickerPolicy.highBaseOptions
-                default: isoValues = []
+                default:
+                    // Base circuit has not landed yet — keep the dual-base drum writable
+                    // with the full union so ISO is never padlock-grayed for a late D0xx.
+                    isoValues = ISOPickerPolicy.unifiedOptions
                 }
             } else {
                 isoValues = ISOPickerPolicy.unifiedOptions
             }
+        } else if usesNikonZRFallbacks {
+            // Codec short label not yet known; still expose the ZR ISO ladder.
+            isoValues = ISOPickerPolicy.unifiedOptions
         } else {
             isoValues = []
         }
@@ -379,13 +386,14 @@ private struct AndroidRawControlCatalog: Sendable {
             resolutionFrameRates: screenSizes.map {
                 screenSizeLabel(
                     for: $0,
-                    currentCodec: currentCodec,
+                    currentCodec: recognizedCodec,
                     usesNikonZRFallbacks: usesNikonZRFallbacks)
             },
             codecs: fileTypes.map(\.label),
             vibrationReduction: vibrationReduction.map(\.label),
+            // Unknown/raw codecs fail closed: only a recognized non-raw codec unlocks e-VR.
             electronicVR:
-                currentCodec.map(MonitorTextFormat.isRawCodec) == false
+                recognizedCodec.map(MonitorTextFormat.isRawCodec) == false
                 ? electronicVR.map(\.label) : []
         )
     }
@@ -396,17 +404,35 @@ private struct AndroidRawControlCatalog: Sendable {
         return fileTypes.contains(where: { $0.label == label }) ? label : nil
     }
 
+    /// Resolves a picker label to a camera-advertised mode — same matching as iOS
+    /// `NativeAppRoot` resolution write: presentation label, bare mode label, then bare
+    /// presentation. Writes only the exact descriptor `raw` (never invent packs).
     func screenSizeMode(
         for label: String,
         properties: PTPCameraPropertySnapshot,
         usesNikonZRFallbacks: Bool
     ) -> PTPCameraScreenSizeMode? {
         let currentCodec = recognizedCurrentCodec(properties.fileType)
-        return screenSizes.first {
-            screenSizeLabel(
-                for: $0,
+        let bareTarget = PTPIPClientSession.bareRecordingModeLabel(label)
+        return screenSizes.first { mode in
+            let presented = screenSizeLabel(
+                for: mode,
                 currentCodec: currentCodec,
-                usesNikonZRFallbacks: usesNikonZRFallbacks) == label
+                usesNikonZRFallbacks: usesNikonZRFallbacks)
+            if presented == label || mode.label == label { return true }
+            guard !bareTarget.isEmpty else { return false }
+            return PTPIPClientSession.bareRecordingModeLabel(mode.label) == bareTarget
+                || PTPIPClientSession.bareRecordingModeLabel(presented) == bareTarget
+        }
+    }
+
+    /// Matches a packed raw to a catalog mode by exact bytes, then by decoded WxH+fps.
+    func screenSizeModeMatching(raw: UInt64) -> PTPCameraScreenSizeMode? {
+        if let exact = screenSizes.first(where: { $0.raw == raw }) { return exact }
+        let live = PTPCameraPropertyDecoders.screenSize(raw)
+        return screenSizes.first {
+            let size = PTPCameraPropertyDecoders.screenSize($0.raw)
+            return size.width == live.width && size.height == live.height && size.fps == live.fps
         }
     }
 
@@ -415,10 +441,10 @@ private struct AndroidRawControlCatalog: Sendable {
         currentCodec: String?,
         usesNikonZRFallbacks: Bool
     ) -> String {
-        AndroidNikonZRRawCropPresentation.label(
+        NikonZRRawCropPresentation.label(
             for: mode,
             currentCodec: currentCodec,
-            usesNikonZRFallbacks: usesNikonZRFallbacks)
+            isNikonZR: usesNikonZRFallbacks)
     }
 
     private func uniqueLabels(_ values: [String]) -> [String] {
@@ -992,9 +1018,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
             valueByteCount: valueByteCount)
     }
 
-    /// Validates the complete Nikon extended-property descriptor before any value becomes a write
-    /// capability. The descriptor must name the requested property, match its expected value width,
-    /// be writable, and carry one exact enum or range form flush to the end of the dataset.
+    /// Validates a DevicePropDesc / DevicePropDescEx dataset before any value becomes a write
+    /// capability. Accepts both:
+    /// - **Ex / FakeZR shape:** UINT32 property code + UINT16 type + GetSet + defaults…
+    /// - **Standard 16-bit shape:** UINT16 property code (e.g. `0xD0A0`) + UINT16 type + …
+    /// which real Nikon bodies use for some movie properties over `GetDevicePropDescEx`.
     private static func writableDescriptorForm(
         _ descriptor: Data,
         property: PTPPropertyCode,
@@ -1009,16 +1037,38 @@ public final class PTPIPClientSession: @unchecked Sendable {
             case 8: 0x0008  // UINT64
             default: 0
             }
-        let formIndex = 7 + valueByteCount * 2
-        guard expectedDataType != 0,
-            bytes.count > formIndex,
-            ByteCoding.readUInt32LE(bytes, at: 0) == property.rawValue,
-            ByteCoding.readUInt16LE(bytes, at: 4) == expectedDataType,
-            bytes[6] == 0 || bytes[6] == 1
-        else {
+        guard expectedDataType != 0, bytes.count >= 7 else {
             throw PTPIPClientSessionError.invalidPropertyDescriptor(property.rawValue)
         }
-        guard bytes[6] == 1 else {
+
+        // Layout A: UINT32 property code (Ex datasets / FakeZR).
+        let exProperty = ByteCoding.readUInt32LE(bytes, at: 0)
+        let exType = ByteCoding.readUInt16LE(bytes, at: 4)
+        let exGetSet = bytes[6]
+        let exFormIndex = 7 + valueByteCount * 2
+
+        // Layout B: UINT16 property code (standard DevicePropDesc).
+        let stdProperty = UInt32(ByteCoding.readUInt16LE(bytes, at: 0))
+        let stdType = ByteCoding.readUInt16LE(bytes, at: 2)
+        let stdGetSet = bytes[4]
+        let stdFormIndex = 5 + valueByteCount * 2
+
+        let formIndex: Int
+        let getSet: UInt8
+        if exProperty == property.rawValue, exType == expectedDataType,
+            exGetSet == 0 || exGetSet == 1, bytes.count > exFormIndex
+        {
+            formIndex = exFormIndex
+            getSet = exGetSet
+        } else if stdProperty == property.rawValue, stdType == expectedDataType,
+            stdGetSet == 0 || stdGetSet == 1, bytes.count > stdFormIndex
+        {
+            formIndex = stdFormIndex
+            getSet = stdGetSet
+        } else {
+            throw PTPIPClientSessionError.invalidPropertyDescriptor(property.rawValue)
+        }
+        guard getSet == 1 else {
             throw PTPIPClientSessionError.unwritablePropertyDescriptor(property.rawValue)
         }
 
@@ -1131,6 +1181,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     refreshAndroidScreenSizeAfterCodecChange()
                 )
             }
+            // Body-side REC dial: re-sample MovScreenSize often enough that the camera remains
+            // the source of truth even when DevicePropChanged is delayed/missing. Round-robin
+            // alone can leave D0A0 stale for tens of seconds on the long live poll list.
+            if !isRecording,
+                result != .transportFailed,
+                property != .movieRecordScreenSize,
+                androidPropertyPollIndex % 3 == 0
+            {
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidProperty(.movieRecordScreenSize))
+            }
             if result != .transportFailed,
                 CameraMonitorPollPolicy.isDue(
                     lastRefreshAt: androidLastStorageRefreshAt,
@@ -1159,6 +1220,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 return androidPropertyReadback(result: .accepted)
             }
             let result = refreshAndroidProperty(property)
+            // Codec change still rebuilds the rate domain; a plain D0A0 value change only
+            // needs the value read above (plus live-pack reconcile inside that read).
             guard property == .movieFileType, result == .accepted else {
                 return androidPropertyReadback(result: result)
             }
@@ -1247,8 +1310,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// advertise only a subset; one unsupported descriptor must not hide the
     /// valid controls that follow it.
     private func refreshAndroidControlDescriptors() -> AndroidCameraPropertyRefreshResult {
-        // Build one new capability generation under commandLifecycleLock. No previous descriptor
-        // value survives a failed pass, and callers cannot observe the partially populated catalog.
+        // Build one new capability generation under commandLifecycleLock. Callers never observe a
+        // half-built catalog: either the new generation becomes complete, or the previous complete
+        // generation is retained. A single descriptor parse failure must not wipe every control.
+        let previousCatalog = androidControlCatalog
+        let previousTint = androidWhiteBalanceTint
         androidControlCatalog = AndroidRawControlCatalog()
         androidWhiteBalanceTint = nil
         let refreshers: [() throws -> Void] = [
@@ -1284,11 +1350,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
             } catch {
                 result = .transportFailed
             }
-            if result == .transportFailed { break }
+            // Keep walking independent descriptors after unsupported/rejected forms so one
+            // body-specific omission cannot hide the rest. Only a dead transport aborts early.
+            if result == .transportFailed || result == .mediaBusy { break }
         }
         if result == .transportFailed || result == .mediaBusy {
-            androidControlCatalog = AndroidRawControlCatalog()
-            androidWhiteBalanceTint = nil
+            // Prefer the last complete catalog over a blank generation so open pickers keep working
+            // across a transient GetDevicePropDescEx glitch while live view holds the channel.
+            if previousCatalog.isComplete {
+                androidControlCatalog = previousCatalog
+                androidWhiteBalanceTint = previousTint
+            } else {
+                androidControlCatalog = AndroidRawControlCatalog()
+                androidWhiteBalanceTint = nil
+            }
         } else {
             androidControlCatalog.isComplete = true
             androidLastDescriptorRefreshAt = Date()
@@ -1297,27 +1372,71 @@ public final class PTPIPClientSession: @unchecked Sendable {
     }
 
     private func refreshAndroidScreenSizeDescriptor() throws {
-        androidControlCatalog.screenSizes = []
-        let values = try descriptorEnumBytes(.movieRecordScreenSize, valueByteCount: 8)
-        androidControlCatalog.screenSizes = values.compactMap { bytes in
-            let raw = ByteCoding.readUInt64LE(bytes, at: 0)
-            let size = PTPCameraPropertyDecoders.screenSize(raw)
-            guard size.width >= 640, size.width <= 8_192, size.height >= 360,
-                size.height <= 5_000, size.fps >= 1, size.fps <= 240
-            else { return nil }
-            return PTPCameraScreenSizeMode(
-                raw: raw,
-                label: MonitorTextFormat.resolutionLabel(
-                    pixelWidth: size.width,
-                    pixelHeight: size.height,
-                    frameRate: Double(size.fps)))
+        // Build the next domain off to the side so a failed re-read never blanks a still-valid
+        // catalog (body-side REC changes re-enter here frequently).
+        let descriptor = try readPropertyDescriptor(.movieRecordScreenSize)
+        // Prefer the strict Ex-shaped parser (FakeZR + well-formed bodies). Real ZR firmware
+        // sometimes returns a standard 16-bit DevicePropDesc for 0xD0A0 that fails the
+        // 32-bit header check — fall back to the shared-core scan that finds the enum
+        // form flag anywhere in the payload so REC options stay writable.
+        //
+        // HARD RULE: never invent packed MovScreenSize values. Writing an unadvertised
+        // combination (lab fallbacks / bit-spliced fps) can reboot a Nikon ZR. Only the
+        // exact 8-byte enum entries from this descriptor may become write targets.
+        let parsed: [PTPCameraScreenSizeMode]
+        do {
+            let form = try Self.writableDescriptorForm(
+                descriptor,
+                property: .movieRecordScreenSize,
+                valueByteCount: 8)
+            guard case .enumeration(let values) = form else {
+                throw PTPIPClientSessionError.unwritablePropertyDescriptor(
+                    PTPPropertyCode.movieRecordScreenSize.rawValue)
+            }
+            parsed = values.compactMap { bytes in
+                guard bytes.count >= 8 else { return nil }
+                let raw = ByteCoding.readUInt64LE(bytes, at: 0)
+                return Self.screenSizeMode(raw: raw)
+            }
+        } catch {
+            let modes = PTPCameraPropertyDecoders.screenSizeModes(fromDescriptor: descriptor)
+            guard !modes.isEmpty else { throw error }
+            parsed = modes
         }
+        guard !parsed.isEmpty else {
+            throw PTPIPClientSessionError.unwritablePropertyDescriptor(
+                PTPPropertyCode.movieRecordScreenSize.rawValue)
+        }
+        // Keep the descriptor enum verbatim — same as iOS `cameraScreenModes`. Never rewrite
+        // advertised packs from a live readback; write path uses exact catalog raws only.
+        androidControlCatalog.screenSizes = parsed
+    }
+
+    private static func screenSizeMode(raw: UInt64) -> PTPCameraScreenSizeMode? {
+        let size = PTPCameraPropertyDecoders.screenSize(raw)
+        guard size.width >= 640, size.width <= 8_192, size.height >= 360,
+            size.height <= 5_000, size.fps >= 1, size.fps <= 240
+        else { return nil }
+        return PTPCameraScreenSizeMode(
+            raw: raw,
+            label: MonitorTextFormat.resolutionLabel(
+                pixelWidth: size.width,
+                pixelHeight: size.height,
+                frameRate: Double(size.fps)))
     }
 
     private func refreshAndroidFileTypeDescriptor() throws {
         androidControlCatalog.fileTypes = []
-        androidControlCatalog.fileTypes = PTPCameraPropertyDecoders.fileTypeModes(
-            fromEnum: try descriptorEnumValues(.movieFileType, valueByteCount: 4))
+        do {
+            let modes = PTPCameraPropertyDecoders.fileTypeModes(
+                fromEnum: try descriptorEnumValues(.movieFileType, valueByteCount: 4))
+            androidControlCatalog.fileTypes =
+                modes.isEmpty && usesNikonZRFallbacks
+                ? AndroidNikonZRControlFallback.fileTypes : modes
+        } catch let error as PTPIPClientSessionError {
+            guard usesNikonZRFallbacks, isDescriptorFallbackEligible(error) else { throw error }
+            androidControlCatalog.fileTypes = AndroidNikonZRControlFallback.fileTypes
+        }
     }
 
     private func refreshAndroidApertureDescriptor() throws {
@@ -1568,7 +1687,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) -> AndroidCameraPropertyRefreshResult {
         switch error {
         case .mediaModeActive, .mediaModeRequired: .mediaBusy
-        case .operationRejected, .unsupportedProperty, .unwritablePropertyDescriptor: .unsupported
+        // A malformed or unwritable *single* DevicePropDesc must not abort the whole catalog
+        // refresh as a transport failure — that wiped ISO/WB/REC domains after one bad D0A0.
+        case .operationRejected, .unsupportedProperty, .unwritablePropertyDescriptor,
+            .invalidPropertyDescriptor:
+            .unsupported
         default: .transportFailed
         }
     }
@@ -1594,7 +1717,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     private func isDescriptorFallbackEligible(_ error: PTPIPClientSessionError) -> Bool {
         switch error {
-        case .operationRejected, .unsupportedProperty: true
+        // Real ZR firmware often returns DevicePropDesc layouts the strict Ex parser rejects
+        // (16-bit headers, unexpected padding). Treat those like an omitted domain so ZR-only
+        // ladders can still open. `unwritablePropertyDescriptor` (getSet=0) stays fail-closed —
+        // the body explicitly said the property is not settable; do not invent writes.
+        case .operationRejected, .unsupportedProperty, .invalidPropertyDescriptor:
+            true
         default: false
         }
     }
@@ -1916,26 +2044,52 @@ public final class PTPIPClientSession: @unchecked Sendable {
         _ control: AndroidCameraControl,
         label: String
     ) -> [PTPCameraPropertyWrite] {
-        if control.requiresCapabilityValidation,
-            !currentAndroidCapabilityOptions(for: control).contains(label)
-        {
-            // Kelvin long-press fine-adjust (±10) lands off the dial ladder
-            // (e.g. 5570K / 5600K). Accept any documented-range temperature.
-            let isFineKelvin =
-                control == .whiteBalance && WhiteBalanceKelvinPolicy.isKelvinLabel(label)
-            if !isFineKelvin {
-                return []
+        // When the body has advertised a non-empty write domain, refuse labels outside it
+        // (keeps dual-base ISO circuits, RAW e-VR suppression, etc. honest). An *empty*
+        // domain used to reject every label via `contains` — that broke capture-bar and
+        // top-bar pickers that open on iOS policy ladders before descriptors land, and
+        // after a failed/incomplete catalog refresh. Empty domains either fall through to
+        // shared-core label encoding (iOS parity) or stay fail-closed for raw-only writes.
+        let capabilityOptions = currentAndroidCapabilityOptions(for: control)
+        if control.requiresCapabilityValidation {
+            if capabilityOptions.isEmpty {
+                if !control.allowsEncodeWithoutCapabilityDomain {
+                    return []
+                }
+            } else if !capabilityOptions.contains(label)
+                && !Self.capabilityOptionsContainRecordingLabel(capabilityOptions, label: label)
+            {
+                // Kelvin long-press fine-adjust (±10) lands off the dial ladder
+                // (e.g. 5570K) only when the body already offers a Kelvin domain
+                // (Color temp mode). Never invent Kelvin when only presets are advertised.
+                let kelvinDomainOpen =
+                    capabilityOptions.contains(where: WhiteBalanceKelvinPolicy.isKelvinLabel)
+                    || androidControlCatalog.whiteBalanceModes.contains {
+                        $0.label == "Color temp"
+                    }
+                let isFineKelvin =
+                    control == .whiteBalance
+                    && WhiteBalanceKelvinPolicy.isKelvinLabel(label)
+                    && kelvinDomainOpen
+                // iOS always encodes MovieTVLock Locked/Unlocked without requiring both
+                // values in the live enum (the body often only advertises the active state).
+                let isShutterLockToggle =
+                    control == .shutterLock && (label == "Locked" || label == "Unlocked")
+                if !isFineKelvin, !isShutterLockToggle {
+                    return []
+                }
             }
         }
         switch control {
         case .iso, .focusMode:
-            guard let sharedControl = control.sharedControl else { return [] }
-            return PTPCameraPropertyWrite.requests(
-                control: sharedControl,
-                label: label,
-                snapshot: androidPropertySnapshot)
+            return sharedControlWrites(control, label: label)
         case .shutter:
-            return shutterDescriptorWrite(label: label).map { [$0] } ?? []
+            if let write = shutterDescriptorWrite(label: label) {
+                return [write]
+            }
+            // Prefer the active circuit's advertised raw when present; otherwise encode the
+            // angle/speed label the same way the iOS shell does.
+            return sharedControlWrites(control, label: label)
         case .iris:
             if let raw = androidControlCatalog.apertures.first(where: { $0.label == label })?.raw {
                 return [
@@ -1943,69 +2097,101 @@ public final class PTPIPClientSession: @unchecked Sendable {
                         property: .movieFNumber, data: Data(ByteCoding.uint16LE(raw)))
                 ]
             }
-            guard usesNikonZRFallbacks, let sharedControl = control.sharedControl else { return [] }
-            return PTPCameraPropertyWrite.requests(
-                control: sharedControl,
-                label: label,
-                snapshot: androidPropertySnapshot)
+            // Empty/omitted enum on ZR (allowsApertureFallback) can use shared-core
+            // encoding. A completed catalog with no domain and no fallback stays closed.
+            if androidControlCatalog.isComplete,
+                androidControlCatalog.apertures.isEmpty,
+                !androidControlCatalog.allowsApertureFallback
+            {
+                return []
+            }
+            return sharedControlWrites(control, label: label)
         case .whiteBalance:
-            return whiteBalanceDescriptorWrites(label: label)
+            let descriptorWrites = whiteBalanceDescriptorWrites(label: label)
+            if !descriptorWrites.isEmpty { return descriptorWrites }
+            return sharedControlWrites(control, label: label)
         case .focusArea:
-            return uint16DescriptorWrite(
+            let writes = uint16DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.focusAreas,
                 property: .movieFocusMeteringMode)
+            return writes.isEmpty ? sharedControlWrites(control, label: label) : writes
         case .focusSubject:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.focusSubjects,
                 property: .movieAFSubjectDetection)
+            return writes.isEmpty ? sharedControlWrites(control, label: label) : writes
         case .audioSensitivity:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.audioSensitivities,
                 property: .movieAudioInputSensitivity)
+            return writes.isEmpty ? sharedControlWrites(control, label: label) : writes
         case .audioInput:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.audioInputs,
                 property: .audioInputSelection)
+            return writes.isEmpty ? sharedControlWrites(control, label: label) : writes
         case .windFilter:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.windFilters,
                 property: .movWindNoiseReduction)
+            return writes.isEmpty ? sharedControlWrites(control, label: label) : writes
         case .attenuator:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.attenuators,
                 property: .movieAttenuator)
+            return writes.isEmpty ? sharedControlWrites(control, label: label) : writes
         case .audio32BitFloat:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.audio32BitFloat,
                 property: .movie32BitFloatAudioRecording)
+            return writes.isEmpty ? sharedControlWrites(control, label: label) : writes
         case .baseISO:
             guard let codec = androidPropertySnapshot.fileType,
                 ISOPickerPolicy.showsDualBaseCircuits(codec: codec)
             else { return [] }
+            let modes =
+                if !androidControlCatalog.baseISO.isEmpty {
+                    androidControlCatalog.baseISO
+                } else if usesNikonZRFallbacks {
+                    AndroidNikonZRControlFallback.baseISO
+                } else {
+                    [] as [AndroidRawControlMode<UInt8>]
+                }
             return uint8DescriptorWrite(
                 label: label,
-                modes: androidControlCatalog.baseISO,
+                modes: modes,
                 property: .movieBaseISO)
         case .shutterMode:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.shutterModes,
                 property: .movieShutterMode)
+            if !writes.isEmpty { return writes }
+            // Known Angle/Speed labels without a descriptor yet (iOS always encodes).
+            guard let mode = shutterDisplayMode(label: label) else { return [] }
+            return [PTPCameraPropertyWrite.shutterMode(mode)]
         case .shutterLock:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.shutterLocks,
                 property: .movieTVLockSetting)
+            if !writes.isEmpty { return writes }
+            switch label {
+            case "Locked": return [PTPCameraPropertyWrite.movieTVLock(unlocked: false)]
+            case "Unlocked": return [PTPCameraPropertyWrite.movieTVLock(unlocked: true)]
+            default: return []
+            }
         case .whiteBalanceTint:
             return whiteBalanceTintWrite(label: label).map { [$0] } ?? []
         case .resolutionFrameRate:
+            // iOS baseline: exact camera-advertised pack for the picked label only.
             return androidControlCatalog.screenSizeMode(
                 for: label,
                 properties: androidPropertySnapshot,
@@ -2013,25 +2199,68 @@ public final class PTPIPClientSession: @unchecked Sendable {
             )
             .map { [PTPCameraPropertyWrite.screenSize(raw: $0.raw)] } ?? []
         case .codec:
-            return androidControlCatalog.fileTypes.first(where: { $0.label == label })
-                .map { [PTPCameraPropertyWrite.fileType(raw: $0.raw)] } ?? []
+            if let mode = androidControlCatalog.fileTypes.first(where: { $0.label == label }) {
+                return [PTPCameraPropertyWrite.fileType(raw: mode.raw)]
+            }
+            // Accept long camera strings ("R3D NE 12-bit R3D") against short labels.
+            let short = MonitorTextFormat.codecShortLabel(label)
+            return androidControlCatalog.fileTypes.first(where: {
+                $0.label == short || MonitorTextFormat.codecShortLabel($0.label) == short
+            })
+            .map { [PTPCameraPropertyWrite.fileType(raw: $0.raw)] } ?? []
         case .vibrationReduction:
-            return uint8DescriptorWrite(
+            let writes = uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.vibrationReduction,
                 property: .movieVibrationReduction)
+            if !writes.isEmpty { return writes }
+            return PTPCameraPropertyWrite.vibrationReduction(label: label).map { [$0] } ?? []
         case .electronicVR:
             return uint8DescriptorWrite(
                 label: label,
                 modes: androidControlCatalog.electronicVR,
                 property: .electronicVR)
         case .exposureMode:
-            guard let sharedControl = control.sharedControl else { return [] }
-            return PTPCameraPropertyWrite.requests(
-                control: sharedControl,
-                label: label,
-                snapshot: androidPropertySnapshot)
+            return sharedControlWrites(control, label: label)
         }
+    }
+
+    /// Label → shared-core property write(s). Used for iOS-parity encode when the Android
+    /// descriptor catalog has not yet advertised an exact raw value for the selection.
+    private func sharedControlWrites(
+        _ control: AndroidCameraControl,
+        label: String
+    ) -> [PTPCameraPropertyWrite] {
+        guard let sharedControl = control.sharedControl else { return [] }
+        return PTPCameraPropertyWrite.requests(
+            control: sharedControl,
+            label: label,
+            snapshot: androidPropertySnapshot)
+    }
+
+    private func shutterDisplayMode(label: String) -> ShutterDisplayMode? {
+        switch label {
+        case "Angle": .angle
+        case "Speed": .speed
+        default: nil
+        }
+    }
+
+    /// Strips ZR crop prefixes and normalizes middle-dot spacing for mode matching.
+    fileprivate static func bareRecordingModeLabel(_ label: String) -> String {
+        NikonZRRawCropPresentation.bareLabel(label)
+    }
+
+    /// True when `label` matches a capability option exactly or as a bare recording-mode form
+    /// (`6K · 25p` ↔ `[FX] 6K · 25p`). Used so top-bar REC writes are not rejected by the
+    /// exact-string capability gate before the raw screen-size match runs.
+    fileprivate static func capabilityOptionsContainRecordingLabel(
+        _ options: [String],
+        label: String
+    ) -> Bool {
+        let bare = bareRecordingModeLabel(label)
+        guard !bare.isEmpty else { return false }
+        return options.contains { bareRecordingModeLabel($0) == bare }
     }
 
     private func currentAndroidCapabilityOptions(for control: AndroidCameraControl) -> [String] {
@@ -2139,24 +2368,48 @@ public final class PTPIPClientSession: @unchecked Sendable {
         _ writes: [PTPCameraPropertyWrite],
         control: AndroidCameraControl,
         label: String,
-        maxAttempts: Int = 8
+        maxAttempts: Int = 6
     ) throws {
+        // Keep readback honest but snappy: bodies usually mirror the write on the
+        // first GetDevicePropValue. Long 200 ms sleeps made every drum snap feel laggy.
         for attempt in 1...maxAttempts {
             var allMatch = true
             for write in writes {
                 let readback = try readProperty(write.property)
                 androidPropertySnapshot = androidPropertySnapshot.applying(
                     property: write.property, data: readback)
-                if readback != write.data { allMatch = false }
+                if !Self.propertyWriteMatchesReadback(write: write, readback: readback) {
+                    allMatch = false
+                }
             }
             if allMatch {
                 if control == .whiteBalanceTint { androidWhiteBalanceTint = label }
                 return
             }
-            if attempt < maxAttempts { Thread.sleep(forTimeInterval: 0.2) }
+            if attempt < maxAttempts { Thread.sleep(forTimeInterval: 0.04) }
         }
         throw PTPIPClientSessionError.controlReadbackMismatch(
             String(describing: control), label)
+    }
+
+    /// True when a property write is confirmed by readback. `MovScreenSize` compares decoded
+    /// width/height/fps (camera may rewrite low packing bits after an exact enum write); other
+    /// properties stay byte-exact.
+    static func propertyWriteMatchesReadback(
+        write: PTPCameraPropertyWrite,
+        readback: Data
+    ) -> Bool {
+        if write.property == .movieRecordScreenSize,
+            write.data.count >= 8,
+            readback.count >= 8
+        {
+            let written = ByteCoding.readUInt64LE([UInt8](write.data), at: 0)
+            let live = ByteCoding.readUInt64LE([UInt8](readback), at: 0)
+            let w = PTPCameraPropertyDecoders.screenSize(written)
+            let r = PTPCameraPropertyDecoders.screenSize(live)
+            return w.width == r.width && w.height == r.height && w.fps == r.fps
+        }
+        return readback == write.data
     }
 
     /// Writes one shared-core-encoded camera property using the operation the

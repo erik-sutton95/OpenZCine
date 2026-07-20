@@ -440,6 +440,19 @@ import Testing
     #expect(modes[1].label.hasSuffix("50p"))
 }
 
+@Test func screenSizeModesAcceptsTrailingPaddingAfterEnumBlock() {
+    func u64le(_ value: UInt64) -> [UInt8] { (0..<8).map { UInt8((value >> ($0 * 8)) & 0xFF) } }
+    let mode25: UInt64 = 0x17A0_0D4A_0019_0000
+    var desc: [UInt8] = [0xA0, 0xD0, 0x08, 0x00, 0x01]
+    desc += u64le(mode25) + u64le(mode25)
+    desc += [0x02, 0x01, 0x00]
+    desc += u64le(mode25)
+    desc += [0x00, 0x00, 0x00, 0x00]  // short trailing padding some Ex bodies append
+
+    let modes = PTPCameraPropertyDecoders.screenSizeModes(fromDescriptor: Data(desc))
+    #expect(modes.map(\.raw) == [mode25])
+}
+
 @Test func fileTypeModesMapAdvertisedEnumToShortCodecLabels() {
     let h265: UInt32 = 0x0001_0A00  // H.265 10-bit MOV
     let h264: UInt32 = 0x0000_0801  // H.264 8-bit MP4

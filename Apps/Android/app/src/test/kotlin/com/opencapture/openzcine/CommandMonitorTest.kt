@@ -16,6 +16,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CommandMonitorTest {
@@ -134,7 +135,8 @@ class CommandMonitorTest {
         val isoSheet = commandControlOptions(iso, pendingControl = null)
         assertTrue(isoSheet.first { it.label == "800" }.selected)
         assertTrue(isoSheet.all { it.enabled })
-        assertFalse(commandControlOptions(iso, CameraControl.ISO).any { it.enabled })
+        // In-flight apply no longer greys the drum — settles coalesce instead.
+        assertTrue(commandControlOptions(iso, CameraControl.ISO).all { it.enabled })
         assertFalse(commandControlOptions(iso, pendingControl = null, controlsEnabled = false).any {
             it.enabled
         })
@@ -243,21 +245,16 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
-        // Resolution/codec keep iOS CameraPicker fallback options so the drums
-        // still open; every other descriptor-backed tile stays write-blocked.
-        assertTrue(
-            presentation.tiles
-                .filter {
-                    it.kind != CommandTileKind.RESOLUTION_FRAMERATE &&
-                        it.kind != CommandTileKind.CODEC
-                }
-                .all { it.value == "—" && it.request == null },
-        )
+        // Without camera-advertised enums, resolution/codec must not offer static
+        // fallback ladders (those always fail apply). All tiles stay write-blocked.
+        assertTrue(presentation.tiles.all { it.request == null })
         val resolution =
             presentation.tiles.first { it.kind == CommandTileKind.RESOLUTION_FRAMERATE }
-        assertEquals(IOS_RESOLUTION_PICKER_FALLBACKS, assertNotNull(resolution.request).options)
+        assertEquals("—", resolution.value)
+        assertNotNull(resolution.unavailableReason)
         val codec = presentation.tiles.first { it.kind == CommandTileKind.CODEC }
-        assertEquals(IOS_CODEC_PICKER_FALLBACKS, assertNotNull(codec.request).options)
+        assertEquals("—", codec.value)
+        assertNotNull(codec.unavailableReason)
         assertTrue(
             presentation.sideSections
                 .flatMap(CommandSideSectionPresentation::cells)
@@ -306,6 +303,8 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
+        // Unknown TV-lock still exposes a write domain so capture-bar Angle/Speed
+        // can encode via the shared core (iOS does not wait forever on lock state).
         val unknownLock =
             presentation(
                 CameraPropertySnapshot(
@@ -313,8 +312,8 @@ class CommandMonitorTest {
                     shutterAngle = "180°",
                 ),
             ).tiles.first { it.kind == CommandTileKind.SHUTTER }
-        assertEquals(null, unknownLock.request)
-        assertContains(unknownLock.unavailableReason.orEmpty(), "lock state")
+        assertNotNull(unknownLock.request)
+        assertContains(unknownLock.request!!.options, "180°")
 
         val angle =
             assertNotNull(
@@ -345,6 +344,32 @@ class CommandMonitorTest {
             )
         assertContains(speed.options, "1/50")
         assertFalse(speed.options.contains("180°"))
+    }
+
+    @Test
+    fun `resolution confirm prefers live D0A0 label over lagging fps property`() {
+        // All 6K packs share WxH; a stale frameRate of 24 must not make 24p look
+        // already-selected while the body is still on 25p.
+        val snapshot =
+            CameraPropertySnapshot(
+                resolution = "6048x3402",
+                frameRate = 24,
+                resolutionFrameRate = "[FX] 6K · 25p",
+            )
+        assertTrue(
+            cameraPropertyConfirmsSelection(
+                snapshot,
+                CameraControl.RESOLUTION_FRAMERATE,
+                "[FX] 6K · 25p",
+            ),
+        )
+        assertFalse(
+            cameraPropertyConfirmsSelection(
+                snapshot,
+                CameraControl.RESOLUTION_FRAMERATE,
+                "[FX] 6K · 24p",
+            ),
+        )
     }
 
     @Test
@@ -551,8 +576,11 @@ class CommandMonitorTest {
 
         val iris = presentation.tiles.first { it.kind == CommandTileKind.IRIS }
         assertEquals("f/2.8", iris.value)
-        assertEquals(null, iris.request)
-        assertContains(iris.unavailableReason.orEmpty(), "mounted lens")
+        // iOS/shared-core ladder keeps IRIS writable when the body has not
+        // advertised an f-number enum yet (was permanently grayed out before).
+        val request = assertNotNull(iris.request)
+        assertContains(request.options, "f/2.8")
+        assertNull(iris.unavailableReason)
     }
 
     @Test

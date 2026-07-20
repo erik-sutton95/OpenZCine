@@ -483,6 +483,8 @@ internal fun MonitorScreen(
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
     var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
     var activeAssistOptions by remember { mutableStateOf<LiveAssistOptionsRequest?>(null) }
+    // iOS pendingShutterLockState: optimistic lock UI until poll matches the write.
+    var optimisticShutterLocked by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(liveViewGuideVisible) {
         if (liveViewGuideVisible) {
             activeCommandControl = null
@@ -509,8 +511,16 @@ internal fun MonitorScreen(
     LiveAssistOptionsBackHandler(visible = activeAssistOptions != null) {
         activeAssistOptions = null
     }
+    /**
+     * Latest desired label per control while an apply is in flight (iOS write-queue
+     * coalesce). Scrolling the drum must never drop intermediate settles — only the
+     * last value for each property is sent once the prior write finishes.
+     */
+    val desiredControlWrites =
+        remember { mutableStateMapOf<CameraControl, Pair<CommandControlRequest, String>>() }
     var pendingCommandControl by remember { mutableStateOf<CameraControl?>(null) }
     var commandControlFeedback by remember { mutableStateOf<CommandControlFeedback?>(null) }
+    var controlApplyLoopRunning by remember { mutableStateOf(false) }
     // iOS `captureBarFrame`: measured glass pill so the exposure picker
     // trailing-aligns to the content-hugging bar (not the wider zone slot).
     var measuredCaptureBar by remember { mutableStateOf<ZoneFrame?>(null) }
@@ -519,6 +529,14 @@ internal fun MonitorScreen(
     }
     val resources = LocalResources.current
     val stringResolver = remember(resources) { resources.phoneStringResolver() }
+    // Drop optimistic override once the body reports the same lock state (iOS poll settle).
+    LaunchedEffect(cameraProperties.shutterLocked, optimisticShutterLocked) {
+        val optimistic = optimisticShutterLocked ?: return@LaunchedEffect
+        if (cameraProperties.shutterLocked == optimistic) {
+            optimisticShutterLocked = null
+        }
+    }
+    val effectiveShutterLocked = optimisticShutterLocked ?: cameraProperties.shutterLocked
     val commandPresentation =
         remember(
             cameraProperties,
@@ -538,8 +556,12 @@ internal fun MonitorScreen(
             )
         }
     val captureSettings =
-        remember(commandPresentation, stringResolver) {
-            monitorCaptureSettings(commandPresentation, stringResolver)
+        remember(commandPresentation, stringResolver, effectiveShutterLocked) {
+            monitorCaptureSettings(
+                commandPresentation,
+                stringResolver,
+                shutterLockedOnCamera = effectiveShutterLocked,
+            )
         }
     val topPillPickers =
         remember(commandPresentation, stringResolver) {
@@ -571,49 +593,109 @@ internal fun MonitorScreen(
             commandTileOrderStore.save(next)
         }
     }
-    val applyCameraControl: (CommandControlRequest, String) -> Unit = applyCameraControl@{ request, label ->
-        if (!commandControlsEnabled || pendingCommandControl != null) return@applyCameraControl
-        pendingCommandControl = request.control
-        commandControlFeedback = null
+    /**
+     * iOS-style apply: optimistic UI (caller already landed the drum), never block the
+     * wheel on an in-flight write, coalesce rapid settles to the latest label per control.
+     */
+    fun drainCameraControlWrites() {
+        if (controlApplyLoopRunning) return
+        controlApplyLoopRunning = true
         recordScope.launch {
             try {
-                session.applyControl(request.control, label)
-                session.refreshProperties()
-                if (cameraPropertyConfirmsSelection(session.cameraProperties.value, request.control, label)) {
-                    if (activeCommandControl?.control == request.control) {
-                        activeCommandControl = request.copy(currentValue = label)
+                while (desiredControlWrites.isNotEmpty()) {
+                    val control = desiredControlWrites.keys.first()
+                    val (req, desiredLabel) = desiredControlWrites.remove(control) ?: continue
+                    // Already matches live readback (operator scrolled back, or a prior
+                    // coalesced write landed) — skip the wire trip. Always send REC/codec
+                    // like iOS (exact advertised pack write); never skip those on a soft
+                    // label match that can lag behind the body.
+                    val alwaysWrite =
+                        control == CameraControl.RESOLUTION_FRAMERATE
+                            || control == CameraControl.CODEC
+                    if (!alwaysWrite
+                        && cameraPropertyConfirmsSelection(
+                            session.cameraProperties.value,
+                            control,
+                            desiredLabel,
+                        )
+                    ) {
+                        continue
                     }
-                    commandControlFeedback =
-                        CommandControlFeedback(
-                            appContext.getString(R.string.control_set_success, request.title, label),
-                            isError = false,
-                        )
-                } else {
-                    commandControlFeedback =
-                        CommandControlFeedback(
-                            appContext.getString(
-                                R.string.control_confirmation_failed,
-                                request.title,
-                                label,
-                            ),
-                            isError = true,
-                        )
+                    pendingCommandControl = control
+                    try {
+                        session.applyControl(control, desiredLabel)
+                        // Property poll will also catch up; one refresh keeps tiles/bar honest
+                        // after the native confirm without freezing the drum (settles still
+                        // enqueue into desiredControlWrites while this runs).
+                        session.refreshProperties()
+                        val confirmed =
+                            cameraPropertyConfirmsSelection(
+                                session.cameraProperties.value,
+                                control,
+                                desiredLabel,
+                            )
+                        // Only surface failures. iOS does not flash "set to …" on every snap.
+                        if (!confirmed && desiredControlWrites[control] == null) {
+                            commandControlFeedback =
+                                CommandControlFeedback(
+                                    appContext.getString(
+                                        R.string.control_confirmation_failed,
+                                        req.title,
+                                        desiredLabel,
+                                    ),
+                                    isError = true,
+                                )
+                        }
+                    } catch (error: CameraControlException) {
+                        if (desiredControlWrites[control] == null) {
+                            commandControlFeedback =
+                                CommandControlFeedback(
+                                    appContext.getString(
+                                        R.string.control_error,
+                                        req.title,
+                                        error.message
+                                            ?: appContext.getString(
+                                                R.string.control_change_rejected,
+                                            ),
+                                    ),
+                                    isError = true,
+                                )
+                        }
+                    }
                 }
-            } catch (error: CameraControlException) {
-                commandControlFeedback =
-                    CommandControlFeedback(
-                        appContext.getString(
-                            R.string.control_error,
-                            request.title,
-                            error.message
-                                ?: appContext.getString(R.string.control_change_rejected),
-                        ),
-                        isError = true,
-                    )
             } finally {
                 pendingCommandControl = null
+                controlApplyLoopRunning = false
+                // Settle may land in the map after the while-check empties it.
+                if (desiredControlWrites.isNotEmpty()) {
+                    drainCameraControlWrites()
+                }
             }
         }
+    }
+    val applyCameraControl: (CommandControlRequest, String) -> Unit =
+        applyCameraControl@{ request, label ->
+            if (!commandControlsEnabled) return@applyCameraControl
+            desiredControlWrites[request.control] = request to label
+            commandControlFeedback = null
+            if (activeCommandControl?.control == request.control) {
+                activeCommandControl = request.copy(currentValue = label)
+            }
+            drainCameraControlWrites()
+        }
+    // iOS shutter long-press (strip cell + open picker panel): toggle MovieTVLock.
+    val shutterHapticView = LocalView.current
+    val shutterLongPressToggle: () -> Unit = {
+        if (operatorSettings.hapticsEnabled.value) {
+            shutterHapticView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        }
+        toggleShutterLockOnCamera(
+            captureSettings = captureSettings,
+            cameraProperties = cameraProperties,
+            applyCameraControl = applyCameraControl,
+            onOptimisticShutterLocked = { optimisticShutterLocked = it },
+            shutterLockedOverride = effectiveShutterLocked,
+        )
     }
     var pendingRecordTarget by remember { mutableStateOf<Boolean?>(null) }
     val sendRecordCommand: (Boolean) -> Unit = { target ->
@@ -1521,13 +1603,7 @@ internal fun MonitorScreen(
                             )
                         commandControlFeedback = null
                     },
-                    onShutterLongPress = {
-                        toggleShutterLockOnCamera(
-                            captureSettings = captureSettings,
-                            cameraProperties = cameraProperties,
-                            applyCameraControl = applyCameraControl,
-                        )
-                    },
+                    onShutterLongPress = shutterLongPressToggle,
                     onCaptureBarBounds = { measuredCaptureBar = it },
                     onOpenCommandControl = {
                         activeAssistOptions = null
@@ -1670,13 +1746,7 @@ internal fun MonitorScreen(
                                                 )
                                             commandControlFeedback = null
                                         },
-                                        onShutterLongPress = {
-                                            toggleShutterLockOnCamera(
-                                                captureSettings = captureSettings,
-                                                cameraProperties = cameraProperties,
-                                                applyCameraControl = applyCameraControl,
-                                            )
-                                        },
+                                        onShutterLongPress = shutterLongPressToggle,
                                         onBarBoundsInRoot = { measuredCaptureBar = it },
                                         maxContentWidth = strip.width.dp,
                                     )
@@ -1950,6 +2020,7 @@ internal fun MonitorScreen(
                                 }
                             },
                             slideFromTop = isTopDropDown,
+                            onShutterLongPress = shutterLongPressToggle,
                         )
                     }
                 }
@@ -2544,25 +2615,41 @@ private fun DotViewfinderGlyph(
 
 /**
  * iOS shutter long-press: toggle `MovieTVLockSetting` (0.45s hold on the
- * SHUTTER capture cell). Uses the lock mode request already projected into
- * the capture strip when the camera advertises it.
+ * SHUTTER capture cell **or** open shutter picker — “hold anywhere”). Lock is
+ * not a picker tab (Angle / Speed only). Always builds a
+ * [CameraControl.SHUTTER_LOCK] write like iOS `unlock/lockShutterControlOnCamera`.
+ *
+ * @param onOptimisticShutterLocked mirrors iOS `pendingShutterLockState` so the
+ * drum undims immediately while the write confirms.
+ * @param shutterLockedOverride preferred lock state when optimistic UI is active.
  */
 internal fun toggleShutterLockOnCamera(
     captureSettings: List<MonitorCaptureSettingPresentation>,
     cameraProperties: CameraPropertySnapshot,
     applyCameraControl: (CommandControlRequest, String) -> Unit,
+    onOptimisticShutterLocked: ((Boolean) -> Unit)? = null,
+    shutterLockedOverride: Boolean? = null,
 ) {
-    val lockRequest =
-        captureSettings
-            .firstOrNull { it.kind == MonitorPickerKind.SHUTTER }
-            ?.picker
-            ?.modes
-            ?.firstOrNull { it.request.control == CameraControl.SHUTTER_LOCK }
-            ?.request
-            ?: return
-    val locked = cameraProperties.shutterLocked == true
+    // Need a shutter cell so we only long-press when shutter chrome is present.
+    if (captureSettings.none { it.kind == MonitorPickerKind.SHUTTER }) return
+    // null readback: still attempt Unlock so a settling body is not stuck behind a
+    // non-functional long-press (iOS always sends the toggle).
+    val locked = (shutterLockedOverride ?: cameraProperties.shutterLocked) != false
     val next = if (locked) "Unlocked" else "Locked"
-    applyCameraControl(lockRequest, next)
+    val options =
+        cameraProperties.controlCapabilities.shutterLocks
+            .ifEmpty { listOf("Unlocked", "Locked") }
+    // Optimistic UI before the safe-point write lands (iOS lockedControls flip).
+    onOptimisticShutterLocked?.invoke(next == "Locked")
+    applyCameraControl(
+        CommandControlRequest(
+            title = "Shutter Lock",
+            control = CameraControl.SHUTTER_LOCK,
+            currentValue = if (locked) "Locked" else "Unlocked",
+            options = options,
+        ),
+        next,
+    )
 }
 
 /**

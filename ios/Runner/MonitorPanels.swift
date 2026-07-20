@@ -1293,7 +1293,7 @@ struct StabilizationPickerPanel: View {
 /// by hairlines and faded at the edges. The centred value is reported through `selection`, updating
 /// as the drum locks onto each detent.
 /// −10 / +10 flanking the settled drum value (Kelvin fine-tune).
-private struct DrumSideAdjust {
+struct DrumSideAdjust {
     var minusEnabled: Bool
     var plusEnabled: Bool
     var onMinus: () -> Void
@@ -1410,7 +1410,7 @@ struct AccentDrumWheel: View {
         .accessibilityLabel(label)
     }
 
-    @ViewBuilder private fun optionRow(_ option: String, isCentered: Bool) -> some View {
+    @ViewBuilder private func optionRow(_ option: String, isCentered: Bool) -> some View {
         let row = HStack(spacing: 6) {
             Text(option)
                 .font(

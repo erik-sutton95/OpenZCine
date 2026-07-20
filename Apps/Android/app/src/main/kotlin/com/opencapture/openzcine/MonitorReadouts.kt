@@ -267,8 +267,20 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
         private set
 
     fun update(snapshot: CameraPropertySnapshot) {
-        resolution = monitorResolutionLabel(snapshot.resolution, snapshot.frameRate, resolution)
-        codec = monitorCodecCompactLabel(snapshot.codec, codec)
+        // Camera is the source of truth: prefer the control presentation
+        // (`resolutionFrameRate`, including ZR `[FX]`/`[DX]` tags) over held
+        // dimensions, then fall back to WxH+fps, then keep the last value only
+        // when this poll omitted those fields entirely.
+        resolution =
+            snapshot.resolutionFrameRate.monitorValueOrNull()
+                ?: monitorResolutionLabel(
+                    snapshot.resolution,
+                    snapshot.frameRate,
+                    resolution,
+                )
+        codec =
+            snapshot.codecSelection.monitorValueOrNull()?.let { monitorCodecCompactLabel(it, it) }
+                ?: monitorCodecCompactLabel(snapshot.codec, codec)
         media =
             monitorMediaStatus(
                 snapshot.storage, snapshot.codec, snapshot.resolution, snapshot.frameRate,

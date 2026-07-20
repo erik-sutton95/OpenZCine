@@ -11,7 +11,10 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -59,6 +62,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
@@ -77,6 +81,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * iOS `panelRevealCurve`: CSS cubic-bezier(0.16, 1, 0.3, 1), 0.20s ease-out-expo
@@ -169,22 +174,19 @@ internal fun monitorTopPillPickers(
         fallbacks: List<String>,
     ): Pair<MonitorPickerKind, MonitorPickerPresentation>? {
         val tile = primary[tileKind]
-        val cameraRequest = tile?.request?.takeIf { it.options.isNotEmpty() }
-        val options = cameraRequest?.options?.ifEmpty { null } ?: fallbacks
+        // Only open when the tile has a camera-backed request with real options.
+        // Static fallback ladders are not writeable and must not seed the drum.
+        val cameraRequest = tile?.request?.takeIf { it.options.isNotEmpty() } ?: return null
+        val options = cameraRequest.options
+        val display = tile.value?.takeIf { it != "—" }
         val current =
-            cameraRequest?.currentValue
-                ?: tile?.value?.takeIf { it != "—" }
+            matchRecordingModeOption(cameraRequest.currentValue, options)
+                ?: matchRecordingModeOption(display, options)
+                ?: cameraRequest.currentValue.takeIf { it in options }
                 ?: options.firstOrNull()
                 ?: return null
-        val request =
-            cameraRequest
-                ?: CommandControlRequest(
-                    title = tile?.title ?: strings.resolve(subtitle),
-                    control = control,
-                    currentValue = current,
-                    options = options,
-                )
-        val title = tile?.title ?: request.title
+        val request = cameraRequest.copy(currentValue = current, options = options)
+        val title = tile.title
         return kind to
             MonitorPickerPresentation(
                 kind = kind,
@@ -229,6 +231,8 @@ internal enum class MonitorPickerAnchor {
 internal fun monitorCaptureSettings(
     dashboard: CommandDashboardPresentation,
     strings: PhoneStringResolver,
+    /** Authoritative camera TV-lock when known; dims the shutter drum like iOS. */
+    shutterLockedOnCamera: Boolean? = null,
 ): List<MonitorCaptureSettingPresentation> {
     val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
     val focus =
@@ -300,24 +304,34 @@ internal fun monitorCaptureSettings(
         )
     val isoTile = primary[CommandTileKind.ISO]
     val shutterTile = primary[CommandTileKind.SHUTTER]
-    // iOS `isControlLocked` / `isShutterLocked` / ISO-while-recording dim.
+    // Codec drives dual-base vs unified ISO layout (iOS ISOPickerPolicy).
+    val codec =
+        primary[CommandTileKind.CODEC]?.value?.takeIf { it != "—" }.orEmpty()
+    // Padlock only for true recording lock — not "wait for base/codec" while the
+    // dual-base / unified policy ladder is still available to write.
     val isoLocked =
-        isoTile?.request == null &&
-            isoTile?.unavailableReason != null &&
+        isoTile?.unavailableReason?.contains("recording", ignoreCase = true) == true &&
+            isoTile.request == null &&
             isoTile.value != "—"
     val shutterLocked =
         shutterTile?.request == null &&
             shutterTile?.unavailableReason != null &&
-            shutterTile.value != "—"
-    // Codec drives dual-base vs unified ISO layout (iOS ISOPickerPolicy).
-    val codec =
-        primary[CommandTileKind.CODEC]?.value?.takeIf { it != "—" }.orEmpty()
+            shutterTile.value != "—" &&
+            shutterTile.unavailableReason.contains("locked", ignoreCase = true)
     val isoPresentation = isoPickerPresentation(isoTile, codec, exposure.getOrNull(0), strings)
     val shutterPresentation =
         shutterPickerPresentation(
             shutterTile = shutterTile,
             shutterModeTile = exposure.getOrNull(1),
             strings = strings,
+            // Prefer the camera property; fall back to the command tile's locked reason so
+            // unit tests / partial projections still dim the drum correctly.
+            shutterLocked =
+                shutterLockedOnCamera
+                    ?: (
+                        shutterTile?.unavailableReason
+                            ?.contains("locked", ignoreCase = true) == true
+                    ),
         )
     // iOS CameraDisplayState.preview order: ISO · SHUTTER · IRIS · WB · FOCUS.
     return listOf(
@@ -341,13 +355,44 @@ internal fun monitorCaptureSettings(
             controlLocked = shutterLocked,
             dimmed = shutterLocked,
         ),
-        single(
-            MonitorPickerKind.IRIS,
-            strings.resolve(R.string.camera_label_iris),
-            "f/2.8",
-            strings.resolve(R.string.camera_subtitle_iris),
-            primary[CommandTileKind.IRIS],
-        ),
+        run {
+            val irisTile = primary[CommandTileKind.IRIS]
+            val cameraOpts = irisTile?.request?.options.orEmpty()
+            val options =
+                cameraOpts.ifEmpty {
+                    IrisPickerPolicy.options(forLensDescriptor = null)
+                }
+            // Open IRIS whenever we have a live f-number, using the lens/core ladder
+            // if the body did not advertise a writable enum (same as iOS).
+            val live = irisTile?.value?.takeIf { it != "—" }
+            val presentation =
+                if (live != null && options.isNotEmpty()) {
+                    val request =
+                        irisTile.request?.copy(options = options)
+                            ?: CommandControlRequest(
+                                title = strings.resolve(R.string.camera_label_iris),
+                                control = CameraControl.IRIS,
+                                currentValue = if (live in options) live else options.first(),
+                                options = options,
+                            )
+                    MonitorPickerPresentation(
+                        kind = MonitorPickerKind.IRIS,
+                        title = strings.resolve(R.string.camera_label_iris),
+                        subtitle = strings.resolve(R.string.camera_subtitle_iris),
+                        modes = listOf(MonitorPickerModePresentation(request.title, request)),
+                    )
+                } else {
+                    null
+                }
+            MonitorCaptureSettingPresentation(
+                kind = MonitorPickerKind.IRIS,
+                label = strings.resolve(R.string.camera_label_iris),
+                value = captureBarDisplayValue(irisTile?.value ?: "—"),
+                widestValue = "f/2.8",
+                picker = presentation,
+                unavailableReason = if (presentation == null) irisTile?.unavailableReason else null,
+            )
+        },
         run {
             val wbTile = primary[CommandTileKind.WHITE_BALANCE]
             val tintTile = exposure.getOrNull(3)
@@ -640,11 +685,13 @@ internal fun shutterPickerPresentation(
     shutterTile: CommandTilePresentation?,
     shutterModeTile: CommandTilePresentation?,
     strings: PhoneStringResolver,
+    shutterLocked: Boolean? = null,
 ): MonitorPickerPresentation? {
     val live = shutterTile?.value?.takeIf { it != "—" } ?: return null
-    // Open even when shutter write is locked (iOS dimmed drum + lock banner).
-    val lockedOnCamera =
-        shutterTile.request == null && shutterTile.unavailableReason != null
+    // Only the camera TV-lock gate dims the drum. Empty descriptor options or a
+    // still-settling shutterMode must not look like "Shutter locked" — the capture
+    // strip still encodes Angle/Speed ladders through the shared core (iOS parity).
+    val lockedOnCamera = shutterLocked == true
     val cameraOpts = shutterTile.request?.options.orEmpty()
     val angleOptions = ShutterPickerPolicy.angleOptions(cameraOpts)
     val speedOptions = ShutterPickerPolicy.speedOptions(cameraOpts)
@@ -1087,11 +1134,20 @@ private fun CaptureStripCells(
                     }
                     .then(
                         if (setting.kind == MonitorPickerKind.SHUTTER && onShutterLongPress != null) {
+                            // iOS capture-bar SHUTTER: tap opens, 0.45s hold toggles TV lock
+                            // even when the cell is dimmed (locked on body).
                             Modifier.pointerInput(enabled, onShutterLongPress) {
-                                detectTapGestures(
-                                    onTap = { if (enabled) onOpenPicker(setting.kind) },
-                                    onLongPress = { onShutterLongPress() },
-                                )
+                                awaitEachGesture {
+                                    awaitFirstDown()
+                                    val releasedEarly =
+                                        withTimeoutOrNull(450L) { waitForUpOrCancellation() }
+                                    if (releasedEarly == null) {
+                                        onShutterLongPress()
+                                        waitForUpOrCancellation()
+                                    } else if (enabled) {
+                                        onOpenPicker(setting.kind)
+                                    }
+                                }
                             }
                         } else {
                             Modifier.chromeClickable(enabled) { onOpenPicker(setting.kind) }
@@ -1146,6 +1202,8 @@ internal fun MonitorControlPickerPanel(
     modifier: Modifier = Modifier,
     slideFromTop: Boolean = false,
     showBackdrop: Boolean = true,
+    /** iOS PickerPanel long-press: shutter control lock toggle (0.45s, hold anywhere). */
+    onShutterLongPress: (() -> Unit)? = null,
 ) {
     val dismissAllowed = pendingControl == null
     BackHandler(enabled = dismissAllowed, onBack = onDismiss)
@@ -1205,6 +1263,7 @@ internal fun MonitorControlPickerPanel(
                     feedback = feedback,
                     onSelect = onSelect,
                     onDismiss = onDismiss,
+                    onShutterLongPress = onShutterLongPress,
                 )
             }
         }
@@ -1221,14 +1280,21 @@ private fun PickerPanelBody(
     feedback: CommandControlFeedback?,
     onSelect: (CommandControlRequest, String) -> Unit,
     onDismiss: () -> Unit,
+    onShutterLongPress: (() -> Unit)? = null,
 ) {
     val pickerDescription =
         stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
+    val viewConfiguration = LocalViewConfiguration.current
+    // iOS uses 0.45s; Compose default is often 400ms — use the stricter of the two.
+    val shutterLongPressMs =
+        maxOf(viewConfiguration.longPressTimeoutMillis.toLong(), 450L)
+    val shutterHoldEnabled =
+        picker.kind == MonitorPickerKind.SHUTTER && onShutterLongPress != null
     var selectedMode by
         remember(picker.kind) {
             mutableIntStateOf(picker.initialModeIndex.coerceIn(0, picker.modes.lastIndex.coerceAtLeast(0)))
         }
-    // Per-tab landed values while this picker is open (iOS WB Kelvin↔Preset
+    // Per-tab landed drum position while this picker is open (iOS WB Kelvin↔Preset
     // restores the last value on that circuit, not the live readout from the
     // other tab). Seeded from each mode's current camera value / base.
     val lastByMode =
@@ -1237,14 +1303,23 @@ private fun PickerPanelBody(
                 *picker.modes.map { it.request.currentValue }.toTypedArray(),
             )
         }
+    // iOS `lastApplied`: last value written per tab. Separate from drum position so
+    // re-selecting the open-time value (e.g. 25p after scrolling to 30p) still writes.
+    val lastAppliedByMode =
+        remember(picker.kind) {
+            androidx.compose.runtime.mutableStateListOf(
+                *picker.modes.map { it.request.currentValue }.toTypedArray(),
+            )
+        }
     val modeIndex = selectedMode.coerceIn(0, picker.modes.lastIndex.coerceAtLeast(0))
     val mode = picker.modes.getOrNull(modeIndex) ?: return
-    val pending = pendingControl != null
     val isTintMode = mode.request.control == CameraControl.WHITE_BALANCE_TINT
     val isKelvinMode =
         picker.kind == MonitorPickerKind.WHITE_BALANCE &&
             mode.label.equals("Kelvin", ignoreCase = true)
-    val drumInteractive = controlsEnabled && !pending && !picker.interactionLocked
+    // Keep the drum scrollable while a write is in flight (iOS). Pending applies
+    // coalesce in MonitorScreen; freezing the wheel dropped rapid settles.
+    val drumInteractive = controlsEnabled && !picker.interactionLocked
     // Ignore drum-settles briefly after a ±10 nudge so scroll snap cannot
     // overwrite the fine-tuned value with a neighbouring dial step.
     var suppressDrumSettleUntil by remember(picker.kind) { mutableStateOf(0L) }
@@ -1262,6 +1337,28 @@ private fun PickerPanelBody(
                 .heightIn(max = frame.height.dp)
                 .overlayGlass(ChromeShape)
                 .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
+                // iOS PickerPanel: long-press anywhere (incl. lock banner) toggles shutter
+                // control lock. requireUnconsumed=false so the drum still scrolls.
+                .then(
+                    if (shutterHoldEnabled) {
+                        Modifier.pointerInput(shutterLongPressMs, onShutterLongPress) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                val releasedEarly =
+                                    withTimeoutOrNull(shutterLongPressMs) {
+                                        waitForUpOrCancellation()
+                                    }
+                                if (releasedEarly == null) {
+                                    onShutterLongPress?.invoke()
+                                    waitForUpOrCancellation()
+                                }
+                            }
+                        }
+                    } else {
+                        Modifier
+                    },
+                )
+                // Absorb plain taps so they don't fall through to the dismiss scrim.
                 .pointerInput(Unit) { detectTapGestures(onTap = {}) }
                 .padding(horizontal = 20.dp, vertical = panelVPad)
                 .semantics { contentDescription = pickerDescription },
@@ -1377,7 +1474,15 @@ private fun PickerPanelBody(
                     interactive = drumInteractive && tintAvailable,
                     onCommit = { label ->
                         if (modeIndex in lastByMode.indices) lastByMode[modeIndex] = label
-                        if (label != mode.request.currentValue) onSelect(mode.request, label)
+                        if (
+                            modeIndex !in lastAppliedByMode.indices
+                                || label != lastAppliedByMode[modeIndex]
+                        ) {
+                            if (modeIndex in lastAppliedByMode.indices) {
+                                lastAppliedByMode[modeIndex] = label
+                            }
+                            onSelect(mode.request, label)
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1410,6 +1515,7 @@ private fun PickerPanelBody(
                                         applyKelvinFineStep(
                                             modeIndex = modeIndex,
                                             lastByMode = lastByMode,
+                                            lastAppliedByMode = lastAppliedByMode,
                                             current = selectedLabel,
                                             delta = -WbPickerPolicy.FINE_STEP_KELVIN,
                                             request = mode.request,
@@ -1421,6 +1527,7 @@ private fun PickerPanelBody(
                                         applyKelvinFineStep(
                                             modeIndex = modeIndex,
                                             lastByMode = lastByMode,
+                                            lastAppliedByMode = lastAppliedByMode,
                                             current = selectedLabel,
                                             delta = WbPickerPolicy.FINE_STEP_KELVIN,
                                             request = mode.request,
@@ -1448,24 +1555,27 @@ private fun PickerPanelBody(
                             if (android.os.SystemClock.uptimeMillis() < suppressDrumSettleUntil) {
                                 return@AccentDrumWheel
                             }
+                            if (settled.isEmpty()) return@AccentDrumWheel
                             if (modeIndex in lastByMode.indices) {
                                 lastByMode[modeIndex] = settled
                             }
-                            if (settled != selectedLabel) onSelect(mode.request, settled)
+                            // iOS: apply when settled != lastApplied (not vs open-time current).
+                            val lastApplied =
+                                lastAppliedByMode.getOrNull(modeIndex).orEmpty()
+                            if (settled != lastApplied) {
+                                if (modeIndex in lastAppliedByMode.indices) {
+                                    lastAppliedByMode[modeIndex] = settled
+                                }
+                                onSelect(mode.request, settled)
+                            }
                         },
                     )
                 }
             }
         }
 
-        if (pendingControl == mode.request.control && !isTintMode) {
-            Text(
-                stringResource(R.string.camera_applying_change),
-                style = chromeStyle(11f, FontWeight.Medium),
-                color = LiveDesign.muted,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        // No in-panel "Applying change…" — iOS is silent while the drum rolls;
+        // the bar/tile value is the feedback. Errors still render above.
 
         if (picker.modes.size > 1) {
             // Fixed-height mode bar (never in the weight slot) — preserves full
@@ -1690,6 +1800,7 @@ internal data class DrumSideAdjust(
 private fun applyKelvinFineStep(
     modeIndex: Int,
     lastByMode: androidx.compose.runtime.snapshots.SnapshotStateList<String>,
+    lastAppliedByMode: androidx.compose.runtime.snapshots.SnapshotStateList<String>,
     current: String,
     delta: Int,
     request: CommandControlRequest,
@@ -1701,6 +1812,9 @@ private fun applyKelvinFineStep(
     suppressUntil(android.os.SystemClock.uptimeMillis() + 450L)
     if (modeIndex in lastByMode.indices) {
         lastByMode[modeIndex] = next
+    }
+    if (modeIndex in lastAppliedByMode.indices) {
+        lastAppliedByMode[modeIndex] = next
     }
     onSelect(request, next)
 }
@@ -1747,10 +1861,13 @@ internal fun AccentDrumWheel(
                 ?.index ?: 0
         }
     }
-    // Keep the selected row centred when the option list / selection changes
-    // (open picker, mode tab switch). contentPadding makes index 0 reachable.
+    // Centre on [selection] only when it is not already the settled row and the
+    // user is not dragging — avoids fighting fling / rapid settles (iOS keeps
+    // local drum state and only snaps when the operator is idle).
     LaunchedEffect(options, selection) {
         val index = options.indexOf(selection).coerceAtLeast(0)
+        if (listState.isScrollInProgress) return@LaunchedEffect
+        if (centeredIndex == index) return@LaunchedEffect
         listState.scrollToItem(index)
     }
     // Apply the row the wheel settles on (iOS applies on drum settle).

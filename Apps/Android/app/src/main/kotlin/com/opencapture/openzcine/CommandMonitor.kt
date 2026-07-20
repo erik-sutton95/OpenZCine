@@ -167,7 +167,10 @@ internal fun commandControlOptions(
         CommandControlOptionPresentation(
             label = label,
             selected = label == request.currentValue,
-            enabled = controlsEnabled && pendingControl == null,
+            // Do not disable rows while another write is in flight — the drum must
+            // stay interactive; MonitorScreen coalesces rapid settles like iOS.
+            // [pendingControl] is retained for callers/tests that still pass it.
+            enabled = controlsEnabled,
         )
     }
 
@@ -313,9 +316,18 @@ internal fun commandDashboardPresentation(
         }
     val resolution =
         snapshot.resolutionFrameRate.monitorValueOrNull()
-            ?: listOfNotNull(snapshot.resolution.monitorValueOrNull(), frameRate?.let { "${it}p" })
-                .joinToString(separator = " · ")
-                .ifBlank { null }
+            ?: run {
+                val rawPair =
+                    listOfNotNull(
+                            snapshot.resolution.monitorValueOrNull(),
+                            frameRate?.let { "${it}p" },
+                        )
+                        .joinToString(separator = " · ")
+                        .ifBlank { null }
+                // Prefer compact `6K · 25p` so the drum seeds on a camera option, not
+                // the raw `6048x3402 · 25p` string that never appears in the enum.
+                rawPair?.let { compactRecordingModeFromRawDisplay(it) } ?: rawPair
+            }
     val stabilization =
         listOfNotNull(
             snapshot.vibrationReduction.monitorValueOrNull(),
@@ -343,15 +355,18 @@ internal fun commandDashboardPresentation(
                 strings.resolve(R.string.command_iso_wait_base)
             else -> strings.resolve(R.string.command_iso_no_values)
         }
-    // The active descriptor changes with the camera's shutter circuit. Never
-    // surface the inactive circuit or a local fallback ladder.
+    // Prefer camera-advertised active-circuit values; the capture-bar Angle/Speed
+    // ladders still open when the descriptor is late (shared-core encode path).
     val shutterOptions = capabilities.options(CameraControl.SHUTTER)
-    val shutterWritable = snapshot.shutterLocked == false && shutterOptions.isNotEmpty()
+    val shutterWritable =
+        snapshot.shutterLocked != true && !shutter.isNullOrBlank()
     val shutterLockReason =
         when {
             snapshot.shutterLocked == true -> strings.resolve(R.string.command_shutter_locked)
-            snapshot.shutterLocked == null -> strings.resolve(R.string.command_shutter_wait_lock)
-            snapshot.shutterMode == null -> strings.resolve(R.string.command_shutter_wait_mode)
+            snapshot.shutterLocked == null && shutterOptions.isEmpty() ->
+                strings.resolve(R.string.command_shutter_wait_lock)
+            snapshot.shutterMode == null && shutterOptions.isEmpty() ->
+                strings.resolve(R.string.command_shutter_wait_mode)
             else -> strings.resolve(R.string.command_shutter_unavailable)
         }
 
@@ -380,11 +395,13 @@ internal fun commandDashboardPresentation(
     }
 
     /**
-     * Resolution / codec open like iOS even before the body advertises enums:
-     * use camera options when present, otherwise the same static fallbacks as
-     * `CameraPicker.options`. Hardware writes still validate against the live
-     * descriptor in the Swift core. When the body has not reported a current
-     * selection, centre on the first option (iOS seeds the drum the same way).
+     * Resolution / codec drums use **only camera-advertised options**. Static iOS-style
+     * ladders are display-only previews and must not be offered for apply — writing a
+     * fallback label always fails with "not supported" (no packed raw in the catalog).
+     *
+     * Current selection is matched onto the option list (raw `6048x3402 · 25p` →
+     * `6K · 25p`, crop prefixes stripped) so the drum does not default to the first
+     * row (often `6K · 24p`) while the body is on a different mode.
      */
     fun recordingModeEditable(
         kind: CommandTileKind,
@@ -395,20 +412,33 @@ internal fun commandDashboardPresentation(
         blockedReason: String,
     ): CommandTilePresentation {
         val cameraOptions = capabilities.options(control)
-        val options = cameraOptions.ifEmpty { fallbacks }
-        val currentValue = value.monitorValueOrNull() ?: options.firstOrNull()
-        return if (currentValue == null) {
-            CommandTilePresentation(kind, title, "—", unavailableReason = unavailable)
-        } else if (options.isEmpty()) {
-            CommandTilePresentation(kind, title, currentValue, unavailableReason = blockedReason)
-        } else {
-            CommandTilePresentation(
-                kind = kind,
-                title = title,
-                value = currentValue,
-                request = CommandControlRequest(title, control, currentValue, options),
-            )
+        val displayValue = value.monitorValueOrNull()
+        // Prefer real descriptor options; never write-path-fallback to static ladders.
+        val options = cameraOptions
+        if (options.isEmpty()) {
+            // Keep the readout visible; leave the control non-writable until Swift
+            // publishes MovScreenSize / MovFileType enums.
+            return if (displayValue == null) {
+                CommandTilePresentation(kind, title, "—", unavailableReason = unavailable)
+            } else {
+                CommandTilePresentation(
+                    kind = kind,
+                    title = title,
+                    value = displayValue,
+                    unavailableReason = blockedReason,
+                )
+            }
         }
+        val currentValue =
+            matchRecordingModeOption(displayValue, options)
+                ?: options.firstOrNull()
+                ?: return CommandTilePresentation(kind, title, "—", unavailableReason = unavailable)
+        return CommandTilePresentation(
+            kind = kind,
+            title = title,
+            value = displayValue ?: currentValue,
+            request = CommandControlRequest(title, control, currentValue, options),
+        )
     }
 
     fun readOnly(
@@ -461,31 +491,65 @@ internal fun commandDashboardPresentation(
                     EXPOSURE_MODE_OPTIONS,
                 ),
             CommandTileKind.ISO to
-                advertisedEditable(
-                    kind = CommandTileKind.ISO,
-                    title = strings.resolve(R.string.command_title_iso),
-                    value = snapshot.iso?.takeIf { it > 0 }?.toString(),
-                    control = CameraControl.ISO,
-                    writable = !isoLockedDuringRecording,
-                    blockedReason = isoCapabilityReason,
-                ),
+                run {
+                    val isoValue = snapshot.iso?.takeIf { it > 0 }?.toString()
+                    val cameraIso = capabilities.options(CameraControl.ISO)
+                    // Capture bar always uses IsoPickerPolicy ladders; keep the command
+                    // tile writable with the same union when the body has not yet named
+                    // a dual-base circuit (otherwise ISO padlocks with "wait for base").
+                    val isoOptions =
+                        cameraIso.ifEmpty {
+                            when {
+                                codec == null -> emptyList()
+                                IsoPickerPolicy.showsDualBaseCircuits(codec) ->
+                                    IsoPickerPolicy.unifiedOptions
+                                else -> IsoPickerPolicy.unifiedOptions
+                            }
+                        }
+                    editable(
+                        kind = CommandTileKind.ISO,
+                        title = strings.resolve(R.string.command_title_iso),
+                        value = isoValue,
+                        control = CameraControl.ISO,
+                        options = isoOptions,
+                        writable = !isoLockedDuringRecording && isoOptions.isNotEmpty(),
+                        blockedReason = isoCapabilityReason,
+                    )
+                },
             CommandTileKind.SHUTTER to
-                advertisedEditable(
+                editable(
                     kind = CommandTileKind.SHUTTER,
                     title = strings.resolve(R.string.command_title_shutter),
                     value = shutter,
                     control = CameraControl.SHUTTER,
-                    blockedReason = shutterLockReason,
+                    // Capture-bar / shared-core encode use Angle+Speed ladders when the
+                    // body has not advertised the active circuit yet.
+                    options =
+                        shutterOptions.ifEmpty {
+                            ShutterPickerPolicy.angleOptions + ShutterPickerPolicy.speedOptions
+                        },
                     writable = shutterWritable,
+                    blockedReason = shutterLockReason,
                 ),
             CommandTileKind.IRIS to
-                advertisedEditable(
-                    kind = CommandTileKind.IRIS,
-                    title = strings.resolve(R.string.command_title_iris),
-                    value = snapshot.iris,
-                    control = CameraControl.IRIS,
-                    blockedReason = strings.resolve(R.string.command_reason_aperture),
-                ),
+                run {
+                    val cameraIris = capabilities.options(CameraControl.IRIS)
+                    // Match iOS: when the body omits an f-number enum, still offer the
+                    // shared-core / lens ladder so IRIS is not permanently grayed out.
+                    val irisOptions =
+                        cameraIris.ifEmpty {
+                            IrisPickerPolicy.options(forLensDescriptor = snapshot.lens)
+                        }
+                    editable(
+                        kind = CommandTileKind.IRIS,
+                        title = strings.resolve(R.string.command_title_iris),
+                        value = snapshot.iris,
+                        control = CameraControl.IRIS,
+                        options = irisOptions,
+                        writable = irisOptions.isNotEmpty(),
+                        blockedReason = strings.resolve(R.string.command_reason_aperture),
+                    )
+                },
             CommandTileKind.WHITE_BALANCE to
                 advertisedEditable(
                     kind = CommandTileKind.WHITE_BALANCE,
@@ -740,6 +804,70 @@ private fun commandTemperature(
         null -> "—"
     }
 
+/**
+ * Compares recording-mode labels loosely: crop prefixes (`[FX] ` / `[DX] `) and
+ * spacing around the middle-dot are ignored so top-bar REC confirmation matches
+ * both the capability string and the compact info-pill readout.
+ */
+internal fun recordingModeLabelsMatch(left: String?, right: String?): Boolean {
+    val a = normalizeRecordingModeLabel(left)
+    val b = normalizeRecordingModeLabel(right)
+    return a.isNotEmpty() && a == b
+}
+
+/** Normalize crop prefix + middot spacing for recording-mode labels. */
+internal fun normalizeRecordingModeLabel(value: String?): String {
+    if (value.isNullOrBlank()) return ""
+    return value
+        .trim()
+        .replace(Regex("""^\[[^\]]+\]\s*"""), "")
+        .replace(Regex("""\s*·\s*"""), "·")
+        .replace(Regex("""\s+"""), " ")
+}
+
+/**
+ * Maps a display value (compact `6K · 25p`, raw `6048x3402 · 25p`, or crop-prefixed)
+ * onto the first camera-advertised option that represents the same mode.
+ */
+internal fun matchRecordingModeOption(display: String?, options: List<String>): String? {
+    if (options.isEmpty()) return null
+    val raw = display?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    options.firstOrNull { it == raw }?.let { return it }
+    val normalized = normalizeRecordingModeLabel(raw)
+    options.firstOrNull { normalizeRecordingModeLabel(it) == normalized }?.let { return it }
+    // Raw property path: "6048x3402 · 25p" or "6048x3402 · 25p" → compact class label.
+    val compact = compactRecordingModeFromRawDisplay(raw)
+    if (compact != null) {
+        val compactNorm = normalizeRecordingModeLabel(compact)
+        options.firstOrNull { normalizeRecordingModeLabel(it) == compactNorm }?.let { return it }
+    }
+    return null
+}
+
+/**
+ * Turns a raw `WxH · Np` / `WxH·Np` tile value into `6K · 25p`-style compact form.
+ */
+internal fun compactRecordingModeFromRawDisplay(display: String): String? {
+    val cleaned = display.trim().replace(Regex("""\s*·\s*"""), " · ")
+    val match =
+        Regex(
+                """^(\d+)\s*[xX×]\s*(\d+)\s*·\s*(\d+)\s*p?$""",
+                RegexOption.IGNORE_CASE,
+            )
+            .matchEntire(cleaned)
+            ?: return null
+    val width = match.groupValues[1].toIntOrNull() ?: return null
+    val fps = match.groupValues[3].toIntOrNull() ?: return null
+    val resolutionClass =
+        when {
+            width >= 7680 -> "8K"
+            width >= 5000 -> "6K"
+            width >= 3500 -> "4K"
+            else -> width.toString()
+        }
+    return "$resolutionClass · ${fps}p"
+}
+
 /** True only when a completed property refresh reflects the accepted control write. */
 internal fun cameraPropertyConfirmsSelection(
     snapshot: CameraPropertySnapshot,
@@ -781,8 +909,27 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.SHUTTER_LOCK ->
             snapshot.shutterLocked?.let { (if (it) "Locked" else "Unlocked") == label } == true
         CameraControl.WHITE_BALANCE_TINT -> snapshot.whiteBalanceTint == label
-        CameraControl.RESOLUTION_FRAMERATE -> snapshot.resolutionFrameRate == label
-        CameraControl.CODEC -> snapshot.codecSelection == label
+        CameraControl.RESOLUTION_FRAMERATE -> {
+            // Prefer the D0A0-backed live label. Falling through to resolution+fps when
+            // resolutionFrameRate is already present caused false "already confirmed"
+            // skips: all 6K modes share WxH (`6048x3402`), so a lagging fps property
+            // (often stuck at 24) made selecting 24p look like a no-op and never write.
+            val live = snapshot.resolutionFrameRate
+            if (!live.isNullOrBlank()) {
+                recordingModeLabelsMatch(live, label)
+            } else {
+                recordingModeLabelsMatch(
+                    monitorResolutionLabel(snapshot.resolution, snapshot.frameRate, ""),
+                    label,
+                )
+            }
+        }
+        CameraControl.CODEC ->
+            recordingModeLabelsMatch(snapshot.codecSelection, label) ||
+                recordingModeLabelsMatch(
+                    snapshot.codec?.let(::monitorCodecShortLabel),
+                    label,
+                )
         CameraControl.VIBRATION_REDUCTION -> snapshot.vibrationReduction == label
         CameraControl.ELECTRONIC_VR -> snapshot.electronicVr == label
     }
@@ -1153,8 +1300,11 @@ private fun CommandTile(
 ) {
     val request = tile.request
     val pending = pendingControl != null
-    val applyingThisControl = request?.control == pendingControl
-    val controlEnabled = request != null && controlsEnabled && !pending
+    // `null == null` is true in Kotlin — never treat a missing request as "applying".
+    val applyingThisControl = request != null && request.control == pendingControl
+    // Stay tappable while another control writes — applies coalesce; greying the
+    // whole grid made rapid multi-control edits feel stuck.
+    val controlEnabled = request != null && controlsEnabled
     // Dashboard layout is app-local, so even read-only camera values remain
     // reorderable without implying that their Nikon property can be changed.
     val canMove = tile.kind != null
@@ -1401,8 +1551,9 @@ private fun CommandSmallTile(
 ) {
     val request = cell.request
     val pending = pendingControl != null
-    val applyingThisControl = request?.control == pendingControl
-    val enabled = request != null && controlsEnabled && !pending
+    // Same null-equality trap as the primary tile path.
+    val applyingThisControl = request != null && request.control == pendingControl
+    val enabled = request != null && controlsEnabled
     val applyingDescription = stringResource(R.string.command_state_applying)
     val pendingDescription = stringResource(R.string.command_state_pending)
     val readOnlyDescription = cell.unavailableReason ?: stringResource(R.string.command_state_read_only)
@@ -1473,11 +1624,10 @@ internal fun CommandControlDialog(
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val pending = pendingControl != null
     val options = commandControlOptions(request, pendingControl, controlsEnabled)
     val isTintPad = request.control == CameraControl.WHITE_BALANCE_TINT
-    val dismissAllowed = !pending
-    BackHandler(enabled = dismissAllowed, onBack = onDismiss)
+    // Allow dismiss while a write drains — iOS never traps the operator in the panel.
+    BackHandler(onBack = onDismiss)
 
     var revealed by remember(request.control, request.title) { mutableStateOf(false) }
     LaunchedEffect(request.control, request.title) { revealed = true }
@@ -1492,7 +1642,7 @@ internal fun CommandControlDialog(
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier.fillMaxSize()
-                .chromeClickable(enabled = dismissAllowed, onClick = onDismiss),
+                .chromeClickable(onClick = onDismiss),
         )
         Column(
             modifier =
@@ -1537,13 +1687,14 @@ internal fun CommandControlDialog(
                         modifier = Modifier.padding(bottom = 2.dp),
                     )
                 }
-                PanelCloseButton(onClick = { if (dismissAllowed) onDismiss() })
+                PanelCloseButton(onClick = onDismiss)
             }
-            feedback?.let {
+            // Errors only — success toasts steal height and iOS stays silent on snap.
+            if (feedback?.isError == true) {
                 Text(
-                    it.message,
+                    feedback.message,
                     style = chromeStyle(11f, FontWeight.Medium),
-                    color = if (it.isError) LiveDesign.rec else LiveDesign.good,
+                    color = LiveDesign.rec,
                     maxLines = 2,
                     overflow = TextOverflow.Clip,
                 )
@@ -1556,37 +1707,47 @@ internal fun CommandControlDialog(
                     maxLines = 2,
                 )
             }
+            // iOS PickerPanel: local selection + lastApplied, seeded once on open.
+            // Never gate settles on request.currentValue — that blocks re-selecting the
+            // value the popup opened on (25→30 works, 30→25 silent until reopen).
+            val openKey = request.control to request.title
+            val labels = options.map { it.label }
+            val seed =
+                labels.firstOrNull { it == request.currentValue }
+                    ?: labels.firstOrNull()
+                    ?: request.currentValue
+            var lastApplied by remember(openKey) { mutableStateOf(seed) }
+            var selection by remember(openKey) { mutableStateOf(seed) }
             if (isTintPad) {
                 val tintAvailable = options.isNotEmpty()
                 WhiteBalanceTintPad(
-                    currentLabel = request.currentValue.ifBlank { "Neutral" },
+                    currentLabel = lastApplied.ifBlank { "Neutral" },
                     available = tintAvailable,
-                    interactive = controlsEnabled && !pending && tintAvailable,
+                    interactive = controlsEnabled && tintAvailable,
                     onCommit = { label ->
-                        if (label != request.currentValue) onSelect(label)
+                        if (label != lastApplied) {
+                            lastApplied = label
+                            selection = label
+                            onSelect(label)
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
             } else {
-                val selectedLabel =
-                    options.firstOrNull { it.selected }?.label
-                        ?: options.firstOrNull()?.label
-                        ?: ""
                 AccentDrumWheel(
-                    options = options.map { it.label },
-                    selection = selectedLabel,
-                    interactive = controlsEnabled && !pending,
+                    options = labels,
+                    selection = selection,
+                    // Stay interactive during in-flight applies (coalesced queue).
+                    interactive = controlsEnabled,
                     modifier = Modifier.fillMaxWidth(),
                     onSettle = { settled ->
-                        if (settled != selectedLabel) onSelect(settled)
+                        if (settled.isEmpty()) return@AccentDrumWheel
+                        selection = settled
+                        if (settled != lastApplied) {
+                            lastApplied = settled
+                            onSelect(settled)
+                        }
                     },
-                )
-            }
-            if (pending) {
-                Text(
-                    stringResource(R.string.camera_applying_change),
-                    style = chromeStyle(11f, FontWeight.Medium),
-                    color = LiveDesign.muted,
                 )
             }
         }

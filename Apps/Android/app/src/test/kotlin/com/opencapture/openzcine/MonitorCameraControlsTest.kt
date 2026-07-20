@@ -314,20 +314,10 @@ class MonitorCameraControlsTest {
     }
 
     @Test
-    fun `top pill pickers always open like iOS even without advertised options`() {
+    fun `top pill pickers open only with camera advertised options`() {
+        // Unwritable static ladders must not seed the drum (they always fail apply).
         val empty = monitorTopPillPickers(dashboard(CameraPropertySnapshot()), strings)
-        assertEquals(
-            setOf(MonitorPickerKind.RESOLUTION, MonitorPickerKind.CODEC),
-            empty.keys,
-        )
-        assertEquals(
-            IOS_RESOLUTION_PICKER_FALLBACKS,
-            empty.getValue(MonitorPickerKind.RESOLUTION).modes.single().request.options,
-        )
-        assertEquals(
-            IOS_CODEC_PICKER_FALLBACKS,
-            empty.getValue(MonitorPickerKind.CODEC).modes.single().request.options,
-        )
+        assertTrue(empty.isEmpty())
 
         val advertised =
             monitorTopPillPickers(
@@ -350,9 +340,32 @@ class MonitorCameraControlsTest {
             advertised.getValue(MonitorPickerKind.RESOLUTION).modes.single().request.options,
         )
         assertEquals(
+            "6K · 25p",
+            advertised.getValue(MonitorPickerKind.RESOLUTION).modes.single().request.currentValue,
+        )
+        assertEquals(
             listOf("H.265", "R3D NE"),
             advertised.getValue(MonitorPickerKind.CODEC).modes.single().request.options,
         )
+    }
+
+    @Test
+    fun `raw resolution tile value maps onto compact camera option`() {
+        assertEquals(
+            "6K · 25p",
+            matchRecordingModeOption(
+                "6048x3402 · 25p",
+                listOf("6K · 24p", "6K · 25p", "[FX] 6K · 25p"),
+            ),
+        )
+        assertEquals(
+            "[FX] 6K · 25p",
+            matchRecordingModeOption(
+                "6K · 25p",
+                listOf("[FX] 6K · 24p", "[FX] 6K · 25p"),
+            ),
+        )
+        assertEquals("6K · 25p", compactRecordingModeFromRawDisplay("6048x3402 · 25p"))
     }
 
     @Test
