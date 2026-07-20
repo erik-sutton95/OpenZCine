@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1883,19 +1884,36 @@ private fun LayoutControl(layout: MediaLibraryLayout, onToggle: (MediaLibraryLay
 /** Opens the composable filter sheet and exposes its active-group count. */
 @Composable
 private fun FilterControl(activeCount: Int, onClick: () -> Unit) {
-    Text(
-        if (activeCount > 0) "FILTER $activeCount" else "FILTER",
-        style = chromeStyle(10f, FontWeight.Bold, mono = true),
-        color = if (activeCount > 0) LiveDesign.accent else LiveDesign.muted,
-        modifier =
-            Modifier.glass(CapsuleShape)
-                .semantics {
-                    contentDescription =
-                        if (activeCount > 0) "$activeCount active media filters" else "Filter media"
-                    role = Role.Button
-                }.chromeClickable(onClick)
-                .padding(horizontal = 10.dp, vertical = 9.dp),
-    )
+    // iOS: FILTER pill with optional accent count badge.
+    Row(
+        Modifier.glass(CapsuleShape)
+            .semantics {
+                contentDescription =
+                    if (activeCount > 0) "$activeCount active media filters" else "Filter media"
+                role = Role.Button
+            }.chromeClickable(onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "FILTER",
+            style = chromeStyle(10f, FontWeight.Bold, mono = true),
+            color = if (activeCount > 0) LiveDesign.accent else LiveDesign.muted,
+        )
+        if (activeCount > 0) {
+            Text(
+                "$activeCount",
+                style = chromeStyle(9f, FontWeight.Bold, mono = true),
+                color = LiveDesign.background,
+                modifier =
+                    Modifier
+                        .clip(CapsuleShape)
+                        .background(LiveDesign.accent)
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
+            )
+        }
+    }
 }
 
 /** Three persisted adaptive-grid density presets. */
@@ -1927,7 +1945,10 @@ private fun ThumbnailSizeControl(
     }
 }
 
-/** Camera-scoped filter controls; sets compose with AND semantics between sections. */
+/**
+ * Camera-scoped filter controls. iOS presents a ~400pt glass popup over a
+ * dimmed backdrop — not a Material AlertDialog.
+ */
 @Composable
 private fun MediaFilterDialog(
     filters: MediaLibraryFilters,
@@ -1935,59 +1956,105 @@ private fun MediaFilterDialog(
     onFiltersChanged: (MediaLibraryFilters) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("Filters") },
-        text = {
+        properties =
+            androidx.compose.ui.window.DialogProperties(
+                usePlatformDefaultWidth = false,
+            ),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.45f))
+                .chromeClickable(onClick = onDismiss),
+            contentAlignment = Alignment.TopCenter,
+        ) {
             Column(
-                Modifier.fillMaxWidth().heightIn(max = 290.dp).verticalScroll(rememberScrollState()),
+                Modifier
+                    .padding(top = 72.dp, start = 20.dp, end = 20.dp)
+                    .widthIn(max = 400.dp)
+                    .fillMaxWidth()
+                    .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
+                    .chromeClickable(onClick = {}) // absorb taps so backdrop doesn't dismiss mid-row
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                FilterSection("FORMAT") {
-                    MediaContainerFilter.entries.forEach { value ->
-                        FilterChoice(value.title, value in filters.containers) {
-                            onFiltersChanged(filters.copy(containers = filters.containers.toggled(value)))
-                        }
-                    }
-                }
-                FilterSection("RESOLUTION") {
-                    MediaResolutionFilter.entries.forEach { value ->
-                        FilterChoice(value.title, value in filters.resolutions) {
-                            onFiltersChanged(filters.copy(resolutions = filters.resolutions.toggled(value)))
-                        }
-                    }
-                }
-                FilterSection("DATE") {
-                    FilterChoice("TODAY", filters.todayOnly) {
-                        onFiltersChanged(filters.copy(todayOnly = !filters.todayOnly))
-                    }
-                }
-                if (storageIds.isNotEmpty()) {
-                    FilterSection("STORAGE") {
-                        storageIds.forEachIndexed { index, storageId ->
-                            FilterChoice("SLOT ${index + 1}", filters.storageId == storageId) {
+                Text(
+                    "Filters",
+                    style = chromeStyle(16f, FontWeight.SemiBold),
+                    color = LiveDesign.text,
+                )
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 290.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    FilterSection("FORMAT") {
+                        MediaContainerFilter.entries.forEach { value ->
+                            FilterChoice(value.title, value in filters.containers) {
                                 onFiltersChanged(
-                                    filters.copy(
-                                        storageId = if (filters.storageId == storageId) null else storageId,
-                                    ),
+                                    filters.copy(containers = filters.containers.toggled(value)),
                                 )
                             }
                         }
                     }
+                    FilterSection("RESOLUTION") {
+                        MediaResolutionFilter.entries.forEach { value ->
+                            FilterChoice(value.title, value in filters.resolutions) {
+                                onFiltersChanged(
+                                    filters.copy(resolutions = filters.resolutions.toggled(value)),
+                                )
+                            }
+                        }
+                    }
+                    FilterSection("DATE") {
+                        FilterChoice("TODAY", filters.todayOnly) {
+                            onFiltersChanged(filters.copy(todayOnly = !filters.todayOnly))
+                        }
+                    }
+                    if (storageIds.isNotEmpty()) {
+                        FilterSection("STORAGE") {
+                            storageIds.forEachIndexed { index, storageId ->
+                                FilterChoice("SLOT ${index + 1}", filters.storageId == storageId) {
+                                    onFiltersChanged(
+                                        filters.copy(
+                                            storageId =
+                                                if (filters.storageId == storageId) null
+                                                else storageId,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        "Clear all",
+                        style = chromeStyle(13f, FontWeight.Medium),
+                        color =
+                            if (filters.activeCount > 0) LiveDesign.accent else LiveDesign.faint,
+                        modifier =
+                            Modifier.chromeClickable(enabled = filters.activeCount > 0) {
+                                onFiltersChanged(MediaLibraryFilters())
+                            },
+                    )
+                    Text(
+                        "Done",
+                        style = chromeStyle(13f, FontWeight.SemiBold),
+                        color = LiveDesign.accent,
+                        modifier = Modifier.chromeClickable(onClick = onDismiss),
+                    )
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-        dismissButton = {
-            TextButton(
-                enabled = filters.activeCount > 0,
-                onClick = { onFiltersChanged(MediaLibraryFilters()) },
-            ) {
-                Text("Clear all filters")
-            }
-        },
-        containerColor = LiveDesign.surface,
-    )
+        }
+    }
 }
 
 @Composable

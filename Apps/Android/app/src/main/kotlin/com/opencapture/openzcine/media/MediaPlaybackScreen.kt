@@ -1379,7 +1379,9 @@ private fun ProgressivePlayer(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        PlaybackButton("−15", "Back 15 seconds") {
+                        // iOS SF-style compact glyphs (gobackward.15 / play / goforward.15 /
+                        // speaker) — keep labels short for landscape phone height.
+                        PlaybackButton("↩15", "Back 15 seconds") {
                             val target =
                                 PlaybackTimeline.clampPosition(
                                     player.currentPosition - 15_000L,
@@ -1389,10 +1391,10 @@ private fun ProgressivePlayer(
                             reachedEnd = false
                         }
                         PlaybackButton(
-                            if (reachedEnd) "↺" else if (playing) "Ⅱ" else "▶",
+                            if (reachedEnd) "↺" else if (playing) "❚❚" else "▶",
                             if (reachedEnd) "Replay from beginning" else "Play or pause",
                         ) { togglePlayback() }
-                        PlaybackButton("+15", "Forward 15 seconds") {
+                        PlaybackButton("15↪", "Forward 15 seconds") {
                             val target =
                                 PlaybackTimeline.clampPosition(
                                     player.currentPosition + 15_000L,
@@ -1403,7 +1405,7 @@ private fun ProgressivePlayer(
                         }
                         Spacer(Modifier.weight(1f))
                         PlaybackButton(
-                            if (audioMode == PlaybackAudioMode.MUTED) "MUTED" else "AUDIO",
+                            if (audioMode == PlaybackAudioMode.MUTED) "🔇" else "🔊",
                             if (audioMode == PlaybackAudioMode.MUTED) "Unmute" else "Mute",
                         ) {
                             audioMode = audioMode.toggled()
