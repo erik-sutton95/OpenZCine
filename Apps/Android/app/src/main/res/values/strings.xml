@@ -298,7 +298,7 @@
     <string name="camera_subtitle_iso">Sensitivity · dual base</string>
     <string name="camera_subtitle_shutter">Angle / speed</string>
     <string name="camera_subtitle_iris">Aperture</string>
-    <string name="camera_subtitle_focus">AF mode / area / subject</string>
+    <string name="camera_subtitle_focus">AF mode · area · subject</string>
     <string name="camera_subtitle_wb">Kelvin / preset / tint</string>
     <!-- Mode tab titles mirror iOS CameraPicker.whiteBalance.modes (Kelvin / Preset / Tint). -->
     <string name="camera_subtitle_resolution">Resolution · frame rate</string>

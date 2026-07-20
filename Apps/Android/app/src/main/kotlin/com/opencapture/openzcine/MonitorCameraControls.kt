@@ -290,13 +290,14 @@ internal fun monitorCaptureSettings(
             dimmed = dimmed,
         )
 
-    val focusModes =
-        listOfNotNull(
-            mode(strings.resolve(R.string.camera_mode_af), focus.getOrNull(0)),
-            mode(strings.resolve(R.string.camera_mode_area), focus.getOrNull(1)),
-            mode(strings.resolve(R.string.camera_mode_subject), focus.getOrNull(2)),
-        )
     val focusValue = focus.getOrNull(0)?.value ?: "—"
+    val focusPresentation =
+        focusPickerPresentation(
+            afModeTile = focus.getOrNull(0),
+            areaTile = focus.getOrNull(1),
+            subjectTile = focus.getOrNull(2),
+            strings = strings,
+        )
     val isoTile = primary[CommandTileKind.ISO]
     val shutterTile = primary[CommandTileKind.SHUTTER]
     // iOS `isControlLocked` / `isShutterLocked` / ISO-while-recording dim.
@@ -365,17 +366,109 @@ internal fun monitorCaptureSettings(
             label = strings.resolve(R.string.camera_label_focus),
             value = captureBarDisplayValue(focusValue),
             widestValue = "Wide-L",
-            picker =
-                focusModes.takeIf(List<MonitorPickerModePresentation>::isNotEmpty)?.let {
-                    MonitorPickerPresentation(
-                        MonitorPickerKind.FOCUS,
-                        strings.resolve(R.string.camera_label_focus),
-                        strings.resolve(R.string.camera_subtitle_focus),
-                        it,
-                    )
-                },
+            picker = focusPresentation,
             unavailableReason = focus.getOrNull(0)?.unavailableReason,
         ),
+    )
+}
+
+/**
+ * iOS `CameraPicker.focus.modes` — three independent tabs (AF Mode / Area /
+ * Subject), each its own camera control. Ladders match iOS; multi-value camera
+ * enums merge in extras without replacing the full AF Mode set.
+ */
+internal fun focusPickerPresentation(
+    afModeTile: CommandTilePresentation?,
+    areaTile: CommandTilePresentation?,
+    subjectTile: CommandTilePresentation?,
+    strings: PhoneStringResolver,
+): MonitorPickerPresentation? {
+    fun drum(
+        tabLabel: String,
+        tile: CommandTilePresentation?,
+        control: CameraControl,
+        options: List<String>,
+        base: String,
+        live: String?,
+    ): MonitorPickerModePresentation? {
+        // Open when the body has a readout even if options are still settling.
+        val value = live?.takeIf { it != "—" } ?: tile?.value?.takeIf { it != "—" } ?: return null
+        val request =
+            tile?.request?.copy(
+                control = control,
+                currentValue =
+                    when {
+                        value in options -> value
+                        else -> base
+                    },
+                options = options,
+            )
+                ?: CommandControlRequest(
+                    title = strings.resolve(R.string.camera_label_focus),
+                    control = control,
+                    currentValue = if (value in options) value else base,
+                    options = options,
+                )
+        return MonitorPickerModePresentation(label = tabLabel, request = request)
+    }
+
+    val afLive = afModeTile?.value?.takeIf { it != "—" }
+    val areaLive = areaTile?.value?.takeIf { it != "—" }
+    val subjectLive = subjectTile?.value?.takeIf { it != "—" }
+    val afOpts =
+        FocusPickerPolicy.afModeOptions(afModeTile?.request?.options.orEmpty())
+    val areaOpts =
+        FocusPickerPolicy.areaOptions(areaTile?.request?.options.orEmpty())
+    val subjectOpts =
+        FocusPickerPolicy.subjectOptions(subjectTile?.request?.options.orEmpty())
+
+    // Tab titles are iOS-literal (same as Kelvin / Preset / Tint) so tests and
+    // chrome match without string-resource indirection.
+    val modes =
+        listOfNotNull(
+            drum(
+                tabLabel = "AF Mode",
+                tile = afModeTile,
+                control = CameraControl.FOCUS_MODE,
+                options = afOpts,
+                base = FocusPickerPolicy.AF_MODE_BASE,
+                live = afLive,
+            ),
+            drum(
+                tabLabel = "Area",
+                tile = areaTile,
+                control = CameraControl.FOCUS_AREA,
+                options = areaOpts,
+                base = FocusPickerPolicy.AREA_BASE,
+                live = areaLive,
+            ),
+            drum(
+                tabLabel = "Subject",
+                tile = subjectTile,
+                control = CameraControl.FOCUS_SUBJECT,
+                options = subjectOpts,
+                base = FocusPickerPolicy.SUBJECT_BASE,
+                live = subjectLive,
+            ),
+        )
+    if (modes.isEmpty()) return null
+
+    val initialMode =
+        when {
+            FocusPickerPolicy.isAfModeLabel(afLive.orEmpty()) -> 0
+            FocusPickerPolicy.isAreaLabel(areaLive.orEmpty()) &&
+                !FocusPickerPolicy.isAfModeLabel(afLive.orEmpty()) -> 1
+            FocusPickerPolicy.isSubjectLabel(subjectLive.orEmpty()) &&
+                afLive == null -> 2
+            else -> 0
+        }
+
+    return MonitorPickerPresentation(
+        kind = MonitorPickerKind.FOCUS,
+        title = strings.resolve(R.string.camera_label_focus),
+        subtitle = FocusPickerPolicy.SUBTITLE,
+        modes = modes,
+        initialModeIndex = initialMode.coerceIn(0, modes.lastIndex),
     )
 }
 

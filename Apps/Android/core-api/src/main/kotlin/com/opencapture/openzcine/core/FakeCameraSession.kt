@@ -210,10 +210,12 @@ public class FakeCameraSession(
                                 "f/8.0",
                                 "f/11.0",
                             ),
-                        focusModes =
-                            listOf("MF", "AF-S", "AF-C", "AF-F", "Wide-L", "Auto Subject"),
-                        focusAreas = listOf("Wide-L", "Normal", "Pinpoint", "Subject"),
-                        focusSubjects = listOf("People", "Animal", "Vehicle", "Off"),
+                        // iOS CameraPicker.focus.modes ladders (independent tabs).
+                        focusModes = listOf("MF", "AF-S", "AF-C", "AF-F"),
+                        focusAreas =
+                            listOf("Single", "Wide-S", "Wide-L", "Auto", "Subject"),
+                        focusSubjects =
+                            listOf("Auto", "People", "Animal", "Bird", "Vehicle", "Airplane"),
                         resolutionFrameRates =
                             listOf(
                                 "6K · 24p",

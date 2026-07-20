@@ -100,10 +100,30 @@ class MonitorCameraControlsTest {
         )
         assertEquals(WbPickerPolicy.SUBTITLE, settings[3].picker?.subtitle)
         assertEquals(0, settings[3].picker?.initialModeIndex) // 5560K → Kelvin
+        // iOS CameraPicker.focus: AF Mode / Area / Subject (independent tabs).
+        assertEquals(
+            listOf("AF Mode", "Area", "Subject"),
+            settings[4].picker?.modes?.map(MonitorPickerModePresentation::label),
+        )
         assertEquals(
             listOf(CameraControl.FOCUS_MODE, CameraControl.FOCUS_AREA, CameraControl.FOCUS_SUBJECT),
             settings[4].picker?.modes?.map { it.request.control },
         )
+        assertEquals(FocusPickerPolicy.SUBTITLE, settings[4].picker?.subtitle)
+        // Sparse camera AF enum still expands to the full iOS AF Mode ladder.
+        assertEquals(
+            FocusPickerPolicy.afModeOptions,
+            settings[4].picker?.modes?.first()?.request?.options,
+        )
+        assertEquals(
+            FocusPickerPolicy.areaOptions,
+            settings[4].picker?.modes?.get(1)?.request?.options,
+        )
+        assertEquals(
+            FocusPickerPolicy.subjectOptions,
+            settings[4].picker?.modes?.get(2)?.request?.options,
+        )
+        assertEquals(0, settings[4].picker?.initialModeIndex) // AF-C → AF Mode
         assertEquals(
             MonitorPickerKind.FOCUS,
             monitorPickerKindForRequest(
