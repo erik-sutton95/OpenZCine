@@ -109,6 +109,21 @@ android {
         ndk {
             abiFilters += supportedAndroidAbi
         }
+
+        externalNativeBuild {
+            cmake {
+                // Static STL avoids clashing with Swift runtime's libc++_shared.so.
+                cppFlags += listOf("-std=c++17", "-fno-exceptions", "-fno-rtti")
+                arguments += listOf("-DANDROID_STL=c++_static")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/live_feed_vk/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {
