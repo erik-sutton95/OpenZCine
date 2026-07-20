@@ -666,15 +666,18 @@
     public func swiftCoreResolveLiveViewRequest(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, streamPreset: jint,
         qualityBias: jint, thermalTier: jint, isRecording: jboolean,
-        cameraOverheating: jboolean
+        cameraOverheating: jboolean, recordingFrameRate: jint
     ) -> jstring? {
+        // JNI cannot pass optional ints; non-positive means "unknown".
+        let frameRate = Int(recordingFrameRate)
         guard
             let request = AndroidLiveViewPolicyWire.resolve(
                 streamPresetRaw: Int(streamPreset),
                 qualityBiasRaw: Int(qualityBias),
                 thermalTierRaw: Int(thermalTier),
                 isRecording: isRecording != 0,
-                cameraOverheating: cameraOverheating != 0)
+                cameraOverheating: cameraOverheating != 0,
+                recordingFrameRate: frameRate > 0 ? frameRate : nil)
         else { return nil }
         return javaString(env, AndroidLiveViewPolicyWire.encode(request))
     }

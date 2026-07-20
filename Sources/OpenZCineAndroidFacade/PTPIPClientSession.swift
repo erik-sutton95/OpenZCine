@@ -1809,8 +1809,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard
             (1...3).contains(imageSize),
             (1...3).contains(compression),
-            frameIntervalNanoseconds >= Self.liveViewFrameIntervalNanoseconds,
-            frameIntervalNanoseconds <= Self.liveViewFrameIntervalNanoseconds * 2
+            // Match recording-rate cadences (e.g. 25p → 40 ms, 50p → 20 ms) while
+            // still rejecting pathological intervals outside the supported envelope.
+            frameIntervalNanoseconds >= Self.minimumLiveViewFrameIntervalNanoseconds,
+            frameIntervalNanoseconds <= Self.maximumLiveViewFrameIntervalNanoseconds
         else { return false }
 
         commandLifecycleLock.lock()
@@ -2832,10 +2834,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Live view
 
-    /// Poll ceiling for the live-view pump (~30 fps). The camera itself paces
-    /// a blocking `GetLiveViewImageEx`, so this only matters against a source
-    /// that answers faster than real frames (the fake ZR, a hot cache).
-    public static let liveViewFrameIntervalNanoseconds: UInt64 = 33_000_000
+    /// Default poll cadence when no recording frame rate has been configured
+    /// (~30 fps). Prefer matching the camera-advertised movie rate via
+    /// ``configureLiveView(imageSize:compression:frameIntervalNanoseconds:)``.
+    public static let liveViewFrameIntervalNanoseconds: UInt64 =
+        AndroidLiveViewPolicyWire.standardFrameIntervalNanoseconds
+
+    /// Fastest accepted preview pull (~60 fps).
+    public static let minimumLiveViewFrameIntervalNanoseconds: UInt64 =
+        AndroidLiveViewPolicyWire.minimumFrameIntervalNanoseconds
+
+    /// Slowest accepted preview pull under thermal shedding (~10 fps).
+    public static let maximumLiveViewFrameIntervalNanoseconds: UInt64 =
+        AndroidLiveViewPolicyWire.maximumFrameIntervalNanoseconds
 
     /// Starts live view and pumps frames from a dedicated background thread.
     ///

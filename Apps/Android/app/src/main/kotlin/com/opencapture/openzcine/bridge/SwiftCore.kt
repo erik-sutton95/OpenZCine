@@ -391,12 +391,17 @@ object SwiftCore {
      * This affects only the live-view JPEG preview. It never changes camera
      * recording format, codec, frame rate, or an active card write.
      */
+    /**
+     * @param recordingFrameRate Camera-advertised movie fps (e.g. 25 for 6K·25p).
+     *   Pass 0 when unknown so Swift applies its default cadence.
+     */
     external fun resolveLiveViewRequest(
         streamPreset: Int,
         qualityBias: Int,
         thermalTier: Int,
         isRecording: Boolean,
         cameraOverheating: Boolean,
+        recordingFrameRate: Int,
     ): String?
 
     /**

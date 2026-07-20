@@ -20,8 +20,8 @@ public data class SwiftLiveViewRequest(
     init {
         require(imageSize in 1..3) { "Preview image size must be 1...3." }
         require(compression in 1..3) { "Preview compression must be 1...3." }
-        require(frameIntervalNanoseconds >= STANDARD_FRAME_INTERVAL_NANOS) {
-            "Preview interval must not exceed the standard request rate."
+        require(frameIntervalNanoseconds in MIN_FRAME_INTERVAL_NANOS..MAX_FRAME_INTERVAL_NANOS) {
+            "Preview interval must be between ${MIN_FRAME_INTERVAL_NANOS}ns and ${MAX_FRAME_INTERVAL_NANOS}ns."
         }
     }
 
@@ -30,8 +30,13 @@ public data class SwiftLiveViewRequest(
         get() = NANOS_PER_SECOND.toDouble() / frameIntervalNanoseconds.toDouble()
 
     internal companion object {
-        const val STANDARD_FRAME_INTERVAL_NANOS = 33_000_000L
         const val NANOS_PER_SECOND = 1_000_000_000L
+        /** ~60 fps ceiling for the disposable JPEG monitor stream. */
+        const val MIN_FRAME_INTERVAL_NANOS = 16_666_667L
+        /** ~10 fps floor under thermal shedding. */
+        const val MAX_FRAME_INTERVAL_NANOS = 100_000_000L
+        /** Default cadence when the body has not reported a recording frame rate (~30 fps). */
+        const val STANDARD_FRAME_INTERVAL_NANOS = NANOS_PER_SECOND / 30L
         val DEFAULT = SwiftLiveViewRequest(2, 2, STANDARD_FRAME_INTERVAL_NANOS)
     }
 }
@@ -43,6 +48,8 @@ internal data class SwiftLiveViewPolicyInput(
     val thermalTier: Int,
     val isRecording: Boolean,
     val cameraOverheating: Boolean,
+    /** Camera-advertised movie frame rate in whole fps; null when unknown. */
+    val recordingFrameRate: Int? = null,
 )
 
 /** Injectable coarse JNI seam for unit tests; protocol policy remains in Swift. */
@@ -61,6 +68,7 @@ internal object ProductionSwiftLiveViewPolicyBridge : SwiftLiveViewPolicyBridge 
                 thermalTier = input.thermalTier,
                 isRecording = input.isRecording,
                 cameraOverheating = input.cameraOverheating,
+                recordingFrameRate = input.recordingFrameRate ?: 0,
             ) ?: return null
         return parseLiveViewRequest(payload)
     }

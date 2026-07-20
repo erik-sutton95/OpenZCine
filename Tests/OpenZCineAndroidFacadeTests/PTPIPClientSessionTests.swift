@@ -237,9 +237,18 @@ struct PTPIPClientSessionTests {
             session.configureLiveView(
                 imageSize: 1,
                 compression: 3,
-                frameIntervalNanoseconds: 49_500_000))
+                // 25 fps cadence (1e9 / 25) — must match recording rate policy.
+                frameIntervalNanoseconds: 40_000_000))
+        // 50 fps (20 ms) must also be accepted by the expanded envelope.
         #expect(
-            server.receivedPropertyWrites()
+            session.configureLiveView(
+                imageSize: 1,
+                compression: 3,
+                frameIntervalNanoseconds: 20_000_000))
+        let writes = server.receivedPropertyWrites()
+        #expect(writes.count == 4)
+        #expect(
+            writes.prefix(2)
                 == [
                     FakeZRPropertyWrite(
                         operation: .setDevicePropValueEx,
