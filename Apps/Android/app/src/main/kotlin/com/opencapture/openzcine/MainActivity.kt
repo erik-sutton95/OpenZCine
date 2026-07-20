@@ -544,21 +544,19 @@ class MainActivity : ComponentActivity() {
                                     record = activeSavedCamera,
                                     reconnect = reconnect,
                                 )
-                            connectionScope.launch {
-                                // Finish this exact profile's slot and AP
-                                // lease before SavedCamerasExperience gets a
-                                // chance to own a reconnect. Its cleanup is
-                                // idempotent with the monitor lifecycle
-                                // effect directly above.
-                                withContext(NonCancellable) {
-                                    exitingSession.disconnect()
-                                    pairingEnvironment.releaseCameraAp()
-                                }
-                                if (monitorSession === exitingSession) {
-                                    monitorSession = null
-                                    startupSurface = StartupSurface.SAVED_CAMERAS
-                                    requestedReconnectID = if (reconnect) reconnectID else null
-                                }
+                            // iOS `disconnectCameraSession`: clear the shell
+                            // synchronously, then fire-and-forget network
+                            // teardown. Awaiting CloseSession / EndLiveView
+                            // here made Android feel hung for several seconds
+                            // after a drop or manual disconnect (stopLiveView
+                            // alone can wait commandTimeout+2s on a dead link).
+                            // The monitor LaunchedEffect dispose path still
+                            // runs disconnect + releaseCameraAp when the
+                            // session leaves composition.
+                            if (monitorSession === exitingSession) {
+                                monitorSession = null
+                                startupSurface = StartupSurface.SAVED_CAMERAS
+                                requestedReconnectID = if (reconnect) reconnectID else null
                             }
                         }
                         // Keep the library identity stable while a consented Frame.io hop
