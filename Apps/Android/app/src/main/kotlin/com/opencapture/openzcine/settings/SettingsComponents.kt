@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -54,16 +55,220 @@ internal fun Modifier.settingsClickable(role: Role, onClick: () -> Unit): Modifi
         onClick = onClick,
     )
 
-/** A card whose rows are divider-separated with no per-row borders (iOS `SettingsRowCard`). */
+/**
+ * A card whose rows are divider-separated with no per-row borders (iOS
+ * `SettingsRowCard`). Optional [title] / [onReset] match the assist-tool cards
+ * on Operator Setup → View Assist.
+ */
 @Composable
-public fun SettingsRowCard(content: @Composable () -> Unit) {
+public fun SettingsRowCard(
+    title: String? = null,
+    onReset: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth()
             .glass(ChromeShape)
             .padding(horizontal = 13.dp)
-            .padding(bottom = 4.dp)
+            .padding(bottom = 4.dp),
     ) {
+        if (title != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 11.dp, bottom = 2.dp).defaultMinSize(minHeight = 24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    title,
+                    style = chromeStyle(13f, FontWeight.SemiBold),
+                    color = LiveDesign.text,
+                )
+                Spacer(Modifier.weight(1f))
+                if (onReset != null) {
+                    SettingsResetButton(onClick = onReset)
+                }
+            }
+        }
         content()
+    }
+}
+
+/** Circular counter-clockwise reset control (iOS `SettingsResetButton`, 28dp). */
+@Composable
+public fun SettingsResetButton(onClick: () -> Unit) {
+    val description = stringResource(R.string.settings_reset_defaults)
+    Box(
+        Modifier.size(28.dp)
+            .background(LiveDesign.background.copy(alpha = 0.42f), CircleShape)
+            .border(1.dp, LiveDesign.hairline, CircleShape)
+            .settingsClickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        // Simple two-arc “↺” mark without pulling in an icon dependency.
+        Canvas(Modifier.size(12.dp)) {
+            val stroke = 1.6.dp.toPx()
+            drawArc(
+                color = LiveDesign.muted,
+                startAngle = -40f,
+                sweepAngle = 260f,
+                useCenter = false,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+            val tipX = size.width * 0.78f
+            val tipY = size.height * 0.18f
+            drawLine(
+                LiveDesign.muted,
+                Offset(tipX - 3.dp.toPx(), tipY),
+                Offset(tipX, tipY),
+                stroke,
+                StrokeCap.Round,
+            )
+            drawLine(
+                LiveDesign.muted,
+                Offset(tipX, tipY),
+                Offset(tipX, tipY + 3.dp.toPx()),
+                stroke,
+                StrokeCap.Round,
+            )
+        }
+    }
+}
+
+/**
+ * Accent capsule action used on Link / System trailing controls (iOS
+ * `SettingsActionPill`). Title is uppercased to match the iOS monospaced pill.
+ */
+@Composable
+public fun SettingsActionPill(title: String, onClick: () -> Unit) {
+    Text(
+        title.uppercase(),
+        style = chromeStyle(10.5f, FontWeight.Bold, mono = true),
+        color = LiveDesign.accent,
+        maxLines = 1,
+        letterSpacing = 0.6.sp,
+        modifier =
+            Modifier
+                .background(LiveDesign.accentDim, CircleShape)
+                .border(1.dp, LiveDesign.accent.copy(alpha = 0.5f), CircleShape)
+                .settingsClickable(role = Role.Button, onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+    )
+}
+
+/**
+ * Link Health dash-scale meter (iOS `SettingsDashScale`): POOR / WATCH / STABLE
+ * marker over a 12-dash track with a three-band legend.
+ */
+@Composable
+public fun SettingsDashScale(title: String, caption: String, score: Int) {
+    val band =
+        when {
+            score >= 80 -> LinkHealthBand.STABLE
+            score >= 50 -> LinkHealthBand.WATCH
+            else -> LinkHealthBand.POOR
+        }
+    val bandColor =
+        when (band) {
+            LinkHealthBand.POOR -> LiveDesign.rec
+            LinkHealthBand.WATCH -> LiveDesign.accent
+            LinkHealthBand.STABLE -> LiveDesign.good
+        }
+    val litCount =
+        when (band) {
+            LinkHealthBand.POOR -> 4
+            LinkHealthBand.WATCH -> 8
+            LinkHealthBand.STABLE -> 12
+        }
+    val bandSlot =
+        when (band) {
+            LinkHealthBand.POOR -> 0
+            LinkHealthBand.WATCH -> 1
+            LinkHealthBand.STABLE -> 2
+        }
+    Column(
+        Modifier.fillMaxWidth()
+            .glass(ChromeShape)
+            .padding(13.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Text(title, style = chromeStyle(13f, FontWeight.SemiBold), color = LiveDesign.text)
+        Text(
+            caption,
+            style = chromeStyle(11.5f, FontWeight.Medium, mono = true),
+            color = LiveDesign.muted,
+        )
+        Row(Modifier.fillMaxWidth().height(19.dp)) {
+            repeat(3) { slot ->
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    if (slot == bandSlot) {
+                        Text(
+                            band.label,
+                            style = chromeStyle(9.5f, FontWeight.Bold, mono = true),
+                            color = bandColor,
+                            letterSpacing = 0.5.sp,
+                            modifier =
+                                Modifier
+                                    .background(bandColor.copy(alpha = 0.12f), CircleShape)
+                                    .border(1.dp, bandColor, CircleShape)
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            repeat(12) { index ->
+                val fill =
+                    when {
+                        index >= litCount -> LiveDesign.hairlineStrong
+                        index < 4 -> LiveDesign.rec.copy(alpha = 0.8f)
+                        index < 8 -> LiveDesign.accent.copy(alpha = 0.85f)
+                        else -> LiveDesign.good.copy(alpha = 0.9f)
+                    }
+                Box(
+                    Modifier.weight(1f)
+                        .height(6.dp)
+                        .background(fill, CircleShape),
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth()) {
+            DashLegend("Poor", "<50", Modifier.weight(1f), Alignment.Start)
+            DashLegend("Watch", "50-79", Modifier.weight(1f), Alignment.CenterHorizontally)
+            DashLegend("Stable", "80+", Modifier.weight(1f), Alignment.End)
+        }
+    }
+}
+
+private enum class LinkHealthBand(val label: String) {
+    POOR("POOR"),
+    WATCH("WATCH"),
+    STABLE("STABLE"),
+}
+
+@Composable
+private fun DashLegend(
+    name: String,
+    sub: String,
+    modifier: Modifier,
+    alignment: Alignment.Horizontal,
+) {
+    Row(
+        modifier,
+        horizontalArrangement =
+            when (alignment) {
+                Alignment.Start -> Arrangement.Start
+                Alignment.End -> Arrangement.End
+                else -> Arrangement.Center
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(name, style = chromeStyle(10f, FontWeight.SemiBold), color = LiveDesign.muted)
+        Spacer(Modifier.size(4.dp))
+        Text(sub, style = chromeStyle(9f, FontWeight.Normal, mono = true), color = LiveDesign.faint)
     }
 }
 
@@ -217,7 +422,7 @@ public fun SettingsGroupCard(
                 )
                 Spacer(Modifier.weight(1f))
                 if (onReset != null) {
-                    SettingsQuietLink(stringResource(R.string.action_reset), onReset)
+                    SettingsResetButton(onClick = onReset)
                 }
             }
             Text(

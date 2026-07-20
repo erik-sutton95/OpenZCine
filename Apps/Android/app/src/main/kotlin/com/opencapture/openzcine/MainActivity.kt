@@ -270,7 +270,13 @@ class MainActivity : ComponentActivity() {
                 // scripted launches skip it so screenshots stay deterministic.
                 var launchSplashVisible by
                     rememberSaveable {
-                        mutableStateOf(debugSession == null && pairingScript == null)
+                        // Debug settings deep-links skip splash so tab screenshots stay deterministic
+                        // (mirrors demo/scripted launches).
+                        mutableStateOf(
+                            debugSession == null &&
+                                pairingScript == null &&
+                                debugInitialSettingsTab == null,
+                        )
                     }
                 LaunchedEffect(Unit) {
                     if (launchSplashVisible) {

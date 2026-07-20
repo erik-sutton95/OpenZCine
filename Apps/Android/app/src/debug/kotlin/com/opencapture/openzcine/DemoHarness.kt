@@ -205,6 +205,11 @@ object DemoHarness {
     /** Debug-only standalone settings selector; release builds always return null. */
     internal fun settingsTab(intent: Intent): OperatorSettingsTab? =
         when (intent.getStringExtra(EXTRA_SETTINGS_TAB)) {
+            "link" -> OperatorSettingsTab.LINK
+            "assist" -> OperatorSettingsTab.ASSIST
+            "controls" -> OperatorSettingsTab.CONTROLS
+            "display" -> OperatorSettingsTab.DISPLAY
+            "storage" -> OperatorSettingsTab.STORAGE
             "system" -> OperatorSettingsTab.SYSTEM
             else -> null
         }
