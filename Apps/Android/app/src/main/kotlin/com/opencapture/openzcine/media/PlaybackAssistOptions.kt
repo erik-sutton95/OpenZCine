@@ -25,8 +25,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -81,6 +79,7 @@ import com.opencapture.openzcine.settings.LocalDesqueezeRatio
 import com.opencapture.openzcine.settings.LocalFramingAspectRatio
 import com.opencapture.openzcine.settings.LocalFramingGuideFamily
 import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.openzcine.settings.GlassPillSlider
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.settings.ScopeAssistConfiguration
@@ -1214,10 +1213,9 @@ private fun ScopeGuides(guides: ScopeGuideLines, onChange: (ScopeGuideLines) -> 
 }
 
 /**
- * iOS `SettingsPercentSlider` row: label + help on the left, the slider and a
- * fixed-width percent readout right-aligned on the SAME row.
+ * iOS `SettingsPercentSlider` row: label + help on the left, the glass-pill
+ * slider and a fixed-width percent readout right-aligned on the SAME row.
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun BrightnessSlider(
     title: String,
@@ -1234,33 +1232,12 @@ private fun BrightnessSlider(
         OptionLabel(title)
         help?.let { HelpBadge(it) }
         Spacer(Modifier.weight(1f))
-        Slider(
-            value =
-                value.toFloat()
-                    .coerceIn(
-                        ScopeAssistConfiguration.MIN_BRIGHTNESS.toFloat(),
-                        ScopeAssistConfiguration.MAX_BRIGHTNESS.toFloat(),
-                    ),
-            onValueChange = { onChange(it.roundToInt()) },
-            valueRange =
-                ScopeAssistConfiguration.MIN_BRIGHTNESS.toFloat()..
-                    ScopeAssistConfiguration.MAX_BRIGHTNESS.toFloat(),
-            colors =
-                SliderDefaults.colors(
-                    activeTrackColor = LiveDesign.accent,
-                    inactiveTrackColor = LiveDesign.hairlineStrong,
-                ),
-            // iOS renders a round white knob, not Material's bar handle.
-            thumb = {
-                Box(
-                    Modifier.size(22.dp)
-                        .background(
-                            androidx.compose.ui.graphics.Color.White,
-                            androidx.compose.foundation.shape.CircleShape,
-                        ),
-                )
-            },
-            modifier = Modifier.width(150.dp).height(32.dp),
+        GlassPillSlider(
+            value = value,
+            range =
+                ScopeAssistConfiguration.MIN_BRIGHTNESS..ScopeAssistConfiguration.MAX_BRIGHTNESS,
+            onChange = onChange,
+            modifier = Modifier.width(150.dp),
         )
         Text(
             "$value%",

@@ -4,15 +4,20 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,9 +28,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -43,20 +45,27 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.chipGlass
 import com.opencapture.openzcine.glass
 import kotlin.math.roundToInt
 
@@ -542,10 +551,11 @@ public fun SettingsNumberField(
 }
 
 /**
- * iOS `SettingsPercentSlider`: accent track, white round thumb, trailing mono
- * percent readout.
+ * iOS `SettingsPercentSlider`: liquid-glass capsule track with a white thumb
+ * and trailing mono percent readout. Uses the shared [glass] / [chipGlass]
+ * package so the pill frosts over the feed when Operator Setup is open above
+ * the monitor, and falls back to the flat glass fill offline.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 public fun SettingsPercentSlider(
     value: Int,
@@ -557,28 +567,11 @@ public fun SettingsPercentSlider(
         horizontalArrangement = Arrangement.spacedBy(9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Slider(
-            value = value.toFloat().coerceIn(range.first.toFloat(), range.last.toFloat()),
-            onValueChange = { next ->
-                val rounded = next.roundToInt().coerceIn(range)
-                if (rounded != value) onChange(rounded)
-            },
-            valueRange = range.first.toFloat()..range.last.toFloat(),
-            colors =
-                SliderDefaults.colors(
-                    activeTrackColor = LiveDesign.accent,
-                    inactiveTrackColor = LiveDesign.hairlineStrong,
-                    activeTickColor = Color.Transparent,
-                    inactiveTickColor = Color.Transparent,
-                ),
-            thumb = {
-                Box(
-                    Modifier
-                        .size(22.dp)
-                        .background(Color.White, CircleShape),
-                )
-            },
-            modifier = Modifier.weight(1f).height(32.dp),
+        GlassPillSlider(
+            value = value,
+            range = range,
+            onChange = onChange,
+            modifier = Modifier.weight(1f),
         )
         Text(
             "$value%",
@@ -586,6 +579,112 @@ public fun SettingsPercentSlider(
             color = LiveDesign.text,
             textAlign = TextAlign.End,
             modifier = Modifier.width(40.dp),
+        )
+    }
+}
+
+/**
+ * Horizontal glass capsule slider — frosted track, accent progress fill, white
+ * circular thumb. Matches the liquid-glass control grammar used on iOS for
+ * scope brightness (and the monitor chrome pill family on Android).
+ */
+@Composable
+public fun GlassPillSlider(
+    value: Int,
+    range: IntRange,
+    onChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val span = (range.last - range.first).coerceAtLeast(1)
+    val fraction =
+        ((value - range.first).toFloat() / span.toFloat()).coerceIn(0f, 1f)
+    val thumb = 22.dp
+    val trackHeight = 14.dp
+    val density = LocalDensity.current
+
+    BoxWithConstraints(
+        modifier
+            .height(32.dp)
+            .semantics(mergeDescendants = true) {
+                stateDescription = "$value%"
+                setProgress { target ->
+                    val next =
+                        (range.first + target * span)
+                            .roundToInt()
+                            .coerceIn(range)
+                    if (next != value) onChange(next)
+                    true
+                }
+            },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        val widthPx = with(density) { maxWidth.toPx() }
+        val thumbPx = with(density) { thumb.toPx() }
+        val travel = (widthPx - thumbPx).coerceAtLeast(1f)
+
+        fun valueAt(x: Float): Int {
+            val f = ((x - thumbPx / 2f) / travel).coerceIn(0f, 1f)
+            return (range.first + f * span).roundToInt().coerceIn(range)
+        }
+
+        // Glass capsule track (frosts when LocalMonitorGlass is present).
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(trackHeight)
+                .align(Alignment.Center)
+                .glass(CircleShape)
+                .border(0.5.dp, LiveDesign.hairline.copy(alpha = 0.18f), CircleShape),
+        ) {
+            // Accent progress fill clipped to a leading capsule segment.
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fraction.coerceAtLeast(0.02f))
+                    .background(LiveDesign.accent.copy(alpha = 0.55f), CircleShape),
+            )
+        }
+
+        // White glass thumb — solid white core with a soft chip rim.
+        Box(
+            Modifier
+                .offset {
+                    IntOffset(
+                        x = (fraction * travel).roundToInt(),
+                        y = 0,
+                    )
+                }
+                .size(thumb)
+                .align(Alignment.CenterStart)
+                .zIndex(1f)
+                .chipGlass(CircleShape)
+                .background(Color.White, CircleShape)
+                .border(1.dp, Color.White.copy(alpha = 0.85f), CircleShape),
+        )
+
+        // Hit target for tap + drag (covers the full control height).
+        Box(
+            Modifier
+                .matchParentSize()
+                .pointerInput(range, widthPx, thumbPx) {
+                    detectTapGestures { offset ->
+                        val next = valueAt(offset.x)
+                        if (next != value) onChange(next)
+                    }
+                }
+                .pointerInput(range, widthPx, thumbPx, value) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset ->
+                            val next = valueAt(offset.x)
+                            if (next != value) onChange(next)
+                        },
+                        onHorizontalDrag = { change, _ ->
+                            change.consume()
+                            val next = valueAt(change.position.x)
+                            if (next != value) onChange(next)
+                        },
+                    )
+                },
         )
     }
 }
