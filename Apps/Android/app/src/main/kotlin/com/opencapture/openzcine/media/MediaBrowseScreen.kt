@@ -187,6 +187,7 @@ private fun stageSelectedMedia(
     cacheStore: MediaCacheStore,
     cameraID: String,
     selection: List<MediaClipRecord>,
+    cameraIDFor: (MediaClipRecord) -> String = { cameraID },
     cancellationCheck: () -> Unit = {},
 ): BatchShareResult {
     val stager = MediaShareStager(context.cacheDir.toPath())
@@ -200,7 +201,7 @@ private fun stageSelectedMedia(
         val entry =
             runCatching {
                 cacheStore.completedEntryOrNull(
-                    cameraID,
+                    cameraIDFor(clip),
                     MediaCacheObjectIdentity(clip),
                     clip.sizeBytes,
                 )
@@ -417,6 +418,12 @@ internal fun MediaBrowseScreen(
     cameraSessionAvailable: Boolean = true,
     savedCameraID: String? = null,
     cameraDisplayName: String? = null,
+    /**
+     * When non-empty and the camera is offline, "On device" lists complete
+     * cache artifacts from every listed camera bucket (iOS offline
+     * `listAllCachedClips` aggregate). Empty = single [cameraID] only.
+     */
+    offlineCameraIDs: List<String> = emptyList(),
     cameraStorageSlots: List<CameraStorageSlotStatus> = emptyList(),
     liveAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
@@ -492,6 +499,12 @@ internal fun MediaBrowseScreen(
             )
         }
     var favorites by remember(cameraID) { mutableStateOf(emptySet<String>()) }
+    // Offline multi-camera library: object key → owning cache bucket cameraID.
+    var offlineClipOwners by
+        remember(cameraID, offlineCameraIDs) { mutableStateOf(emptyMap<String, String>()) }
+    fun ownerCameraID(clip: MediaClipRecord): String =
+        offlineClipOwners[clip.offlineObjectKey()] ?: cameraID
+    fun clipKey(clip: MediaClipRecord): String = clip.libraryKey(ownerCameraID(clip))
     var state by remember(cameraID) { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var reloadKey by remember { mutableIntStateOf(0) }
     var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
@@ -549,16 +562,22 @@ internal fun MediaBrowseScreen(
         activeShare.cancel()
     }
 
-    LaunchedEffect(cameraID) {
-        favorites = withContext(Dispatchers.IO) { libraryIndex.favoriteIDs(cameraID) }
+    LaunchedEffect(cameraID, offlineCameraIDs) {
+        favorites =
+            withContext(Dispatchers.IO) {
+                val ids =
+                    offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
+                ids.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+            }
     }
 
-    LaunchedEffect(cameraID, options.source, effectiveCameraConnected, reloadKey) {
+    LaunchedEffect(cameraID, offlineCameraIDs, options.source, effectiveCameraConnected, reloadKey) {
         state = BrowseState.Loading
         val nextState =
             when (options.source) {
                 MediaLibrarySource.CAMERA -> {
                     browseStorageSlots = null
+                    offlineClipOwners = emptyMap()
                     if (!effectiveCameraConnected) {
                         BrowseState.Failed("Reconnect the camera or choose On device media.")
                     } else if (!SwiftCore.isAvailable) {
@@ -596,20 +615,37 @@ internal fun MediaBrowseScreen(
                         }
                     }
                 }
-                MediaLibrarySource.LOCAL ->
-                    withContext(Dispatchers.IO) {
-                        val clips =
-                            libraryIndex.persistedClips(cameraID).filter { clip ->
-                                runCatching {
-                                    cacheStore.completedEntryOrNull(
-                                        cameraID,
-                                        MediaCacheObjectIdentity(clip),
-                                        clip.sizeBytes,
-                                    )
-                                }.getOrNull() != null
+                MediaLibrarySource.LOCAL -> {
+                    val (clips, owners) =
+                        withContext(Dispatchers.IO) {
+                            // iOS offline `.camera` spans every per-serial bucket
+                            // and keeps only fully downloaded entries.
+                            val bucketIDs =
+                                offlineCameraIDs.takeIf { it.isNotEmpty() }
+                                    ?: listOf(cameraID)
+                            val nextOwners = linkedMapOf<String, String>()
+                            val nextClips = ArrayList<MediaClipRecord>()
+                            for (bucketID in bucketIDs) {
+                                for (clip in libraryIndex.persistedClips(bucketID)) {
+                                    val complete =
+                                        runCatching {
+                                            cacheStore.completedEntryOrNull(
+                                                bucketID,
+                                                MediaCacheObjectIdentity(clip),
+                                                clip.sizeBytes,
+                                            )
+                                        }.getOrNull()
+                                    if (complete != null) {
+                                        nextOwners[clip.offlineObjectKey()] = bucketID
+                                        nextClips += clip
+                                    }
+                                }
                             }
-                        BrowseState.Loaded(clips)
-                    }
+                            nextClips to nextOwners
+                        }
+                    offlineClipOwners = owners
+                    BrowseState.Loaded(clips)
+                }
             }
         state = nextState
         if (
@@ -650,10 +686,11 @@ internal fun MediaBrowseScreen(
             cameraID = cameraID,
             sortOrder = options.sortOrder,
             filters = filters,
+            libraryKey = ::clipKey,
         )
     val selectedClips =
-        displayedClips.filter { clip -> clip.libraryKey(cameraID) in selectedIDs }
-    val visibleIDs = displayedClips.map { clip -> clip.libraryKey(cameraID) }.toSet()
+        displayedClips.filter { clip -> clipKey(clip) in selectedIDs }
+    val visibleIDs = displayedClips.map { clip -> clipKey(clip) }.toSet()
 
     LaunchedEffect(visibleIDs) {
         val retained = MediaLibrarySelection.retainVisible(selectedIDs, visibleIDs)
@@ -661,26 +698,27 @@ internal fun MediaBrowseScreen(
         if (retained.isEmpty()) isSelecting = false
     }
 
-    LaunchedEffect(cameraID, selectedClips) {
+    LaunchedEffect(cameraID, offlineClipOwners, selectedClips) {
         readySelectionIDs =
             withContext(Dispatchers.IO) {
                 selectedClips.mapNotNull { clip ->
+                    val owner = ownerCameraID(clip)
                     val complete =
                         runCatching {
                             cacheStore.completedEntryOrNull(
-                                cameraID,
+                                owner,
                                 MediaCacheObjectIdentity(clip),
                                 clip.sizeBytes,
                             )
                         }.getOrNull()
-                    clip.libraryKey(cameraID).takeIf { complete != null }
+                    clip.libraryKey(owner).takeIf { complete != null }
                 }.toSet()
             }
     }
     val readyGalleryCount =
         selectedClips.count { clip ->
             clip.contentKind == MediaContentKind.PLAYABLE_PROXY &&
-                clip.libraryKey(cameraID) in readySelectionIDs
+                clipKey(clip) in readySelectionIDs
         }
     val selectedLutLabel =
         when (selectedLut) {
@@ -689,7 +727,15 @@ internal fun MediaBrowseScreen(
         }
 
     fun toggleFavorite(clip: MediaClipRecord) {
-        favorites = libraryIndex.toggleFavorite(cameraID, clip)
+        val owner = ownerCameraID(clip)
+        val updated = libraryIndex.toggleFavorite(owner, clip)
+        // Re-merge favorites across offline buckets so the star stays accurate.
+        favorites =
+            if (offlineCameraIDs.isEmpty()) {
+                updated
+            } else {
+                offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+            }
     }
 
     fun open(clip: MediaClipRecord) {
@@ -706,13 +752,13 @@ internal fun MediaBrowseScreen(
     fun beginSelection(clip: MediaClipRecord) {
         if (shareInProgress) return
         isSelecting = true
-        selectedIDs = MediaLibrarySelection.begin(clip.libraryKey(cameraID))
+        selectedIDs = MediaLibrarySelection.begin(clipKey(clip))
         shareMessage = null
     }
 
     fun toggleSelection(clip: MediaClipRecord) {
         if (shareInProgress) return
-        selectedIDs = MediaLibrarySelection.toggle(selectedIDs, clip.libraryKey(cameraID))
+        selectedIDs = MediaLibrarySelection.toggle(selectedIDs, clipKey(clip))
     }
 
     fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
@@ -731,6 +777,7 @@ internal fun MediaBrowseScreen(
                                 cacheStore,
                                 cameraID,
                                 selectionSnapshot,
+                                cameraIDFor = ::ownerCameraID,
                             ) { stageContext.ensureActive() }
                         }
                     if (staged.staged.isEmpty()) {
@@ -955,6 +1002,7 @@ internal fun MediaBrowseScreen(
                                 cacheStore,
                                 cameraID,
                                 selectionSnapshot,
+                                cameraIDFor = ::ownerCameraID,
                             ) { stageContext.ensureActive() }
                         }
                     if (result.staged.isEmpty()) {
@@ -966,16 +1014,17 @@ internal fun MediaBrowseScreen(
                     val artifacts =
                         withContext(Dispatchers.IO) {
                             result.staged.zip(result.stagedClips).map { (share, clip) ->
+                                val owner = ownerCameraID(clip)
                                 FrameioDeliveryArtifact(
                                     share = share,
                                     byteCount = Files.size(share.file),
                                     context =
                                         FrameioArtifactContext(
-                                            cameraID = cameraID,
+                                            cameraID = owner,
                                             captureDate = clip.captureDate,
                                             supportsLutBake =
                                                 clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
-                                            stableClipIdentity = clip.libraryKey(cameraID),
+                                            stableClipIdentity = clip.libraryKey(owner),
                                         ),
                                 )
                             }
@@ -1112,6 +1161,8 @@ internal fun MediaBrowseScreen(
                         layout = options.layout,
                         thumbnailSize = options.thumbnailSize,
                         cameraID = cameraID,
+                        cameraIDFor = ::ownerCameraID,
+                        clipIdentity = ::clipKey,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -1182,6 +1233,8 @@ internal fun MediaBrowseScreen(
                             layout = options.layout,
                             thumbnailSize = options.thumbnailSize,
                             cameraID = cameraID,
+                            cameraIDFor = ::ownerCameraID,
+                            clipIdentity = ::clipKey,
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
                             favorites = favorites,
@@ -1265,10 +1318,11 @@ internal fun MediaBrowseScreen(
         }
 
         playingClip?.let { clip ->
+            val owner = ownerCameraID(clip)
             MediaPlaybackScreen(
                 initialClip = clip,
                 filteredClips = displayedClips,
-                cameraID = cameraID,
+                cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
                 favoriteIDs = favorites,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
@@ -1281,7 +1335,11 @@ internal fun MediaBrowseScreen(
                 frameioController = frameioController,
                 onToggleFavorite = ::toggleFavorite,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                    libraryIndex.rememberResolvedObjectSize(cameraID, resolvedClip, resolvedSize)
+                    libraryIndex.rememberResolvedObjectSize(
+                        ownerCameraID(resolvedClip),
+                        resolvedClip,
+                        resolvedSize,
+                    )
                 },
                 onClose = {
                     playingClip = null
@@ -1290,12 +1348,17 @@ internal fun MediaBrowseScreen(
             )
         }
         viewingPhoto?.let { clip ->
+            val owner = ownerCameraID(clip)
             MediaStillViewer(
                 clip = clip,
-                cameraID = cameraID,
+                cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                    libraryIndex.rememberResolvedObjectSize(cameraID, resolvedClip, resolvedSize)
+                    libraryIndex.rememberResolvedObjectSize(
+                        ownerCameraID(resolvedClip),
+                        resolvedClip,
+                        resolvedSize,
+                    )
                 },
                 onClose = {
                     viewingPhoto = null
@@ -2099,6 +2162,8 @@ private fun MediaLibraryBody(
     layout: MediaLibraryLayout,
     thumbnailSize: MediaThumbnailSize,
     cameraID: String,
+    cameraIDFor: (MediaClipRecord) -> String = { cameraID },
+    clipIdentity: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2126,7 +2191,8 @@ private fun MediaLibraryBody(
                         clips = clips,
                         thumbnailSize = thumbnailSize,
                         source = source,
-                        cameraID = cameraID,
+                        cameraIDFor = cameraIDFor,
+                        clipIdentity = clipIdentity,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2142,7 +2208,8 @@ private fun MediaLibraryBody(
                     MediaClipList(
                         clips = clips,
                         source = source,
-                        cameraID = cameraID,
+                        cameraIDFor = cameraIDFor,
+                        clipIdentity = clipIdentity,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2164,7 +2231,8 @@ private fun MediaClipGrid(
     clips: List<MediaClipRecord>,
     thumbnailSize: MediaThumbnailSize,
     source: MediaLibrarySource,
-    cameraID: String,
+    cameraIDFor: (MediaClipRecord) -> String,
+    clipIdentity: (MediaClipRecord) -> String,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2216,12 +2284,12 @@ private fun MediaClipGrid(
         // mode immediately returns ordinary scrolling.
         userScrollEnabled = !isSelecting,
     ) {
-        items(clips, key = { clip -> clip.libraryKey(cameraID) }) { clip ->
-            val identity = clip.libraryKey(cameraID)
+        items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
+            val identity = clipIdentity(clip)
             MediaClipCell(
                 clip = clip,
                 source = source,
-                cameraID = cameraID,
+                cameraID = cameraIDFor(clip),
                 cameraConnected = cameraConnected,
                 cacheStore = cacheStore,
                 favorite = identity in favorites,
@@ -2246,7 +2314,8 @@ private fun MediaClipGrid(
 private fun MediaClipList(
     clips: List<MediaClipRecord>,
     source: MediaLibrarySource,
-    cameraID: String,
+    cameraIDFor: (MediaClipRecord) -> String,
+    clipIdentity: (MediaClipRecord) -> String,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2262,12 +2331,12 @@ private fun MediaClipList(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(bottom = 28.dp),
     ) {
-        items(clips, key = { clip -> clip.libraryKey(cameraID) }) { clip ->
-            val identity = clip.libraryKey(cameraID)
+        items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
+            val identity = clipIdentity(clip)
             MediaClipListRow(
                 clip = clip,
                 source = source,
-                cameraID = cameraID,
+                cameraID = cameraIDFor(clip),
                 cameraConnected = cameraConnected,
                 cacheStore = cacheStore,
                 favorite = identity in favorites,

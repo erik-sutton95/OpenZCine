@@ -234,12 +234,15 @@ class MainActivity : ComponentActivity() {
                 // environment migrates that identity only on this upgrade;
                 // new installs receive their own persisted identity instead.
                 val hasSavedCameraProfilesAtLaunch = remember { savedCameras.isNotEmpty() }
-                var offlineMediaBucket by
-                    remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
+                // Offline Media: per-camera card entry or the global startup
+                // Media Library (all complete caches), matching iOS
+                // `openCachedMediaLibrary` / listAllCachedClips.
+                var offlineMediaBuckets by
+                    remember { mutableStateOf<List<MediaLibraryCameraBucket>?>(null) }
                 var completedMediaBuckets by
                     remember { mutableStateOf(emptyMap<String, MediaLibraryCameraBucket>()) }
                 var mediaCacheRevision by remember { mutableStateOf(0) }
-                LaunchedEffect(savedCameras, monitorSession, offlineMediaBucket, mediaCacheRevision) {
+                LaunchedEffect(savedCameras, monitorSession, offlineMediaBuckets, mediaCacheRevision) {
                     if (monitorSession != null) return@LaunchedEffect
                     completedMediaBuckets =
                         withContext(Dispatchers.IO) {
@@ -337,7 +340,7 @@ class MainActivity : ComponentActivity() {
                 // Startup and monitor are both immersive; re-assert whenever
                 // the surface changes so a transient swipe-reveal on one
                 // surface never leaks bars onto the next.
-                val immersive = monitorSession != null || offlineMediaBucket != null
+                val immersive = monitorSession != null || offlineMediaBuckets != null
                 LaunchedEffect(immersive) { applyImmersiveSystemBars() }
                 LaunchedEffect(immersive, operatorSettings.keepScreenAwake.value) {
                     if (operatorSettings.shouldKeepScreenAwake(immersive)) {
@@ -347,10 +350,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val active = monitorSession
-                val offlineBucket = offlineMediaBucket
-                if (active == null && offlineBucket != null) {
+                val offlineBuckets = offlineMediaBuckets
+                if (active == null && offlineBuckets != null) {
+                    val primary = offlineBuckets.firstOrNull()
                     val offlineAssist =
-                        remember(offlineBucket.cameraID) {
+                        remember(primary?.cameraID, offlineBuckets.size) {
                             AssistState.restore(
                                 applicationContext,
                                 intentEffects = null,
@@ -360,18 +364,24 @@ class MainActivity : ComponentActivity() {
                         }
                     LaunchedEffect(offlineAssist) { offlineAssist.activateEffectsMirror() }
                     MediaBrowseScreen(
-                        cameraID = offlineBucket.cameraID,
+                        cameraID = primary?.cameraID ?: "offline-all-cameras",
                         cameraConnected = false,
                         cameraSessionAvailable = false,
-                        savedCameraID = offlineBucket.savedCameraID,
-                        cameraDisplayName = offlineBucket.displayName,
+                        savedCameraID = primary?.savedCameraID,
+                        cameraDisplayName =
+                            when {
+                                offlineBuckets.isEmpty() -> "Media Library"
+                                offlineBuckets.size == 1 -> offlineBuckets.first().displayName
+                                else -> "All cameras"
+                            },
+                        offlineCameraIDs = offlineBuckets.map { it.cameraID },
                         liveAssistState = offlineAssist,
                         exposureAssistCameraInput = ExposureAssistCameraInput(),
                         operatorSettings = operatorSettings,
                         lutLibrary = lutLibrary,
                         frameioController = frameioController,
                         selectedLut = offlineAssist.selectedLut,
-                        onClose = { offlineMediaBucket = null },
+                        onClose = { offlineMediaBuckets = null },
                     )
                 } else if (active == null) {
                     BackHandler(enabled = standaloneSettingsPresented) {
@@ -394,9 +404,17 @@ class MainActivity : ComponentActivity() {
                                     onPaired = ::acceptPairedCamera,
                                     onPairNewCamera = { startupSurface = StartupSurface.PAIRING },
                                     onOpenSettings = { standaloneSettingsPresented = true },
+                                    onOpenMediaLibrary = {
+                                        // iOS openCachedMediaLibrary: every
+                                        // complete on-device cache bucket.
+                                        offlineMediaBuckets =
+                                            completedMediaBuckets.values.toList()
+                                    },
                                     cachedMediaCameraIDs = completedMediaBuckets.keys,
                                     onOpenCachedMedia = { record ->
-                                        offlineMediaBucket = completedMediaBuckets[record.id]
+                                        completedMediaBuckets[record.id]?.let { bucket ->
+                                            offlineMediaBuckets = listOf(bucket)
+                                        }
                                     },
                                     requestedReconnectID = requestedReconnectID,
                                     onReconnectRequestConsumed = { requestedReconnectID = null },

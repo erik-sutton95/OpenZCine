@@ -1964,14 +1964,16 @@ internal fun StartupOutlineButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     leadingChevron: Boolean = false,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier
             .height(40.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(StartupColors.control.copy(alpha = 0.82f))
+            .background(StartupColors.control.copy(alpha = if (enabled) 0.82f else 0.55f))
             .border(1.dp, StartupColors.border.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.55f)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,

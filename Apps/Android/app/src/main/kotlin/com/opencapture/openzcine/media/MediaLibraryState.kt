@@ -393,6 +393,8 @@ internal object MediaLibraryFiltering {
         sortOrder: MediaLibrarySortOrder,
         filters: MediaLibraryFilters = MediaLibraryFilters(),
         todayToken: String = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
+        /** Offline multi-camera libraries resolve favorites with the owning bucket. */
+        libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
     ): List<MediaClipRecord> {
         var filtered =
             when (category) {
@@ -405,7 +407,7 @@ internal object MediaLibraryFiltering {
                 MediaLibraryCategory.PHOTOS ->
                     clips.filter { it.contentKind == MediaContentKind.STILL_PHOTO }
                 MediaLibraryCategory.FAVORITES ->
-                    clips.filter { it.libraryKey(cameraID) in favoriteIDs }
+                    clips.filter { libraryKey(it) in favoriteIDs }
             }
         if (filters.containers.isNotEmpty()) {
             filtered = filtered.filter { clip -> clip.containerFilter() in filters.containers }
@@ -494,6 +496,14 @@ internal object MediaLibrarySelection {
 /** Stable private favorite/index identity — never a filename-only key. */
 internal fun MediaClipRecord.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageId, handle, captureDate, filename)
+
+/**
+ * Bucket-independent object identity used to map offline multi-camera clips
+ * back to their owning cache cameraID.
+ */
+internal fun MediaClipRecord.offlineObjectKey(): String =
+    listOf(storageId.toString(), handle.toString(), captureDate, filename)
+        .joinToString(separator = "\u0000")
 
 private fun MediaObjectIdentity.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageID, handle, captureDate, filename)

@@ -124,6 +124,8 @@ internal fun mayAutoReconnectUsb(
  * stored SSID, whereas hotspot records only use discovery/last-known PTP-IP
  * hosts and never ask Android to switch networks. [onOpenSettings] opens
  * app-local operator setup without constructing a camera session.
+ * [onOpenMediaLibrary] opens the offline Media browser for all cached clips
+ * (iOS startup `Media Library` / `openCachedMediaLibrary`).
  */
 @Composable
 public fun SavedCamerasExperience(
@@ -132,6 +134,7 @@ public fun SavedCamerasExperience(
     onPaired: (PairedCamera) -> Unit,
     onPairNewCamera: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenMediaLibrary: () -> Unit = {},
     onRecordsChanged: (List<SavedCameraRecord>) -> Unit,
     cachedMediaCameraIDs: Set<String> = emptySet(),
     onOpenCachedMedia: (SavedCameraRecord) -> Unit = {},
@@ -510,6 +513,7 @@ public fun SavedCamerasExperience(
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         SavedCameraOverview(
                             onPairNewCamera = onPairNewCamera,
+                            onOpenMediaLibrary = onOpenMediaLibrary,
                             onOpenSettings = onOpenSettings,
                             enabled = !busy,
                             modifier = Modifier.width(overviewWidth).fillMaxSize(),
@@ -540,6 +544,7 @@ public fun SavedCamerasExperience(
                         item {
                             SavedCameraOverview(
                                 onPairNewCamera = onPairNewCamera,
+                                onOpenMediaLibrary = onOpenMediaLibrary,
                                 onOpenSettings = onOpenSettings,
                                 enabled = !busy,
                                 modifier = Modifier.fillMaxWidth(),
@@ -669,6 +674,7 @@ public fun SavedCamerasExperience(
 @Composable
 private fun SavedCameraOverview(
     onPairNewCamera: () -> Unit,
+    onOpenMediaLibrary: () -> Unit,
     onOpenSettings: () -> Unit,
     enabled: Boolean,
     modifier: Modifier,
@@ -691,6 +697,7 @@ private fun SavedCameraOverview(
             lineHeight = 18.sp,
         )
         Spacer(Modifier.weight(1f, fill = false))
+        // iOS intro card order: Pair new → Media Library → Settings.
         StartupFilledButton(
             text = stringResource(R.string.saved_pair_new_camera),
             enabled = enabled,
@@ -698,7 +705,14 @@ private fun SavedCameraOverview(
             modifier = Modifier.fillMaxWidth(),
         )
         StartupOutlineButton(
+            text = stringResource(R.string.saved_media_library),
+            enabled = enabled,
+            onClick = onOpenMediaLibrary,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        StartupOutlineButton(
             text = stringResource(R.string.action_settings),
+            enabled = enabled,
             onClick = onOpenSettings,
             modifier = Modifier.fillMaxWidth(),
         )
