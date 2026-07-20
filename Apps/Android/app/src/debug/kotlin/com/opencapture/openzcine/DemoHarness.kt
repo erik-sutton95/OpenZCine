@@ -132,7 +132,8 @@ object DemoHarness {
      * Glass-tier override: `--es zc.glass.tier flat` (or `full`) pins chrome
      * glass. FLAT is the opaque-fill floor; legacy `blur` maps to FLAT. Null
      * (default / release) lets [resolveTier] pick the platform ceiling. The
-     * override can only lower the tier.
+     * override can only lower the tier — low-RAM devices stay FLAT even if
+     * `"full"` is requested.
      */
     fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
 

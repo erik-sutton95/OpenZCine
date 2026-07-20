@@ -378,15 +378,21 @@ internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int
  * [presentationState], when supplied, retains the same frame's camera
  * metadata and image dimensions for feed-aligned overlays.
  *
- * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra,
- * see [FeedEffectsRenderer]) into the drawn frame. The default preserves the
- * plain feed unless the debug harness switched effects on. API 33+ uses AGSL;
- * API 29-32 uses the same immutable plan through a GLES2 surface. Builds
- * without the staged Swift core, and frames outside the supported original
- * SDR working space, always render plain.
+ * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra)
+ * into the drawn frame. The default preserves the plain feed. Presentation:
+ * - **FLAT glass / no glass:** graded frames go to a GLES/Vulkan [SurfaceView]
+ *   (A12-class path; AGSL live grade janked ~99% frames with LUT).
+ * - **FULL liquid glass:** Compose [Canvas] (+ AGSL [FeedEffectsRenderer] when
+ *   graded). Kyant `layerBackdrop` only records HWUI/Compose draw commands —
+ *   a SurfaceView is a separate buffer and never appears under glass blur.
+ * Builds without the staged Swift core, and frames outside original SDR,
+ * always render plain.
  * [configuration] is local operator choice only; [cameraInput] is forwarded
  * unchanged to Swift, which owns camera curve/clip policy for both the
  * renderer and the optional false-colour reference key.
+ *
+ * @param preferComposablePresentation When true (FULL liquid glass), force the
+ *   Compose Canvas present path so chrome/popups can blur the live feed.
  */
 @Composable
 fun LiveFeedView(
@@ -401,12 +407,13 @@ fun LiveFeedView(
     lutLibrary: AndroidLutLibrary? = null,
     effectsPresentationState: LiveFeedEffectsPresentationState? = null,
     aspectFill: Boolean = false,
+    preferComposablePresentation: Boolean = false,
 ) {
     val applicationContext = LocalContext.current.applicationContext
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
     val fallbackColorMode = remember(source) { mutableStateOf(LiveFeedColorMode.UNKNOWN) }
-    // GPU present (Vulkan preferred, GLES fallback). Compose Canvas is plain-feed only —
-    // AGSL live grading janked A12 (~99% janky frames with LUT).
+    // GPU present (Vulkan preferred, GLES fallback) for FLAT glass. FULL glass
+    // must stay on Compose Canvas so Kyant can sample the feed.
     val gpuBackend = remember(source) { LiveFeedGpuBackendFactory.create(applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
@@ -445,6 +452,9 @@ fun LiveFeedView(
     var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     // Wear / small preview baker only (not the live monitor path).
     var previewBaker by remember { mutableStateOf<LiveFramePreviewBaker?>(null) }
+    // AGSL grade for the Compose present path (FULL glass). Mid/high devices
+    // only — A12 stays on FLAT + GPU SurfaceView.
+    var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
         effects,
         configuration,
@@ -452,11 +462,14 @@ fun LiveFeedView(
         lutLibrary,
         lutRenderGeneration,
         colorMode,
+        preferComposablePresentation,
     ) {
         // Never retain a plan for a superseded selection while its
         // replacement is prepared. Cube baking is native/CPU work off UI.
         renderPlan = null
         previewBaker = null
+        (composableEffectsRenderer as? AutoCloseable)?.close()
+        composableEffectsRenderer = null
         gpuBackend.updatePlan(null, aspectFill)
         if (effects.isIdentity) return@LaunchedEffect
         if (!liveFeedEffectsCanRender(Build.VERSION.SDK_INT, SwiftCore.isAvailable, colorMode)) {
@@ -476,28 +489,43 @@ fun LiveFeedView(
             }
         renderPlan = nextPlan
         if (nextPlan != null) {
-            gpuBackend.updatePlan(nextPlan, aspectFill)
+            if (!preferComposablePresentation) {
+                gpuBackend.updatePlan(nextPlan, aspectFill)
+            }
             // Small-preview baker for Wear: GLES path reuses the same plan via
             // LegacyFeedEffectsPreviewBaker; AGSL baker is API 33-only fallback.
             previewBaker =
                 withContext(Dispatchers.Default) {
                     LegacyFeedEffectsPreviewBaker(applicationContext, nextPlan)
                 }
+            if (preferComposablePresentation && Build.VERSION.SDK_INT >= 33) {
+                composableEffectsRenderer =
+                    withContext(Dispatchers.Default) {
+                        runCatching { FeedEffectsRenderer.create(nextPlan) }.getOrNull()
+                    }
+            }
         }
     }
     SideEffect {
         val plan = renderPlan
-        if (plan != null && !gpuBackend.renderFailed) {
+        if (!preferComposablePresentation && plan != null && !gpuBackend.renderFailed) {
             gpuBackend.updatePlan(plan, aspectFill)
         }
     }
-    val gpuSurfaceActive = renderPlan != null && !gpuBackend.renderFailed
+    // SurfaceView is a separate buffer — Kyant layerBackdrop cannot sample it.
+    // FULL liquid glass therefore stays on Compose Canvas even when graded.
+    val gpuSurfaceActive =
+        !preferComposablePresentation &&
+            renderPlan != null &&
+            !gpuBackend.renderFailed
     val gpuFramesRequested = gpuSurfaceActive
     val latestGpuFramesRequested = rememberUpdatedState(gpuFramesRequested)
     LaunchedEffect(gpuFramesRequested) {
         if (!gpuFramesRequested) gpuBackend.clearFrame()
     }
-    val falseColorReady = gpuSurfaceActive && renderPlan?.falseColorReady == true
+    val falseColorReady =
+        (gpuSurfaceActive || composableEffectsRenderer != null) &&
+            renderPlan?.falseColorReady == true
     LaunchedEffect(
         falseColorReady,
         effects.falseColor,
@@ -517,6 +545,10 @@ fun LiveFeedView(
     DisposableEffect(ownedPreviewBaker) {
         onDispose { (ownedPreviewBaker as? AutoCloseable)?.close() }
     }
+    val ownedComposableRenderer = composableEffectsRenderer
+    DisposableEffect(ownedComposableRenderer) {
+        onDispose { (ownedComposableRenderer as? AutoCloseable)?.close() }
+    }
 
     LaunchedEffect(source, presentationState) {
         presentationState?.clear()
@@ -527,7 +559,7 @@ fun LiveFeedView(
             Log.d(
                 TAG,
                 "hardware MJPEG decoder available: ${LiveFeedMjpegHardware.isAvailable()} " +
-                    "gpuBackend=${gpuBackend.kind}",
+                    "gpuBackend=${gpuBackend.kind} composablePresent=$preferComposablePresentation",
             )
         }
         // Low-RAM devices (A12 class): slightly smaller decode when assists are
@@ -598,7 +630,9 @@ fun LiveFeedView(
             onRelease = { view -> gpuBackend.detach(view) },
         )
     } else {
-        // Plain feed: native blit, no AGSL grade (GPU surface handles assists).
+        // Compose Canvas is what Kyant layerBackdrop records for liquid glass.
+        // Graded FULL glass uses AGSL; plain feed is a direct bitmap blit.
+        val agslRenderer = composableEffectsRenderer
         Canvas(modifier) {
             val androidBitmap =
                 presentationState?.bitmap
@@ -613,14 +647,28 @@ fun LiveFeedView(
                     aspectFill = aspectFill,
                 ) ?: return@Canvas
             drawIntoCanvas { canvas ->
-                val dst =
-                    android.graphics.Rect(
-                        content.left,
-                        content.top,
-                        content.left + content.width,
-                        content.top + content.height,
+                if (agslRenderer != null &&
+                    Build.VERSION.SDK_INT >= 33 &&
+                    decodedLiveFeedColorMode(androidBitmap) == LiveFeedColorMode.SDR
+                ) {
+                    agslRenderer.draw(
+                        canvas.nativeCanvas,
+                        androidBitmap,
+                        content.left.toFloat(),
+                        content.top.toFloat(),
+                        content.width.toFloat(),
+                        content.height.toFloat(),
                     )
-                canvas.nativeCanvas.drawBitmap(androidBitmap, null, dst, null)
+                } else {
+                    val dst =
+                        android.graphics.Rect(
+                            content.left,
+                            content.top,
+                            content.left + content.width,
+                            content.top + content.height,
+                        )
+                    canvas.nativeCanvas.drawBitmap(androidBitmap, null, dst, null)
+                }
             }
         }
     }

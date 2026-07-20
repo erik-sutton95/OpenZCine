@@ -53,11 +53,12 @@ enum class GlassTier {
  *
  * - Pre-API 33 → FLAT (lens needs RuntimeShader).
  * - Low-RAM / under 4 GB total → FLAT (Exynos 850 class like Galaxy A12
- *   cannot sustain Kyant blur+lens without tanking the monitor).
+ *   cannot sustain Kyant blur+lens under live feed).
  * - Else → FULL on API 33+.
  *
  * Debug override `zc.glass.tier` can only lower; legacy `"blur"` → FLAT.
- * `"full"` never raises above [capability].
+ * `"full"` never raises above [capability] — low-RAM devices stay FLAT even
+ * when the intent asks for full glass.
  */
 fun resolveTier(
     sdkInt: Int,
@@ -127,6 +128,11 @@ class FrameBudgetWindow(
  *
  * Attach with [com.kyant.backdrop.backdrops.layerBackdrop]. Popups must be
  * **siblings outside** the scene recording so they do not loop.
+ *
+ * **Feed present path:** layer recording only sees Compose/HWUI draws.
+ * [SurfaceView] / [android.opengl.GLSurfaceView] live feed (FLAT + LUT/GPU)
+ * never appears in the sample — [LiveFeedView] forces Compose Canvas when
+ * [tier] is [GlassTier.FULL] so glass blur includes the video.
  *
  * @param allowDemote When true, [MonitorGlassBudgetLoop] may lower FULL → FLAT
  *   under sustained jank. API gating still uses [resolveTier].

@@ -49,6 +49,10 @@ class GlassTierTest {
             GlassTier.FLAT,
             resolveTier(33, "full", totalRamBytes = 3L * 1024 * 1024 * 1024),
         )
+        assertEquals(
+            GlassTier.FLAT,
+            resolveTier(33, "full", isLowRamDevice = true, totalRamBytes = 8L * 1024 * 1024 * 1024),
+        )
     }
 
     @Test

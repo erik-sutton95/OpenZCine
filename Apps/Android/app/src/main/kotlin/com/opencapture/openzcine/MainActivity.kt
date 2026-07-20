@@ -583,7 +583,13 @@ class MainActivity : ComponentActivity() {
                                 assist = assist,
                                 operatorSettings = operatorSettings,
                                 lutLibrary = lutLibrary,
-                                liveViewEnabled = overlay != MonitorOverlay.MEDIA,
+                                // Media already owned this gate. Settings also
+                                // drops every preview consumer so the native
+                                // live-view pump and GPU decode path release
+                                // while Operator Setup is on top — otherwise
+                                // the full-screen sheet fights the feed for
+                                // CPU/GPU on lower-tier phones.
+                                liveViewEnabled = overlay == MonitorOverlay.NONE,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == MonitorOverlay.NONE,

@@ -280,7 +280,7 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * read-only rather than receiving guessed options.
  *
  * Chrome glass runs the GPU treatment (GlassChrome.kt) at this device's
- * [resolveTier] ceiling (FULL on API 33+, else FLAT opaque fill);
+ * [resolveTier] ceiling (FULL on API 33+ with enough RAM, else FLAT);
  * [glassTierOverride] (`zc.glass.tier` debug intent extra) can only lower.
  *
  * [assist] is shared with Operator Settings so toolbar and settings changes
@@ -1501,6 +1501,9 @@ internal fun MonitorScreen(
                         lutLibrary = lutLibrary,
                         effectsPresentationState = liveFeedEffectsPresentation,
                         aspectFill = isPortraitFill,
+                        // SurfaceView graded feed is invisible to Kyant
+                        // layerBackdrop — FULL glass must present via Compose.
+                        preferComposablePresentation = glass.tier == GlassTier.FULL,
                     )
                     // Presentation-only texture: after the camera frame/effect renderer, before
                     // every geometry-bearing assist. Scopes continue sampling monitorFrameSource.

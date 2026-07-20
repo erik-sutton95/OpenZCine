@@ -14,6 +14,10 @@ private const val TAG = "ZCLiveFeedGpu"
  *
  * Adapters grade [FeedEffectsRenderPlan] into a [SurfaceView]. Compose chrome
  * overlays the surface; the graded video never round-trips through Compose Canvas.
+ *
+ * **Liquid glass caveat:** Kyant `layerBackdrop` cannot sample a SurfaceView.
+ * [LiveFeedView] only activates this backend when glass is FLAT (or absent);
+ * FULL glass uses Compose Canvas + AGSL so chrome/popups blur the feed.
  */
 internal interface LiveFeedGpuBackend {
     /** Android view that owns the swapchain / GL surface. */
