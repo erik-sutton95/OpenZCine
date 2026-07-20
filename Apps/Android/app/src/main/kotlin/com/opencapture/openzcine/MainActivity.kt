@@ -22,8 +22,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -819,10 +822,10 @@ fun MonitorShell(
 }
 
 /**
- * Branded launch splash — the Compose continuation of the system splash,
- * porting iOS `LaunchSplashView` (ios/Runner/Branding.swift): the diagonal
- * near-black gradient with a gold top-trailing glow, the app logo, and the
- * wordmark, fading out with an ease-out after the hold.
+ * Branded launch splash — Compose continuation of the system splash, porting
+ * iOS `LaunchSplashContent` / `LaunchSplashOverlay` (ios/Runner/Branding.swift):
+ * diagonal near-black gradient + gold top-trailing glow, rounded app icon +
+ * wordmark (landscape HStack / portrait VStack), 2250 ms hold then 350 ms ease-out.
  */
 @Composable
 private fun LaunchSplashOverlay(visible: Boolean) {
@@ -831,8 +834,9 @@ private fun LaunchSplashOverlay(visible: Boolean) {
         enter = androidx.compose.animation.EnterTransition.None,
         exit = fadeOut(tween(durationMillis = 350)),
     ) {
-        Column(
+        BoxWithConstraints(
             Modifier.fillMaxSize().drawBehind {
+                // BrandBackdrop: backgroundDeep → background → warm charcoal.
                 drawRect(
                     Brush.linearGradient(
                         colors =
@@ -843,7 +847,7 @@ private fun LaunchSplashOverlay(visible: Boolean) {
                             ),
                         start = Offset.Zero,
                         end = Offset(size.width, size.height),
-                    )
+                    ),
                 )
                 drawRect(
                     Brush.radialGradient(
@@ -854,24 +858,69 @@ private fun LaunchSplashOverlay(visible: Boolean) {
                             ),
                         center = Offset(size.width * 0.85f, size.height * 0.10f),
                         radius = size.maxDimension * 0.7f,
-                    )
+                    ),
                 )
             },
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
         ) {
-            Image(
-                painter = painterResource(R.drawable.openzcine_splash_icon),
-                contentDescription = null,
-                modifier = Modifier.size(96.dp).clip(RoundedCornerShape(21.dp)),
-            )
-            Box(Modifier.size(24.dp))
-            Text(
-                "OpenZCine",
-                color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            val landscape = maxWidth >= maxHeight
+            // iOS: min(width * (landscape ? 0.16 : 0.28), 96)
+            val logoSize =
+                minOf(
+                    maxWidth * if (landscape) 0.16f else 0.28f,
+                    96.dp,
+                )
+            // iOS continuous corner: size * 0.22
+            val logoCorner = logoSize * 0.22f
+            val wordmarkSp = if (landscape) 34.sp else 30.sp
+            if (landscape) {
+                Row(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = maxOf(32.dp, maxWidth * 0.08f)),
+                    horizontalArrangement =
+                        Arrangement.spacedBy(
+                            maxOf(32.dp, maxWidth * 0.06f),
+                            Alignment.CenterHorizontally,
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.openzcine_splash_icon),
+                        contentDescription = "OpenZCine",
+                        modifier =
+                            Modifier
+                                .size(logoSize)
+                                .clip(RoundedCornerShape(logoCorner)),
+                    )
+                    Text(
+                        "OpenZCine",
+                        color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
+                        fontSize = wordmarkSp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically),
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.openzcine_splash_icon),
+                        contentDescription = "OpenZCine",
+                        modifier =
+                            Modifier
+                                .size(logoSize)
+                                .clip(RoundedCornerShape(logoCorner)),
+                    )
+                    Text(
+                        "OpenZCine",
+                        color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
+                        fontSize = wordmarkSp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
         }
     }
 }
