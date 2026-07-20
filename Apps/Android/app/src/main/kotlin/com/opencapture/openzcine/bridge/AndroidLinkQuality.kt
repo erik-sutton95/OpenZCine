@@ -31,12 +31,12 @@ public data class SwiftLiveViewRequest(
 
     internal companion object {
         const val NANOS_PER_SECOND = 1_000_000_000L
-        /** ~60 fps ceiling for the disposable JPEG monitor stream. */
-        const val MIN_FRAME_INTERVAL_NANOS = 16_666_667L
+        /** Fixed 60 Hz monitor pull ceiling. */
+        const val MIN_FRAME_INTERVAL_NANOS = NANOS_PER_SECOND / 60L
         /** ~10 fps floor under thermal shedding. */
         const val MAX_FRAME_INTERVAL_NANOS = 100_000_000L
-        /** Default cadence when the body has not reported a recording frame rate (~30 fps). */
-        const val STANDARD_FRAME_INTERVAL_NANOS = NANOS_PER_SECOND / 30L
+        /** Nominal cadence: fixed 60 Hz before thermal shedding. */
+        const val STANDARD_FRAME_INTERVAL_NANOS = MIN_FRAME_INTERVAL_NANOS
         val DEFAULT = SwiftLiveViewRequest(2, 2, STANDARD_FRAME_INTERVAL_NANOS)
     }
 }
@@ -48,7 +48,10 @@ internal data class SwiftLiveViewPolicyInput(
     val thermalTier: Int,
     val isRecording: Boolean,
     val cameraOverheating: Boolean,
-    /** Camera-advertised movie frame rate in whole fps; null when unknown. */
+    /**
+     * Unused — monitor cadence is fixed at 60 Hz. Kept so call sites that
+     * still pass a body frame rate compile cleanly.
+     */
     val recordingFrameRate: Int? = null,
 )
 

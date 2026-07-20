@@ -3,7 +3,7 @@ import Testing
 @testable import OpenZCineAndroidFacade
 
 struct AndroidLiveViewPolicyWireTests {
-    @Test("Android wire resolves shared stream choices and thermal cadence")
+    @Test("Android wire resolves shared stream choices at a fixed 60 Hz cadence")
     func resolvesPreviewOnlyPolicy() throws {
         let nominal = try #require(
             AndroidLiveViewPolicyWire.resolve(
@@ -14,11 +14,10 @@ struct AndroidLiveViewPolicyWireTests {
                 cameraOverheating: false))
         #expect(nominal.imageSize == 1)
         #expect(nominal.compression == 1)
-        // Unknown recording rate falls back to the 30 fps default cadence.
-        #expect(nominal.frameIntervalNanoseconds == 1_000_000_000 / 30)
+        #expect(nominal.frameIntervalNanoseconds == 1_000_000_000 / 60)
         #expect(
             AndroidLiveViewPolicyWire.encode(nominal)
-                == "1\t1\t\(1_000_000_000 / 30)")
+                == "1\t1\t\(1_000_000_000 / 60)")
 
         let recordingUnderSeriousHeat = try #require(
             AndroidLiveViewPolicyWire.resolve(
@@ -31,14 +30,14 @@ struct AndroidLiveViewPolicyWireTests {
         // preview-only and the serious tier only slows preview pulls.
         #expect(recordingUnderSeriousHeat.imageSize == 2)
         #expect(recordingUnderSeriousHeat.compression == 3)
-        // Default 30 fps × serious 1.5 thermal multiplier.
+        // Fixed 60 Hz × serious 1.5 thermal multiplier.
         #expect(
             recordingUnderSeriousHeat.frameIntervalNanoseconds
-                == UInt64((Double(1_000_000_000 / 30) * 1.5).rounded()))
+                == UInt64((Double(1_000_000_000 / 60) * 1.5).rounded()))
     }
 
-    @Test("Preview pull cadence matches the camera-advertised recording frame rate")
-    func matchesRecordingFrameRate() throws {
+    @Test("Recording frame rate is ignored; cadence stays locked at 60 Hz before thermal")
+    func ignoresRecordingFrameRate() throws {
         let at25 = try #require(
             AndroidLiveViewPolicyWire.resolve(
                 streamPresetRaw: 1,
@@ -47,8 +46,6 @@ struct AndroidLiveViewPolicyWireTests {
                 isRecording: false,
                 cameraOverheating: false,
                 recordingFrameRate: 25))
-        #expect(at25.frameIntervalNanoseconds == 40_000_000)
-
         let at50 = try #require(
             AndroidLiveViewPolicyWire.resolve(
                 streamPresetRaw: 1,
@@ -57,18 +54,8 @@ struct AndroidLiveViewPolicyWireTests {
                 isRecording: false,
                 cameraOverheating: false,
                 recordingFrameRate: 50))
-        #expect(at50.frameIntervalNanoseconds == 20_000_000)
-
-        // Thermal shedding only lengthens the interval (never faster than the body rate).
-        let at25Serious = try #require(
-            AndroidLiveViewPolicyWire.resolve(
-                streamPresetRaw: 1,
-                qualityBiasRaw: 1,
-                thermalTierRaw: 2,
-                isRecording: false,
-                cameraOverheating: false,
-                recordingFrameRate: 25))
-        #expect(at25Serious.frameIntervalNanoseconds == 60_000_000)
+        #expect(at25.frameIntervalNanoseconds == 1_000_000_000 / 60)
+        #expect(at50.frameIntervalNanoseconds == 1_000_000_000 / 60)
     }
 
     @Test("Hardware-verified camera hot state wins and invalid JNI values fail closed")
@@ -82,10 +69,10 @@ struct AndroidLiveViewPolicyWireTests {
                 cameraOverheating: true))
         #expect(hot.imageSize == 1)
         #expect(hot.compression == 2)
-        // Default 30 fps × critical 2.0 thermal multiplier.
+        // Fixed 60 Hz × critical 2.0 thermal multiplier.
         #expect(
             hot.frameIntervalNanoseconds
-                == UInt64((Double(1_000_000_000 / 30) * 2.0).rounded()))
+                == UInt64((Double(1_000_000_000 / 60) * 2.0).rounded()))
         #expect(
             AndroidLiveViewPolicyWire.resolve(
                 streamPresetRaw: 9,

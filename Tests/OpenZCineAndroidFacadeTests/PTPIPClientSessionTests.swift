@@ -237,14 +237,14 @@ struct PTPIPClientSessionTests {
             session.configureLiveView(
                 imageSize: 1,
                 compression: 3,
-                // 25 fps cadence (1e9 / 25) — must match recording rate policy.
-                frameIntervalNanoseconds: 40_000_000))
-        // 50 fps (20 ms) must also be accepted by the expanded envelope.
+                // Fixed 60 Hz monitor cadence (1e9 / 60).
+                frameIntervalNanoseconds: 1_000_000_000 / 60))
+        // Thermal-lengthened interval must also be accepted.
         #expect(
             session.configureLiveView(
                 imageSize: 1,
                 compression: 3,
-                frameIntervalNanoseconds: 20_000_000))
+                frameIntervalNanoseconds: 33_000_000))
         let writes = server.receivedPropertyWrites()
         #expect(writes.count == 4)
         #expect(

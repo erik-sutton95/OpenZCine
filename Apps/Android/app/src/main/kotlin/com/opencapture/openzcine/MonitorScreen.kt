@@ -454,7 +454,6 @@ internal fun MonitorScreen(
         thermalTier,
         previewPolicyRecording,
         cameraProperties.temperatureStatus,
-        cameraProperties.frameRate,
     ) {
         liveViewController?.apply(
             SwiftLiveViewPolicyInput(
@@ -463,9 +462,6 @@ internal fun MonitorScreen(
                 thermalTier = thermalTier.wireValue,
                 isRecording = previewPolicyRecording,
                 cameraOverheating = cameraProperties.temperatureStatus == CameraTemperatureStatus.HOT,
-                // Match the disposable JPEG pull cadence to the body-advertised
-                // recording rate (6K·25p → 25 Hz, 6K·50p → 50 Hz).
-                recordingFrameRate = cameraProperties.frameRate?.takeIf { it > 0 },
             ),
         )
     }
