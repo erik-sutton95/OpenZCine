@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.openzcine.ChromeShape
+import com.opencapture.openzcine.GlassTier
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.LocalMonitorGlass
 import com.opencapture.openzcine.R
@@ -591,18 +592,19 @@ public fun GlassPillSlider(
     modifier: Modifier = Modifier,
 ) {
     val monitorGlass = LocalMonitorGlass.current
+    // Liquid glass only when the monitor session is on FULL tier. Standalone
+    // Operator Setup and FLAT-tier devices get the solid white capsule thumb.
+    val useLiquidGlass = monitorGlass?.tier == GlassTier.FULL
     val localBackdrop = rememberLayerBackdrop()
     val sceneBackdrop = monitorGlass?.layerBackdrop
     val latestOnChange by rememberUpdatedState(onChange)
     val floatRange = range.first.toFloat()..range.last.toFloat()
 
-    // When no feed backdrop is available, capture a warm dark plate behind the
-    // control so the liquid thumb still has content to sample.
     Box(
         modifier
             .height(40.dp)
             .then(
-                if (sceneBackdrop == null) {
+                if (useLiquidGlass && sceneBackdrop == null) {
                     Modifier.layerBackdrop(localBackdrop)
                 } else {
                     Modifier
@@ -621,7 +623,7 @@ public fun GlassPillSlider(
             },
         contentAlignment = Alignment.Center,
     ) {
-        if (sceneBackdrop == null) {
+        if (useLiquidGlass && sceneBackdrop == null) {
             Box(
                 Modifier
                     .matchParentSize()
@@ -649,6 +651,7 @@ public fun GlassPillSlider(
             backdrop = sceneBackdrop ?: localBackdrop,
             modifier = Modifier.fillMaxWidth(),
             accentColor = LiveDesign.accent,
+            useLiquidGlass = useLiquidGlass,
         )
     }
 }

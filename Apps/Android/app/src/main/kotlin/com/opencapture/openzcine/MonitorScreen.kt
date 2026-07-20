@@ -356,15 +356,38 @@ internal fun MonitorScreen(
             drawRect(LiveDesign.background)
             drawContent()
         }
+    val activityManager =
+        remember(appContext) {
+            appContext.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                as android.app.ActivityManager
+        }
+    val totalRamBytes =
+        remember(activityManager) {
+            android.app.ActivityManager.MemoryInfo()
+                .also(activityManager::getMemoryInfo)
+                .totalMem
+        }
     val glass =
-        remember(glassTierOverride, feedBackdrop, sceneBackdrop) {
-            val tier = resolveTier(android.os.Build.VERSION.SDK_INT, glassTierOverride)
+        remember(
+            glassTierOverride,
+            feedBackdrop,
+            sceneBackdrop,
+            totalRamBytes,
+            activityManager.isLowRamDevice,
+        ) {
+            val tier =
+                resolveTier(
+                    sdkInt = android.os.Build.VERSION.SDK_INT,
+                    override = glassTierOverride,
+                    isLowRamDevice = activityManager.isLowRamDevice,
+                    totalRamBytes = totalRamBytes,
+                )
             MonitorGlass(
                 tier,
                 layerBackdrop = feedBackdrop,
                 overlayBackdrop = sceneBackdrop,
                 // Pin FULL only when the operator explicitly forces it; otherwise
-                // allow frame-budget demote so low-end testing is realistic.
+                // allow frame-budget demote so borderline devices still fall back.
                 allowDemote = glassTierOverride?.lowercase() != "full",
             )
         }

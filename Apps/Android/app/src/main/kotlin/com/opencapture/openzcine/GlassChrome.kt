@@ -49,11 +49,31 @@ enum class GlassTier {
 }
 
 /**
- * API 33+ → FULL (lens needs RuntimeShader). Else → FLAT.
+ * Capability floor for liquid glass.
+ *
+ * - Pre-API 33 → FLAT (lens needs RuntimeShader).
+ * - Low-RAM / under 4 GB total → FLAT (Exynos 850 class like Galaxy A12
+ *   cannot sustain Kyant blur+lens without tanking the monitor).
+ * - Else → FULL on API 33+.
+ *
  * Debug override `zc.glass.tier` can only lower; legacy `"blur"` → FLAT.
+ * `"full"` never raises above [capability].
  */
-fun resolveTier(sdkInt: Int, override: String? = null): GlassTier {
-    val capability = if (sdkInt >= 33) GlassTier.FULL else GlassTier.FLAT
+fun resolveTier(
+    sdkInt: Int,
+    override: String? = null,
+    isLowRamDevice: Boolean = false,
+    totalRamBytes: Long = Long.MAX_VALUE,
+): GlassTier {
+    val lowEnd =
+        isLowRamDevice ||
+            (totalRamBytes in 1L until MIN_FULL_GLASS_RAM_BYTES)
+    val capability =
+        when {
+            sdkInt < 33 -> GlassTier.FLAT
+            lowEnd -> GlassTier.FLAT
+            else -> GlassTier.FULL
+        }
     val requested =
         when (override?.lowercase()) {
             "full" -> GlassTier.FULL
@@ -63,17 +83,20 @@ fun resolveTier(sdkInt: Int, override: String? = null): GlassTier {
     return if (requested.ordinal < capability.ordinal) requested else capability
 }
 
+/** Devices reporting under this total RAM stay on FLAT glass. */
+const val MIN_FULL_GLASS_RAM_BYTES: Long = 4L * 1024L * 1024L * 1024L
+
 /**
- * Sustained frame-budget detector used only when [MonitorGlass.allowDemote]
- * is true. Defaults are intentionally loose: live-view decode pacing on
- * mid-range phones routinely sits near 30–50 ms even without glass, so a
- * tight 48 ms / 10 % window demoted FULL → FLAT within ~20 s on Galaxy A12.
+ * Sustained frame-budget detector used when [MonitorGlass.allowDemote] is
+ * true. Defaults are moderate: demote after a short warm-up if most frames
+ * miss a 48 ms budget (so a mid-range phone that snuck into FULL still
+ * falls back cleanly without waiting a full minute).
  */
 class FrameBudgetWindow(
-    private val budgetNanos: Long = 100_000_000L,
-    private val window: Int = 600,
-    private val maxOverBudget: Int = 360,
-    private val warmup: Int = 120,
+    private val budgetNanos: Long = 48_000_000L,
+    private val window: Int = 90,
+    private val maxOverBudget: Int = 45,
+    private val warmup: Int = 45,
 ) {
     private var skipped = 0
     private var seen = 0

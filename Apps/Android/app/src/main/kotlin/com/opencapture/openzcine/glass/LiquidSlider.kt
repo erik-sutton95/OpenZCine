@@ -64,6 +64,11 @@ internal fun LiquidSlider(
     modifier: Modifier = Modifier,
     accentColor: Color = LiveDesign.accent,
     trackColor: Color = Color(0xFF787880).copy(alpha = 0.36f),
+    /**
+     * When false (FLAT glass tier / low-end devices), the thumb is a solid
+     * white capsule — no Kyant blur/lens path.
+     */
+    useLiquidGlass: Boolean = true,
 ) {
     val trackBackdrop = rememberLayerBackdrop()
 
@@ -161,20 +166,9 @@ internal fun LiquidSlider(
             )
         }
 
-        Box(
-            Modifier
-                .graphicsLayer {
-                    translationX =
-                        (
-                            -size.width / 2f +
-                                trackWidth * dampedDragAnimation.progress
-                        ).fastCoerceIn(
-                            -size.width / 4f,
-                            trackWidth - size.width * 3f / 4f,
-                        ) * if (isLtr) 1f else -1f
-                }
-                .then(dampedDragAnimation.modifier)
-                .drawBackdrop(
+        val thumbChrome: Modifier =
+            if (useLiquidGlass) {
+                Modifier.drawBackdrop(
                     backdrop =
                         rememberCombinedBackdrop(
                             backdrop,
@@ -230,6 +224,29 @@ internal fun LiquidSlider(
                         drawRect(Color.White.copy(alpha = 1f - progress))
                     },
                 )
+            } else {
+                // FLAT tier: solid white capsule — no RuntimeShader blur/lens cost.
+                Modifier.background(Color.White, Capsule())
+            }
+
+        Box(
+            Modifier
+                .graphicsLayer {
+                    translationX =
+                        (
+                            -size.width / 2f +
+                                trackWidth * dampedDragAnimation.progress
+                        ).fastCoerceIn(
+                            -size.width / 4f,
+                            trackWidth - size.width * 3f / 4f,
+                        ) * if (isLtr) 1f else -1f
+                    if (useLiquidGlass) {
+                        scaleX = dampedDragAnimation.scaleX
+                        scaleY = dampedDragAnimation.scaleY
+                    }
+                }
+                .then(dampedDragAnimation.modifier)
+                .then(thumbChrome)
                 .size(40.dp, 24.dp),
         )
     }

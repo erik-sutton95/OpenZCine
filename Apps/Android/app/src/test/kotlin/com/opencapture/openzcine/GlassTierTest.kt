@@ -9,8 +9,9 @@ import kotlin.test.assertTrue
 class GlassTierTest {
     @Test
     fun platformCeilingPicksTheTier() {
-        assertEquals(GlassTier.FULL, resolveTier(33))
-        assertEquals(GlassTier.FULL, resolveTier(36))
+        // High-RAM API 33+ → FULL.
+        assertEquals(GlassTier.FULL, resolveTier(33, totalRamBytes = 6L * 1024 * 1024 * 1024))
+        assertEquals(GlassTier.FULL, resolveTier(36, totalRamBytes = 8L * 1024 * 1024 * 1024))
         // Older APIs get flat opaque fill — no fake frost tier.
         assertEquals(GlassTier.FLAT, resolveTier(31))
         assertEquals(GlassTier.FLAT, resolveTier(32))
@@ -18,13 +19,36 @@ class GlassTierTest {
     }
 
     @Test
+    fun lowEndDevicesStayFlatEvenOnApi33() {
+        // Galaxy A12 class: under 4 GB total RAM.
+        assertEquals(
+            GlassTier.FLAT,
+            resolveTier(33, totalRamBytes = 3L * 1024 * 1024 * 1024),
+        )
+        assertEquals(
+            GlassTier.FLAT,
+            resolveTier(33, isLowRamDevice = true, totalRamBytes = 8L * 1024 * 1024 * 1024),
+        )
+        // Exactly 4 GB is the FULL floor.
+        assertEquals(
+            GlassTier.FULL,
+            resolveTier(33, totalRamBytes = MIN_FULL_GLASS_RAM_BYTES),
+        )
+    }
+
+    @Test
     fun overrideLowersButNeverRaises() {
-        assertEquals(GlassTier.FLAT, resolveTier(33, "flat"))
+        assertEquals(GlassTier.FLAT, resolveTier(33, "flat", totalRamBytes = 8L * 1024 * 1024 * 1024))
         // Legacy "blur" overrides map to FLAT (opaque floor).
-        assertEquals(GlassTier.FLAT, resolveTier(33, "blur"))
+        assertEquals(GlassTier.FLAT, resolveTier(33, "blur", totalRamBytes = 8L * 1024 * 1024 * 1024))
         // FULL needs RuntimeShader — pre-33 stays FLAT.
         assertEquals(GlassTier.FLAT, resolveTier(31, "full"))
         assertEquals(GlassTier.FLAT, resolveTier(29, "full"))
+        // "full" cannot raise a low-RAM A12-class device.
+        assertEquals(
+            GlassTier.FLAT,
+            resolveTier(33, "full", totalRamBytes = 3L * 1024 * 1024 * 1024),
+        )
     }
 
     @Test
@@ -45,8 +69,14 @@ class GlassTierTest {
 
     @Test
     fun unknownOverrideFallsBackToTheCeiling() {
-        assertEquals(GlassTier.FULL, resolveTier(33, "chrome"))
-        assertEquals(GlassTier.FULL, resolveTier(33, null))
+        assertEquals(
+            GlassTier.FULL,
+            resolveTier(33, "chrome", totalRamBytes = 8L * 1024 * 1024 * 1024),
+        )
+        assertEquals(
+            GlassTier.FULL,
+            resolveTier(33, null, totalRamBytes = 8L * 1024 * 1024 * 1024),
+        )
     }
 
     @Test
