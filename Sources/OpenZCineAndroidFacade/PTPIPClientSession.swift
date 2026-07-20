@@ -3298,14 +3298,22 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Graceful teardown: best-effort `CloseSession` so the camera releases its
     /// session slot immediately, THEN drop both sockets — the same semantics as
     /// the iOS reconnect-wedge fix (`NativeCameraSession.shutdown`). Bounded:
-    /// the read timeout is dropped to 2 s first, so a dead link cannot stall
-    /// teardown. Safe to call more than once.
+    /// the read timeout is dropped to 2 s **before** joining live view / media
+    /// / CloseSession, so a dead link cannot stall teardown for the full
+    /// 10 s command poll. Safe to call more than once.
     ///
     /// A running live-view pump is stopped (and joined) first, so the wire
     /// order on teardown is always `EndLiveView` → `CloseSession`.
     public func disconnect() {
         commandLifecycleLock.lock()
         defer { commandLifecycleLock.unlock() }
+        // Bound every remaining join before waiting: EndLiveView, media stop,
+        // and CloseSession all inherit the shortened command timeout.
+        command?.timeoutMilliseconds = 2_000
+        #if os(Android)
+            // USB shares the same 2 s teardown budget as Wi‑Fi CloseSession.
+            // (executeTransactionSynchronously still takes an explicit deadline.)
+        #endif
         stopEventDrain()
         stopMediaTransfer()
         releaseMediaMode()
@@ -3327,7 +3335,6 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 return
             }
         #endif
-        command?.timeoutMilliseconds = 2_000
         _ = try? executeTransaction(.closeSession)
         command?.close()
         event?.close()

@@ -483,6 +483,8 @@ internal fun MonitorScreen(
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
     var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
     var activeAssistOptions by remember { mutableStateOf<LiveAssistOptionsRequest?>(null) }
+    // iOS `isRedDownloadPresented` — full-screen RED IPP2 download cover.
+    var redDownloadPresented by remember { mutableStateOf(false) }
     // iOS pendingShutterLockState: optimistic lock UI until poll matches the write.
     var optimisticShutterLocked by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(liveViewGuideVisible) {
@@ -2054,9 +2056,26 @@ internal fun MonitorScreen(
                     cameraInput = exposureAssistCameraInput,
                     lutLibrary = lutLibrary,
                     onRecenterPanel = recenterPanel,
+                    onOpenRedDownload = { redDownloadPresented = true },
                     onDismiss = { activeAssistOptions = null },
                 )
             }
+        }
+        if (redDownloadPresented && lutLibrary != null) {
+            com.opencapture.openzcine.lut.RedLutDownloadScreen(
+                lutLibrary = lutLibrary,
+                onRequestInternetHop = {
+                    // Hop is owned by Frame.io hop for now — operator can
+                    // leave the camera AP from Settings when needed. The
+                    // gateway still explains the camera-AP block.
+                },
+                onClose = { redDownloadPresented = false },
+                onImported = { count ->
+                    if (count > 0 && !assist.isOn(AssistTool.LUT)) {
+                        assist.toggle(AssistTool.LUT)
+                    }
+                },
+            )
         }
         if (liveViewGuideVisible) {
             val guideController = requireNotNull(liveViewGuideController)

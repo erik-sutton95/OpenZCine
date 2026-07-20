@@ -408,6 +408,7 @@ class SwiftCoreCameraSession internal constructor(
         SwiftCoreLiveFrameSource(
             onRecordingState = ::applyCameraRecordingState,
             onCommandRoundTrip = ::updateRoundTripMeasurement,
+            onStreamExhausted = ::markLiveViewStreamExhausted,
         )
 
     /**
@@ -749,6 +750,23 @@ class SwiftCoreCameraSession internal constructor(
      */
     private fun reportEventChannelDegraded(attempt: Long, message: String) {
         if (isCurrentAttempt(attempt)) phaseLogger("eventChannelEnded", message)
+    }
+
+    /**
+     * Live-view pump exhausted its restart budget (iOS stall escalate). Tear
+     * down the active attempt so [MonitorSessionRecovery] can full-reconnect
+     * instead of spinning a Connected session with a dead feed forever.
+     */
+    private fun markLiveViewStreamExhausted() {
+        val attempt =
+            synchronized(attemptLock) {
+                if (_state.value !is CameraSessionState.Connected) return
+                activeAttempt
+            } ?: return
+        markTerminalEventChannelEnded(
+            attempt,
+            "Live view stopped after repeated pump failures.",
+        )
     }
 
     /**

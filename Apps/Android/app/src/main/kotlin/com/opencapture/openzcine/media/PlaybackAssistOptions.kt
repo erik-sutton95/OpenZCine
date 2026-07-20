@@ -162,6 +162,8 @@ private data class AssistOptionsActions(
     val resetFalseColorScale: () -> Unit,
     val recenterPanel: (() -> Unit)?,
     val contextLabel: String,
+    /** Opens the full-screen RED IPP2 download flow (iOS `isRedDownloadPresented`). */
+    val openRedDownload: () -> Unit = {},
 )
 
 /**
@@ -217,6 +219,7 @@ internal fun LiveAssistOptionsOverlay(
     cameraInput: ExposureAssistCameraInput,
     lutLibrary: AndroidLutLibrary?,
     onRecenterPanel: (() -> Unit)? = null,
+    onOpenRedDownload: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val isOn: (AssistTool) -> Boolean = { candidate ->
@@ -247,6 +250,10 @@ internal fun LiveAssistOptionsOverlay(
                 resetFalseColorScale = assistState::resetFalseColorSelection,
                 recenterPanel = onRecenterPanel,
                 contextLabel = "live monitor",
+                openRedDownload = {
+                    onDismiss()
+                    onOpenRedDownload()
+                },
             ),
         settings = settings,
         cameraInput = cameraInput,
@@ -400,11 +407,11 @@ private enum class LutPopupCategory(val label: String) {
     CUSTOM("Custom"),
 }
 
-/** iOS `RedOutputFilter` output-space filter over the RED list. */
+/** iOS `RedOutputFilter` output-space filter over the RED list (raw file tokens). */
 private enum class RedOutputSpaceFilter(val label: String, val needle: String?) {
     ALL("All", null),
-    REC709("Rec.709", "709"),
-    REC2020("Rec.2020", "2020"),
+    REC709("Rec.709", "REC709"),
+    REC2020("Rec.2020", "REC2020"),
 }
 
 /** One row the LUT drum can land on. */
@@ -515,17 +522,27 @@ private fun LutOptions(
                 onDeleteRequest = null,
             )
         LutPopupCategory.RED -> {
+            // iOS filters on raw file name tokens (REC709 / REC2020), not display text.
             val redEntries =
-                storedEntries.filter { entry ->
-                    entry.selection.category == StoredLutCategory.RED &&
-                        (redFilter.needle == null || entry.displayName.contains(redFilter.needle!!))
-                }
+                storedEntries
+                    .filter { entry ->
+                        entry.selection.category == StoredLutCategory.RED &&
+                            (redFilter.needle == null ||
+                                entry.selection.fileName.uppercase().contains(redFilter.needle!!))
+                    }
+                    .let { list ->
+                        // Float the recommended default to the top (iOS LUTLibraryIndex.defaultRedLUT).
+                        val default = defaultRedLutEntry(list)
+                        if (default == null) list
+                        else listOf(default) + list.filterNot { it.selection == default.selection }
+                    }
             if (redEntries.isEmpty() && redFilter == RedOutputSpaceFilter.ALL) {
-                // iOS placeholder shape: a titled empty state with the download
-                // capsule; RED delivery stays fail-closed on Android for now.
+                // iOS empty RED tab: title + terms subtitle + Download CTA (always tappable).
                 OptionLabel("RED IPP2 LUTs")
-                OptionCopy("Authorized RED looks downloaded in Operator Setup appear here.")
-                CapsuleActionButton("Download from RED", enabled = false) {}
+                OptionCopy("Download RED's official looks — you'll accept RED's terms.")
+                CapsuleActionButton("Download from RED", enabled = true) {
+                    actions.openRedDownload()
+                }
             } else {
                 CompactSegmented(
                     RedOutputSpaceFilter.entries.toList(),
@@ -535,8 +552,13 @@ private fun LutOptions(
                 LutDrumWheel(
                     entries =
                         redEntries.map { entry ->
+                            val isDefault =
+                                defaultRedLutEntry(redEntries)?.selection == entry.selection
                             LutWheelEntry(
-                                label = entry.displayName,
+                                label =
+                                    shortRedPresetName(entry.selection.fileName).let { short ->
+                                        if (isDefault) "★ $short" else short
+                                    },
                                 selected =
                                     actions.sharedAssistState.selectedLut ==
                                         FeedLutSelection.Stored(entry.selection),
@@ -552,7 +574,8 @@ private fun LutOptions(
             val customEntries =
                 storedEntries.filter { it.selection.category == StoredLutCategory.CUSTOM }
             if (customEntries.isEmpty()) {
-                OptionCopy("No custom LUTs yet.")
+                OptionLabel("No custom LUTs yet")
+                OptionCopy("Import a .cube file to add your own look.")
             } else {
                 LutDrumWheel(
                     entries =
@@ -569,7 +592,7 @@ private fun LutOptions(
                     onDeleteRequest = { pendingDelete = it },
                 )
             }
-            LutImportButton(lutLibrary, scope) { feedback = it }
+            LutImportButton(lutLibrary, scope, actions) { feedback = it }
         }
     }
     pendingDelete?.let { entry ->
@@ -584,9 +607,14 @@ private fun LutOptions(
                         actions.sharedAssistState.selectedLut ==
                         FeedLutSelection.Stored(entry.selection)
                     ) {
-                        library.firstPreparedReplacement(entry.selection)
-                            ?.let(actions.selectStoredLut)
-                            ?: actions.setVisible(AssistTool.LUT, false)
+                        // iOS: keep LUT tool on; same-category replacement else Log3G10→709.
+                        val replacement = library.firstPreparedReplacement(entry.selection)
+                        if (replacement != null) {
+                            actions.selectStoredLut(replacement)
+                        } else {
+                            actions.selectLut(FeedLut.LOG3G10_709)
+                        }
+                        actions.setVisible(AssistTool.LUT, true)
                     }
                     feedback = "${entry.displayName} deleted."
                 } else {
@@ -599,11 +627,42 @@ private fun LutOptions(
     feedback?.let { message -> OptionCopy(message) }
 }
 
+/** iOS `LUTLibraryIndex.defaultRedLUT` preference order (file-name heuristics). */
+private fun defaultRedLutEntry(
+    entries: List<com.opencapture.openzcine.lut.StoredLutEntry>,
+): com.opencapture.openzcine.lut.StoredLutEntry? {
+    if (entries.isEmpty()) return null
+    fun score(fileName: String): Int {
+        val upper = fileName.uppercase()
+        var s = 0
+        if (upper.contains("REC709") || upper.contains("REC_709")) s += 4
+        if (upper.contains("MEDIUM")) s += 2
+        if (upper.contains("SOFT") || upper.contains("ROLLOFF")) s += 1
+        if (upper.contains("CONTRAST")) s += 1
+        return s
+    }
+    return entries.maxByOrNull { score(it.selection.fileName) }
+}
+
+/** iOS `RedPresetName.short` — strip N-Log/IPP2 noise for the drum. */
+private fun shortRedPresetName(fileName: String): String {
+    var name = fileName.removeSuffix(".cube").removeSuffix(".CUBE")
+    name =
+        name
+            .replace(Regex("(?i)N[-_]?Log[_-]?"), "")
+            .replace(Regex("(?i)IPP2[_-]?"), "")
+            .replace('_', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    return name.ifBlank { fileName }
+}
+
 /** iOS "Import .cube" capsule: opens the document picker straight from the popup. */
 @Composable
 private fun LutImportButton(
     lutLibrary: AndroidLutLibrary?,
     scope: kotlinx.coroutines.CoroutineScope,
+    actions: AssistOptionsActions,
     onFeedback: (String) -> Unit,
 ) {
     val launcher =
@@ -614,8 +673,14 @@ private fun LutImportButton(
             if (uri != null) {
                 scope.launch {
                     when (val result = library.importFromDocument(uri)) {
-                        is com.opencapture.openzcine.lut.CustomLutImportResult.Imported ->
+                        is com.opencapture.openzcine.lut.CustomLutImportResult.Imported -> {
+                            // iOS importCustomLUT: select + enable LUT immediately.
+                            if (library.prepare(result.entry.selection)) {
+                                actions.selectStoredLut(result.entry.selection)
+                                actions.setVisible(AssistTool.LUT, true)
+                            }
                             onFeedback("${result.entry.displayName} imported.")
+                        }
                         is com.opencapture.openzcine.lut.CustomLutImportResult.Rejected ->
                             onFeedback(result.message)
                     }
@@ -623,7 +688,7 @@ private fun LutImportButton(
             }
         }
     CapsuleActionButton("Import .cube", enabled = lutLibrary != null) {
-        launcher.launch(arrayOf("*/*"))
+        launcher.launch(arrayOf("*/*", "application/octet-stream"))
     }
 }
 

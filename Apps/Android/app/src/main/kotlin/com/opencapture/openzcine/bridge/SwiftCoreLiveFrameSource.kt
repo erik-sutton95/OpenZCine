@@ -157,14 +157,25 @@ class SwiftCoreLiveFrameSource(
     private val sharingScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val restartDelayMillis: Long = 250L,
+    /**
+     * iOS live-view stall policy escalates after a few restarts to a full
+     * session reconnect. When this many consecutive pump ends happen without
+     * a sustained stream, [onStreamExhausted] runs once so the session can
+     * mark itself Disconnected and [MonitorSessionRecovery] can reconnect.
+     */
+    private val maxConsecutiveRestarts: Int = 3,
     private val onRecordingState: (Boolean) -> Unit = {},
     private val onCommandRoundTrip: () -> Unit = {},
+    private val onStreamExhausted: () -> Unit = {},
     private val stopDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val beforeStartReservation: suspend () -> Unit = {},
 ) : LiveFrameSource {
     init {
         require(restartDelayMillis >= 0L) { "restartDelayMillis must not be negative." }
+        require(maxConsecutiveRestarts >= 1) { "maxConsecutiveRestarts must be at least 1." }
     }
+
+    private val consecutivePumpEnds = AtomicLong(0L)
 
     private val previewRequestLock = Any()
     private var requestedPreview = SwiftLiveViewRequest.DEFAULT
@@ -360,6 +371,9 @@ class SwiftCoreLiveFrameSource(
                             level: com.opencapture.openzcine.core.LiveCameraLevel? = null,
                             timecode: LiveFrameTimecode? = null,
                         ) {
+                            // A sustained stream resets the stall ladder so
+                            // brief glitches still get the three free restarts.
+                            consecutivePumpEnds.set(0L)
                             onCommandRoundTrip()
                             onRecordingState(isRecording)
                             val audioLevels =
@@ -409,6 +423,13 @@ class SwiftCoreLiveFrameSource(
             .buffer(Channel.CONFLATED)
             .retryWhen { cause, _ ->
                 if (cause !is LiveViewEndedException) return@retryWhen false
+                val ends = consecutivePumpEnds.incrementAndGet()
+                if (ends > maxConsecutiveRestarts) {
+                    // Match iOS: after a few rapid LV deaths, escalate — leave
+                    // the flow ended and let the session owner reconnect.
+                    runCatching { onStreamExhausted() }
+                    return@retryWhen false
+                }
                 delay(restartDelayMillis)
                 true
             }
