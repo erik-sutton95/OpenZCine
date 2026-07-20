@@ -4,8 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,15 +34,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -62,10 +69,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.ChromeShape
+import com.opencapture.openzcine.GlassTier
 import com.opencapture.openzcine.LiveDesign
+import com.opencapture.openzcine.LocalMonitorGlass
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.chromeStyle
-import com.opencapture.openzcine.chipGlass
 import com.opencapture.openzcine.glass
 import kotlin.math.roundToInt
 
@@ -584,9 +592,9 @@ public fun SettingsPercentSlider(
 }
 
 /**
- * Horizontal glass capsule slider — frosted track, accent progress fill, white
- * circular thumb. Matches the liquid-glass control grammar used on iOS for
- * scope brightness (and the monitor chrome pill family on Android).
+ * Horizontal glass capsule slider — frosted pill track, accent progress, white
+ * grab thumb. Drag uses horizontal [draggable] (stable keys; works inside a
+ * vertical settings scroller). Tap jumps; drag scrubs from the grab point.
  */
 @Composable
 public fun GlassPillSlider(
@@ -598,13 +606,17 @@ public fun GlassPillSlider(
     val span = (range.last - range.first).coerceAtLeast(1)
     val fraction =
         ((value - range.first).toFloat() / span.toFloat()).coerceIn(0f, 1f)
-    val thumb = 22.dp
-    val trackHeight = 14.dp
+    val thumb = 28.dp
+    val trackHeight = 28.dp
     val density = LocalDensity.current
+    val latestValue by rememberUpdatedState(value)
+    val latestOnChange by rememberUpdatedState(onChange)
+    // Accumulates fractional steps so 1px drags still move the value smoothly.
+    var dragRemainder by remember { mutableFloatStateOf(0f) }
 
     BoxWithConstraints(
         modifier
-            .height(32.dp)
+            .height(40.dp)
             .semantics(mergeDescendants = true) {
                 stateDescription = "$value%"
                 setProgress { target ->
@@ -612,7 +624,7 @@ public fun GlassPillSlider(
                         (range.first + target * span)
                             .roundToInt()
                             .coerceIn(range)
-                    if (next != value) onChange(next)
+                    if (next != latestValue) latestOnChange(next)
                     true
                 }
             },
@@ -622,69 +634,138 @@ public fun GlassPillSlider(
         val thumbPx = with(density) { thumb.toPx() }
         val travel = (widthPx - thumbPx).coerceAtLeast(1f)
 
-        fun valueAt(x: Float): Int {
+        fun valueAtX(x: Float): Int {
             val f = ((x - thumbPx / 2f) / travel).coerceIn(0f, 1f)
             return (range.first + f * span).roundToInt().coerceIn(range)
         }
 
-        // Glass capsule track (frosts when LocalMonitorGlass is present).
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(trackHeight)
-                .align(Alignment.Center)
-                .glass(CircleShape)
-                .border(0.5.dp, LiveDesign.hairline.copy(alpha = 0.18f), CircleShape),
-        ) {
-            // Accent progress fill clipped to a leading capsule segment.
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(fraction.coerceAtLeast(0.02f))
-                    .background(LiveDesign.accent.copy(alpha = 0.55f), CircleShape),
-            )
-        }
-
-        // White glass thumb — solid white core with a soft chip rim.
-        Box(
-            Modifier
-                .offset {
-                    IntOffset(
-                        x = (fraction * travel).roundToInt(),
-                        y = 0,
-                    )
+        val dragState =
+            rememberDraggableState { delta ->
+                // Relative scrub from the current value — grab the thumb and slide.
+                val units = delta / travel * span + dragRemainder
+                val steps = units.toInt()
+                dragRemainder = units - steps
+                if (steps != 0) {
+                    val next = (latestValue + steps).coerceIn(range)
+                    if (next != latestValue) latestOnChange(next)
                 }
+            }
+
+        // Thick glass pill track.
+        GlassPillTrack(
+            fraction = fraction,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .height(trackHeight)
+                    .align(Alignment.Center),
+        )
+
+        // Elevated white thumb — the grab target.
+        Box(
+            Modifier
+                .offset { IntOffset(x = (fraction * travel).roundToInt(), y = 0) }
                 .size(thumb)
                 .align(Alignment.CenterStart)
                 .zIndex(1f)
-                .chipGlass(CircleShape)
-                .background(Color.White, CircleShape)
-                .border(1.dp, Color.White.copy(alpha = 0.85f), CircleShape),
+                .shadow(elevation = 6.dp, shape = CircleShape, clip = false)
+                .background(
+                    brush =
+                        Brush.verticalGradient(
+                            colors =
+                                listOf(
+                                    Color.White,
+                                    Color(0xFFF2F0EA),
+                                ),
+                        ),
+                    shape = CircleShape,
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.95f), CircleShape),
         )
 
-        // Hit target for tap + drag (covers the full control height).
+        // Full-height interaction layer: tap jumps; horizontal drag scrubs.
+        // Keys intentionally exclude [value] so the drag gesture is not cancelled
+        // on every step (that was why the thumb would not scrub continuously).
         Box(
             Modifier
                 .matchParentSize()
-                .pointerInput(range, widthPx, thumbPx) {
+                .pointerInput(range, travel, thumbPx) {
                     detectTapGestures { offset ->
-                        val next = valueAt(offset.x)
-                        if (next != value) onChange(next)
+                        dragRemainder = 0f
+                        val next = valueAtX(offset.x)
+                        if (next != latestValue) latestOnChange(next)
                     }
                 }
-                .pointerInput(range, widthPx, thumbPx, value) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { offset ->
-                            val next = valueAt(offset.x)
-                            if (next != value) onChange(next)
-                        },
-                        onHorizontalDrag = { change, _ ->
-                            change.consume()
-                            val next = valueAt(change.position.x)
-                            if (next != value) onChange(next)
-                        },
-                    )
+                .draggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    onDragStarted = { dragRemainder = 0f },
+                    onDragStopped = { dragRemainder = 0f },
+                ),
+        )
+    }
+}
+
+/**
+ * Frosted capsule track. Prefers live [glass] when a monitor backdrop is
+ * available; otherwise paints a self-contained glass pill (translucent fill +
+ * specular rim) so the control still reads as glass in standalone settings.
+ */
+@Composable
+private fun GlassPillTrack(fraction: Float, modifier: Modifier = Modifier) {
+    val monitorGlass = LocalMonitorGlass.current
+    val canFrost =
+        monitorGlass?.layerBackdrop != null &&
+            monitorGlass.tier == GlassTier.FULL
+    Box(
+        modifier
+            .clip(CircleShape)
+            .then(
+                if (canFrost) {
+                    Modifier.glass(CircleShape)
+                } else {
+                    // Standalone / flat tier: a readable glass pill without a feed sample.
+                    Modifier
+                        .background(
+                            brush =
+                                Brush.verticalGradient(
+                                    colors =
+                                        listOf(
+                                            Color(0.22f, 0.19f, 0.15f, 0.92f),
+                                            Color(0.12f, 0.10f, 0.08f, 0.88f),
+                                        ),
+                                ),
+                            shape = CircleShape,
+                        )
+                        .border(1.dp, LiveDesign.hairlineStrong, CircleShape)
                 },
+            ),
+    ) {
+        // Soft top specular so the capsule reads as glass even without blur.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 10.dp)
+                .background(Color.White.copy(alpha = 0.14f), CircleShape),
+        )
+        // Accent progress fill under the thumb travel.
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
+                .background(
+                    brush =
+                        Brush.horizontalGradient(
+                            colors =
+                                listOf(
+                                    LiveDesign.accent.copy(alpha = 0.35f),
+                                    LiveDesign.accent.copy(alpha = 0.72f),
+                                ),
+                        ),
+                    shape = CircleShape,
+                ),
         )
     }
 }
