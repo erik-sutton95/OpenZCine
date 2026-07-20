@@ -550,6 +550,9 @@ private fun PlaybackClipSession(
                     chromeVisible = chromeVisible,
                     onChromeVisibleChanged = { chromeVisible = it },
                     onPlayerChanged = { activePlayer = it },
+                    shareReady = shareState == PlaybackShareState.READY,
+                    deliveryInProgress = deliveryInProgress,
+                    onShare = { deliveryChooserPresented = true },
                 )
             MediaTransferPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
         }
@@ -572,6 +575,7 @@ private fun PlaybackClipSession(
         }
 
         if (chromeVisible) {
+            // iOS topBar: close · filename · favorite only (share sits on bottom transport).
             Column(
                 Modifier.fillMaxWidth()
                     .windowInsetsPadding(
@@ -601,14 +605,6 @@ private fun PlaybackClipSession(
                     enabled = !actionInProgress,
                     onClick = onToggleFavorite,
                 )
-                if (shareState == PlaybackShareState.READY) {
-                    PlaybackButton(
-                        if (deliveryInProgress) "…" else "DELIVER",
-                        "Choose delivery for ${clip.filename}",
-                        enabled = !deliveryInProgress && !actionInProgress,
-                        onClick = { deliveryChooserPresented = true },
-                    )
-                }
             }
             when (shareState) {
                 PlaybackShareState.BUFFERING ->
@@ -681,6 +677,9 @@ private fun ProgressivePlayer(
     chromeVisible: Boolean,
     onChromeVisibleChanged: (Boolean) -> Unit,
     onPlayerChanged: (Player?) -> Unit,
+    shareReady: Boolean = false,
+    deliveryInProgress: Boolean = false,
+    onShare: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -1417,6 +1416,15 @@ private fun ProgressivePlayer(
                             highlighted = playbackAssistState.hasAnyVisibleAssist,
                         ) {
                             assistMode = true
+                        }
+                        // iOS places Share on the bottom transport row (not the top bar).
+                        if (shareReady) {
+                            PlaybackButton(
+                                if (deliveryInProgress) "…" else "⇧",
+                                "Share or deliver this clip",
+                                enabled = !deliveryInProgress,
+                                onClick = onShare,
+                            )
                         }
                     }
                 }
