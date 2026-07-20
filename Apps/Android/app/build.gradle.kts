@@ -280,6 +280,8 @@ dependencies {
     implementation(libs.compose.material3)
     // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
     implementation(libs.kyant.backdrop)
+    // Capsule shape used by the catalog LiquidSlider (runtime of backdrop; compile-visible here).
+    implementation(libs.kyant.shapes)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)
