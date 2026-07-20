@@ -293,6 +293,11 @@ internal fun MonitorScreen(
     assist: AssistState,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary? = null,
+    /**
+     * Shared camera-AP → internet hop owner (Frame.io + RED download). Required
+     * for "Download over internet" while bound to the camera access point.
+     */
+    frameioController: com.opencapture.openzcine.frameio.FrameioDeliveryController? = null,
     liveViewEnabled: Boolean = true,
     glassTierOverride: String? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
@@ -2064,11 +2069,7 @@ internal fun MonitorScreen(
         if (redDownloadPresented && lutLibrary != null) {
             com.opencapture.openzcine.lut.RedLutDownloadScreen(
                 lutLibrary = lutLibrary,
-                onRequestInternetHop = {
-                    // Hop is owned by Frame.io hop for now — operator can
-                    // leave the camera AP from Settings when needed. The
-                    // gateway still explains the camera-AP block.
-                },
+                frameioController = frameioController,
                 onClose = { redDownloadPresented = false },
                 onImported = { count ->
                     if (count > 0 && !assist.isOn(AssistTool.LUT)) {

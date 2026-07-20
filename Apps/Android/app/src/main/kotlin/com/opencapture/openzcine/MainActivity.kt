@@ -615,6 +615,7 @@ class MainActivity : ComponentActivity() {
                                 assist = assist,
                                 operatorSettings = operatorSettings,
                                 lutLibrary = lutLibrary,
+                                frameioController = frameioController,
                                 // Media already owned this gate. Settings also
                                 // drops every preview consumer so the native
                                 // live-view pump and GPU decode path release

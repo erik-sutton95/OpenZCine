@@ -13,7 +13,6 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -25,14 +24,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -51,10 +48,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
-import com.opencapture.openzcine.settings.SettingsLinkAction
+import com.opencapture.openzcine.frameio.FrameioDeliveryController
+import com.opencapture.openzcine.frameio.FrameioHopAvailability
+import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import java.io.File
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -68,13 +68,14 @@ internal const val RED_IPP2_PRESETS_URL =
  * gateway (terms / blocked / hop) → RED's real page in WebView → operator
  * accepts terms and downloads → we import cubes into the RED category.
  *
- * Internet hop (leave camera AP) is requested via [onRequestInternetHop] when
- * the gate reports [RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT].
+ * Camera-AP internet hop reuses [FrameioDeliveryController.beginInternetHop]
+ * (leave AP → wait for validated internet) and [endInternetHop] on dismiss
+ * (rejoin saved camera Wi‑Fi + reconnect session).
  */
 @Composable
 internal fun RedLutDownloadScreen(
     lutLibrary: AndroidLutLibrary,
-    onRequestInternetHop: (() -> Unit)? = null,
+    frameioController: FrameioDeliveryController? = null,
     onClose: () -> Unit,
     onImported: (count: Int) -> Unit = {},
 ) {
@@ -84,36 +85,105 @@ internal fun RedLutDownloadScreen(
     var readiness by remember { mutableStateOf(gate.readiness()) }
     var phase by remember { mutableStateOf<RedDownloadPhase>(RedDownloadPhase.Gateway) }
     var progress by remember { mutableFloatStateOf(0f) }
+    var hopBusy by remember { mutableStateOf(false) }
+    var hopError by remember { mutableStateOf<String?>(null) }
+    val hopState = frameioController?.internetHopState ?: FrameioInternetHopState.Idle
+    val hopAvailability =
+        frameioController?.cameraHopAvailability ?: FrameioHopAvailability.NOT_CAMERA_ACCESS_POINT
+    fun finishAndClose() {
+        scope.launch {
+            // iOS endInternetHop on dismiss — rejoin camera when we hopped away.
+            if (frameioController != null &&
+                (frameioController.isInternetHopActive ||
+                    hopState is FrameioInternetHopState.Online ||
+                    hopState is FrameioInternetHopState.Rejoined ||
+                    hopState is FrameioInternetHopState.Failed)
+            ) {
+                withContext(NonCancellable) { frameioController.endInternetHop() }
+            }
+            onClose()
+        }
+    }
+
+    fun requestInternetHop() {
+        val controller = frameioController
+        if (controller == null) {
+            hopError =
+                "OpenZCine can't leave the camera Wi‑Fi from this surface. Reconnect from Your cameras on home Wi‑Fi to download RED LUTs."
+            return
+        }
+        if (hopAvailability != FrameioHopAvailability.READY) {
+            hopError =
+                hopAvailability.operatorMessage.ifBlank {
+                    "OpenZCine can't hop off this camera connection automatically."
+                }
+            return
+        }
+        scope.launch {
+            hopBusy = true
+            hopError = null
+            val ok =
+                try {
+                    controller.beginInternetHop()
+                } catch (_: Exception) {
+                    false
+                }
+            hopBusy = false
+            if (!ok) {
+                hopError =
+                    controller.errorMessage
+                        ?: "OpenZCine couldn't leave the camera Wi‑Fi for an internet route."
+            }
+            // Poll gate immediately — hop success should expose validated internet.
+            readiness = gate.readiness()
+            if (ok && readiness.network == RedLutNetworkAvailability.AVAILABLE) {
+                // Stay on gateway with active terms Continue (iOS post-hop unblock).
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
             readiness = gate.readiness()
-            delay(1_500)
+            // After a successful hop, Frame.io marks Online while the phone is
+            // on home Wi‑Fi / cellular — refresh hop-facing error when network flips.
+            if (readiness.network == RedLutNetworkAvailability.AVAILABLE) {
+                hopError = null
+            }
+            delay(1_000)
         }
     }
 
-    BackHandler(onBack = onClose)
+    // Mid-hop: surface controller progress until Online or Failed.
+    val switchingNetworks =
+        hopBusy ||
+            hopState is FrameioInternetHopState.LeavingCamera ||
+            hopState is FrameioInternetHopState.WaitingForInternet
+
+    BackHandler(enabled = !switchingNetworks) { finishAndClose() }
 
     Box(Modifier.fillMaxSize().background(LiveDesign.background)) {
         when (val current = phase) {
             RedDownloadPhase.Gateway ->
                 RedDownloadGateway(
                     readiness = readiness,
+                    switchingNetworks = switchingNetworks,
+                    hopError = hopError,
+                    canHop =
+                        frameioController != null &&
+                            hopAvailability == FrameioHopAvailability.READY,
                     onContinue = {
-                        // iOS presents RED's public IPP2 page whenever internet
-                        // is available — no private authorization endpoint.
                         when (readiness.network) {
                             RedLutNetworkAvailability.AVAILABLE,
                             RedLutNetworkAvailability.SWIFT_CORE_UNAVAILABLE,
                             -> phase = RedDownloadPhase.Browsing
                             RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT ->
-                                if (onRequestInternetHop != null) onRequestInternetHop()
-                                else phase = RedDownloadPhase.Browsing
+                                requestInternetHop()
                             RedLutNetworkAvailability.NO_INTERNET -> Unit
                         }
                     },
-                    onHop = onRequestInternetHop,
-                    onClose = onClose,
+                    onHop = ::requestInternetHop,
+                    onClose = ::finishAndClose,
                 )
             RedDownloadPhase.Browsing ->
                 RedDownloadWebView(
@@ -146,7 +216,7 @@ internal fun RedLutDownloadScreen(
                     body = null,
                     progress = progress,
                     primary = null,
-                    onClose = onClose,
+                    onClose = ::finishAndClose,
                 )
             RedDownloadPhase.Importing ->
                 RedStatusPage(
@@ -154,7 +224,7 @@ internal fun RedLutDownloadScreen(
                     body = null,
                     progress = null,
                     primary = null,
-                    onClose = onClose,
+                    onClose = ::finishAndClose,
                 )
             is RedDownloadPhase.Success ->
                 RedStatusPage(
@@ -163,8 +233,8 @@ internal fun RedLutDownloadScreen(
                         else "${current.count} RED LUTs added",
                     body = "Find them under the RED tab in the LUT picker.",
                     progress = null,
-                    primary = "Done" to onClose,
-                    onClose = onClose,
+                    primary = "Done" to ::finishAndClose,
+                    onClose = ::finishAndClose,
                 )
             is RedDownloadPhase.Failed ->
                 RedStatusPage(
@@ -176,17 +246,19 @@ internal fun RedLutDownloadScreen(
                             phase = RedDownloadPhase.Gateway
                             progress = 0f
                         },
-                    secondary = "Close" to onClose,
-                    onClose = onClose,
+                    secondary = "Close" to ::finishAndClose,
+                    onClose = ::finishAndClose,
                 )
         }
 
         if (phase == RedDownloadPhase.Browsing || phase == RedDownloadPhase.Gateway) {
-            TextButton(
-                onClick = onClose,
-                modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-            ) {
-                Text("✕", color = LiveDesign.text, fontSize = 20.sp)
+            if (!switchingNetworks) {
+                TextButton(
+                    onClick = ::finishAndClose,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                ) {
+                    Text("✕", color = LiveDesign.text, fontSize = 20.sp)
+                }
             }
         }
     }
@@ -209,8 +281,11 @@ private sealed interface RedDownloadPhase {
 @Composable
 private fun RedDownloadGateway(
     readiness: RedLutDownloadReadiness,
+    switchingNetworks: Boolean,
+    hopError: String?,
+    canHop: Boolean,
     onContinue: () -> Unit,
-    onHop: (() -> Unit)?,
+    onHop: () -> Unit,
     onClose: () -> Unit,
 ) {
     // Match iOS: only block when there is no internet path (camera AP / offline).
@@ -224,7 +299,7 @@ private fun RedDownloadGateway(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (blocked) {
+        if (blocked || switchingNetworks) {
             Text(
                 "Internet required",
                 style = chromeStyle(20f, FontWeight.Bold),
@@ -232,28 +307,50 @@ private fun RedDownloadGateway(
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(12.dp))
-            Text(
-                readiness.network.operatorMessage,
-                style = chromeStyle(14f, FontWeight.Normal),
-                color = LiveDesign.muted,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(20.dp))
-            if (
-                readiness.network == RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT &&
-                    onHop != null
-            ) {
-                CapsuleButton("Download over internet", onClick = onHop)
-                Spacer(Modifier.height(8.dp))
+            if (switchingNetworks) {
+                // iOS mid-hop: ProgressView + "Switching networks…"
+                CircularProgressIndicator(
+                    color = LiveDesign.accent,
+                    modifier = Modifier.size(28.dp),
+                )
+                Spacer(Modifier.height(12.dp))
                 Text(
-                    "We'll hop off the camera's Wi‑Fi to download, then reconnect your camera automatically.",
-                    style = chromeStyle(12f, FontWeight.Normal),
+                    "Switching networks…",
+                    style = chromeStyle(14f, FontWeight.SemiBold),
+                    color = LiveDesign.text,
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                Text(
+                    hopError ?: readiness.network.operatorMessage,
+                    style = chromeStyle(14f, FontWeight.Normal),
                     color = LiveDesign.muted,
                     textAlign = TextAlign.Center,
                 )
+                Spacer(Modifier.height(20.dp))
+                if (readiness.network == RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT) {
+                    CapsuleButton(
+                        "Download over internet",
+                        onClick = onHop,
+                        enabled = canHop,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (canHop) {
+                            "We'll hop off the camera's Wi‑Fi to download, then reconnect your camera automatically."
+                        } else {
+                            "Automatic hop needs a saved camera access-point profile with its Wi‑Fi key. Connect over the camera AP after pairing, or leave Wi‑Fi and open RED from home internet."
+                        },
+                        style = chromeStyle(12f, FontWeight.Normal),
+                        color = LiveDesign.muted,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
-            Spacer(Modifier.height(16.dp))
-            CapsuleButton("Close", onClick = onClose, bright = false)
+            if (!switchingNetworks) {
+                Spacer(Modifier.height(16.dp))
+                CapsuleButton("Close", onClick = onClose, bright = false)
+            }
         } else {
             Text(
                 "RED provides its IPP2 Output Presets for free, but you must accept RED's terms on RED's own site.",
@@ -281,17 +378,30 @@ private fun CapsuleButton(
     label: String,
     onClick: () -> Unit,
     bright: Boolean = true,
+    enabled: Boolean = true,
 ) {
     TextButton(
         onClick = onClick,
+        enabled = enabled,
         modifier =
             Modifier
                 .fillMaxWidth()
                 .height(44.dp)
                 .clip(RoundedCornerShape(999.dp))
-                .background(if (bright) LiveDesign.glassBright else LiveDesign.glass),
+                .background(
+                    when {
+                        !enabled -> LiveDesign.glass.copy(alpha = 0.5f)
+                        bright -> LiveDesign.glassBright
+                        else -> LiveDesign.glass
+                    },
+                ),
     ) {
-        Text(label, color = LiveDesign.text, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        Text(
+            label,
+            color = if (enabled) LiveDesign.text else LiveDesign.muted,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 13.sp,
+        )
     }
 }
 
