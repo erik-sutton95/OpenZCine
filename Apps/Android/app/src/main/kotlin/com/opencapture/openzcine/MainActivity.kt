@@ -43,6 +43,7 @@ import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,7 +53,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import java.util.concurrent.atomic.AtomicBoolean
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -129,8 +132,15 @@ class MainActivity : ComponentActivity() {
     // PKCE state before it ever makes a network request.
     private val frameioRedirectCallback = MutableStateFlow<FrameioRedirectCallback?>(null)
 
+    /**
+     * Holds the solid system SplashScreen until the first Compose frame so we
+     * never flash a second (platform) logo — only [LaunchSplashOverlay] brands.
+     */
+    private val composeFirstFrameDrawn = AtomicBoolean(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        val splashScreen = installSplashScreen()
+        splashScreen.setKeepOnScreenCondition { !composeFirstFrameDrawn.get() }
         super.onCreate(savedInstanceState)
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
         diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
@@ -163,6 +173,9 @@ class MainActivity : ComponentActivity() {
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
             }
         setContent {
+            // Drop the solid system hold as soon as Compose paints; the only
+            // branded splash is LaunchSplashOverlay (rounded logo + wordmark).
+            SideEffect { composeFirstFrameDrawn.set(true) }
             OpenZCineTheme {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 // A monitor reached from a saved card retains that exact
@@ -822,10 +835,11 @@ fun MonitorShell(
 }
 
 /**
- * Branded launch splash — Compose continuation of the system splash, porting
- * iOS `LaunchSplashContent` / `LaunchSplashOverlay` (ios/Runner/Branding.swift):
- * diagonal near-black gradient + gold top-trailing glow, rounded app icon +
- * wordmark (landscape HStack / portrait VStack), 2250 ms hold then 350 ms ease-out.
+ * The **only** branded cold-start splash (iOS `LaunchSplashContent`):
+ * solid brand backdrop, full-bleed AppLogo clipped to continuous rounded
+ * corners (size × 0.22), and the OpenZCine wordmark. The system SplashScreen
+ * is a matching solid hold with a transparent icon so it never shows a
+ * second square logo.
  */
 @Composable
 private fun LaunchSplashOverlay(visible: Boolean) {
@@ -835,32 +849,7 @@ private fun LaunchSplashOverlay(visible: Boolean) {
         exit = fadeOut(tween(durationMillis = 350)),
     ) {
         BoxWithConstraints(
-            Modifier.fillMaxSize().drawBehind {
-                // BrandBackdrop: backgroundDeep → background → warm charcoal.
-                drawRect(
-                    Brush.linearGradient(
-                        colors =
-                            listOf(
-                                androidx.compose.ui.graphics.Color(0xFF0A0908),
-                                androidx.compose.ui.graphics.Color(0xFF100E0C),
-                                androidx.compose.ui.graphics.Color(0xFF17140F),
-                            ),
-                        start = Offset.Zero,
-                        end = Offset(size.width, size.height),
-                    ),
-                )
-                drawRect(
-                    Brush.radialGradient(
-                        colors =
-                            listOf(
-                                androidx.compose.ui.graphics.Color(0xFFFFE100).copy(alpha = 0.18f),
-                                androidx.compose.ui.graphics.Color.Transparent,
-                            ),
-                        center = Offset(size.width * 0.85f, size.height * 0.10f),
-                        radius = size.maxDimension * 0.7f,
-                    ),
-                )
-            },
+            Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xFF0A0908)),
         ) {
             val landscape = maxWidth >= maxHeight
             // iOS: min(width * (landscape ? 0.16 : 0.28), 96)
@@ -869,9 +858,21 @@ private fun LaunchSplashOverlay(visible: Boolean) {
                     maxWidth * if (landscape) 0.16f else 0.28f,
                     96.dp,
                 )
-            // iOS continuous corner: size * 0.22
+            // iOS AppLogoMark continuous corner: size * 0.22
             val logoCorner = logoSize * 0.22f
             val wordmarkSp = if (landscape) 34.sp else 30.sp
+            @Composable
+            fun RoundedAppLogo() {
+                Image(
+                    painter = painterResource(R.drawable.openzcine_app_logo),
+                    contentDescription = "OpenZCine",
+                    contentScale = ContentScale.Crop,
+                    modifier =
+                        Modifier
+                            .size(logoSize)
+                            .clip(RoundedCornerShape(logoCorner)),
+                )
+            }
             if (landscape) {
                 Row(
                     Modifier
@@ -884,14 +885,7 @@ private fun LaunchSplashOverlay(visible: Boolean) {
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Image(
-                        painter = painterResource(R.drawable.openzcine_splash_icon),
-                        contentDescription = "OpenZCine",
-                        modifier =
-                            Modifier
-                                .size(logoSize)
-                                .clip(RoundedCornerShape(logoCorner)),
-                    )
+                    RoundedAppLogo()
                     Text(
                         "OpenZCine",
                         color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
@@ -905,14 +899,7 @@ private fun LaunchSplashOverlay(visible: Boolean) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically),
                 ) {
-                    Image(
-                        painter = painterResource(R.drawable.openzcine_splash_icon),
-                        contentDescription = "OpenZCine",
-                        modifier =
-                            Modifier
-                                .size(logoSize)
-                                .clip(RoundedCornerShape(logoCorner)),
-                    )
+                    RoundedAppLogo()
                     Text(
                         "OpenZCine",
                         color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),

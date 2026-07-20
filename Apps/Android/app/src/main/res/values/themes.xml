@@ -9,12 +9,12 @@
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
-    <!-- core-splashscreen renders this contract on API 29-30 and delegates to
-      the platform SplashScreen on API 31+. The bitmap itself contains the
-      byte-exact AppLogo source centered inside Android's mask-safe icon area. -->
+    <!-- Cold-start hold only: solid brand backdrop + fully transparent icon so
+      the platform never flashes a square logo. The single branded splash
+      (rounded AppLogo + wordmark) is drawn once in Compose LaunchSplashOverlay. -->
     <style name="Theme.OpenZCine.Starting" parent="Theme.SplashScreen">
         <item name="isLightTheme">false</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/openzcine_splash_icon</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/openzcine_splash_empty</item>
         <item name="windowSplashScreenBackground">@color/openzcine_splash_background</item>
         <item name="postSplashScreenTheme">@style/Theme.OpenZCine</item>
     </style>
