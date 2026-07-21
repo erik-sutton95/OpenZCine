@@ -12,6 +12,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,12 +23,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -38,19 +43,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioHopAvailability
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -86,18 +95,22 @@ internal fun RedLutDownloadScreen(
     val hopState = frameioController?.internetHopState ?: FrameioInternetHopState.Idle
     val hopAvailability =
         frameioController?.cameraHopAvailability ?: FrameioHopAvailability.NOT_CAMERA_ACCESS_POINT
+    /**
+     * Dismiss immediately. Camera rejoin runs from [DisposableEffect] after the cover is gone
+     * (iOS ends the hop on disappear). Never await hop completion before [onClose] — rejoin can
+     * take many seconds and made Close appear broken.
+     */
     fun finishAndClose() {
-        scope.launch {
-            // iOS endInternetHop on dismiss — rejoin camera when we hopped away.
-            if (frameioController != null &&
-                (frameioController.isInternetHopActive ||
-                    hopState is FrameioInternetHopState.Online ||
-                    hopState is FrameioInternetHopState.Rejoined ||
-                    hopState is FrameioInternetHopState.Failed)
-            ) {
-                withContext(NonCancellable) { frameioController.endInternetHop() }
+        onClose()
+    }
+
+    // iOS `onDisappear { model.endInternetHop() }` — rejoin after leave, not before.
+    DisposableEffect(frameioController) {
+        val controller = frameioController
+        onDispose {
+            if (controller != null && controller.isInternetHopActive) {
+                endInternetHopAfterDismiss(controller)
             }
-            onClose()
         }
     }
 
@@ -156,7 +169,8 @@ internal fun RedLutDownloadScreen(
             hopState is FrameioInternetHopState.LeavingCamera ||
             hopState is FrameioInternetHopState.WaitingForInternet
 
-    BackHandler(enabled = !switchingNetworks) { finishAndClose() }
+    // Always allow leave — hop rejoin continues in the background after dismiss.
+    BackHandler { finishAndClose() }
 
     Box(Modifier.fillMaxSize().background(LiveDesign.background)) {
         when (val current = phase) {
@@ -210,7 +224,7 @@ internal fun RedLutDownloadScreen(
                     body = null,
                     progress = progress,
                     primary = null,
-                    onClose = ::finishAndClose,
+                    secondary = "Cancel" to ::finishAndClose,
                 )
             RedDownloadPhase.Importing ->
                 RedStatusPage(
@@ -218,7 +232,7 @@ internal fun RedLutDownloadScreen(
                     body = null,
                     progress = null,
                     primary = null,
-                    onClose = ::finishAndClose,
+                    secondary = "Cancel" to ::finishAndClose,
                 )
             is RedDownloadPhase.Success ->
                 RedStatusPage(
@@ -228,7 +242,7 @@ internal fun RedLutDownloadScreen(
                     body = "Find them under the RED tab in the LUT picker.",
                     progress = null,
                     primary = "Done" to ::finishAndClose,
-                    onClose = ::finishAndClose,
+                    secondary = null,
                 )
             is RedDownloadPhase.Failed ->
                 RedStatusPage(
@@ -241,20 +255,60 @@ internal fun RedLutDownloadScreen(
                             progress = 0f
                         },
                     secondary = "Close" to ::finishAndClose,
-                    onClose = ::finishAndClose,
                 )
         }
 
-        if (phase == RedDownloadPhase.Browsing || phase == RedDownloadPhase.Gateway) {
-            if (!switchingNetworks) {
-                TextButton(
-                    onClick = ::finishAndClose,
-                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-                ) {
-                    Text("✕", color = LiveDesign.text, fontSize = 20.sp)
-                }
-            }
+        // Above the WebView (AndroidView) so ✕ always receives taps.
+        RedCloseChip(
+            onClick = ::finishAndClose,
+            modifier =
+                Modifier
+                    .align(Alignment.TopStart)
+                    .zIndex(2f)
+                    .statusBarsPadding()
+                    .padding(start = 8.dp, top = 4.dp),
+        )
+    }
+}
+
+/**
+ * Ends a camera-AP internet hop after the RED cover is already gone.
+ *
+ * Uses a composition-independent scope so work survives [onClose] tearing down
+ * [rememberCoroutineScope].
+ */
+private fun endInternetHopAfterDismiss(controller: FrameioDeliveryController) {
+    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
+        try {
+            withContext(NonCancellable) { controller.endInternetHop() }
+        } catch (_: Exception) {
+            // Rejoin best-effort; operator already left the RED surface.
         }
+    }
+}
+
+/** Top-leading close control that stays above WebView hit targets. */
+@Composable
+private fun RedCloseChip(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    Box(
+        modifier =
+            modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(LiveDesign.glassBright.copy(alpha = 0.92f))
+                .clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    role = Role.Button,
+                    onClick = onClick,
+                ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("✕", color = LiveDesign.text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -341,10 +395,12 @@ private fun RedDownloadGateway(
                     )
                 }
             }
-            if (!switchingNetworks) {
-                Spacer(Modifier.height(16.dp))
-                CapsuleButton("Close", onClick = onClose, bright = false)
-            }
+            Spacer(Modifier.height(16.dp))
+            CapsuleButton(
+                if (switchingNetworks) "Cancel" else "Close",
+                onClick = onClose,
+                bright = false,
+            )
         } else {
             Text(
                 "RED provides its IPP2 Output Presets for free, but you must accept RED's terms on RED's own site.",
@@ -406,7 +462,6 @@ private fun RedStatusPage(
     progress: Float?,
     primary: Pair<String, () -> Unit>?,
     secondary: Pair<String, () -> Unit>? = null,
-    onClose: () -> Unit,
 ) {
     Column(
         Modifier
