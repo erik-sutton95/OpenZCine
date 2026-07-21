@@ -397,8 +397,7 @@ private val EFFECTS_AGSL =
     uniform float3 zebraMidtoneColor;
 
     const float3 LUMA709 = float3(0.2126, 0.7152, 0.0722);
-    const float DEFOCUS_REJECTION = 1.35;   // iOS ImageEffectsCompositor
-    const float PEAKING_EDGE_INSET = 10.4;  // 2.6px coarse radius × iOS crop factor 4
+    const float PEAKING_EDGE_INSET = 6.0;
     const float ZEBRA_GAIN = 40.0;          // iOS soft-threshold ramp
     const float ZEBRA_HALF_WIDTH = 5.0 / 255.0;
     const float STRIPE_PITCH = 14.14;       // iOS 5 px stripes rotated 45 deg
@@ -498,20 +497,13 @@ private val EFFECTS_AGSL =
         return deLogCurve4;
     }
 
-    // Sobel's orthogonal 1-2-1 smoothing supplies the fine noise-floor blur;
-    // the 2.6px pass is iOS's defocus-rejection scale.
-    float gradMag(float2 p, float d) {
-        float tl = deLogGrey(p + float2(-d, -d));
-        float tc = deLogGrey(p + float2(0.0, -d));
-        float tr = deLogGrey(p + float2(d, -d));
-        float ml = deLogGrey(p + float2(-d, 0.0));
-        float mr = deLogGrey(p + float2(d, 0.0));
-        float bl = deLogGrey(p + float2(-d, d));
-        float bc = deLogGrey(p + float2(0.0, d));
-        float br = deLogGrey(p + float2(d, d));
-        float gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
-        float gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
-        return length(float2(gx, gy)) / (8.0 * d);
+    // 1 px central differences — no 3×3 / pre-blur fattening.
+    float edgeMagnitude(float2 p) {
+        float l = deLogGrey(p - float2(1.0, 0.0));
+        float r = deLogGrey(p + float2(1.0, 0.0));
+        float u = deLogGrey(p - float2(0.0, 1.0));
+        float d = deLogGrey(p + float2(0.0, 1.0));
+        return length(float2(r - l, d - u)) * 0.5;
     }
 
     half4 main(float2 fragCoord) {
@@ -524,16 +516,16 @@ private val EFFECTS_AGSL =
         }
 
         if (peakingOn > 0.5) {
-            // Fine/coarse derivative-of-Gaussian approximations at the exact
-            // iOS radii. Suppress the coarse-filter fringe with the same crop.
             if (src.x >= PEAKING_EDGE_INSET && src.y >= PEAKING_EDGE_INSET
                 && src.x < sourceSize.x - PEAKING_EDGE_INSET
                 && src.y < sourceSize.y - PEAKING_EDGE_INSET) {
-                float fine = gradMag(src, 0.8);
-                float coarse = gradMag(src, 2.6);
-                float response = fine - DEFOCUS_REJECTION * coarse;
-                float mask = clamp((response - peakingThreshold) * peakingRamp, 0.0, 1.0);
-                color = mix(color, peakingColor, mask);
+                float g = edgeMagnitude(src);
+                float thr = clamp(peakingThreshold * 30.0, 0.045, 0.14);
+                float aa = thr * (0.06 + 0.04 * clamp(160.0 / max(peakingRamp, 1.0), 0.5, 1.5));
+                float core = smoothstep(thr, thr + aa, g);
+                float under = smoothstep(thr - aa * 0.35, thr, g) * (1.0 - core);
+                color = mix(color, float3(0.04, 0.04, 0.05), under * 0.28);
+                color = mix(color, peakingColor, core);
             }
         }
 

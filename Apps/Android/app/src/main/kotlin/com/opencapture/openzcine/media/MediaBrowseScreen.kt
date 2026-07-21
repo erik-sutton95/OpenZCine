@@ -9,8 +9,20 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import android.view.HapticFeedbackConstants
+import android.view.View
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.platform.LocalView
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -406,6 +418,15 @@ internal fun effectiveMediaCameraConnection(
 }
 
 /**
+ * Library source is never operator-toggled (iOS sets it programmatically). A
+ * connected camera session always lists the camera; offline opens always read
+ * complete cache. Persisted `view.source` from a prior offline visit must not
+ * stick and suppress camera fetch after reconnect.
+ */
+internal fun mediaLibrarySourceForConnection(cameraConnected: Boolean): MediaLibrarySource =
+    if (cameraConnected) MediaLibrarySource.CAMERA else MediaLibrarySource.LOCAL
+
+/**
  * Full-screen Android media library.
  *
  * The camera source is the shared Swift core's bounded listing wire. The local
@@ -433,6 +454,7 @@ internal fun MediaBrowseScreen(
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary,
     frameioController: FrameioDeliveryController,
+    mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
     selectedLut: FeedLutSelection,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
@@ -488,19 +510,18 @@ internal fun MediaBrowseScreen(
             internetHopState,
             rejoinedConnectionObserved,
         )
-    val defaultSource =
-        if (effectiveCameraConnected) MediaLibrarySource.CAMERA else MediaLibrarySource.LOCAL
+    // Connection owns source. Category / layout / sort still restore from prefs.
+    val librarySource = mediaLibrarySourceForConnection(effectiveCameraConnected)
     var options by
         remember(cameraID) {
-            val restored = libraryIndex.viewOptions(defaultSource)
-            mutableStateOf(
-                if (effectiveCameraConnected) {
-                    restored
-                } else {
-                    restored.copy(source = MediaLibrarySource.LOCAL)
-                },
-            )
+            val restored = libraryIndex.viewOptions(MediaLibrarySource.CAMERA)
+            mutableStateOf(restored.copy(source = librarySource))
         }
+    LaunchedEffect(librarySource) {
+        if (options.source != librarySource) {
+            options = options.copy(source = librarySource)
+        }
+    }
     var favorites by remember(cameraID) { mutableStateOf(emptySet<String>()) }
     // Offline multi-camera library: object key → owning cache bucket cameraID.
     var offlineClipOwners by
@@ -530,8 +551,10 @@ internal fun MediaBrowseScreen(
 
     fun updateOptions(updated: MediaLibraryViewOptions) {
         if (shareInProgress) return
-        options = updated
-        libraryIndex.saveViewOptions(updated)
+        // Never let category/layout edits re-stick a stale source preference.
+        val coerced = updated.copy(source = librarySource)
+        options = coerced
+        libraryIndex.saveViewOptions(coerced)
         isSelecting = false
         selectedIDs = emptySet()
         readySelectionIDs = emptySet()
@@ -574,15 +597,15 @@ internal fun MediaBrowseScreen(
             }
     }
 
-    LaunchedEffect(cameraID, offlineCameraIDs, options.source, effectiveCameraConnected, reloadKey) {
+    LaunchedEffect(cameraID, offlineCameraIDs, librarySource, effectiveCameraConnected, reloadKey) {
         state = BrowseState.Loading
         val nextState =
-            when (options.source) {
+            when (librarySource) {
                 MediaLibrarySource.CAMERA -> {
                     browseStorageSlots = null
                     offlineClipOwners = emptyMap()
                     if (!effectiveCameraConnected) {
-                        BrowseState.Failed("Reconnect the camera or choose On device media.")
+                        BrowseState.Failed("Reconnect the camera to list media.")
                     } else if (!SwiftCore.isAvailable) {
                         BrowseState.Failed("Camera core is not bundled in this build.")
                     } else {
@@ -667,16 +690,16 @@ internal fun MediaBrowseScreen(
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
     val visibleStorageSlots =
         mediaStorageSlotPresentations(
-            source = options.source,
+            source = librarySource,
             cameraConnected = cameraConnected,
             cameraSessionAvailable = cameraSessionAvailable,
             slots = browseStorageSlots ?: cameraStorageSlots,
         )
-    LaunchedEffect(cameraID, options.source, state, visibleStorageSlots) {
+    LaunchedEffect(cameraID, librarySource, state, visibleStorageSlots) {
         if (state !is BrowseState.Loaded) return@LaunchedEffect
         val retained =
             filters.retainingAvailableStorage(
-                options.source,
+                librarySource,
                 visibleStorageSlots.mapTo(linkedSetOf(), MediaStorageSlotPresentation::storageId),
             )
         if (retained != filters) filters = retained
@@ -767,6 +790,38 @@ internal fun MediaBrowseScreen(
     fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedClips
+        val coordinator = mediaDeliveryCoordinator
+        if (coordinator != null) {
+            scope.launch {
+                val items =
+                    withContext(Dispatchers.IO) {
+                        selectionSnapshot.mapNotNull { clip ->
+                            val owner = ownerCameraID(clip)
+                            val entry =
+                                runCatching {
+                                    cacheStore.completedEntryOrNull(
+                                        owner,
+                                        MediaCacheObjectIdentity(clip),
+                                        clip.sizeBytes,
+                                    )
+                                }.getOrNull() ?: return@mapNotNull null
+                            MediaDeliveryWorkItem(owner, clip, entry)
+                        }
+                    }
+                if (items.isEmpty()) {
+                    shareMessage = "Only complete cached media can be shared."
+                    return@launch
+                }
+                coordinator.beginNativeShare(items, configuration) { published, metadata ->
+                    context.startActivity(
+                        AndroidMediaShareIntent.chooserIntent(context, published, metadata),
+                    )
+                    exitSelection()
+                }
+            }
+            return
+        }
+        val selectionSnapshotLegacy = selectedClips
         shareInProgress = true
         shareMessage = null
         shareJob =
@@ -779,7 +834,7 @@ internal fun MediaBrowseScreen(
                                 context,
                                 cacheStore,
                                 cameraID,
-                                selectionSnapshot,
+                                selectionSnapshotLegacy,
                                 cameraIDFor = ::ownerCameraID,
                             ) { stageContext.ensureActive() }
                         }
@@ -888,6 +943,33 @@ internal fun MediaBrowseScreen(
             shareMessage =
                 MediaGalleryBatchResult(savedCount = 0, failures = emptyList())
                     .operatorMessage(MediaGalleryOmissions(nonVideoCount = nonVideoCount))
+            return
+        }
+        val coordinator = mediaDeliveryCoordinator
+        if (coordinator != null) {
+            scope.launch {
+                val items =
+                    withContext(Dispatchers.IO) {
+                        videoSelection.mapNotNull { clip ->
+                            val owner = ownerCameraID(clip)
+                            val entry =
+                                runCatching {
+                                    cacheStore.completedEntryOrNull(
+                                        owner,
+                                        MediaCacheObjectIdentity(clip),
+                                        clip.sizeBytes,
+                                    )
+                                }.getOrNull() ?: return@mapNotNull null
+                            MediaDeliveryWorkItem(owner, clip, entry)
+                        }
+                    }
+                if (items.isEmpty()) {
+                    shareMessage = "No complete cached video is ready."
+                    return@launch
+                }
+                coordinator.beginSaveToPhotos(items, configuration)
+                exitSelection()
+            }
             return
         }
         shareInProgress = true
@@ -1138,7 +1220,6 @@ internal fun MediaBrowseScreen(
                         displayedCount = displayedClips.size,
                         isSelecting = isSelecting,
                         selectedCount = selectedClips.size,
-                        readyCount = readySelectionIDs.size,
                         shareInProgress = shareInProgress,
                         frameioPreparationInProgress = frameioPreparationInProgress,
                         frameioDeliveryState = frameioController.deliveryState,
@@ -1146,8 +1227,10 @@ internal fun MediaBrowseScreen(
                         sortOrder = options.sortOrder,
                         activeFilterCount = filters.activeCount,
                         onExitSelection = ::cancelActiveShareOrExitSelection,
-                        onShare = ::presentNativeDelivery,
-                        onFrameioDelivery = ::presentFrameioDelivery,
+                        onShare = {
+                            // Unified Share sheet (native + Frame.io), like iOS.
+                            presentNativeDelivery()
+                        },
                         onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                         onShowFilters = { filterDialogPresented = true },
                     )
@@ -1155,7 +1238,7 @@ internal fun MediaBrowseScreen(
                         MediaLibraryBody(
                             state = state,
                             clips = displayedClips,
-                            source = options.source,
+                            source = librarySource,
                             layout = options.layout,
                             thumbnailSize = options.thumbnailSize,
                             cameraID = cameraID,
@@ -1173,11 +1256,8 @@ internal fun MediaBrowseScreen(
                             onToggleSelection = { identity ->
                                 if (!shareInProgress) toggleSelection(identity)
                             },
-                            onSweepSelection = { identities ->
-                                if (!shareInProgress) {
-                                    selectedIDs =
-                                        MediaLibrarySelection.addSweep(selectedIDs, identities)
-                                }
+                            onSweepSelection = { next ->
+                                if (!shareInProgress) selectedIDs = next
                             },
                             onToggleFavorite = ::toggleFavorite,
                             onRetry = { reloadKey += 1 },
@@ -1229,7 +1309,6 @@ internal fun MediaBrowseScreen(
                             displayedCount = displayedClips.size,
                             isSelecting = isSelecting,
                             selectedCount = selectedClips.size,
-                            readyCount = readySelectionIDs.size,
                             shareInProgress = shareInProgress,
                             frameioPreparationInProgress = frameioPreparationInProgress,
                             frameioDeliveryState = frameioController.deliveryState,
@@ -1237,15 +1316,14 @@ internal fun MediaBrowseScreen(
                             sortOrder = options.sortOrder,
                             activeFilterCount = filters.activeCount,
                             onExitSelection = ::cancelActiveShareOrExitSelection,
-                            onShare = ::presentNativeDelivery,
-                            onFrameioDelivery = ::presentFrameioDelivery,
+                            onShare = { presentNativeDelivery() },
                             onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                             onShowFilters = { filterDialogPresented = true },
                         )
                         MediaLibraryBody(
                             state = state,
                             clips = displayedClips,
-                            source = options.source,
+                            source = librarySource,
                             layout = options.layout,
                             thumbnailSize = options.thumbnailSize,
                             cameraID = cameraID,
@@ -1263,11 +1341,8 @@ internal fun MediaBrowseScreen(
                             onToggleSelection = { identity ->
                                 if (!shareInProgress) toggleSelection(identity)
                             },
-                            onSweepSelection = { identities ->
-                                if (!shareInProgress) {
-                                    selectedIDs =
-                                        MediaLibrarySelection.addSweep(selectedIDs, identities)
-                                }
+                            onSweepSelection = { next ->
+                                if (!shareInProgress) selectedIDs = next
                             },
                             onToggleFavorite = ::toggleFavorite,
                             onRetry = { reloadKey += 1 },
@@ -1290,20 +1365,45 @@ internal fun MediaBrowseScreen(
             )
         }
 
-        if (nativeDeliveryPresented) {
-            NativeMediaDeliveryDialog(
-                selectedCount = selectedClips.size,
-                shareReadyCount = readySelectionIDs.size,
-                galleryReadyCount = readyGalleryCount,
-                busy = shareInProgress,
+        if (nativeDeliveryPresented || frameioDeliveryPresented) {
+            MediaDeliveryPopup(
+                clipCount = selectedClips.size,
+                readyCount = readySelectionIDs.size,
+                cameraConnected = effectiveCameraConnected,
                 selectedLut = selectedLut.takeIf { selectedLutLabel != null },
                 selectedLutLabel = selectedLutLabel,
-                onDismiss = { nativeDeliveryPresented = false },
-                onShare = { configuration ->
+                frameioController = frameioController,
+                preferredDestination =
+                    if (frameioDeliveryPresented && !nativeDeliveryPresented) {
+                        MediaDeliveryDestination.FRAMEIO
+                    } else {
+                        null
+                    },
+                busy = shareInProgress || frameioPreparationInProgress,
+                onDismiss = {
                     nativeDeliveryPresented = false
+                    frameioDeliveryPresented = false
+                    if (frameioController.isInternetHopActive) {
+                        scope.launch {
+                            withContext(NonCancellable) { frameioController.endInternetHop() }
+                        }
+                    }
+                },
+                onNativeShare = { configuration ->
+                    nativeDeliveryPresented = false
+                    frameioDeliveryPresented = false
                     beginBatchShare(configuration)
                 },
-                onSaveToGallery = ::beginBatchGallerySave,
+                onSaveToGallery = { configuration ->
+                    nativeDeliveryPresented = false
+                    frameioDeliveryPresented = false
+                    beginBatchGallerySave(configuration)
+                },
+                onFrameioDeliver = { options ->
+                    nativeDeliveryPresented = false
+                    frameioDeliveryPresented = false
+                    beginFrameioDelivery(options)
+                },
             )
         }
 
@@ -1313,24 +1413,6 @@ internal fun MediaBrowseScreen(
                 storageIds = visibleStorageSlots.map(MediaStorageSlotPresentation::storageId),
                 onFiltersChanged = ::updateFilters,
                 onDismiss = { filterDialogPresented = false },
-            )
-        }
-
-        if (frameioDeliveryPresented) {
-            FrameioDeliveryDialog(
-                controller = frameioController,
-                readyCount = readySelectionIDs.size,
-                selectedLut = selectedLut.takeIf { selectedLutLabel != null },
-                selectedLutLabel = selectedLutLabel,
-                onDismiss = {
-                    frameioDeliveryPresented = false
-                    if (frameioController.isInternetHopActive) {
-                        scope.launch {
-                            withContext(NonCancellable) { frameioController.endInternetHop() }
-                        }
-                    }
-                },
-                onDeliver = ::beginFrameioDelivery,
             )
         }
 
@@ -1350,6 +1432,7 @@ internal fun MediaBrowseScreen(
                 operatorSettings = operatorSettings,
                 lutLibrary = lutLibrary,
                 frameioController = frameioController,
+                mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                 onToggleFavorite = ::toggleFavorite,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
@@ -1719,7 +1802,6 @@ private fun MediaLibraryHeader(
     displayedCount: Int,
     isSelecting: Boolean,
     selectedCount: Int,
-    readyCount: Int,
     shareInProgress: Boolean,
     frameioPreparationInProgress: Boolean,
     frameioDeliveryState: FrameioDeliveryState,
@@ -1728,21 +1810,18 @@ private fun MediaLibraryHeader(
     activeFilterCount: Int,
     onExitSelection: () -> Unit,
     onShare: () -> Unit,
-    onFrameioDelivery: () -> Unit,
     onSortChange: (MediaLibrarySortOrder) -> Unit,
     onShowFilters: () -> Unit,
 ) {
     if (isSelecting) {
         SelectionHeader(
             selectedCount = selectedCount,
-            readyCount = readyCount,
             shareInProgress = shareInProgress,
             frameioPreparationInProgress = frameioPreparationInProgress,
             frameioDeliveryState = frameioDeliveryState,
             frameioInternetHopState = frameioInternetHopState,
             onExit = onExitSelection,
             onShare = onShare,
-            onFrameioDelivery = onFrameioDelivery,
         )
         return
     }
@@ -1794,34 +1873,40 @@ private fun MediaHeaderIdentity(
     }
 }
 
-/** Selection-only header; delivery remains disabled until at least one final cache exists. */
+/**
+ * iOS `selectionHeader`: close · "N selected" · single Share capsule.
+ * Share opens the unified delivery popup (native + Frame.io), same as a clip.
+ */
 @Composable
 private fun SelectionHeader(
     selectedCount: Int,
-    readyCount: Int,
     shareInProgress: Boolean,
     frameioPreparationInProgress: Boolean,
     frameioDeliveryState: FrameioDeliveryState,
     frameioInternetHopState: FrameioInternetHopState,
     onExit: () -> Unit,
     onShare: () -> Unit,
-    onFrameioDelivery: () -> Unit,
 ) {
     val rejoiningCamera = frameioInternetHopState is FrameioInternetHopState.RejoiningCamera
-    val enabled = readyCount > 0 && !shareInProgress
     val upload = frameioDeliveryState as? FrameioDeliveryState.Uploading
-    val identity: @Composable RowScope.() -> Unit = {
+    val busy = shareInProgress || frameioPreparationInProgress || upload != null || rejoiningCamera
+    val shareEnabled = selectedCount > 0 && !busy
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         Text(
-            if (rejoiningCamera) "Rejoining" else if (shareInProgress) "Stop" else "Cancel",
+            if (rejoiningCamera) "Rejoining" else if (busy) "Stop" else "Cancel",
             style = chromeStyle(13f, FontWeight.SemiBold),
-            color = if (shareInProgress && !rejoiningCamera) LiveDesign.accent else LiveDesign.muted,
+            color = if (busy && !rejoiningCamera) LiveDesign.accent else LiveDesign.muted,
             modifier =
                 Modifier.glass(CircleShape)
                     .semantics {
                         contentDescription =
                             if (rejoiningCamera) {
                                 "Rejoining saved camera Wi-Fi network"
-                            } else if (shareInProgress) {
+                            } else if (busy) {
                                 "Cancel active media delivery"
                             } else {
                                 "Exit media selection"
@@ -1839,52 +1924,38 @@ private fun SelectionHeader(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-    }
-    val actions: @Composable RowScope.() -> Unit = {
-        FrameioSelectionAction(
-            readyCount = readyCount,
-            enabled = enabled,
-            preparationInProgress = frameioPreparationInProgress,
-            upload = upload,
-            rejoiningCamera = rejoiningCamera,
-            onClick = onFrameioDelivery,
-        )
-        DeliverySelectionAction(
-            readyCount = readyCount,
-            enabled = enabled,
-            shareInProgress = shareInProgress,
-            frameioPreparationInProgress = frameioPreparationInProgress,
-            uploadInProgress = upload != null,
-            onClick = onShare,
-        )
-    }
-
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        if (maxWidth < 560.dp) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    content = identity,
-                )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                    content = actions,
-                )
+        // iOS Label("Share", systemImage: "square.and.arrow.up") capsule.
+        val shareLabel =
+            when {
+                rejoiningCamera -> "REJOINING…"
+                upload != null ->
+                    "UP ${upload.itemIndex}/${upload.itemCount} ${(upload.progress * 100).roundToInt()}%"
+                frameioPreparationInProgress || shareInProgress -> "PREPARING…"
+                else -> "Share"
             }
-        } else {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                identity()
-                actions()
-            }
-        }
+        Text(
+            shareLabel,
+            style = chromeStyle(14f, FontWeight.SemiBold),
+            color = if (shareEnabled || busy) LiveDesign.accent else LiveDesign.faint,
+            maxLines = 1,
+            modifier =
+                Modifier.clip(CapsuleShape)
+                    .background(if (shareEnabled) LiveDesign.accentDim else Color.Transparent)
+                    .border(1.dp, LiveDesign.hairline, CapsuleShape)
+                    .semantics {
+                        contentDescription =
+                            if (shareEnabled) {
+                                "Share $selectedCount selected items"
+                            } else if (busy) {
+                                "Media delivery in progress"
+                            } else {
+                                "Share selected media"
+                            }
+                        if (shareEnabled) role = Role.Button else disabled()
+                    }
+                    .chromeClickable(enabled = shareEnabled, onClick = onShare)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+        )
     }
 }
 
@@ -2254,6 +2325,7 @@ private fun MediaLibraryBody(
     onOpen: (MediaClipRecord) -> Unit,
     onBeginSelection: (MediaClipRecord) -> Unit,
     onToggleSelection: (MediaClipRecord) -> Unit,
+    /** Full selection set after a Photos-style range paint (not a delta). */
     onSweepSelection: (Set<String>) -> Unit,
     onToggleFavorite: (MediaClipRecord) -> Unit,
     onRetry: () -> Unit,
@@ -2300,6 +2372,7 @@ private fun MediaLibraryBody(
                         onOpen = onOpen,
                         onBeginSelection = onBeginSelection,
                         onToggleSelection = onToggleSelection,
+                        onSweepSelection = onSweepSelection,
                         onToggleFavorite = onToggleFavorite,
                     )
                 }
@@ -2307,7 +2380,14 @@ private fun MediaLibraryBody(
     }
 }
 
-/** Adaptive grid with long-press selection and a selection-mode drag sweep. */
+/**
+ * Adaptive grid with iOS Photos-style multi-select:
+ * long-press a cell to enter selection, then long-press + drag to range-paint
+ * select/deselect (shrinking the drag restores the pre-sweep snapshot).
+ *
+ * While selecting, cells drop their own clickables and a full-size overlay owns
+ * tap-toggle + long-press range paint so LazyGrid scroll cannot steal the gesture.
+ */
 @Composable
 private fun MediaClipGrid(
     clips: List<MediaClipRecord>,
@@ -2328,65 +2408,88 @@ private fun MediaClipGrid(
 ) {
     val cellFrames = remember { mutableStateMapOf<String, Rect>() }
     var gridOrigin by remember { mutableStateOf(Offset.Zero) }
-    val currentFrames by rememberUpdatedState(cellFrames.toMap())
-    val currentOrigin by rememberUpdatedState(gridOrigin)
+    val gridState = rememberLazyGridState()
+    val sweepScope = rememberCoroutineScope()
+    val orderedIDs = remember(clips) { clips.map(clipIdentity) }
+    // Live map/origin for mid-drag hit tests (edge auto-scroll moves cells without
+    // waiting for a rememberUpdatedState snapshot).
+    val currentSelected by rememberUpdatedState(selectedIDs)
+    val currentClips by rememberUpdatedState(clips)
+    val currentIdentity by rememberUpdatedState(clipIdentity)
     val currentSweep by rememberUpdatedState(onSweepSelection)
+    val currentToggle by rememberUpdatedState(onToggleSelection)
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val edgeBandPx = with(density) { 72.dp.toPx() }
 
     LaunchedEffect(clips) { cellFrames.clear() }
-    val sweepModifier =
-        if (isSelecting) {
-            Modifier.pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { point ->
-                        hitClipID(currentFrames, currentOrigin, point)?.let { identity ->
-                            currentSweep(setOf(identity))
-                        }
-                    },
-                    onDrag = { change, _ ->
-                        hitClipID(currentFrames, currentOrigin, change.position)?.let { identity ->
-                            currentSweep(setOf(identity))
-                        }
-                    },
+
+    Box(
+        Modifier.fillMaxSize()
+            .onGloballyPositioned { coordinates -> gridOrigin = coordinates.positionInRoot() },
+    ) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
+            state = gridState,
+            modifier = Modifier.fillMaxSize(),
+            // iOS LazyVGrid spacing: 16.
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(bottom = 28.dp),
+            // Overlay owns movement while selecting; plain scroll resumes after exit.
+            userScrollEnabled = !isSelecting,
+        ) {
+            items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
+                val identity = clipIdentity(clip)
+                MediaClipCell(
+                    clip = clip,
+                    source = source,
+                    cameraID = cameraIDFor(clip),
+                    cameraConnected = cameraConnected,
+                    cacheStore = cacheStore,
+                    favorite = identity in favorites,
+                    selected = identity in selectedIDs,
+                    isSelecting = isSelecting,
+                    // Cells only open / enter selection outside multi-select; the overlay
+                    // owns toggle + paint once [isSelecting] is true.
+                    onClick = { onOpen(clip) },
+                    onLongPress = { onBeginSelection(clip) },
+                    onToggleFavorite = { onToggleFavorite(clip) },
+                    modifier =
+                        Modifier.onGloballyPositioned { coordinates ->
+                            cellFrames[identity] = coordinates.boundsInRoot()
+                        },
                 )
             }
-        } else {
-            Modifier
         }
 
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
-        modifier =
-            Modifier.fillMaxSize()
-                .onGloballyPositioned { coordinates -> gridOrigin = coordinates.positionInRoot() }
-                .then(sweepModifier),
-        // iOS LazyVGrid spacing: 16.
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = PaddingValues(bottom = 28.dp),
-        // Drag sweep owns one-finger movement in selection mode. Exiting the
-        // mode immediately returns ordinary scrolling.
-        userScrollEnabled = !isSelecting,
-    ) {
-        items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
-            val identity = clipIdentity(clip)
-            MediaClipCell(
-                clip = clip,
-                source = source,
-                cameraID = cameraIDFor(clip),
-                cameraConnected = cameraConnected,
-                cacheStore = cacheStore,
-                favorite = identity in favorites,
-                selected = identity in selectedIDs,
-                isSelecting = isSelecting,
-                onClick = {
-                    if (isSelecting) onToggleSelection(clip) else onOpen(clip)
-                },
-                onLongPress = { onBeginSelection(clip) },
-                onToggleFavorite = { onToggleFavorite(clip) },
-                modifier =
-                    Modifier.onGloballyPositioned { coordinates ->
-                        cellFrames[identity] = coordinates.boundsInRoot()
-                    },
+        // Full-size gesture layer above cells so combinedClickable cannot steal long-press
+        // and so vertical drags cannot reach LazyGrid while selecting.
+        if (isSelecting) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .mediaSelectionGestures(
+                        orderedIDs = orderedIDs,
+                        frames = { cellFrames },
+                        origin = { gridOrigin },
+                        selectedIDs = { currentSelected },
+                        clips = { currentClips },
+                        clipIdentity = { currentIdentity(it) },
+                        onToggle = { currentToggle(it) },
+                        onSweep = { currentSweep(it) },
+                        onScrollBy = { delta ->
+                            sweepScope.launch { gridState.scrollBy(delta) }
+                        },
+                        onEdgeScroll = { delta, finger, paintAt ->
+                            sweepScope.launch {
+                                gridState.scrollBy(delta)
+                                paintAt(finger)
+                            }
+                        },
+                        view = view,
+                        edgeBandPx = edgeBandPx,
+                    ),
             )
         }
     }
@@ -2407,33 +2510,226 @@ private fun MediaClipList(
     onOpen: (MediaClipRecord) -> Unit,
     onBeginSelection: (MediaClipRecord) -> Unit,
     onToggleSelection: (MediaClipRecord) -> Unit,
+    onSweepSelection: (Set<String>) -> Unit,
     onToggleFavorite: (MediaClipRecord) -> Unit,
 ) {
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(bottom = 28.dp),
+    val rowFrames = remember { mutableStateMapOf<String, Rect>() }
+    var listOrigin by remember { mutableStateOf(Offset.Zero) }
+    val listState = rememberLazyListState()
+    val sweepScope = rememberCoroutineScope()
+    val orderedIDs = remember(clips) { clips.map(clipIdentity) }
+    val currentSelected by rememberUpdatedState(selectedIDs)
+    val currentClips by rememberUpdatedState(clips)
+    val currentIdentity by rememberUpdatedState(clipIdentity)
+    val currentToggle by rememberUpdatedState(onToggleSelection)
+    val currentSweep by rememberUpdatedState(onSweepSelection)
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val edgeBandPx = with(density) { 72.dp.toPx() }
+
+    LaunchedEffect(clips) { rowFrames.clear() }
+
+    Box(
+        Modifier.fillMaxSize()
+            .onGloballyPositioned { coordinates -> listOrigin = coordinates.positionInRoot() },
     ) {
-        items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
-            val identity = clipIdentity(clip)
-            MediaClipListRow(
-                clip = clip,
-                source = source,
-                cameraID = cameraIDFor(clip),
-                cameraConnected = cameraConnected,
-                cacheStore = cacheStore,
-                favorite = identity in favorites,
-                selected = identity in selectedIDs,
-                isSelecting = isSelecting,
-                onClick = {
-                    if (isSelecting) onToggleSelection(clip) else onOpen(clip)
-                },
-                onLongPress = { onBeginSelection(clip) },
-                onToggleFavorite = { onToggleFavorite(clip) },
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 28.dp),
+            userScrollEnabled = !isSelecting,
+        ) {
+            items(clips, key = { clip -> clipIdentity(clip) }) { clip ->
+                val identity = clipIdentity(clip)
+                MediaClipListRow(
+                    clip = clip,
+                    source = source,
+                    cameraID = cameraIDFor(clip),
+                    cameraConnected = cameraConnected,
+                    cacheStore = cacheStore,
+                    favorite = identity in favorites,
+                    selected = identity in selectedIDs,
+                    isSelecting = isSelecting,
+                    onClick = { onOpen(clip) },
+                    onLongPress = { onBeginSelection(clip) },
+                    onToggleFavorite = { onToggleFavorite(clip) },
+                    modifier =
+                        Modifier.onGloballyPositioned { coordinates ->
+                            rowFrames[identity] = coordinates.boundsInRoot()
+                        },
+                )
+            }
+        }
+
+        if (isSelecting) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .mediaSelectionGestures(
+                        orderedIDs = orderedIDs,
+                        frames = { rowFrames },
+                        origin = { listOrigin },
+                        selectedIDs = { currentSelected },
+                        clips = { currentClips },
+                        clipIdentity = { currentIdentity(it) },
+                        onToggle = { currentToggle(it) },
+                        onSweep = { currentSweep(it) },
+                        onScrollBy = { delta ->
+                            sweepScope.launch { listState.scrollBy(delta) }
+                        },
+                        onEdgeScroll = { delta, finger, paintAt ->
+                            sweepScope.launch {
+                                listState.scrollBy(delta)
+                                paintAt(finger)
+                            }
+                        },
+                        view = view,
+                        edgeBandPx = edgeBandPx,
+                    ),
             )
         }
     }
 }
+
+/**
+ * Photos-style multi-select overlay gestures:
+ * - short tap toggles the hit clip
+ * - long-press + drag range-paints select/deselect from a pre-gesture snapshot
+ * - vertical drag before long-press scrolls the list/grid (content follows the finger)
+ *
+ * The overlay sits above the lazy list so native user-scroll cannot see the pointer;
+ * finger pans are applied with [onScrollBy] instead.
+ */
+private fun Modifier.mediaSelectionGestures(
+    orderedIDs: List<String>,
+    frames: () -> Map<String, Rect>,
+    origin: () -> Offset,
+    selectedIDs: () -> Set<String>,
+    clips: () -> List<MediaClipRecord>,
+    clipIdentity: (MediaClipRecord) -> String,
+    onToggle: (MediaClipRecord) -> Unit,
+    onSweep: (Set<String>) -> Unit,
+    onScrollBy: (delta: Float) -> Unit,
+    onEdgeScroll: (delta: Float, finger: Offset, paintAt: (Offset) -> Unit) -> Unit,
+    view: View,
+    edgeBandPx: Float,
+): Modifier =
+    pointerInput(orderedIDs) {
+        fun indexAt(local: Offset): Int? {
+            val id = hitClipID(frames(), origin(), local) ?: return null
+            return orderedIDs.indexOf(id).takeIf { it >= 0 }
+        }
+        fun clipAt(local: Offset): MediaClipRecord? {
+            val id = hitClipID(frames(), origin(), local) ?: return null
+            return clips().firstOrNull { clipIdentity(it) == id }
+        }
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            down.consume()
+            val touchSlop = viewConfiguration.touchSlop
+            val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+
+            // null = long-press timeout (start paint)
+            // "up" = short tap (toggle)
+            // Offset = moved past slop before long-press (scroll from that position)
+            val early: Any? =
+                withTimeoutOrNull(longPressTimeout) {
+                    var current = down
+                    while (current.pressed) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change =
+                            event.changes.firstOrNull { it.id == down.id }
+                                ?: return@withTimeoutOrNull "up"
+                        change.consume()
+                        if (!change.pressed) return@withTimeoutOrNull "up"
+                        if ((change.position - down.position).getDistance() > touchSlop) {
+                            return@withTimeoutOrNull change.position
+                        }
+                        current = change
+                    }
+                    "up"
+                }
+
+            when (early) {
+                "up" -> clipAt(down.position)?.let(onToggle)
+                is Offset -> {
+                    // Finger moved before long-press: pan the list with the finger.
+                    // scrollBy(positive) moves content up; finger up (y decreases) → positive.
+                    var lastY = early.y
+                    // Include the slop-crossing delta from the down point so the first
+                    // move feels immediate rather than waiting for the next event.
+                    val initialDelta = down.position.y - early.y
+                    if (initialDelta != 0f) onScrollBy(initialDelta)
+                    var pressed = true
+                    while (pressed) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null) break
+                        change.consume()
+                        if (change.pressed) {
+                            val delta = lastY - change.position.y
+                            if (delta != 0f) onScrollBy(delta)
+                            lastY = change.position.y
+                        }
+                        pressed = change.pressed
+                    }
+                }
+                null -> {
+                    val startIndex = indexAt(down.position)
+                    if (startIndex == null) {
+                        waitForUpOrCancellation()
+                        return@awaitEachGesture
+                    }
+                    val snapshot = selectedIDs()
+                    val paintSelect = orderedIDs[startIndex] !in snapshot
+                    var lastIndex: Int? = null
+                    fun paintTo(index: Int) {
+                        if (index == lastIndex) return
+                        lastIndex = index
+                        onSweep(
+                            MediaLibrarySelection.paintRange(
+                                snapshot = snapshot,
+                                orderedIDs = orderedIDs,
+                                anchorIndex = startIndex,
+                                currentIndex = index,
+                                paintSelect = paintSelect,
+                            ),
+                        )
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    }
+                    fun paintAt(local: Offset) {
+                        indexAt(local)?.let(::paintTo)
+                    }
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    paintTo(startIndex)
+
+                    val height = size.height.toFloat()
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        change.consume()
+                        if (!change.pressed) break
+                        paintAt(change.position)
+                        // Edge auto-scroll (iOS edgeBand ≈ 90pt).
+                        val y = change.position.y
+                        val delta =
+                            when {
+                                y < edgeBandPx ->
+                                    -((edgeBandPx - y) / edgeBandPx * 28f).coerceAtLeast(4f)
+                                y > height - edgeBandPx ->
+                                    ((y - (height - edgeBandPx)) / edgeBandPx * 28f)
+                                        .coerceAtLeast(4f)
+                                else -> 0f
+                            }
+                        if (delta != 0f) {
+                            onEdgeScroll(delta, change.position, ::paintAt)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
 /** Grid card with action-safe metadata; a long press starts library selection. */
 @Composable
@@ -2451,6 +2747,18 @@ private fun MediaClipCell(
     onToggleFavorite: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // While multi-selecting the parent overlay owns all pointer input; cell clickables
+    // would steal long-press and re-enable scroll competition.
+    val interaction =
+        if (isSelecting) {
+            Modifier
+        } else {
+            Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongPress,
+                onLongClickLabel = "Select ${clip.filename}",
+            )
+        }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Box(
             Modifier.fillMaxWidth()
@@ -2464,11 +2772,7 @@ private fun MediaClipCell(
                 ).semantics {
                     contentDescription = clipAccessibilityLabel(clip, selected, isSelecting)
                     role = Role.Button
-                }.combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onLongPress,
-                    onLongClickLabel = "Select ${clip.filename}",
-                ),
+                }.then(interaction),
             contentAlignment = Alignment.Center,
         ) {
             ClipArtwork(
@@ -2535,9 +2839,21 @@ private fun MediaClipListRow(
     onClick: () -> Unit,
     onLongPress: () -> Unit,
     onToggleFavorite: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val interaction =
+        if (isSelecting) {
+            Modifier
+        } else {
+            Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongPress,
+                onLongClickLabel = "Select ${clip.filename}",
+            )
+        }
     Row(
-        Modifier.fillMaxWidth()
+        modifier
+            .fillMaxWidth()
             .clip(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
             .background(if (selected) LiveDesign.accentDim else LiveDesign.surface)
             .border(
@@ -2547,11 +2863,8 @@ private fun MediaClipListRow(
             ).semantics {
                 contentDescription = clipAccessibilityLabel(clip, selected, isSelecting)
                 role = Role.Button
-            }.combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongPress,
-                onLongClickLabel = "Select ${clip.filename}",
-            ).padding(8.dp),
+            }.then(interaction)
+            .padding(8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

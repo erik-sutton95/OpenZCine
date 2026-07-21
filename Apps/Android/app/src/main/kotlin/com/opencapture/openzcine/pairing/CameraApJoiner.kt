@@ -1,10 +1,14 @@
 package com.opencapture.openzcine.pairing
 
+import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -26,8 +30,19 @@ import kotlinx.coroutines.withTimeoutOrNull
  * otherwise prefer the default network). The [android.net.ConnectivityManager.NetworkCallback]
  * stays registered while the session lives — unregistering tears the
  * peer-to-peer network down — so callers must [release] on teardown.
+ *
+ * The system "switch networks" dialog only appears after Android finds a
+ * matching AP in scan results (unlike iOS `NEHotspotConfiguration`, which
+ * prompts immediately). Callers should stage a Ready-to-join confirm first
+ * and keep Wi‑Fi enabled so the dialog can surface.
  */
-public class CameraApJoiner(private val connectivity: ConnectivityManager) {
+public class CameraApJoiner(context: Context) {
+    private val appContext = context.applicationContext
+    private val connectivity =
+        appContext.getSystemService(ConnectivityManager::class.java)
+            ?: error("ConnectivityManager unavailable")
+    private val wifi = appContext.getSystemService(WifiManager::class.java)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val lock = Any()
     private val availability = CameraApAvailabilityTracker<Network>()
     private val reassociationWaiters = mutableListOf<ReassociationWaiter>()
@@ -37,9 +52,12 @@ public class CameraApJoiner(private val connectivity: ConnectivityManager) {
     /**
      * Requests the camera's network and suspends until Android connects
      * (`true`) or declines/times out (`false`). Android shows its own consent
-     * dialog for the specifier request; a user cancel surfaces as
-     * `onUnavailable` → `false`. Cancelling the coroutine releases its own
-     * request without disturbing a later [join] call.
+     * dialog for the specifier request once the AP is visible; a user cancel
+     * surfaces as `onUnavailable` → `false`. Cancelling the coroutine releases
+     * its own request without disturbing a later [join] call.
+     *
+     * Returns `false` immediately when Wi‑Fi is disabled — Android never shows
+     * a join dialog while the radio is off.
      *
      * @param ssid Exact camera SSID from the camera's Direct-connection screen.
      * @param passphrase WPA2 key, or null/empty for an open camera network.
@@ -51,6 +69,10 @@ public class CameraApJoiner(private val connectivity: ConnectivityManager) {
         timeoutMillis: Int = 45_000,
     ): Boolean {
         release()
+        // No scan → no specifier match → no system "switch networks" dialog.
+        if (wifi != null && !wifi.isWifiEnabled) {
+            return false
+        }
         val specifier =
             WifiNetworkSpecifier.Builder()
                 .setSsid(ssid)
@@ -84,7 +106,27 @@ public class CameraApJoiner(private val connectivity: ConnectivityManager) {
                 callback = networkCallback
                 joinContinuation = continuation
             }
-            connectivity.requestNetwork(request, networkCallback, timeoutMillis)
+            // Post the request on the main looper so OEMs that attach the
+            // system join dialog to the foreground activity's UI thread still
+            // surface it above our connection popup.
+            mainHandler.post {
+                if (!continuation.isActive) {
+                    releaseOwned(networkCallback)
+                    return@post
+                }
+                try {
+                    connectivity.requestNetwork(
+                        request,
+                        networkCallback,
+                        mainHandler,
+                        timeoutMillis,
+                    )
+                } catch (_: RuntimeException) {
+                    // SecurityException / IllegalArgumentException / IllegalStateException
+                    // when the radio or framework rejects the request.
+                    handleUnavailable(networkCallback)
+                }
+            }
             continuation.invokeOnCancellation { releaseOwned(networkCallback) }
         }
     }

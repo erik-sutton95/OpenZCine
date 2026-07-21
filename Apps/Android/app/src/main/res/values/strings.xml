@@ -144,7 +144,7 @@
     <string name="conn_ready_detail">Join %1$s\'s Wi‑Fi network to continue.</string>
     <string name="conn_scanned_caption">Scanned from camera screen — check it matches.</string>
     <string name="conn_connecting_title">Connecting…</string>
-    <string name="conn_joining_detail">Tap Connect when Android asks to switch networks.</string>
+    <string name="conn_joining_detail">Joining the camera Wi‑Fi… Keep the camera\'s network screen on. Android may ask to switch networks the first time.</string>
     <string name="conn_searching_title">Searching…</string>
     <string name="conn_searching_detail">Looking for %1$s on your network.</string>
     <string name="conn_handshaking_detail">Establishing a secure link with %1$s.</string>
@@ -366,7 +366,9 @@
     <string name="command_title_wb_tint">WB Tint</string>
     <string name="command_title_grid">Grid</string>
     <string name="command_title_tone">Tone</string>
+    <string name="command_title_picture_profile">Picture Profile</string>
     <string name="command_title_evr">e-VR</string>
+    <string name="command_reason_picture_profile">Picture Profile is not available from the camera yet.</string>
     <string name="command_reason_aperture">This camera did not provide apertures for the mounted lens.</string>
     <string name="command_reason_white_balance">This camera did not provide white-balance choices.</string>
     <string name="command_reason_recording_modes">This camera did not advertise recording modes.</string>
@@ -392,6 +394,7 @@
     <string name="command_section_exposure">Exposure</string>
     <string name="command_section_focus">Focus</string>
     <string name="command_section_audio">Audio</string>
+    <string name="command_section_monitor">Monitor</string>
     <string name="command_not_connected">Connect to a camera to read this control.</string>
     <string name="command_wait_readback">Waiting for camera property readback.</string>
     <string name="command_limited_readback">Camera property readback is limited: %1$s.</string>
@@ -407,8 +410,8 @@
     <string name="temperature_ok">OK</string>
     <string name="temperature_check">CHECK</string>
     <string name="temperature_hot">HOT</string>
-    <string name="command_dashboard_description">Command dashboard. Swipe up to view Image, Focus, and Audio controls.</string>
-    <string name="command_side_description">Image, Focus, and Audio controls. Swipe up to reveal more command controls.</string>
+    <string name="command_dashboard_description">Command dashboard. Swipe up to view Image, Focus, Audio, and Monitor controls.</string>
+    <string name="command_side_description">Image, Focus, Audio, and Monitor controls. Swipe up to reveal more command controls.</string>
     <string name="command_health_temp">Temp</string>
     <string name="command_health_storage">Storage</string>
     <string name="command_health_camera">Camera</string>
@@ -425,7 +428,7 @@
     <string name="command_state_change_reorder">. Double tap to change; long press and drag to reorder.</string>
     <string name="command_state_locked">. Controls are locked.</string>
     <string name="command_change_description">Change %1$s</string>
-    <string name="command_more">MORE ↓</string>
+    <string name="command_more">MORE ⌄</string>
     <string name="command_more_description">More command controls below. Swipe up to reveal them.</string>
     <string name="command_current_value">Current: %1$s</string>
     <string name="command_health_value_description">%1$s %2$s</string>
@@ -454,6 +457,7 @@
     <string name="monitor_settings_recovery">Open Settings, restore hidden monitor controls</string>
     <string name="camera_connected">Camera connected</string>
     <string name="camera_connecting">Camera connecting</string>
+    <string name="camera_reading_properties">Reading camera settings…</string>
     <string name="camera_disconnected">Camera disconnected</string>
     <string name="camera_connecting_short">Connecting…</string>
     <string name="camera_none">No camera</string>

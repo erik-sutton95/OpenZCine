@@ -36,6 +36,7 @@ androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "
 mlkit-text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "mlKitTextRecognition" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
 compose-ui = { module = "androidx.compose.ui:ui" }
 compose-foundation = { module = "androidx.compose.foundation:foundation" }
 compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }

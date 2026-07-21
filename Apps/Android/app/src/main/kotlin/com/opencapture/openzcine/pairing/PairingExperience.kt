@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
 import android.net.Uri
 import android.net.nsd.NsdManager
 import android.os.Build
@@ -156,7 +155,7 @@ public fun realPairingEnvironment(
     context: Context,
     hasLegacySavedCameraProfiles: Boolean = false,
 ): PairingEnvironment {
-    val joiner = CameraApJoiner(context.getSystemService(ConnectivityManager::class.java))
+    val joiner = CameraApJoiner(context)
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
     val usbCameraSource = AndroidUsbPtpCameraSource(context)
@@ -440,6 +439,18 @@ internal const val FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS: Long = 60_000L
 internal const val FIRST_PAIR_RECONNECT_INTERVAL_MILLIS: Long = 2_000L
 internal const val FIRST_PAIR_HOTSPOT_SETTLE_MILLIS: Long = 2_000L
 
+/**
+ * Pause after a successful camera-AP join before the first PTP-IP Init.
+ * Device logs show `rejectedInitiator` ~30ms after association when we race
+ * the camera's stack; iOS waits for subnet confirmation and a similar settle.
+ */
+internal const val CAMERA_AP_POST_JOIN_SETTLE_MILLIS: Long = 1_200L
+
+/** How many PTP-IP establish attempts after a camera-AP rejoin. */
+internal const val CAMERA_AP_CONNECT_ATTEMPTS: Int = 3
+
+internal const val CAMERA_AP_CONNECT_RETRY_DELAY_MILLIS: Long = 1_500L
+
 /** How often the USB discover step re-enumerates while waiting for a camera. */
 internal const val USB_DISCOVER_POLL_INTERVAL_MILLIS: Long = 1_500L
 
@@ -524,21 +535,31 @@ public fun PairingExperience(
             }
         }
 
-    suspend fun reconnectAfterFirstPair(savedCamera: SavedCameraRecord): PairedCamera? {
+    suspend fun reconnectAfterFirstPair(
+        savedCamera: SavedCameraRecord,
+        confirmPin: String? = null,
+    ): PairedCamera? {
         val isCameraAp = savedCamera.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
-        if (!isCameraAp) {
-            // The camera's hotspot/USB transport needs a short settle after its
-            // body-side confirmation before it will accept the restored profile.
+        // Stay on "Tap Confirm on the camera" while the body restarts its AP —
+        // do not flip to Reconnecting until the network is back (or the wait
+        // times out and we start active rejoin attempts).
+        phase = PairingPhase.ConfirmOnCamera(confirmPin)
+        if (isCameraAp) {
+            // Prefer reassociation of the still-bound join (loss → return when
+            // the operator taps Confirm). Fall through to active rejoin loops
+            // if the wait times out or the binding was already released.
+            environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS)
+        } else {
+            // Hotspot/USB: short settle after body-side confirmation.
             delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
         }
         // iOS keeps re-applying the camera AP configuration while the just-paired
         // camera reboots its Wi-Fi (attemptPairedReconnectRejoin), then reconnects
         // off the saved profile the moment it returns — staying armed until a
         // connect succeeds. Android's WifiNetworkSpecifier does NOT auto-rejoin a
-        // rebooted AP, so we mirror the active re-join: each pass re-issues the
-        // join (which blocks until the AP is back, then binds the process) before
-        // attempting the saved-profile connect. Re-joining a session-approved SSID
-        // is silent on API 31+.
+        // rebooted AP if the binding was dropped, so each pass re-issues the
+        // join before attempting the saved-profile connect. Re-joining a
+        // session-approved SSID is silent on API 31+.
         val rejoinSsid = savedCamera.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
         val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
 
@@ -592,15 +613,30 @@ public fun PairingExperience(
         phase = PairingPhase.Handshaking
         work.value =
             scope.launch {
+                // Latch confirm-on-camera outside StateFlow "latest only" — a
+                // fast FAILED after confirmOnCamera used to overwrite the phase
+                // before the collector ran, so we never entered the wait path.
                 var confirmation: PairingPhase.ConfirmOnCamera? = null
+                var sawPairingChallenge = false
                 val progressWatcher =
                     launch(start = CoroutineStart.UNDISPATCHED) {
                         session.connectionProgress.collect { progress ->
-                            pairingPhaseFor(progress)?.let { updated ->
-                                phase = updated
-                                if (updated is PairingPhase.ConfirmOnCamera) {
-                                    confirmation = updated
+                            when (progress.phase) {
+                                CameraConnectionPhase.PAIRING -> {
+                                    sawPairingChallenge = true
+                                    phase = PairingPhase.Pairing(progress.detail.ifBlank { null })
                                 }
+                                CameraConnectionPhase.CONFIRM_ON_CAMERA -> {
+                                    val confirmed =
+                                        PairingPhase.ConfirmOnCamera(
+                                            progress.detail.ifBlank { null },
+                                        )
+                                    confirmation = confirmed
+                                    phase = confirmed
+                                }
+                                CameraConnectionPhase.HANDSHAKING ->
+                                    phase = PairingPhase.Handshaking
+                                else -> Unit
                             }
                         }
                     }
@@ -616,7 +652,17 @@ public fun PairingExperience(
                         confirmation.takeIf {
                             savedCamera.transport != SavedCameraTransport.USB_C
                         }
-                    if (firstTimePairing && pairingConfirmed != null) {
+                    // If StateFlow collapsed confirmOnCamera → FAILED, still
+                    // treat a first-time Wi-Fi pair that reached the pairing
+                    // challenge as body-confirm pending (iOS acceptedPairing).
+                    val treatAsPairedAwaitingBody =
+                        pairingConfirmed != null ||
+                            (
+                                firstTimePairing &&
+                                    sawPairingChallenge &&
+                                    savedCamera.transport != SavedCameraTransport.USB_C
+                            )
+                    if (firstTimePairing && treatAsPairedAwaitingBody) {
                         // Nikon has accepted `ConfirmPairing`, but this is still
                         // not a usable monitor session. Persist the profile,
                         // close the temporary session, then wait for the body
@@ -627,14 +673,19 @@ public fun PairingExperience(
                                 lastSeenAtEpochMillis = System.currentTimeMillis(),
                             )
                         onPairingProfilePrepared(preparedProfile)
-                        phase = pairingConfirmed
+                        val pin = pairingConfirmed?.pin
+                        phase = PairingPhase.ConfirmOnCamera(pin)
                         withContext(NonCancellable) { session.disconnect() }
-                        val reconnected = reconnectAfterFirstPair(preparedProfile)
+                        val reconnected =
+                            reconnectAfterFirstPair(preparedProfile, confirmPin = pin)
                         if (reconnected != null) {
                             handedOff.value = true
                             onPaired(reconnected)
                         } else {
-                            phase = PairingPhase.Error(unreachableMessage)
+                            phase =
+                                PairingPhase.Error(
+                                    friendlyCameraConnectionFailure(unreachableMessage),
+                                )
                         }
                     } else if (connected != null) {
                         handedOff.value = true
@@ -650,7 +701,13 @@ public fun PairingExperience(
                         )
                     } else {
                         withContext(NonCancellable) { session.disconnect() }
-                        phase = PairingPhase.Error(unreachableMessage)
+                        val detail = session.connectionProgress.value.detail
+                        phase =
+                            PairingPhase.Error(
+                                friendlyCameraConnectionFailure(
+                                    detail.takeIf { it.isNotBlank() } ?: unreachableMessage,
+                                ),
+                            )
                     }
                 } catch (error: CancellationException) {
                     // `sessionConnect` begins native work asynchronously. A
@@ -660,7 +717,8 @@ public fun PairingExperience(
                     throw error
                 } catch (_: Exception) {
                     withContext(NonCancellable) { session.disconnect() }
-                    phase = PairingPhase.Error(unreachableMessage)
+                    phase =
+                        PairingPhase.Error(friendlyCameraConnectionFailure(unreachableMessage))
                 } finally {
                     progressWatcher.cancel()
                 }
@@ -763,6 +821,9 @@ public fun PairingExperience(
                     // lives; the popup's plaintext staging dies with the phase.
                     if (passphrase != null) environment.credentials.save(ssid, passphrase)
                     environment.credentials.lastSsid = ssid
+                    // Association can finish before the camera answers PTP-IP
+                    // Init; match the saved-reconnect settle before handshaking.
+                    delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                     // Camera-AP mode: the ZR always answers on the fixed AP host.
                     connect(CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST)
                 } else {

@@ -357,6 +357,10 @@ class SwiftCoreCameraSession internal constructor(
     override val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
         _propertyRefreshStatus.asStateFlow()
 
+    private val _initialMonitorPropertiesReady = MutableStateFlow(false)
+    override val initialMonitorPropertiesReady: StateFlow<Boolean> =
+        _initialMonitorPropertiesReady.asStateFlow()
+
     private val _latestCommandRoundTripMilliseconds = MutableStateFlow<Double?>(null)
     override val latestCommandRoundTripMilliseconds: StateFlow<Double?> =
         _latestCommandRoundTripMilliseconds.asStateFlow()
@@ -394,6 +398,8 @@ class SwiftCoreCameraSession internal constructor(
      * stale live-view header for a few frames after accepting the operation.
      */
     @Volatile private var ignoreLiveRecordingStateUntilNanos: Long = 0L
+    /** Throttles LV hot-path RTT publishes (see [updateRoundTripMeasurement]). */
+    @Volatile private var lastRoundTripPublishNanos: Long = 0L
 
     /** Incremented only by authoritative camera record events. */
     @Volatile private var cameraRecordingEventVersion: Long = 0L
@@ -892,17 +898,29 @@ class SwiftCoreCameraSession internal constructor(
         }
     }
 
-    /** Starts one initial property burst followed by conservative round-robin reads. */
+    /** Starts one full property burst, then conservative round-robin reads. */
     private fun startPropertyRefresh(attempt: Long) {
         stopPropertyRefresh(clearSnapshot = false)
+        _initialMonitorPropertiesReady.value = false
         _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Refreshing
         val job =
             propertyRefreshScope.launch {
-                refreshCameraProperties(
-                    attempt = attempt,
-                    request = SwiftCore.PROPERTY_REFRESH_BOOTSTRAP,
-                    propertyCode = 0L,
-                )
+                // Full live-order burst (no 1.5 s gaps). The monitor holds live
+                // view until [initialMonitorPropertiesReady] so this owns the
+                // command channel without competing with GetLiveViewImageEx.
+                try {
+                    refreshCameraProperties(
+                        attempt = attempt,
+                        request = SwiftCore.PROPERTY_REFRESH_BOOTSTRAP,
+                        propertyCode = 0L,
+                    )
+                } finally {
+                    // Always open the feed — even a degraded/partial bootstrap
+                    // is better than an infinite loader.
+                    if (ownsConnectedAttempt(attempt)) {
+                        _initialMonitorPropertiesReady.value = true
+                    }
+                }
                 while (isActive && ownsConnectedAttempt(attempt)) {
                     delay(propertyPollIntervalMillis.coerceAtLeast(1L))
                     if (!isActive || !ownsConnectedAttempt(attempt)) break
@@ -935,6 +953,7 @@ class SwiftCoreCameraSession internal constructor(
             _cameraProperties.value = CameraPropertySnapshot()
         }
         _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Idle
+        _initialMonitorPropertiesReady.value = false
     }
 
     /** Coalesces a burst of camera property events into a bounded delayed refresh. */
@@ -993,7 +1012,13 @@ class SwiftCoreCameraSession internal constructor(
                     )
                 return
             }
-            _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Refreshing
+            // Only bootstrap (and degraded recoveries) surface "Refreshing" in
+            // the shell. Steady-state NEXT polls used to flip Refreshing→Ready
+            // every interval and recompose monitor chrome on top of the feed hitch.
+            val isBootstrap = request == SwiftCore.PROPERTY_REFRESH_BOOTSTRAP
+            if (isBootstrap) {
+                _propertyRefreshStatus.value = CameraPropertyRefreshStatus.Refreshing
+            }
             cameraCommandMutex.withLock {
                 if (!ownsConnectedAttempt(attempt)) return
                 val readback = readNativePropertySnapshot(request, propertyCode)
@@ -1003,9 +1028,21 @@ class SwiftCoreCameraSession internal constructor(
                     readback.isValid &&
                         readback.result != NativePropertyRefreshResult.NO_SESSION
                 ) {
-                    _cameraProperties.value = readback.snapshot
+                    // Avoid rewriting an equal snapshot — property StateFlow
+                    // collectors recompose the whole property bar otherwise.
+                    val next = readback.snapshot
+                    if (next != _cameraProperties.value) {
+                        _cameraProperties.value = next
+                    }
                 }
-                _propertyRefreshStatus.value = readback.result.toRefreshStatus()
+                val nextStatus = readback.result.toRefreshStatus()
+                if (
+                    isBootstrap ||
+                        nextStatus !is CameraPropertyRefreshStatus.Ready ||
+                        _propertyRefreshStatus.value !is CameraPropertyRefreshStatus.Ready
+                ) {
+                    _propertyRefreshStatus.value = nextStatus
+                }
             }
         }
     }
@@ -1080,8 +1117,19 @@ class SwiftCoreCameraSession internal constructor(
     private fun updateRoundTripMeasurement() {
         if (_state.value !is CameraSessionState.Connected) {
             _latestCommandRoundTripMilliseconds.value = null
+            lastRoundTripPublishNanos = 0L
             return
         }
+        // Live-view invokes this every frame; rate-limit the JNI + StateFlow churn.
+        // Explicit control/recording commands still get a fresh sample within ~250 ms.
+        val now = System.nanoTime()
+        if (
+            lastRoundTripPublishNanos != 0L &&
+                now - lastRoundTripPublishNanos < ROUND_TRIP_PUBLISH_INTERVAL_NANOS
+        ) {
+            return
+        }
+        lastRoundTripPublishNanos = now
         _latestCommandRoundTripMilliseconds.value = core.latestRoundTripMilliseconds()
     }
 
@@ -1101,8 +1149,15 @@ class SwiftCoreCameraSession internal constructor(
     private companion object {
         val nextConnectionOwner = AtomicLong()
         const val RECORDING_READBACK_GRACE_NANOS: Long = 1_500_000_000L
-        const val PROPERTY_POLL_INTERVAL_MILLIS: Long = 1_500L
+        /**
+         * Steady-state property poll gap. Live view and property reads share
+         * one PTP `transactionLock`; 1.5 s left a visible hitch every ~30–45
+         * frames. 3 s keeps battery/ISO fresh enough without punching the feed.
+         */
+        const val PROPERTY_POLL_INTERVAL_MILLIS: Long = 3_000L
         const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
+        /** Max rate for command RTT StateFlow updates (LV frames fire every present). */
+        const val ROUND_TRIP_PUBLISH_INTERVAL_NANOS: Long = 250_000_000L
         const val MAX_EVENT_PROPERTY_REFRESHES: Int = 4
         const val EVENT_BUFFER_CAPACITY: Int = 64
         const val EVENT_CODE_MASK: Int = 0xFFFF

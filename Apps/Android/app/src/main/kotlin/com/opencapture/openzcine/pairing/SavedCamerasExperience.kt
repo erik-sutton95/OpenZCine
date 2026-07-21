@@ -67,6 +67,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 private sealed interface SavedCameraPhase {
     data object Idle : SavedCameraPhase
 
+    /**
+     * Camera-AP profile staged for join: the operator must confirm before we
+     * issue [CameraApJoiner.join] (which surfaces Android's switch-network
+     * dialog). Matches first-pair [ConnectionPopupPhase.ReadyToJoin].
+     */
+    data class ReadyToJoin(
+        val record: SavedCameraRecord,
+        val ssid: String,
+        val key: String,
+    ) : SavedCameraPhase
+
     data class Joining(val title: String) : SavedCameraPhase
 
     data class Connecting(val title: String) : SavedCameraPhase
@@ -136,8 +147,6 @@ public fun SavedCamerasExperience(
     onOpenSettings: () -> Unit,
     onOpenMediaLibrary: () -> Unit = {},
     onRecordsChanged: (List<SavedCameraRecord>) -> Unit,
-    cachedMediaCameraIDs: Set<String> = emptySet(),
-    onOpenCachedMedia: (SavedCameraRecord) -> Unit = {},
     requestedReconnectID: String? = null,
     onReconnectRequestConsumed: () -> Unit = {},
     suppressedUsbAutoReconnectHosts: Set<String> = emptySet(),
@@ -199,14 +208,21 @@ public fun SavedCamerasExperience(
             }
         }
 
-    suspend fun reconnectAfterNikonPairing(record: SavedCameraRecord): PairedCamera? {
+    suspend fun reconnectAfterNikonPairing(
+        record: SavedCameraRecord,
+        confirmPin: String? = null,
+    ): PairedCamera? {
         val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
-        if (!isCameraAp) {
+        phase = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, confirmPin)
+        if (isCameraAp) {
+            environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS)
+        } else {
             delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
         }
         // Actively re-join the rebooting camera AP each pass (iOS
         // attemptPairedReconnectRejoin) — Android's WifiNetworkSpecifier does
-        // not auto-rejoin a rebooted AP, so a passive wait strands the operator.
+        // not auto-rejoin a rebooted AP if the binding dropped, so a passive
+        // wait can strand the operator without the rejoin loop.
         val rejoinSsid = record.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
         val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
 
@@ -251,12 +267,11 @@ public fun SavedCamerasExperience(
         }
     }
 
-    fun reconnect(record: SavedCameraRecord, explicit: Boolean = true) {
-        if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
-        if (explicit && record.transport == SavedCameraTransport.USB_C) {
-            onUsbAutoReconnectSuppressionCleared(record.host)
-        }
-        handedOff.value = false
+    fun beginReconnectWork(
+        record: SavedCameraRecord,
+        cameraApSsid: String?,
+        cameraApKey: String?,
+    ) {
         // Mark synchronously so an explicit Link-tab reconnect and the USB
         // attachment observer cannot race into two profile-owned sessions.
         phase = SavedCameraPhase.Connecting(record.displayTitle)
@@ -308,95 +323,154 @@ public fun SavedCamerasExperience(
                             }
                         }
                     } else if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-                        val ssid = record.wifiSsid
-                        if (ssid == null) {
-                            phase =
-                                SavedCameraPhase.Error(
-                                    "This camera needs its Wi‑Fi network name. Pair it again to refresh the profile.",
-                                )
-                            return@launch
-                        }
-                        val key = environment.credentials.passphrase(ssid)
-                        if (key == null) {
-                            phase =
-                                SavedCameraPhase.Error(
-                                    "The Wi‑Fi key for $ssid is not available on this phone. Pair again to save it.",
-                                )
-                            return@launch
-                        }
+                        val ssid =
+                            cameraApSsid
+                                ?: record.wifiSsid
+                                ?: run {
+                                    phase =
+                                        SavedCameraPhase.Error(
+                                            "This camera needs its Wi‑Fi network name. Pair it again to refresh the profile.",
+                                        )
+                                    return@launch
+                                }
+                        val key =
+                            cameraApKey
+                                ?: environment.credentials.passphrase(ssid)
+                                ?: run {
+                                    phase =
+                                        SavedCameraPhase.Error(
+                                            "The Wi‑Fi key for $ssid is not available on this phone. Pair again to save it.",
+                                        )
+                                    return@launch
+                                }
                         phase = SavedCameraPhase.Joining(record.displayTitle)
                         if (!environment.joinCameraAp(ssid, key)) {
                             phase =
                                 SavedCameraPhase.Error(
-                                    "Couldn't join $ssid. Check the camera is powered on and try again.",
+                                    "Couldn't join $ssid. Turn on Wi‑Fi, keep the camera's network screen on, then try again.",
                                 )
                             return@launch
                         }
+                        // Wi‑Fi association can complete before the camera answers
+                        // PTP-IP Init; racing that window surfaces rejectedInitiator
+                        // and a generic "Couldn't connect" with no system Wi‑Fi sheet
+                        // (Android silently rejoins a previously approved AP).
+                        delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                     }
 
-                    phase = SavedCameraPhase.Connecting(record.displayTitle)
-                    val activeSession = session ?: environment.createSession(host)
-                    session = activeSession
-                    var pairingWasConfirmed = false
-                    var pairingPin: String? = null
-                    val progressWatcher =
-                        launch(start = CoroutineStart.UNDISPATCHED) {
-                            activeSession.connectionProgress.collect { progress ->
-                                when (progress.phase) {
-                                    CameraConnectionPhase.PAIRING ->
-                                        phase = SavedCameraPhase.Pairing(record.displayTitle)
-                                    CameraConnectionPhase.CONFIRM_ON_CAMERA -> {
-                                        pairingWasConfirmed = true
-                                        pairingPin = progress.detail.ifBlank { null }
-                                        phase =
-                                            SavedCameraPhase.ConfirmOnCamera(
-                                                record.displayTitle,
-                                                pairingPin,
-                                            )
+                    val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
+                    val maxAttempts = if (isCameraAp) CAMERA_AP_CONNECT_ATTEMPTS else 1
+                    var lastFailureDetail: String? = null
+                    var pairedCamera: PairedCamera? = null
+                    var attempt = 0
+                    while (pairedCamera == null && attempt < maxAttempts) {
+                        if (attempt > 0) {
+                            delay(CAMERA_AP_CONNECT_RETRY_DELAY_MILLIS)
+                        }
+                        attempt += 1
+                        phase = SavedCameraPhase.Connecting(record.displayTitle)
+                        // Prefer restore-then-pair; on the last camera-AP attempt after a
+                        // handshake rejection, force first-time pairing so a forgotten
+                        // camera-side profile can be recreated without wiping the phone.
+                        val useFirstTimePairing =
+                            isCameraAp &&
+                                attempt == maxAttempts &&
+                                lastFailureDetail?.let { detail ->
+                                    val lower = detail.lowercase()
+                                    lower.contains("rejectedinitiator") ||
+                                        (lower.contains("rejected") && lower.contains("handshake"))
+                                } == true
+                        val attemptSession =
+                            session
+                                ?: if (useFirstTimePairing) {
+                                    environment.createFirstTimePairingSession(host)
+                                } else {
+                                    environment.createSession(host)
+                                }
+                        session = attemptSession
+                        var pairingWasConfirmed = false
+                        var pairingPin: String? = null
+                        var failureDetail: String? = null
+                        val progressWatcher =
+                            launch(start = CoroutineStart.UNDISPATCHED) {
+                                attemptSession.connectionProgress.collect { progress ->
+                                    when (progress.phase) {
+                                        CameraConnectionPhase.PAIRING ->
+                                            phase = SavedCameraPhase.Pairing(record.displayTitle)
+                                        CameraConnectionPhase.CONFIRM_ON_CAMERA -> {
+                                            pairingWasConfirmed = true
+                                            pairingPin = progress.detail.ifBlank { null }
+                                            phase =
+                                                SavedCameraPhase.ConfirmOnCamera(
+                                                    record.displayTitle,
+                                                    pairingPin,
+                                                )
+                                        }
+                                        CameraConnectionPhase.FAILED ->
+                                            failureDetail = progress.detail.ifBlank { null }
+                                        else -> Unit
                                     }
-                                    else -> Unit
                                 }
                             }
-                        }
-                    val pairedCamera =
                         try {
-                            activeSession.connect()
-                            val connected = activeSession.state.value as? CameraSessionState.Connected
-                            if (pairingWasConfirmed) {
-                                // A saved profile was rejected and Nikon accepted a fresh
-                                // pairing request. Mirror iOS: never hand this temporary
-                                // session to the monitor; wait for the body confirmation and
-                                // reconnect with the newly restored profile instead.
-                                phase = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, pairingPin)
-                                withContext(NonCancellable) { activeSession.disconnect() }
-                                reconnectAfterNikonPairing(
-                                    record.copy(
-                                        host = host,
-                                        cameraName =
-                                            connected?.identity?.name ?: record.cameraName,
-                                        lastSeenAtEpochMillis = System.currentTimeMillis(),
-                                    ),
-                                )
-                            } else {
-                                connected?.let {
-                                    PairedCamera(
-                                        session = activeSession,
-                                        savedCamera =
-                                            record.copy(
-                                                host = host,
-                                                cameraName = it.identity.name,
-                                                lastSeenAtEpochMillis = System.currentTimeMillis(),
-                                            ),
+                            attemptSession.connect()
+                            val connected =
+                                attemptSession.state.value as? CameraSessionState.Connected
+                            pairedCamera =
+                                if (pairingWasConfirmed) {
+                                    // A saved profile was rejected and Nikon accepted a fresh
+                                    // pairing request. Mirror iOS: never hand this temporary
+                                    // session to the monitor; wait for the body confirmation and
+                                    // reconnect with the newly restored profile instead.
+                                    phase =
+                                        SavedCameraPhase.ConfirmOnCamera(
+                                            record.displayTitle,
+                                            pairingPin,
+                                        )
+                                    withContext(NonCancellable) { attemptSession.disconnect() }
+                                    session = null
+                                    reconnectAfterNikonPairing(
+                                        record.copy(
+                                            host = host,
+                                            cameraName =
+                                                connected?.identity?.name ?: record.cameraName,
+                                            lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                        ),
+                                        confirmPin = pairingPin,
                                     )
+                                } else {
+                                    connected?.let {
+                                        PairedCamera(
+                                            session = attemptSession,
+                                            savedCamera =
+                                                record.copy(
+                                                    host = host,
+                                                    cameraName = it.identity.name,
+                                                    lastSeenAtEpochMillis =
+                                                        System.currentTimeMillis(),
+                                                ),
+                                        )
+                                    }
                                 }
+                            if (pairedCamera == null) {
+                                lastFailureDetail =
+                                    failureDetail
+                                        ?: attemptSession.connectionProgress.value.detail
+                                            .takeIf { it.isNotBlank() }
+                                withContext(NonCancellable) { attemptSession.disconnect() }
+                                session = null
                             }
                         } finally {
                             progressWatcher.cancel()
                         }
+                    }
                     if (pairedCamera == null) {
                         phase =
                             SavedCameraPhase.Error(
-                                "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
+                                friendlyCameraConnectionFailure(
+                                    lastFailureDetail
+                                        ?: "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
+                                ),
                             )
                         return@launch
                     }
@@ -412,7 +486,9 @@ public fun SavedCamerasExperience(
                 } catch (_: Exception) {
                     phase =
                         SavedCameraPhase.Error(
-                            "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
+                            friendlyCameraConnectionFailure(
+                                "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
+                            ),
                         )
                 } finally {
                     if (!handoffSucceeded) {
@@ -425,6 +501,53 @@ public fun SavedCamerasExperience(
                     }
                 }
             }
+    }
+
+    /**
+     * Operator tapped Connect on a saved card. Camera-AP profiles stage a
+     * Ready-to-join confirm (SSID + Connect) so we explicitly prompt the join
+     * before issuing Android's switch-network dialog — previously reconnect
+     * jumped straight into Joining and only said "Tap Connect when Android
+     * asks" without an in-app join step when the system UI never appeared.
+     * Hotspot and USB go straight into the connect work.
+     */
+    fun reconnect(record: SavedCameraRecord, explicit: Boolean = true) {
+        if (phase !is SavedCameraPhase.Idle && phase !is SavedCameraPhase.Error) return
+        if (explicit && record.transport == SavedCameraTransport.USB_C) {
+            onUsbAutoReconnectSuppressionCleared(record.host)
+        }
+        handedOff.value = false
+        if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+            val ssid = record.wifiSsid
+            if (ssid.isNullOrBlank()) {
+                phase =
+                    SavedCameraPhase.Error(
+                        "This camera needs its Wi‑Fi network name. Pair it again to refresh the profile.",
+                    )
+                return
+            }
+            val key = environment.credentials.passphrase(ssid)
+            if (key == null) {
+                phase =
+                    SavedCameraPhase.Error(
+                        "The Wi‑Fi key for $ssid is not available on this phone. Pair again to save it.",
+                    )
+                return
+            }
+            phase = SavedCameraPhase.ReadyToJoin(record = record, ssid = ssid, key = key)
+            return
+        }
+        beginReconnectWork(record, cameraApSsid = null, cameraApKey = null)
+    }
+
+    /** Confirm Ready-to-join and issue the camera-AP join + session connect. */
+    fun confirmCameraApJoin() {
+        val staged = phase as? SavedCameraPhase.ReadyToJoin ?: return
+        beginReconnectWork(
+            record = staged.record,
+            cameraApSsid = staged.ssid,
+            cameraApKey = staged.key,
+        )
     }
 
     fun cancelWork() {
@@ -480,6 +603,7 @@ public fun SavedCamerasExperience(
     val busy = phase.isBusy()
     val statusTitle =
         when (phase) {
+            is SavedCameraPhase.ReadyToJoin -> stringResource(R.string.pairing_status_ready)
             is SavedCameraPhase.Joining -> stringResource(R.string.pairing_status_joining)
             is SavedCameraPhase.Connecting -> stringResource(R.string.pairing_status_connecting)
             is SavedCameraPhase.Pairing -> stringResource(R.string.pairing_status_pairing)
@@ -523,9 +647,7 @@ public fun SavedCamerasExperience(
                             discoveredCameras = discoveredCameras,
                             usbCameras = usbCameras,
                             phase = phase,
-                            cachedMediaCameraIDs = cachedMediaCameraIDs,
                             onConnect = ::reconnect,
-                            onOpenCachedMedia = onOpenCachedMedia,
                             onRename = { record ->
                                 renameTarget = record
                                 renameDraft = record.customName.orEmpty()
@@ -556,9 +678,7 @@ public fun SavedCamerasExperience(
                                 discoveredCameras = discoveredCameras,
                                 usbCameras = usbCameras,
                                 phase = phase,
-                                cachedMediaCameraIDs = cachedMediaCameraIDs,
                                 onConnect = ::reconnect,
-                                onOpenCachedMedia = onOpenCachedMedia,
                                 onRename = { record ->
                                     renameTarget = record
                                     renameDraft = record.customName.orEmpty()
@@ -578,6 +698,10 @@ public fun SavedCamerasExperience(
         val popupPhase =
             when (val active = phase) {
                 SavedCameraPhase.Idle -> null
+                is SavedCameraPhase.ReadyToJoin ->
+                    // Prefer the camera AP SSID in the join prompt so the
+                    // operator knows which network Android will request.
+                    ConnectionPopupPhase.ReadyToJoin(key = null, keyFromScan = false)
                 is SavedCameraPhase.Joining -> ConnectionPopupPhase.JoiningWifi
                 is SavedCameraPhase.Connecting -> ConnectionPopupPhase.Handshaking
                 is SavedCameraPhase.Pairing -> ConnectionPopupPhase.Pairing
@@ -591,6 +715,7 @@ public fun SavedCamerasExperience(
                 deviceName =
                     connectionDisplayName(
                         when (val active = phase) {
+                            is SavedCameraPhase.ReadyToJoin -> active.ssid
                             is SavedCameraPhase.Joining -> active.title
                             is SavedCameraPhase.Connecting -> active.title
                             is SavedCameraPhase.Pairing -> active.title
@@ -600,7 +725,7 @@ public fun SavedCamerasExperience(
                         },
                     ),
                 phase = popup,
-                onConnect = {},
+                onConnect = ::confirmCameraApJoin,
                 onDismiss = ::cancelWork,
             )
         }
@@ -725,9 +850,7 @@ private fun SavedCameraList(
     discoveredCameras: List<DiscoveredCamera>,
     usbCameras: List<UsbPtpCamera>,
     phase: SavedCameraPhase,
-    cachedMediaCameraIDs: Set<String>,
     onConnect: (SavedCameraRecord) -> Unit,
-    onOpenCachedMedia: (SavedCameraRecord) -> Unit,
     onRename: (SavedCameraRecord) -> Unit,
     onRemove: (SavedCameraRecord) -> Unit,
     fillAvailableHeight: Boolean,
@@ -789,10 +912,8 @@ private fun SavedCameraList(
                     SavedCameraRow(
                         record = record,
                         isDiscovered = isDiscovered,
-                        hasCachedMedia = record.id in cachedMediaCameraIDs,
                         enabled = !busy,
                         onConnect = { onConnect(record) },
-                        onOpenCachedMedia = { onOpenCachedMedia(record) },
                         onRename = { onRename(record) },
                         onRemove = { onRemove(record) },
                     )
@@ -806,10 +927,8 @@ private fun SavedCameraList(
 internal fun SavedCameraRow(
     record: SavedCameraRecord,
     isDiscovered: Boolean,
-    hasCachedMedia: Boolean,
     enabled: Boolean,
     onConnect: () -> Unit,
-    onOpenCachedMedia: () -> Unit,
     onRename: () -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -905,13 +1024,6 @@ internal fun SavedCameraRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (hasCachedMedia && enabled) {
-            StartupOutlineButton(
-                text = stringResource(R.string.saved_media_library),
-                onClick = onOpenCachedMedia,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
     }
 }
 

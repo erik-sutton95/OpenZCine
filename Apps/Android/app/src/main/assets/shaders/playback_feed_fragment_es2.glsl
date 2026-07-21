@@ -32,8 +32,7 @@ varying vec2 vTexSamplingCoord;
 
 const vec3 LUMA_709 = vec3(0.2126, 0.7152, 0.0722);
 const float ATLAS_COLUMNS = 8.0;
-const float DEFOCUS_REJECTION = 1.35;
-const float PEAKING_EDGE_INSET = 10.4;
+const float PEAKING_EDGE_INSET = 6.0;
 const float ZEBRA_GAIN = 40.0;
 const float ZEBRA_HALF_WIDTH = 5.0 / 255.0;
 const float STRIPE_PITCH = 14.14;
@@ -168,23 +167,17 @@ float deLogGrey(vec2 coordinate) {
     );
 }
 
-float gradientMagnitude(vec2 coordinate, float sourceRadius) {
-    vec2 delta = vec2(sourceRadius) / max(uSourceSize, vec2(1.0));
-    float topLeft = deLogGrey(coordinate + vec2(-delta.x, -delta.y));
-    float topCenter = deLogGrey(coordinate + vec2(0.0, -delta.y));
-    float topRight = deLogGrey(coordinate + vec2(delta.x, -delta.y));
-    float middleLeft = deLogGrey(coordinate + vec2(-delta.x, 0.0));
-    float middleRight = deLogGrey(coordinate + vec2(delta.x, 0.0));
-    float bottomLeft = deLogGrey(coordinate + vec2(-delta.x, delta.y));
-    float bottomCenter = deLogGrey(coordinate + vec2(0.0, delta.y));
-    float bottomRight = deLogGrey(coordinate + vec2(delta.x, delta.y));
-    float gx =
-        -topLeft - 2.0 * middleLeft - bottomLeft
-        + topRight + 2.0 * middleRight + bottomRight;
-    float gy =
-        -topLeft - 2.0 * topCenter - topRight
-        + bottomLeft + 2.0 * bottomCenter + bottomRight;
-    return length(vec2(gx, gy)) / (8.0 * sourceRadius);
+// Thin peaking: pure 1 px central differences (no 3×3 Sobel / pre-blur —
+// those fatten the ridge). Strict threshold + minimal AA.
+// Wire: uPeakingThreshold = sensitivity×0.06; uPeakingRamp must stay *used*
+// or ES2 strips it and Media3 NPE fail-closes the whole assist path.
+float edgeMagnitude(vec2 coordinate) {
+    vec2 px = 1.0 / max(uSourceSize, vec2(1.0));
+    float l = deLogGrey(coordinate - vec2(px.x, 0.0));
+    float r = deLogGrey(coordinate + vec2(px.x, 0.0));
+    float u = deLogGrey(coordinate - vec2(0.0, px.y));
+    float d = deLogGrey(coordinate + vec2(0.0, px.y));
+    return length(vec2(r - l, d - u)) * 0.5;
 }
 
 void main() {
@@ -203,15 +196,14 @@ void main() {
             && vTexSamplingCoord.x < 1.0 - inset.x
             && vTexSamplingCoord.y < 1.0 - inset.y
         ) {
-            float fine = gradientMagnitude(vTexSamplingCoord, 0.8);
-            float coarse = gradientMagnitude(vTexSamplingCoord, 2.6);
-            float response = fine - DEFOCUS_REJECTION * coarse;
-            float mask = clamp(
-                (response - uPeakingThreshold) * uPeakingRamp,
-                0.0,
-                1.0
-            );
-            color = mix(color, uPeakingColor, mask);
+            float g = edgeMagnitude(vTexSamplingCoord);
+            float thr = clamp(uPeakingThreshold * 30.0, 0.045, 0.14);
+            // Very narrow AA — almost a hard edge (ramp kept live for the linker).
+            float aa = thr * (0.06 + 0.04 * clamp(160.0 / max(uPeakingRamp, 1.0), 0.5, 1.5));
+            float core = smoothstep(thr, thr + aa, g);
+            float under = smoothstep(thr - aa * 0.35, thr, g) * (1.0 - core);
+            color = mix(color, vec3(0.04, 0.04, 0.05), under * 0.28);
+            color = mix(color, uPeakingColor, core);
         }
     }
 

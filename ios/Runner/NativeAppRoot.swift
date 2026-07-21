@@ -2118,8 +2118,8 @@ final class NativeAppModel {
         }
         connection = .preparingLiveView
         connectionPhase = .preparingLiveView
-        connectionMessage =
-            "Opening live view…"
+        // Matches Android: fill AF / lens / subject / audio before the feed opens.
+        connectionMessage = "Reading camera settings…"
         startLiveView(session: session)
     }
 
@@ -3142,6 +3142,16 @@ final class NativeAppModel {
         liveViewTask?.cancel()
         resetCameraPropertyState()
         liveViewTask = Task {
+            // Android parity: one full property + descriptor burst before the first
+            // StartLiveView so AF mode / lens / subject land immediately and the
+            // command channel is not shared with GetLiveViewImageEx during fill-in.
+            // A brief semi-stable (or held) feed for 1–3 s is preferred to 20–30 s of
+            // drip-fed one-property-per-frame polls.
+            connectionMessage = "Reading camera settings…"
+            await bootstrapCameraProperties(session: session)
+            guard !Task.isCancelled, cameraSession === session else { return }
+            connectionMessage = "Opening live view…"
+
             // Jittered exponential backoff (≈1s → cap 8s) so repeated stalls against a flaky AP don't
             // resync into a restart burst; the random spread de-correlates successive attempts.
             let backoff = ReconnectBackoff(
@@ -3561,7 +3571,7 @@ final class NativeAppModel {
             consecutiveBadLiveFrames = 0
             frameRate.recordFrame(at: CACurrentMediaTime())
             measuredLiveViewFPS = frameRate.displayFPS
-            liveTimecode = firstFrame.timecode
+            applyLiveViewHeaderTimecode(firstFrame.timecode)
             liveFPS = frameRate.formatted
             cameraState = cameraState.updating(phoneBatteryPercent: currentPhoneBatteryPercent)
             connectionMessage = "Live view streaming from \(session.identity.displayName)."
@@ -3684,7 +3694,7 @@ final class NativeAppModel {
                     } else if scopeAssist != .empty {
                         clearScopeAssist()
                     }
-                    if frame.timecode != liveTimecode { liveTimecode = frame.timecode }
+                    applyLiveViewHeaderTimecode(frame.timecode)
                     let fpsLabel = frameRate.formatted
                     if fpsLabel != liveFPS { liveFPS = fpsLabel }
                     await runLiveViewControlSafePoint(
@@ -4351,6 +4361,38 @@ final class NativeAppModel {
         return false
     }
 
+    /// Constant camera-header TC sync — every live-view frame updates the hero readout.
+    private func applyLiveViewHeaderTimecode(_ timecode: Timecode) {
+        if timecode != liveTimecode { liveTimecode = timecode }
+    }
+
+    /// Full live-order property + storage + descriptor burst (Android bootstrap parity).
+    /// Call once after connect / before the first `StartLiveView`.
+    private func bootstrapCameraProperties(session: NativeCameraSession) async {
+        logConnection("property-bootstrap: starting full live-order burst")
+        for property in PTPPropertyCode.liveMonitorPollOrder {
+            guard !Task.isCancelled, cameraSession === session else { return }
+            await readAndApplyCameraProperty(session: session, property: property)
+        }
+        propertyPollIndex = 0
+        guard !Task.isCancelled, cameraSession === session else { return }
+        // Force the slow maintenance groups immediately (don't wait for 60 s cadence).
+        lastStorageRefreshAt = nil
+        lastDescriptorRefreshAt = nil
+        await refreshStorageInfo(session: session)
+        lastStorageRefreshAt = Date()
+        guard !Task.isCancelled, cameraSession === session else { return }
+        await refreshLensApertures(session: session)
+        await refreshScreenModes(session: session)
+        await refreshFileTypeModes(session: session)
+        await refreshControlOptions(session: session)
+        lastDescriptorRefreshAt = Date()
+        publishCameraDisplayState()
+        syncFocusFromSnapshot()
+        syncShutterLockFromSnapshot()
+        logConnection("property-bootstrap: complete")
+    }
+
     private func pollNextCameraProperty(session: NativeCameraSession) async {
         let pollOrder = PTPPropertyCode.monitorPollOrder(isRecording: isRecording)
         guard !pollOrder.isEmpty else { return }
@@ -4363,47 +4405,55 @@ final class NativeAppModel {
         } else if property == .movieBaseISO, shouldSuppressBaseISOPoll() {
             // Same for dual-base ISO — keep the picker tab on the circuit the operator chose.
         } else {
-            do {
-                let data = try await session.readCameraProperty(property)
-                if Self.commandTileDiagnosticProps.contains(property),
-                    commandTileDiagnosticLogged.insert(property).inserted
-                {
-                    let hex = data.map { String(format: "%02x", $0) }.joined()
-                    logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
-                }
-                cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                    property: property, data: data)
-                publishCameraDisplayState()
-                syncFocusFromSnapshot()
-                syncShutterLockFromSnapshot()
-                if property == .warningStatus {
-                    applyThermalStreamStepDownIfNeeded()
-                }
-                if property == .movieShutterMode,
-                    let pending = pendingShutterMode,
-                    cameraPropertySnapshot.shutterMode == pending
-                {
-                    pendingShutterMode = nil
-                    await refreshShutterModeDependentOptions(
-                        session: session, mode: pending)
-                }
-                if property == .movieTVLockSetting,
-                    let pending = pendingShutterLockState,
-                    cameraPropertySnapshot.shutterLocked == !pending
-                {
-                    pendingShutterLockState = nil
-                }
-            } catch {
-                // Some properties are mode/lens dependent — keep the last known values. Log the
-                // first command-tile failure so an on-hardware "—" is diagnosable from Console.
-                if Self.commandTileDiagnosticProps.contains(property),
-                    commandTileDiagnosticLogged.insert(property).inserted
-                {
-                    logConnection("cmd-tile \(property) read failed: \(error)")
-                }
-            }
+            await readAndApplyCameraProperty(session: session, property: property)
         }
         await refreshCameraMaintenanceIfDue(session: session)
+    }
+
+    /// One property read applied into the snapshot and derived monitor state.
+    private func readAndApplyCameraProperty(
+        session: NativeCameraSession,
+        property: PTPPropertyCode
+    ) async {
+        do {
+            let data = try await session.readCameraProperty(property)
+            if Self.commandTileDiagnosticProps.contains(property),
+                commandTileDiagnosticLogged.insert(property).inserted
+            {
+                let hex = data.map { String(format: "%02x", $0) }.joined()
+                logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
+            }
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: property, data: data)
+            publishCameraDisplayState()
+            syncFocusFromSnapshot()
+            syncShutterLockFromSnapshot()
+            if property == .warningStatus {
+                applyThermalStreamStepDownIfNeeded()
+            }
+            if property == .movieShutterMode,
+                let pending = pendingShutterMode,
+                cameraPropertySnapshot.shutterMode == pending
+            {
+                pendingShutterMode = nil
+                await refreshShutterModeDependentOptions(
+                    session: session, mode: pending)
+            }
+            if property == .movieTVLockSetting,
+                let pending = pendingShutterLockState,
+                cameraPropertySnapshot.shutterLocked == !pending
+            {
+                pendingShutterLockState = nil
+            }
+        } catch {
+            // Some properties are mode/lens dependent — keep the last known values. Log the
+            // first command-tile failure so an on-hardware "—" is diagnosable from Console.
+            if Self.commandTileDiagnosticProps.contains(property),
+                commandTileDiagnosticLogged.insert(property).inserted
+            {
+                logConnection("cmd-tile \(property) read failed: \(error)")
+            }
+        }
     }
 
     /// Refreshes slow-changing descriptors on a conservative cadence. The first non-recording poll

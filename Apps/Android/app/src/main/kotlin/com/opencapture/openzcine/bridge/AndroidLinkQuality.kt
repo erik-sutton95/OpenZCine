@@ -210,6 +210,8 @@ public class AndroidLinkHealthMonitor internal constructor(
     private var recentCommandFailures = 0
     private var roundTripMilliseconds: Double? = null
     private var resetBars = true
+    /** Last JNI health score time — throttles score() off the per-frame hot path. */
+    private var lastScoreNanos: Long = 0L
 
     /** Replaces connection truth from the real session state flow. */
     internal fun updateSession(
@@ -261,7 +263,19 @@ public class AndroidLinkHealthMonitor internal constructor(
         lastGoodFrameNanos = timestamp
         recentFrameTimes.addLast(timestamp)
         trimOldFrames(timestamp)
-        refresh(nowNanos = timestamp)
+        // Cheap timestamp bookkeeping every frame; JNI health scoring is rate-limited.
+        // Per-frame score() was a main-thread hitch (~every 20–30 frames under load).
+        // Still score immediately for the first two frames so FPS / STREAMING
+        // presentation arms without waiting a full score interval.
+        val needsColdStartScore = recentFrameTimes.size <= 2
+        if (
+            needsColdStartScore ||
+                lastScoreNanos == 0L ||
+                timestamp - lastScoreNanos >= SCORE_INTERVAL_NANOS
+        ) {
+            lastScoreNanos = timestamp
+            refresh(nowNanos = timestamp)
+        }
     }
 
     /** Records only an observed command-channel transport failure, never a guessed radio event. */
@@ -357,5 +371,7 @@ public class AndroidLinkHealthMonitor internal constructor(
     private companion object {
         const val FPS_WINDOW_NANOS = SwiftLiveViewRequest.NANOS_PER_SECOND
         const val STALE_STREAM_NANOS = 1_500_000_000L
+        /** Score at most ~4 Hz from frame arrivals; the 1 s UI loop still refreshes. */
+        const val SCORE_INTERVAL_NANOS = SwiftLiveViewRequest.NANOS_PER_SECOND / 4L
     }
 }

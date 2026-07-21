@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -181,14 +182,22 @@ internal data class CommandTilePresentation(
     val value: String,
     val request: CommandControlRequest? = null,
     val unavailableReason: String? = null,
+    /** Accent-tinted value (iOS `.cmd-stile.amber`) — Sens when manual, Atten when ON. */
+    val amber: Boolean = false,
+    /** Dimmed value (iOS `.cmd-stile.muted`) — Picture Profile placeholder. */
+    val muted: Boolean = false,
 )
 
-/** A small section of the right-hand Image / Focus / Audio command column. */
+/**
+ * Sections of the iOS command side column (Image / Focus / Audio / Monitor).
+ * [EXPOSURE] is retained only for capture-bar projection — it is not shown on DISP 3.
+ */
 internal enum class CommandSideSectionKind {
     IMAGE,
     EXPOSURE,
     FOCUS,
     AUDIO,
+    MONITOR,
 }
 
 internal data class CommandSideSectionPresentation(
@@ -200,7 +209,13 @@ internal data class CommandSideSectionPresentation(
 /** All display data needed by the dashboard, projected from the typed session snapshot. */
 internal data class CommandDashboardPresentation(
     val tiles: List<CommandTilePresentation>,
+    /** Visible side column only — Image / Focus / Audio / Monitor (iOS CommandSideColumn). */
     val sideSections: List<CommandSideSectionPresentation>,
+    /**
+     * Capture-bar exposure helpers (Base ISO, Shutter Mode/Lock, WB Tint). Not rendered on
+     * the DISP 3 side column (iOS removed that section from the command dashboard).
+     */
+    val captureExposureCells: List<CommandTilePresentation> = emptyList(),
     val temperature: String,
     val storage: String,
     val camera: String,
@@ -209,11 +224,49 @@ internal data class CommandDashboardPresentation(
     val refreshSummary: String,
 )
 
+/**
+ * iOS [CmdRow] packing: pairs of two, leftover single cell spans the full width
+ * (prototype `.span2`). Focus/Audio rows are ordered to match iOS CommandSideColumn.
+ */
+internal fun commandSideSectionRows(
+    section: CommandSideSectionPresentation,
+): List<List<CommandTilePresentation>> {
+    val cells = section.cells
+    return when (section.kind) {
+        CommandSideSectionKind.IMAGE ->
+            // Tone | Picture Profile
+            listOf(cells.take(2)).filter { it.isNotEmpty() }
+        CommandSideSectionKind.FOCUS ->
+            // Mode | Area, then Subject full-width
+            buildList {
+                if (cells.size >= 2) add(cells.take(2))
+                else if (cells.isNotEmpty()) add(cells.take(1))
+                if (cells.size >= 3) add(listOf(cells[2]))
+            }
+        CommandSideSectionKind.AUDIO ->
+            // Sens | 32-bit Float ; Input | Wind ; Atten full-width
+            // cells order: Sens, 32-bit, Input, Wind, Atten
+            buildList {
+                if (cells.size >= 2) add(cells.take(2))
+                if (cells.size >= 4) add(cells.subList(2, 4))
+                else if (cells.size == 3) add(listOf(cells[2]))
+                if (cells.size >= 5) add(listOf(cells[4]))
+            }
+        CommandSideSectionKind.MONITOR ->
+            // Grid full-width
+            listOf(cells.take(1)).filter { it.isNotEmpty() }
+        CommandSideSectionKind.EXPOSURE ->
+            // Not shown on DISP 3; keep a safe chunking if ever rendered.
+            cells.chunked(2)
+    }
+}
+
 private const val COMMAND_GRID_COLUMNS = 3
 private const val COMMAND_GRID_SPACING_DP = 9
 private const val COMMAND_REORDER_CLICK_SUPPRESSION_MS = 150L
 private const val COMMAND_PORTRAIT_GRID_ROW_HEIGHT_DP = 76
-private val COMMAND_COMPACT_SIDE_TILE_HEIGHT = 36.dp
+/** iOS CommandSmallTile minHeight — landscape and portrait side tiles. */
+private val COMMAND_SIDE_TILE_MIN_HEIGHT = 42.dp
 private val COMMAND_PORTRAIT_SIDE_TILE_HEIGHT = 44.dp
 
 /** Returns the number of rows required for the dashboard's primary control grid. */
@@ -609,6 +662,11 @@ internal fun commandDashboardPresentation(
                 blockedReason = strings.resolve(R.string.command_reason_focus_subjects),
             ),
         )
+    // iOS commandMicrophoneUsesManualLevel — amber when Sens is not Auto.
+    val audioSensRaw =
+        snapshot.audioSensitivity.monitorValueOrNull()
+            ?: snapshot.microphoneSensitivity.monitorValueOrNull()
+    val audioSensManual = audioSensRaw != null && !audioSensRaw.equals("Auto", ignoreCase = true)
     val audioSensitivityCell =
         if (snapshot.audioSensitivity.monitorValueOrNull() != null) {
             advertisedEditable(
@@ -616,23 +674,44 @@ internal fun commandDashboardPresentation(
                 value = snapshot.audioSensitivity,
                 control = CameraControl.AUDIO_SENSITIVITY,
                 blockedReason = strings.resolve(R.string.command_reason_audio_sensitivity),
-            )
+            ).copy(amber = audioSensManual)
         } else {
             readOnly(
                 title = strings.resolve(R.string.command_title_sensitivity_short),
                 value = snapshot.microphoneSensitivity,
                 reason = strings.resolve(R.string.command_reason_microphone_read_only),
-            )
+            ).copy(amber = audioSensManual)
         }
+    // iOS commandMicrophoneInputLabel: Microphone → MIC, Line → LINE (display only).
+    val audioInputDisplay =
+        when (snapshot.audioInput.monitorValueOrNull()) {
+            "Line" -> "LINE"
+            "Microphone" -> "MIC"
+            else -> snapshot.audioInput
+        }
+    val audioInputCell =
+        advertisedEditable(
+            title = strings.resolve(R.string.command_title_input),
+            value = snapshot.audioInput,
+            control = CameraControl.AUDIO_INPUT,
+            blockedReason = strings.resolve(R.string.command_reason_audio_input),
+        ).let { cell ->
+            val display = audioInputDisplay.monitorValueOrNull()
+            if (display != null && display != cell.value) cell.copy(value = display) else cell
+        }
+    val attenuatorOn =
+        snapshot.inputAttenuator.monitorValueOrNull()?.equals("ON", ignoreCase = true) == true
+    // iOS CommandSideColumn Audio order: Sens | 32-bit Float ; Input | Wind ; Atten
     val audioCells =
         listOf(
             audioSensitivityCell,
             advertisedEditable(
-                title = strings.resolve(R.string.command_title_input),
-                value = snapshot.audioInput,
-                control = CameraControl.AUDIO_INPUT,
-                blockedReason = strings.resolve(R.string.command_reason_audio_input),
+                title = strings.resolve(R.string.command_title_32_bit_float),
+                value = snapshot.audio32BitFloat,
+                control = CameraControl.AUDIO_32_BIT_FLOAT,
+                blockedReason = strings.resolve(R.string.command_reason_32_bit_float),
             ),
+            audioInputCell,
             advertisedEditable(
                 title = strings.resolve(R.string.command_title_wind),
                 value = snapshot.windFilter,
@@ -644,16 +723,11 @@ internal fun commandDashboardPresentation(
                 value = snapshot.inputAttenuator,
                 control = CameraControl.ATTENUATOR,
                 blockedReason = strings.resolve(R.string.command_reason_attenuator),
-            ),
-            advertisedEditable(
-                title = strings.resolve(R.string.command_title_32_bit_float),
-                value = snapshot.audio32BitFloat,
-                control = CameraControl.AUDIO_32_BIT_FLOAT,
-                blockedReason = strings.resolve(R.string.command_reason_32_bit_float),
-            ),
+            ).copy(amber = attenuatorOn),
         )
 
-    val exposureCells =
+    // Capture-bar only — iOS does not show these on the command side column.
+    val captureExposureCells =
         listOf(
             advertisedEditable(
                 title = strings.resolve(R.string.command_title_base_iso),
@@ -697,40 +771,28 @@ internal fun commandDashboardPresentation(
             ?: "—"
     return CommandDashboardPresentation(
         tiles = normalizeCommandTileOrder(tileOrder).mapNotNull(tilesByKind::get),
+        // iOS CommandSideColumn: Image → Focus → Audio → Monitor (no Exposure / VR side tiles).
         sideSections =
             listOf(
                 CommandSideSectionPresentation(
                     kind = CommandSideSectionKind.IMAGE,
                     title = strings.resolve(R.string.command_section_image),
-                    cells = listOf(
-                        readOnly(
-                            title = strings.resolve(R.string.command_title_grid),
-                            value = snapshot.cameraGrid,
-                            reason = strings.resolve(R.string.command_reason_grid_read_only),
+                    cells =
+                        listOf(
+                            readOnly(
+                                title = strings.resolve(R.string.command_title_tone),
+                                value = snapshot.tone,
+                                reason = strings.resolve(R.string.command_reason_tone),
+                            ),
+                            // iOS Picture Profile placeholder (muted, no camera write path).
+                            CommandTilePresentation(
+                                title = strings.resolve(R.string.command_title_picture_profile),
+                                value = "—",
+                                unavailableReason =
+                                    strings.resolve(R.string.command_reason_picture_profile),
+                                muted = true,
+                            ),
                         ),
-                        readOnly(
-                            title = strings.resolve(R.string.command_title_tone),
-                            value = snapshot.tone,
-                            reason = strings.resolve(R.string.command_reason_tone),
-                        ),
-                        advertisedEditable(
-                            title = strings.resolve(R.string.command_title_vr),
-                            value = snapshot.vibrationReduction,
-                            control = CameraControl.VIBRATION_REDUCTION,
-                            blockedReason = strings.resolve(R.string.command_reason_movie_vr),
-                        ),
-                        advertisedEditable(
-                            title = strings.resolve(R.string.command_title_evr),
-                            value = snapshot.electronicVr,
-                            control = CameraControl.ELECTRONIC_VR,
-                            blockedReason = strings.resolve(R.string.command_reason_evr),
-                        ),
-                    ),
-                ),
-                CommandSideSectionPresentation(
-                    CommandSideSectionKind.EXPOSURE,
-                    strings.resolve(R.string.command_section_exposure),
-                    exposureCells,
                 ),
                 CommandSideSectionPresentation(
                     CommandSideSectionKind.FOCUS,
@@ -742,7 +804,20 @@ internal fun commandDashboardPresentation(
                     strings.resolve(R.string.command_section_audio),
                     audioCells,
                 ),
+                CommandSideSectionPresentation(
+                    kind = CommandSideSectionKind.MONITOR,
+                    title = strings.resolve(R.string.command_section_monitor),
+                    cells =
+                        listOf(
+                            readOnly(
+                                title = strings.resolve(R.string.command_title_grid),
+                                value = snapshot.cameraGrid,
+                                reason = strings.resolve(R.string.command_reason_grid_read_only),
+                            ),
+                        ),
+                ),
             ),
+        captureExposureCells = captureExposureCells,
         temperature = commandTemperature(snapshot.temperatureStatus, strings),
         storage = monitorStorageLabel(snapshot.storage),
         camera = camera,
@@ -955,7 +1030,8 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
 
 /**
  * The DISP 3 command dashboard: camera-backed health and primary controls at
- * left, with an iOS-shaped Image / Focus / Audio companion column at right.
+ * left, with an iOS-shaped Image / Focus / Audio / Monitor companion column at
+ * right (`ios/Runner/MonitorPanels.swift` CommandMonitor).
  */
 @Composable
 internal fun CommandDashboard(
@@ -968,6 +1044,8 @@ internal fun CommandDashboard(
     onOpenControl: (CommandControlRequest) -> Unit,
     onMoveTile: (CommandTileKind, Int) -> Unit,
     onReorderStarted: () -> Unit = {},
+    liveFps: String = presentation.frameRate,
+    signalBars: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -983,13 +1061,18 @@ internal fun CommandDashboard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RecordChip(recording)
+                // iOS CommandTimecodeReadout: monospaced 60pt.
                 RetainedCameraTimecodeReadout(
                     retention = timecodeRetention,
                     sessionState = sessionState,
-                    sizeSp = 44f,
+                    sizeSp = 60f,
                 )
             }
-            CommandHealthStrip(presentation)
+            CommandHealthStrip(
+                presentation = presentation,
+                liveFps = liveFps,
+                signalBars = signalBars,
+            )
             CommandGrid(
                 tiles = presentation.tiles,
                 controlsEnabled = controlsEnabled,
@@ -1000,6 +1083,7 @@ internal fun CommandDashboard(
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
         }
+        // iOS sideWidth = max(160, width * 0.27) ≈ 0.85fr of the 2.35+0.85 split.
         CommandSideColumn(
             sections = presentation.sideSections,
             controlsEnabled = controlsEnabled,
@@ -1082,29 +1166,51 @@ internal fun CommandTimecode(
     CameraTimecodeReadout(timecode = timecode, sizeSp = sizeSp, modifier = modifier)
 }
 
-/** Camera-derived Temp / Storage / Camera / Lens / Frame-rate health blocks. */
+/**
+ * Camera-derived Temp / Storage / Camera / Lens strip + live FPS chip
+ * (iOS `CommandHealthStrip` — no "Read" block; FPS lives in [FpsChip]).
+ */
 @Composable
-private fun CommandHealthStrip(presentation: CommandDashboardPresentation) {
+private fun CommandHealthStrip(
+    presentation: CommandDashboardPresentation,
+    liveFps: String,
+    signalBars: Int,
+) {
+    val okLabel = stringResource(R.string.temperature_ok)
     Row(
         Modifier
             .fillMaxWidth()
+            .clip(ChromeShape)
             .background(LiveDesign.surface, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         CommandStatusBlock(
             stringResource(R.string.command_health_temp),
             presentation.temperature,
-            Modifier.weight(0.65f),
-            good = presentation.temperature == stringResource(R.string.temperature_ok),
+            Modifier.weight(0.7f, fill = false).widthIn(min = 52.dp, max = 148.dp),
+            good = presentation.temperature == okLabel ||
+                presentation.temperature.startsWith(okLabel),
         )
-        CommandStatusBlock(stringResource(R.string.command_health_storage), presentation.storage, Modifier.weight(1.1f))
-        CommandStatusBlock(stringResource(R.string.command_health_camera), presentation.camera, Modifier.weight(1f))
-        CommandStatusBlock(stringResource(R.string.command_health_lens), presentation.lens, Modifier.weight(1.25f))
-        CommandStatusBlock(stringResource(R.string.command_health_fps), presentation.frameRate, Modifier.weight(0.65f))
-        CommandStatusBlock(stringResource(R.string.command_health_read), presentation.refreshSummary, Modifier.weight(0.8f))
+        CommandStatusBlock(
+            stringResource(R.string.command_health_storage),
+            presentation.storage,
+            Modifier.weight(1.1f).widthIn(min = 52.dp, max = 148.dp),
+        )
+        CommandStatusBlock(
+            stringResource(R.string.command_health_camera),
+            presentation.camera,
+            Modifier.weight(1f).widthIn(min = 52.dp, max = 148.dp),
+        )
+        CommandStatusBlock(
+            stringResource(R.string.command_health_lens),
+            presentation.lens,
+            Modifier.weight(1.25f).widthIn(min = 52.dp, max = 148.dp),
+        )
+        // Hold the FPS chip at its natural size (iOS fixedSize + layoutPriority).
+        FpsChip(signalBars = signalBars, fps = liveFps)
     }
 }
 
@@ -1122,13 +1228,15 @@ private fun CommandStatusBlock(
     ) {
         Text(
             label.uppercase(),
-            style = chromeStyle(8f, FontWeight.Bold),
+            // iOS CommandStatusBlock: 8.5 bold
+            style = chromeStyle(8.5f, FontWeight.Bold),
             color = LiveDesign.faint,
             maxLines = 1,
         )
         Text(
             value,
-            style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
+            // iOS: 12 medium mono
+            style = chromeStyle(12f, FontWeight.Medium, mono = true),
             color = if (good) LiveDesign.good else LiveDesign.text,
             maxLines = 1,
             overflow = TextOverflow.Clip,
@@ -1159,7 +1267,8 @@ internal fun CommandGrid(
     var suppressCameraClicksUntil by remember { mutableLongStateOf(0L) }
     val density = LocalDensity.current
     BoxWithConstraints(modifier.clipToBounds()) {
-        val rowHeight = maxOf(66.dp, (maxHeight - spacing * (rows - 1)) / rows)
+        // iOS CommandPrimaryGrid: max(44, (height - spacing * (rows-1)) / rows)
+        val rowHeight = maxOf(44.dp, (maxHeight - spacing * (rows - 1)) / rows)
         val spacingPx = with(density) { spacing.toPx() }
         val tileWidth = (maxWidth - spacing * (columns - 1)) / columns
         val tileWidthPx = with(density) { tileWidth.toPx() }
@@ -1271,11 +1380,13 @@ internal fun CommandGrid(
                             Modifier.offset { offset }
                                 .width(tileWidth)
                                 .height(rowHeight)
+                                // iOS: scaleEffect(1.06) + shadow(radius: 16, y: 8) while dragging.
                                 .graphicsLayer {
-                                    scaleX = if (dragging) 1.04f else 1f
-                                    scaleY = if (dragging) 1.04f else 1f
-                                    shadowElevation = if (dragging) 14.dp.toPx() else 0f
+                                    scaleX = if (dragging) 1.06f else 1f
+                                    scaleY = if (dragging) 1.06f else 1f
+                                    shadowElevation = if (dragging) 16.dp.toPx() else 0f
                                     shape = ChromeShape
+                                    clip = true
                                 }
                                 .zIndex(if (dragging) 1f else 0f),
                     )
@@ -1350,8 +1461,10 @@ private fun CommandTile(
                 else -> append(changeReorderDescription)
             }
         }
+    // iOS CommandTile: pad h12/v8, title 10 bold, value 24 medium mono, LiveDesign.cornerRadius.
     Column(
         modifier
+            .clip(ChromeShape)
             .background(LiveDesign.surface, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .semantics(mergeDescendants = true) {
@@ -1371,7 +1484,7 @@ private fun CommandTile(
             tile.title.uppercase(),
             style = chromeStyle(10f, FontWeight.Bold),
             color = LiveDesign.faint,
-            maxLines = 2,
+            maxLines = 1,
             overflow = TextOverflow.Clip,
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1425,7 +1538,7 @@ private fun CommandSideColumn(
     }
 }
 
-/** The shared Image / Focus / Audio section stack for both dashboard orientations. */
+/** The shared Image / Focus / Audio / Monitor section stack (iOS CommandSideColumn). */
 @Composable
 private fun CommandSecondarySections(
     sections: List<CommandSideSectionPresentation>,
@@ -1435,9 +1548,10 @@ private fun CommandSecondarySections(
     compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    // iOS CommandSideColumn VStack spacing: 4 between sections.
     Column(
         modifier,
-        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         sections.forEach { section ->
             CommandSideSection(
@@ -1508,32 +1622,38 @@ private fun CommandSideSection(
     onOpenControl: (CommandControlRequest) -> Unit,
     compact: Boolean,
 ) {
+    // iOS CommandSection: title 9.5 bold, rows VStack spacing 5, CmdRow HStack spacing 6.
     Column(
         Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
             section.title.uppercase(),
-            style = chromeStyle(if (compact) 8.5f else 9.5f, FontWeight.Bold),
+            style = chromeStyle(9.5f, FontWeight.Bold),
             color = LiveDesign.faint,
             modifier = Modifier.padding(start = 2.dp),
         )
-        section.cells.chunked(2).forEach { row ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                row.forEach { cell ->
-                    CommandSmallTile(
-                        cell = cell,
-                        controlsEnabled = controlsEnabled,
-                        pendingControl = pendingControl,
-                        onOpenControl = onOpenControl,
-                        compact = compact,
-                        modifier = Modifier.weight(1f),
-                    )
+        Column(
+            Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            commandSideSectionRows(section).forEach { row ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    row.forEach { cell ->
+                        // One tile in a row spans full width (iOS CmdRow / .span2).
+                        CommandSmallTile(
+                            cell = cell,
+                            controlsEnabled = controlsEnabled,
+                            pendingControl = pendingControl,
+                            onOpenControl = onOpenControl,
+                            compact = compact,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
-                repeat(2 - row.size) { Box(Modifier.weight(1f)) }
             }
         }
     }
@@ -1574,11 +1694,18 @@ private fun CommandSmallTile(
                 else -> append(changeDescription)
             }
         }
+    // iOS CommandSmallTile: minHeight 42, pad h10/v6, title 9 bold muted, value 15 medium mono.
+    val valueColor =
+        when {
+            cell.amber -> LiveDesign.accent
+            cell.muted -> LiveDesign.faint
+            enabled -> LiveDesign.text
+            else -> LiveDesign.muted
+        }
     Column(
         modifier
-            .height(
-                if (compact) COMMAND_COMPACT_SIDE_TILE_HEIGHT else COMMAND_PORTRAIT_SIDE_TILE_HEIGHT,
-            )
+            .heightIn(min = if (compact) COMMAND_SIDE_TILE_MIN_HEIGHT else COMMAND_PORTRAIT_SIDE_TILE_HEIGHT)
+            .clip(ChromeShape)
             .background(LiveDesign.surface, ChromeShape)
             .border(1.dp, LiveDesign.hairline, ChromeShape)
             .semantics(mergeDescendants = true) {
@@ -1590,20 +1717,20 @@ private fun CommandSmallTile(
                 onClickLabel = changeLabel,
                 onClick = { request?.let(onOpenControl) },
             )
-            .padding(horizontal = 8.dp, vertical = if (compact) 3.dp else 5.dp),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 1.dp else 2.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Text(
             cell.title.uppercase(),
-            style = chromeStyle(if (compact) 7.5f else 8.5f, FontWeight.Bold),
+            style = chromeStyle(9f, FontWeight.Bold),
             color = LiveDesign.muted,
             maxLines = 1,
             overflow = TextOverflow.Clip,
         )
         Text(
             cell.value,
-            style = chromeStyle(if (compact) 11.5f else 13f, FontWeight.Medium, mono = true),
-            color = if (enabled) LiveDesign.text else LiveDesign.muted,
+            style = chromeStyle(15f, FontWeight.Medium, mono = true),
+            color = valueColor,
             maxLines = 1,
             overflow = TextOverflow.Clip,
         )

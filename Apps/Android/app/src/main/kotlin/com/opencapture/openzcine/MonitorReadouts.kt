@@ -31,44 +31,45 @@ internal data class MonitorBatteryPresentation(
 )
 
 /**
- * Last camera timecode accepted by the existing display decoder.
+ * Live-view header timecode retention for one connected camera.
  *
- * The holder is remembered by connected-camera identity, not by preview source,
- * so DISP 3 can release every frame collector without discarding its camera-owned
- * hero value. A disconnect or replacement camera receives a new empty holder.
+ * Always mirrors camera-header TC (standby and rolling). Keeps the last good
+ * sample when Nikon briefly reports empty/off around record transitions.
+ * UI publishes are lightly rate-limited so second ticks stay smooth without
+ * thrashing composition on every frame.
  */
 internal class MonitorTimecodeRetention(private val cameraIdentity: CameraIdentity?) {
     private var retainedTimecode: LiveFrameTimecode? by mutableStateOf(null)
     private var lastPublishNanos: Long = 0L
 
-    /**
-     * Retains the exact timecode state paired with the latest displayed frame.
-     * Skips Snapshot write when unchanged, and caps UI publishes at ~10 Hz so
-     * the top bar does not recompose on every live frame (~25 Hz).
-     */
+    /** Ingest a live-view header sample and publish when it advances. */
     fun accept(timecode: LiveFrameTimecode?): Unit {
-        val next =
-            if (cameraIdentity == null) null else authoritativeTimecode(timecode)
-        if (next == retainedTimecode) return
-        val now = System.nanoTime()
-        // Always publish the first value and any second-boundary jump immediately.
-        val secondChanged =
-            retainedTimecode == null ||
-                next == null ||
-                retainedTimecode!!.hour != next.hour ||
-                retainedTimecode!!.minute != next.minute ||
-                retainedTimecode!!.second != next.second
-        if (!secondChanged && lastPublishNanos != 0L && now - lastPublishNanos < 100_000_000L) {
-            return
-        }
-        lastPublishNanos = now
-        retainedTimecode = next
+        if (cameraIdentity == null) return
+        val next = liveViewHeaderTimecode(timecode) ?: return
+        publish(next)
     }
 
     /** Returns the retained value only while the same camera is still connected. */
     fun timecodeFor(sessionState: CameraSessionState): LiveFrameTimecode? {
         val currentIdentity = (sessionState as? CameraSessionState.Connected)?.identity
         return retainedTimecode.takeIf { cameraIdentity != null && currentIdentity == cameraIdentity }
+    }
+
+    private fun publish(next: LiveFrameTimecode) {
+        if (next == retainedTimecode) return
+        val now = System.nanoTime()
+        val previous = retainedTimecode
+        val secondChanged =
+            previous == null ||
+                previous.hour != next.hour ||
+                previous.minute != next.minute ||
+                previous.second != next.second
+        // Always publish second boundaries immediately; frame ticks ~30 Hz max.
+        if (!secondChanged && lastPublishNanos != 0L && now - lastPublishNanos < 33_000_000L) {
+            return
+        }
+        lastPublishNanos = now
+        retainedTimecode = next
     }
 }
 
@@ -330,20 +331,33 @@ internal class MonitorFrameRateSampler {
 }
 
 /**
- * Keeps only enabled, structurally valid camera timecode. No shell clock or
- * elapsed-time extrapolation is allowed to stand in for a missing frame value.
+ * Live-view header timecode acceptance (iOS parity).
+ *
+ * iOS always applies `frame.timecode` digits to the hero readout without
+ * requiring the header "on" flag. Nikon can leave `on=0` while still advancing
+ * H:M:S:F during a take; requiring `on` froze Android TC for the whole roll.
+ *
+ * Pure zero + off is treated as "not available" so we never invent a clock.
+ * Any other in-range H:M:S:F from the camera header is accepted as-is.
  */
-internal fun authoritativeTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
+internal fun liveViewHeaderTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
     timecode?.takeIf {
-        it.on &&
-            it.hour in 0..23 &&
+        it.hour in 0..23 &&
             it.minute in 0..59 &&
             it.second in 0..59 &&
-            it.frame in 0..255
+            it.frame in 0..255 &&
+            (it.on || it.hour != 0 || it.minute != 0 || it.second != 0 || it.frame != 0)
     }
+
+/**
+ * Same acceptance as [liveViewHeaderTimecode] — kept as the public name used by
+ * chrome / tests for "camera-owned, not synthetic" values.
+ */
+internal fun authoritativeTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
+    liveViewHeaderTimecode(timecode)
 
 /** Exact camera timecode label, or the explicit unavailable placeholder. */
 internal fun cameraTimecodeLabel(timecode: LiveFrameTimecode?): String =
-    authoritativeTimecode(timecode)?.let {
+    liveViewHeaderTimecode(timecode)?.let {
         String.format(Locale.ROOT, "%02d:%02d:%02d:%02d", it.hour, it.minute, it.second, it.frame)
     } ?: UNAVAILABLE_TIMECODE

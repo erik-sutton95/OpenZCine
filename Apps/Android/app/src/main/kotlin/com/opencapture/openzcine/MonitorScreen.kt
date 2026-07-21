@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -115,9 +116,12 @@ import com.opencapture.openzcine.wear.WearRecordCommandSafety
 import com.opencapture.openzcine.wear.androidWatchRelayState
 import com.opencapture.openzcine.wear.executeWearRecordCommand
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** One measured live-toolbar tool and the orientation in which its anchor is valid. */
@@ -324,6 +328,10 @@ internal fun MonitorScreen(
         }
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
+    // Hold live view until the full post-connect property burst finishes so
+    // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
+    // interleaved one-property-per-1.5 s polls against the LV pump.
+    val initialMonitorPropertiesReady by session.initialMonitorPropertiesReady.collectAsState()
     val commandRoundTripMilliseconds by
         session.latestCommandRoundTripMilliseconds.collectAsState()
     val cameraReadouts = remember(cameraProperties) { monitorCameraReadouts(cameraProperties) }
@@ -452,23 +460,40 @@ internal fun MonitorScreen(
     // A camera warning becomes an overheating input only for the explicit HOT
     // state; WARNING remains informational until Nikon hardware proves it is
     // safe to treat as a thermal stop signal.
-    LaunchedEffect(
-        liveViewController,
-        operatorSettings.streamPreset,
-        operatorSettings.qualityBias,
-        thermalTier,
-        previewPolicyRecording,
-        cameraProperties.temperatureStatus,
-    ) {
-        liveViewController?.apply(
+    val liveViewPolicyInput =
+        remember(
+            operatorSettings.streamPreset,
+            operatorSettings.qualityBias,
+            thermalTier,
+            previewPolicyRecording,
+            cameraProperties.temperatureStatus,
+        ) {
             SwiftLiveViewPolicyInput(
                 streamPreset = operatorSettings.streamPreset.wireValue,
                 qualityBias = operatorSettings.qualityBias.wireValue,
                 thermalTier = thermalTier.wireValue,
                 isRecording = previewPolicyRecording,
-                cameraOverheating = cameraProperties.temperatureStatus == CameraTemperatureStatus.HOT,
-            ),
-        )
+                cameraOverheating =
+                    cameraProperties.temperatureStatus == CameraTemperatureStatus.HOT,
+            )
+        }
+    LaunchedEffect(liveViewController, liveViewPolicyInput) {
+        liveViewController?.apply(liveViewPolicyInput)
+    }
+    // Record start/stop changes the thermal LV size and restarts the pump. If the
+    // body rejects the first configure pass, preview can sit in Rejected with no
+    // frames (and a frozen TC) until the whole monitor remounts. Re-apply once the
+    // recording state settles so a stuck rejection recovers without a reconnect.
+    LaunchedEffect(liveViewController, recordingState) {
+        if (liveViewController == null) return@LaunchedEffect
+        if (
+            recordingState != CameraRecordingState.RECORDING &&
+                recordingState != CameraRecordingState.STANDBY
+        ) {
+            return@LaunchedEffect
+        }
+        delay(350)
+        liveViewController.apply(liveViewPolicyInput)
     }
     val recordCommandPending =
         recordingState == CameraRecordingState.STARTING ||
@@ -1078,7 +1103,9 @@ internal fun MonitorScreen(
         // and backgrounding drops below STARTED so the camera receives
         // EndLiveView instead of continuing sensor readout for no consumer.
         val activeFrameSource =
-            if (!liveViewEnabled) {
+            if (!liveViewEnabled || !initialMonitorPropertiesReady) {
+                // Gate LV until bootstrap owns the command channel and fills
+                // every monitor property (or the session never bootstraps).
                 null
             } else {
                 frameSource
@@ -1171,10 +1198,28 @@ internal fun MonitorScreen(
                 isDemoSession = isDemoSession || frameSource != null,
             )
         }
+        // Link health must use generation-filtered frames so a restart does not
+        // score a stale replay JPEG as a live stream. Conflate so chrome never
+        // backpressures the shared live-frame bus (feed hitch root cause).
         LaunchedEffect(actualLinkHealth, healthFrameSource) {
-            (healthFrameSource as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource)
-                ?.currentStreamFrames
-                ?.collect(actualLinkHealth::recordFrame)
+            val swiftSource =
+                healthFrameSource as? com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
+                    ?: return@LaunchedEffect
+            swiftSource.currentStreamFrames
+                .conflate()
+                .collect(actualLinkHealth::recordFrame)
+        }
+        // Constant camera-header TC sync — every live-view frame updates the
+        // hero readout (standby and rolling). No free-run or lag probing.
+        LaunchedEffect(monitorFrameSource, timecodeRetention) {
+            val source = monitorFrameSource ?: return@LaunchedEffect
+            source.frames
+                .conflate()
+                .collect { frame ->
+                    withContext(Dispatchers.Main.immediate) {
+                        timecodeRetention.accept(frame.timecode)
+                    }
+                }
         }
         LaunchedEffect(actualLinkHealth, propertyRefreshStatus) {
             actualLinkHealth.reportPropertyRefresh(propertyRefreshStatus)
@@ -1201,9 +1246,11 @@ internal fun MonitorScreen(
                 liveAudioLevels = null
                 return@LaunchedEffect
             }
-            monitorFrameSource.frames.collect { frame ->
-                liveAudioLevels = frame.audioLevels
-            }
+            monitorFrameSource.frames
+                .conflate()
+                .collect { frame ->
+                    liveAudioLevels = frame.audioLevels
+                }
         }
         val railPlan =
             landscapeSideRailPlan(
@@ -1466,7 +1513,30 @@ internal fun MonitorScreen(
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                if (monitorFrameSource != null) {
+                if (
+                    sessionState is CameraSessionState.Connected &&
+                        !initialMonitorPropertiesReady &&
+                        frameSource == null &&
+                        !isCommand
+                ) {
+                    // Brief hold while the full property bootstrap fills AF /
+                    // lens / subject / audio without fighting live-view pulls.
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            color = LiveDesign.accent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(28.dp),
+                        )
+                        Text(
+                            text = stringResource(R.string.camera_reading_properties),
+                            style = chromeStyle(13f, FontWeight.Medium),
+                            color = LiveDesign.muted,
+                        )
+                    }
+                } else if (monitorFrameSource != null) {
                     LiveFeedView(
                         monitorFrameSource,
                         Modifier.fillMaxSize().graphicsLayer {
@@ -1474,7 +1544,8 @@ internal fun MonitorScreen(
                             scaleY = localFraming.verticalPresentationScale
                         },
                         onPresentedFrame = { frame, bitmap, baker ->
-                            timecodeRetention.accept(frame.timecode)
+                            // TC is owned by the stream collector above; present
+                            // path only drives FPS + wear (decode can lag a take).
                             fpsSampler.accept(System.nanoTime())
                             wearRelay.ingestPresentedFrame(frame, bitmap, baker)
                             val isRealCameraFrame =
@@ -1654,6 +1725,8 @@ internal fun MonitorScreen(
                                 view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                             }
                         },
+                        liveFps = fpsSampler.formatted,
+                        signalBars = actualLinkHealth.presentation.signalBars,
                         modifier =
                             Modifier.zone(
                                 ZoneFrame(
@@ -2676,6 +2749,13 @@ internal fun toggleShutterLockOnCamera(
 }
 
 /**
+ * Vertical separation between the phone and camera battery indicators when
+ * they hug the leading display cutout (dp). Wider than the previous 28dp so
+ * the two readouts read as distinct clusters instead of a tight pair.
+ */
+internal const val CUTOUT_HUGGED_BATTERY_GAP_DP = 80f
+
+/**
  * Clusters the landscape battery indicators around the display cutout —
  * phone battery above, camera battery below, mirroring how iOS flanks the
  * Dynamic Island. Returns the zone-map frames untouched when there is no
@@ -2688,7 +2768,7 @@ internal fun cutoutHuggedBatteryFrames(
     bounds: ZoneFrame,
 ): Pair<ZoneFrame?, ZoneFrame?> {
     if (phone == null || camera == null || cutoutCenterY == null) return phone to camera
-    val gap = 28f
+    val gap = CUTOUT_HUGGED_BATTERY_GAP_DP
     val phoneFrame = phone.copy(y = cutoutCenterY - gap / 2f - phone.height)
     val cameraFrame = camera.copy(y = cutoutCenterY + gap / 2f)
     val top = bounds.y

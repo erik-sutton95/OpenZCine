@@ -490,6 +490,29 @@ internal object MediaLibrarySelection {
     /** Sweeps only add unseen items, avoiding a repeated drag toggling an item back off. */
     fun addSweep(current: Set<String>, identities: Collection<String>): Set<String> = current + identities
 
+    /**
+     * Photos-style range paint (iOS `MediaSweepSelectGesture.paint`): selection is the
+     * pre-sweep [snapshot] with the contiguous `[anchor…current]` range painted on or off.
+     * Shrinking the range restores trailing cells from the snapshot.
+     */
+    fun paintRange(
+        snapshot: Set<String>,
+        orderedIDs: List<String>,
+        anchorIndex: Int,
+        currentIndex: Int,
+        paintSelect: Boolean,
+    ): Set<String> {
+        if (orderedIDs.isEmpty()) return snapshot
+        val lo = minOf(anchorIndex, currentIndex).coerceIn(0, orderedIDs.lastIndex)
+        val hi = maxOf(anchorIndex, currentIndex).coerceIn(0, orderedIDs.lastIndex)
+        val result = snapshot.toMutableSet()
+        for (index in lo..hi) {
+            val id = orderedIDs[index]
+            if (paintSelect) result.add(id) else result.remove(id)
+        }
+        return result
+    }
+
     fun retainVisible(current: Set<String>, visible: Set<String>): Set<String> = current.intersect(visible)
 }
 

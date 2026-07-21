@@ -54,7 +54,6 @@ internal object FeedEffectsRenderPlanFactory {
         cameraInput: ExposureAssistCameraInput,
         lutLibrary: AndroidLutLibrary? = null,
     ): FeedEffectsRenderPlan? {
-        if (effects.isIdentity) return null
         if (!SwiftCore.isAvailable) {
             Log.w(TAG, "feed effects need the Swift core (just android-core); rendering plain")
             return null
@@ -74,6 +73,17 @@ internal object FeedEffectsRenderPlanFactory {
         lutLibrary: AndroidLutLibrary?,
     ): FeedEffectsRenderPlan {
         val renderConfiguration = renderConfiguration(configuration, cameraInput)
+        // Identity is still a real plan (all effect flags off) so the GPU present
+        // path can stay mounted and swap peaking/LUT/zebra without a black frame.
+        if (effects.isIdentity) {
+            return FeedEffectsRenderPlan(
+                effects = effects,
+                configuration = renderConfiguration,
+                baseCube = null,
+                limitsPaintCube = null,
+                limitsWeightCube = null,
+            )
+        }
         val baseCube = baseCube(effects, renderConfiguration, lutLibrary)
         val limitsActive = effects.falseColor == FeedFalseColorScale.LIMITS
         val limitsPaint =

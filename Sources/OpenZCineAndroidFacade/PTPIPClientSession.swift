@@ -765,13 +765,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
             .confirmPairing,
             parameters: [PTPIPSessionScript.pairingConfirmValue]
         )
-        // `ConfirmPairing` has succeeded. The camera can now show its body-side
-        // confirmation and restart its AP; Kotlin uses this phase to wait for that reconnect.
+        // `ConfirmPairing` (app-side) has succeeded. The operator must still tap
+        // Confirm on the camera body; that restarts the camera AP and this
+        // temporary session cannot become a usable monitor session.
+        //
+        // Do NOT call ChangeApplicationMode / identify here: on real hardware
+        // they race the body-confirm reboot, throw (often as a generic
+        // unreachable/app-control failure), and Kotlin never reaches the
+        // confirm-on-camera wait + saved-profile reconnect (iOS always shuts
+        // down after first-time pairing and waits — see
+        // `transitionToSavedCameraNetworkCheck`). Publish `confirmOnCamera`
+        // then a soft `connected` with the handshake-level name so JNI
+        // completes cleanly; the Android shell disconnects and reconnects.
         onPhase(.confirmOnCamera, challenge.pin ?? "")
-        guard try session.enableAppControl() else {
-            throw PTPIPClientSessionError.appControlUnavailable
-        }
-        try session.identify()
         onPhase(.connected, session.identity.displayName)
     }
 
@@ -1129,15 +1135,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Refreshes the semantic Android monitor readback without exposing a PTP
     /// property ID or encoded bytes to Kotlin.
     ///
-    /// The bootstrap is deliberately bounded to the high-value header and
-    /// safety fields. Subsequent calls read one property in the shared core's
-    /// conservative round-robin order, except `MovFileType` is placed directly
-    /// before its Android-specific `MovScreenSize` dependency. Polling never
-    /// monopolizes the command channel or starves live-view frame fetches. A
-    /// `DevicePropChanged` request is accepted only for a property already
-    /// supported by that core order. Any unsupported body/mode read preserves
-    /// accumulated values and returns a non-terminal result; it never
-    /// disconnects the session.
+    /// Bootstrap runs a **full** live-monitor property burst plus storage and
+    /// control descriptors so AF mode, lens, subject, audio, and VR land before
+    /// the first live-view frame is shown. The Android shell holds the feed
+    /// until that burst finishes. Subsequent `.next` calls resume one-property
+    /// round-robin (codec kept immediately before screen-size). Polling never
+    /// disconnects the session on a body-specific unsupported field.
     public func refreshAndroidPropertySnapshot(
         _ request: AndroidCameraPropertyRefreshRequest
     ) -> AndroidCameraPropertyReadback {
@@ -1150,7 +1153,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
         switch request {
         case .bootstrap:
             var result: AndroidCameraPropertyRefreshResult = .accepted
-            for property in Self.androidBootstrapPropertyOrder {
+            // Full live order — same set as steady-state poll, read back-to-back
+            // so the operator does not wait ~30s for focus/lens/subject.
+            for property in Self.androidLiveMonitorPollOrder {
                 result = mergedAndroidPropertyRefreshResult(
                     result, refreshAndroidProperty(property))
                 if result == .transportFailed { break }
@@ -1162,8 +1167,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 result = mergedAndroidPropertyRefreshResult(
                     result, refreshAndroidControlDescriptors())
             }
+            // Steady-state `.next` starts after the complete set has been seeded.
+            androidPropertyPollIndex = 0
             return androidPropertyReadback(result: result)
         case .next(let isRecording):
+            // While GetLiveViewImageEx is pumping, every extra PTP transaction
+            // steals `transactionLock` and punches a visible hole in the feed
+            // (seen as a hitch every ~1.5–3 s). Keep steady-state polls to a
+            // single property; defer storage/descriptor/screen-size extras
+            // until live view is idle (Command / media / standby).
+            let liveViewStreaming = liveViewIsActive()
             let pollOrder = Self.androidMonitorPollOrder(isRecording: isRecording)
             guard !pollOrder.isEmpty else {
                 return androidPropertyReadback(result: .accepted)
@@ -1181,10 +1194,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     refreshAndroidScreenSizeAfterCodecChange()
                 )
             }
-            // Body-side REC dial: re-sample MovScreenSize often enough that the camera remains
-            // the source of truth even when DevicePropChanged is delayed/missing. Round-robin
-            // alone can leave D0A0 stale for tens of seconds on the long live poll list.
-            if !isRecording,
+            // Body-side REC dial: re-sample MovScreenSize when the feed is not
+            // owning the wire. During live view, trust DevicePropChanged + the
+            // regular round-robin slot for D0A0 instead of a dual hit.
+            if !liveViewStreaming,
+                !isRecording,
                 result != .transportFailed,
                 property != .movieRecordScreenSize,
                 androidPropertyPollIndex % 3 == 0
@@ -1192,7 +1206,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 result = mergedAndroidPropertyRefreshResult(
                     result, refreshAndroidProperty(.movieRecordScreenSize))
             }
-            if result != .transportFailed,
+            if !liveViewStreaming,
+                result != .transportFailed,
                 CameraMonitorPollPolicy.isDue(
                     lastRefreshAt: androidLastStorageRefreshAt,
                     now: Date(),
@@ -1200,7 +1215,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
             {
                 result = mergedAndroidPropertyRefreshResult(result, refreshAndroidStorage())
             }
-            if result != .transportFailed, !isRecording,
+            if !liveViewStreaming,
+                result != .transportFailed,
+                !isRecording,
                 CameraMonitorPollPolicy.isDue(
                     lastRefreshAt: androidLastDescriptorRefreshAt,
                     now: Date(),
@@ -1856,30 +1873,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return .accepted
     }
 
-    /// Bounded first-refresh set: the values the operator needs before the
-    /// full low-rate round-robin fills in lens, audio, focus, and display
-    /// details. Each read remains a separate serialized PTP transaction.
-    private static let androidBootstrapPropertyOrder: [PTPPropertyCode] = [
-        .movieISOSensitivity,
-        .movieBaseISO,
-        .movieShutterMode,
-        .movieShutterAngle,
-        .movieShutterSpeed,
-        .movieFNumber,
-        .movieWhiteBalance,
-        .movieWBColorTemp,
-        .movieRecordScreenSize,
-        .movieFileType,
-        .batteryLevel,
-        .warningStatus,
-    ]
-
     /// Android keeps codec immediately before its codec-dependent frame-size value so a missed
     /// property event cannot publish a new D0A0 value with the prior codec's picker domain.
     static func androidMonitorPollOrder(isRecording: Bool) -> [PTPPropertyCode] {
         isRecording ? PTPPropertyCode.recordingMonitorPollOrder : androidLiveMonitorPollOrder
     }
 
+    /// Full live-monitor property set used for both the post-connect bootstrap
+    /// burst and the steady-state round-robin. Each entry is still one PTP
+    /// transaction; bootstrap just issues them back-to-back without the 1.5 s gap.
     private static let androidLiveMonitorPollOrder: [PTPPropertyCode] = {
         var pollOrder = PTPPropertyCode.liveMonitorPollOrder
         guard
@@ -2368,11 +2370,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
         _ writes: [PTPCameraPropertyWrite],
         control: AndroidCameraControl,
         label: String,
-        maxAttempts: Int = 6
+        maxAttempts: Int? = nil
     ) throws {
-        // Keep readback honest but snappy: bodies usually mirror the write on the
-        // first GetDevicePropValue. Long 200 ms sleeps made every drum snap feel laggy.
-        for attempt in 1...maxAttempts {
+        // Focus-family writes settle slower under live view (body often mirrors
+        // after a few frames). Keep other drums snappy (6 × 40 ms).
+        let isFocusFamily =
+            control == .focusMode || control == .focusArea || control == .focusSubject
+        let attempts = maxAttempts ?? (isFocusFamily ? 12 : 6)
+        let sleepSeconds = isFocusFamily ? 0.08 : 0.04
+        for attempt in 1...attempts {
             var allMatch = true
             for write in writes {
                 let readback = try readProperty(write.property)
@@ -2386,15 +2392,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 if control == .whiteBalanceTint { androidWhiteBalanceTint = label }
                 return
             }
-            if attempt < maxAttempts { Thread.sleep(forTimeInterval: 0.04) }
+            if attempt < attempts { Thread.sleep(forTimeInterval: sleepSeconds) }
         }
         throw PTPIPClientSessionError.controlReadbackMismatch(
             String(describing: control), label)
     }
 
-    /// True when a property write is confirmed by readback. `MovScreenSize` compares decoded
-    /// width/height/fps (camera may rewrite low packing bits after an exact enum write); other
-    /// properties stay byte-exact.
+    /// True when a property write is confirmed by readback.
+    /// - `MovScreenSize`: decoded width/height/fps (camera may rewrite low packing bits).
+    /// - `MovieFocusMode`: decoded label (MF raw 3 lens-ring and 4 menu are equivalent).
+    /// - Other properties: byte-exact.
     static func propertyWriteMatchesReadback(
         write: PTPCameraPropertyWrite,
         readback: Data
@@ -2408,6 +2415,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
             let w = PTPCameraPropertyDecoders.screenSize(written)
             let r = PTPCameraPropertyDecoders.screenSize(live)
             return w.width == r.width && w.height == r.height && w.fps == r.fps
+        }
+        if write.property == .movieFocusMode,
+            let written = write.data.first,
+            let live = readback.first
+        {
+            // Label match: MF (3/4) and AF labels compare as decoded strings.
+            return PTPCameraPropertyDecoders.movieFocusMode(written)
+                == PTPCameraPropertyDecoders.movieFocusMode(live)
         }
         return readback == write.data
     }

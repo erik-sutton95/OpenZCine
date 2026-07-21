@@ -85,17 +85,19 @@ struct PTPIPClientSessionTests {
         #expect(phases.map(\.0) == [.handshaking, .pairing, .confirmOnCamera, .connected])
         // The pairing PIN extracted by the core from the challenge bytes.
         #expect(phases.first(where: { $0.0 == .confirmOnCamera })?.1 == "1234")
-        #expect(session.identity.model == "ZR")
+        // First-time Wi-Fi pairing stops after ConfirmPairing; full identity
+        // arrives on the post-body-confirm saved-profile reconnect.
+        #expect(session.identity.model.isEmpty || session.identity.model == "ZR")
 
         let operations = server.receivedOperations()
         // Probe attempt: open + refused app mode + graceful CloseSession…
         #expect(operations.prefix(3) == [.openSession, .changeApplicationMode, .closeSession])
-        // …then the fresh pairing session in the iOS-verified order.
+        // …then the temporary pairing session. No ChangeApplicationMode after
+        // ConfirmPairing — that races the body-confirm AP restart on hardware.
         #expect(
-            operations.dropFirst(3).prefix(5)
+            operations.dropFirst(3).prefix(3)
                 == [
-                    .openSession, .getPairingInfo, .confirmPairing, .changeApplicationMode,
-                    .getDeviceInfo,
+                    .openSession, .getPairingInfo, .confirmPairing,
                 ])
     }
 
@@ -121,11 +123,12 @@ struct PTPIPClientSessionTests {
         #expect(confirmPhaseFollowedSuccessfulConfirm)
         // Unknown Wi-Fi cameras must never probe `ChangeApplicationMode`: that
         // ejects the ZR from its pairing wizard before it yields a challenge.
+        // After ConfirmPairing we also skip app-control/identify so the shell
+        // can wait for body Confirm + AP restart (real ZR behavior).
         #expect(
             server.receivedOperations()
                 == [
-                    .openSession, .getPairingInfo, .confirmPairing, .changeApplicationMode,
-                    .getDeviceInfo,
+                    .openSession, .getPairingInfo, .confirmPairing,
                 ])
     }
 
@@ -1159,6 +1162,23 @@ struct PTPIPClientSessionTests {
                 readback: Data(
                     ByteCoding.uint64LE(
                         UInt64(3_840) << 48 | UInt64(2_160) << 32 | UInt64(25) << 16))))
+    }
+
+    @Test func focusModeReadbackMatchesOnLabelIncludingDualMFRaws() {
+        // Menu MF (4) vs lens-ring MF (3) both decode to "MF".
+        let writeMF = PTPCameraPropertyWrite(
+            property: .movieFocusMode, data: Data([4]))
+        #expect(
+            PTPIPClientSession.propertyWriteMatchesReadback(write: writeMF, readback: Data([4])))
+        #expect(
+            PTPIPClientSession.propertyWriteMatchesReadback(write: writeMF, readback: Data([3])))
+        // AF-F must not match residual MF.
+        let writeAFF = PTPCameraPropertyWrite(
+            property: .movieFocusMode, data: Data([2]))
+        #expect(
+            PTPIPClientSession.propertyWriteMatchesReadback(write: writeAFF, readback: Data([2])))
+        #expect(
+            !PTPIPClientSession.propertyWriteMatchesReadback(write: writeAFF, readback: Data([3])))
     }
 
     @Test func invalidScreenSizeDescriptorDoesNotWipeTheControlCatalog() throws {

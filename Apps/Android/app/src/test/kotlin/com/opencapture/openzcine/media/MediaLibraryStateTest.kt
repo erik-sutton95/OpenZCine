@@ -84,6 +84,18 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `connected session always lists the camera regardless of sticky offline prefs`() {
+        assertEquals(
+            MediaLibrarySource.CAMERA,
+            mediaLibrarySourceForConnection(cameraConnected = true),
+        )
+        assertEquals(
+            MediaLibrarySource.LOCAL,
+            mediaLibrarySourceForConnection(cameraConnected = false),
+        )
+    }
+
+    @Test
     fun `Frameio dialog cannot close while the camera network handoff is unsettled`() {
         val blocked =
             listOf(
@@ -468,6 +480,42 @@ class MediaLibraryStateTest {
         assertEquals(setOf("one", "two", "three"), swept)
         assertEquals(setOf("two"), MediaLibrarySelection.retainVisible(swept, setOf("two")))
         assertEquals(emptySet(), MediaLibrarySelection.toggle(setOf("one"), "one"))
+    }
+
+    @Test
+    fun `paint range restores trailing cells from the pre-sweep snapshot`() {
+        val ordered = listOf("a", "b", "c", "d")
+        val snapshot = setOf("a")
+        // Anchor on b (unselected → paint select), drag to d.
+        val painted =
+            MediaLibrarySelection.paintRange(
+                snapshot = snapshot,
+                orderedIDs = ordered,
+                anchorIndex = 1,
+                currentIndex = 3,
+                paintSelect = true,
+            )
+        assertEquals(setOf("a", "b", "c", "d"), painted)
+        // Shrink range back to b only — c/d leave again.
+        val shrunk =
+            MediaLibrarySelection.paintRange(
+                snapshot = snapshot,
+                orderedIDs = ordered,
+                anchorIndex = 1,
+                currentIndex = 1,
+                paintSelect = true,
+            )
+        assertEquals(setOf("a", "b"), shrunk)
+        // Paint-deselect from a snapshot that already has a–d.
+        val deselect =
+            MediaLibrarySelection.paintRange(
+                snapshot = setOf("a", "b", "c", "d"),
+                orderedIDs = ordered,
+                anchorIndex = 1,
+                currentIndex = 2,
+                paintSelect = false,
+            )
+        assertEquals(setOf("a", "d"), deselect)
     }
 
     @Test

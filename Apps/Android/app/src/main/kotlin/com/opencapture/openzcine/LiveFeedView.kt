@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -463,21 +465,22 @@ fun LiveFeedView(
         lutRenderGeneration,
         colorMode,
         preferComposablePresentation,
+        aspectFill,
     ) {
-        // Never retain a plan for a superseded selection while its
-        // replacement is prepared. Cube baking is native/CPU work off UI.
-        renderPlan = null
-        previewBaker = null
-        (composableEffectsRenderer as? AutoCloseable)?.close()
-        composableEffectsRenderer = null
-        gpuBackend.updatePlan(null, aspectFill)
-        if (effects.isIdentity) return@LaunchedEffect
-        if (!liveFeedEffectsCanRender(Build.VERSION.SDK_INT, SwiftCore.isAvailable, colorMode)) {
+        // Keep the *current* plan on screen while the next one bakes. Clearing
+        // plan / SurfaceView mid-toggle was the black flash on LUT/peak/zebra.
+        if (
+            !effects.isIdentity &&
+                !liveFeedEffectsCanRender(Build.VERSION.SDK_INT, SwiftCore.isAvailable, colorMode)
+        ) {
             if (colorMode != LiveFeedColorMode.UNKNOWN) {
                 Log.w(TAG, "feed effects unavailable for $colorMode live input; rendering the plain feed")
             }
             return@LaunchedEffect
         }
+        if (!SwiftCore.isAvailable) return@LaunchedEffect
+        val previousBaker = previewBaker
+        val previousComposable = composableEffectsRenderer
         val nextPlan =
             withContext(Dispatchers.Default) {
                 FeedEffectsRenderPlanFactory.create(
@@ -487,23 +490,32 @@ fun LiveFeedView(
                     lutLibrary,
                 )
             }
+        if (nextPlan == null) return@LaunchedEffect
+        // Atomic present-path swap: push GPU uniforms first, then Compose state.
+        if (!preferComposablePresentation) {
+            gpuBackend.updatePlan(nextPlan, aspectFill)
+        }
         renderPlan = nextPlan
-        if (nextPlan != null) {
-            if (!preferComposablePresentation) {
-                gpuBackend.updatePlan(nextPlan, aspectFill)
+        val nextBaker =
+            withContext(Dispatchers.Default) {
+                LegacyFeedEffectsPreviewBaker(applicationContext, nextPlan)
             }
-            // Small-preview baker for Wear: GLES path reuses the same plan via
-            // LegacyFeedEffectsPreviewBaker; AGSL baker is API 33-only fallback.
-            previewBaker =
+        previewBaker = nextBaker
+        if (previousBaker !== nextBaker) {
+            (previousBaker as? AutoCloseable)?.close()
+        }
+        if (preferComposablePresentation && Build.VERSION.SDK_INT >= 33) {
+            val nextComposable =
                 withContext(Dispatchers.Default) {
-                    LegacyFeedEffectsPreviewBaker(applicationContext, nextPlan)
+                    runCatching { FeedEffectsRenderer.create(nextPlan) }.getOrNull()
                 }
-            if (preferComposablePresentation && Build.VERSION.SDK_INT >= 33) {
-                composableEffectsRenderer =
-                    withContext(Dispatchers.Default) {
-                        runCatching { FeedEffectsRenderer.create(nextPlan) }.getOrNull()
-                    }
+            composableEffectsRenderer = nextComposable
+            if (previousComposable !== nextComposable) {
+                (previousComposable as? AutoCloseable)?.close()
             }
+        } else if (composableEffectsRenderer != null) {
+            (composableEffectsRenderer as? AutoCloseable)?.close()
+            composableEffectsRenderer = null
         }
     }
     SideEffect {
@@ -514,15 +526,17 @@ fun LiveFeedView(
     }
     // SurfaceView is a separate buffer — Kyant layerBackdrop cannot sample it.
     // FULL liquid glass therefore stays on Compose Canvas even when graded.
+    // Keep the GPU surface mounted whenever the Swift core can grade so toggles
+    // never remount AndroidView (another source of flash).
     val gpuSurfaceActive =
         !preferComposablePresentation &&
-            renderPlan != null &&
-            !gpuBackend.renderFailed
+            SwiftCore.isAvailable &&
+            !gpuBackend.renderFailed &&
+            renderPlan != null
     val gpuFramesRequested = gpuSurfaceActive
     val latestGpuFramesRequested = rememberUpdatedState(gpuFramesRequested)
-    LaunchedEffect(gpuFramesRequested) {
-        if (!gpuFramesRequested) gpuBackend.clearFrame()
-    }
+    // Do not clearFrame when the surface briefly becomes inactive — that blacked
+    // the swapchain between effect plans. Source teardown clears explicitly.
     val falseColorReady =
         (gpuSurfaceActive || composableEffectsRenderer != null) &&
             renderPlan?.falseColorReady == true
@@ -795,9 +809,20 @@ internal fun FalseColorReferenceOverlay(
                     stringResource(R.string.false_color_axis_clipped),
                 ),
         )
+    var isDragging by remember { mutableStateOf(false) }
     Canvas(
         modifier
             .zone(frame)
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                scaleX = if (isDragging) 1.03f else 1f
+                scaleY = if (isDragging) 1.03f else 1f
+                shadowElevation = if (isDragging) 18.dp.toPx() else 0f
+                shape = ChromeShape
+                clip = true
+                ambientShadowColor = Color.Black.copy(alpha = 0.5f)
+                spotShadowColor = Color.Black.copy(alpha = 0.5f)
+            }
             .glass(ChromeShape)
             .semantics {
                 contentDescription = referenceDescription
@@ -815,11 +840,16 @@ internal fun FalseColorReferenceOverlay(
             .pointerInput(default, resolvedLayout, placementRevision, hapticsEnabled) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
+                        isDragging = true
                         if (hapticsEnabled) {
                             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         }
                     },
-                    onDragEnd = { saveFrame(frame) },
+                    onDragEnd = {
+                        isDragging = false
+                        saveFrame(frame)
+                    },
+                    onDragCancel = { isDragging = false },
                 ) { change, dragAmount ->
                     change.consume()
                     val snapped =

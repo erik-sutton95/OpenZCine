@@ -11,10 +11,13 @@ class CutoutHuggedBatteryFramesTest {
 
     @Test
     fun `clusters phone above and camera below the cutout centre`() {
+        val halfGap = CUTOUT_HUGGED_BATTERY_GAP_DP / 2f
         val (huggedPhone, huggedCamera) =
             cutoutHuggedBatteryFrames(phone, camera, cutoutCenterY = 192f, bounds = bounds)
-        assertEquals(192f - 14f - 40f, huggedPhone!!.y)
-        assertEquals(192f + 14f, huggedCamera!!.y)
+        assertEquals(192f - halfGap - 40f, huggedPhone!!.y)
+        assertEquals(192f + halfGap, huggedCamera!!.y)
+        // Clear gap between the two indicator frames.
+        assertEquals(CUTOUT_HUGGED_BATTERY_GAP_DP, huggedCamera.y - (huggedPhone.y + huggedPhone.height))
     }
 
     @Test

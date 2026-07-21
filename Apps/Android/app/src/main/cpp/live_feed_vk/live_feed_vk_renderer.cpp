@@ -35,6 +35,11 @@ struct GpuParams {
     float zebraHighlight;
     float zebraMidtone;
     float aspectFill;
+    // Peaking de-log curve (5 points) + source extent for dual-scale Sobel.
+    float deLogCurve0to3[4];
+    float deLogCurve4;
+    float sourceSize[2];
+    float pad;
 };
 
 }  // namespace
@@ -915,6 +920,8 @@ bool LiveFeedVk_SubmitBitmap(LiveFeedVkSession* session, JNIEnv* env, jobject bi
         uploadRgba(session, session->feedImage, w, h, static_cast<const uint8_t*>(pixels), bytes);
     AndroidBitmap_unlockPixels(env, bitmap);
     if (!ok) return false;
+    session->params.sourceSize[0] = static_cast<float>(w);
+    session->params.sourceSize[1] = static_cast<float>(h);
     session->hasFrame = true;
     return drawFrame(session);
 }
@@ -933,7 +940,7 @@ bool LiveFeedVk_SetPlan(
     bool /*limitsOn*/,
     bool peakingOn,
     const float* peakingColor3,
-    const float* /*deLogCurve5*/,
+    const float* deLogCurve5,
     float peakingThreshold,
     float peakingRamp,
     bool zebraHighlightOn,
@@ -955,6 +962,23 @@ bool LiveFeedVk_SetPlan(
     session->params.zebraHighlight = zebraHighlight;
     session->params.zebraMidtone = zebraMidtone;
     session->params.aspectFill = aspectFill ? 1.f : 0.f;
+    // Preserve sourceSize across plan updates (set when frames upload).
+    session->params.sourceSize[0] = static_cast<float>(session->feedW);
+    session->params.sourceSize[1] = static_cast<float>(session->feedH);
+    if (deLogCurve5) {
+        session->params.deLogCurve0to3[0] = deLogCurve5[0];
+        session->params.deLogCurve0to3[1] = deLogCurve5[1];
+        session->params.deLogCurve0to3[2] = deLogCurve5[2];
+        session->params.deLogCurve0to3[3] = deLogCurve5[3];
+        session->params.deLogCurve4 = deLogCurve5[4];
+    } else {
+        // Identity quarter-axis fallback (linear).
+        session->params.deLogCurve0to3[0] = 0.f;
+        session->params.deLogCurve0to3[1] = 0.25f;
+        session->params.deLogCurve0to3[2] = 0.5f;
+        session->params.deLogCurve0to3[3] = 0.75f;
+        session->params.deLogCurve4 = 1.f;
+    }
     if (peakingColor3) {
         session->params.peakingColor[0] = peakingColor3[0];
         session->params.peakingColor[1] = peakingColor3[1];

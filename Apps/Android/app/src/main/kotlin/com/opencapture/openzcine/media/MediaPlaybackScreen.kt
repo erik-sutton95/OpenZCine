@@ -34,9 +34,19 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.outlined.CenterFocusWeak
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -59,6 +69,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -117,6 +128,7 @@ import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
+import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import com.opencapture.openzcine.liveFeedContentRect
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -145,6 +157,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val PLAYBACK_ZOOM_MAX = 4f
+
+/** iOS `PlaybackChrome` — compact transport metrics. */
+private object PlaybackChrome {
+    val transportButtonWidth = 40.dp
+    val transportButtonHeight = 36.dp
+    val actionButtonWidth = 38.dp
+    val actionButtonHeight = 36.dp
+    val transportIconSize = 18.dp
+    val primaryTransportIconSize = 22.dp
+    val actionIconSize = 16.dp
+    val corner = RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)
+}
 
 private data class PlaybackTransportFlash(val glyph: String, val generation: Long)
 
@@ -179,6 +203,7 @@ internal fun MediaPlaybackScreen(
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
     frameioController: FrameioDeliveryController,
+    mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
     onToggleFavorite: (MediaClipRecord) -> Unit,
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
@@ -207,6 +232,7 @@ internal fun MediaPlaybackScreen(
             operatorSettings = operatorSettings,
             lutLibrary = lutLibrary,
             frameioController = frameioController,
+            mediaDeliveryCoordinator = mediaDeliveryCoordinator,
             onToggleFavorite = { onToggleFavorite(activeClip) },
             onResolvedObjectSize = onResolvedObjectSize,
             onNavigate = { target -> activeClip = target },
@@ -231,6 +257,7 @@ private fun PlaybackClipSession(
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
     frameioController: FrameioDeliveryController,
+    mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
     onToggleFavorite: () -> Unit,
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit,
     onNavigate: (MediaClipRecord) -> Unit,
@@ -306,95 +333,57 @@ private fun PlaybackClipSession(
     fun beginShare(configuration: MediaDeliveryConfiguration) {
         val completedEntry = shareableEntry ?: return
         if (deliveryInProgress || actionInProgress) return
-        val job =
-            deliveryScope.launch(start = CoroutineStart.LAZY) {
-                val stageContext = coroutineContext
-                val runningJob = stageContext[Job]
-                try {
-                    val staged =
-                        withContext(Dispatchers.IO) {
-                            MediaShareStager(shareCacheDirectory)
-                                .stage(completedEntry, clip) {
-                                    stageContext.ensureActive()
-                                }
-                        }
-                    val prepared =
-                        frameioController.prepareForExternalDelivery(
-                            FrameioDeliveryArtifact(
-                                share = staged,
-                                byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
-                                context =
-                                    FrameioArtifactContext(
-                                        cameraID = cameraID,
-                                        captureDate = clip.captureDate,
-                                        supportsLutBake = true,
-                                        stableClipIdentity = clip.libraryKey(cameraID),
-                                    ),
-                            ),
-                            configuration,
-                        )
-                    var cleanupFailed = false
-                    try {
-                        val published =
-                            if (prepared.transientExport == null) {
-                                prepared.share
-                            } else {
-                                withContext(Dispatchers.IO) {
-                                    MediaShareStager(shareCacheDirectory).stagePreparedArtifact(
-                                        source = prepared.share.file,
-                                        expectedBytes = prepared.byteCount,
-                                        displayName = prepared.share.displayName,
-                                        mimeType = prepared.share.mimeType,
-                                    ) { stageContext.ensureActive() }
-                                }
-                            }
-                        stageContext.ensureActive()
-                        if (pendingAction != null) {
-                            throw CancellationException("Playback closed before sharing began.")
-                        }
-                        // Pause before another activity gains the foreground. Media3 also releases
-                        // its focus through the lifecycle observer if the chooser backgrounds us.
-                        activePlayer?.pause()
-                        context.startActivity(
-                            AndroidMediaShareIntent.chooserIntent(
-                                context,
-                                listOf(published),
-                                mediaDeliveryMetadataSummary(listOf(clip))
-                                    .takeIf { configuration.includeMetadata },
-                            ),
-                        )
-                    } finally {
-                        cleanupFailed =
-                            withContext(NonCancellable) {
-                                runCatching {
-                                    frameioController.releaseExternalDelivery(prepared)
-                                }.isFailure
-                            }
-                    }
-                    if (cleanupFailed) {
-                        deliveryMessage = "The share opened, but its temporary export wasn't removed."
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    deliveryMessage = error.message ?: "Couldn't prepare this clip for sharing."
-                } finally {
-                    if (deliveryJob === runningJob) {
-                        deliveryJob = null
-                        deliveryInProgress = false
-                    }
-                }
+        val coordinator = mediaDeliveryCoordinator
+        if (coordinator != null) {
+            activePlayer?.pause()
+            deliveryMessage = null
+            coordinator.beginNativeShare(
+                items =
+                    listOf(
+                        MediaDeliveryWorkItem(
+                            cameraID = cameraID,
+                            clip = clip,
+                            entry = completedEntry,
+                        ),
+                    ),
+                configuration = configuration,
+            ) { published, metadata ->
+                context.startActivity(
+                    AndroidMediaShareIntent.chooserIntent(context, published, metadata),
+                )
             }
-        deliveryJob = job
-        deliveryMessage = null
-        deliveryInProgress = true
-        job.start()
+            return
+        }
+        deliveryMessage = "Delivery progress coordinator is unavailable."
     }
 
     fun beginGallerySave(configuration: MediaDeliveryConfiguration) {
         val completedEntry = shareableEntry ?: return
         if (deliveryInProgress || actionInProgress) return
-        val resumeAfterSave = activePlayer?.isPlaying == true
+        val coordinator = mediaDeliveryCoordinator
+        if (coordinator != null) {
+            activePlayer?.pause()
+            deliveryMessage = null
+            coordinator.beginSaveToPhotos(
+                items =
+                    listOf(
+                        MediaDeliveryWorkItem(
+                            cameraID = cameraID,
+                            clip = clip,
+                            entry = completedEntry,
+                        ),
+                    ),
+                configuration = configuration,
+            )
+            return
+        }
+        deliveryMessage = "Delivery progress coordinator is unavailable."
+    }
+
+    fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
+        val completedEntry = shareableEntry ?: return
+        if (deliveryInProgress || actionInProgress) return
+        val resumeAfter = activePlayer?.isPlaying == true
         activePlayer?.pause()
         val job =
             deliveryScope.launch(start = CoroutineStart.LAZY) {
@@ -407,55 +396,26 @@ private fun PlaybackClipSession(
                                 stageContext.ensureActive()
                             }
                         }
-                    val prepared =
-                        frameioController.prepareForExternalDelivery(
-                            FrameioDeliveryArtifact(
-                                share = staged,
-                                byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
-                                context =
-                                    FrameioArtifactContext(
-                                        cameraID = cameraID,
-                                        captureDate = clip.captureDate,
-                                        supportsLutBake = true,
-                                        stableClipIdentity = clip.libraryKey(cameraID),
-                                    ),
-                            ),
-                            configuration,
+                    val artifact =
+                        FrameioDeliveryArtifact(
+                            share = staged,
+                            byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
+                            context =
+                                FrameioArtifactContext(
+                                    cameraID = cameraID,
+                                    captureDate = clip.captureDate,
+                                    supportsLutBake = true,
+                                    stableClipIdentity = clip.libraryKey(cameraID),
+                                ),
                         )
-                    var cleanupFailed = false
-                    val result =
-                        try {
-                            withContext(Dispatchers.IO) {
-                                val artifact =
-                                    MediaGalleryArtifact.fromStagedShare(
-                                        prepared.share,
-                                        mediaCaptureTimestampMillis(clip.captureDate)
-                                            .takeIf { configuration.includeMetadata },
-                                    )
-                                MediaGallerySaver(galleryGateway).save(listOf(artifact)) {
-                                    stageContext.ensureActive()
-                                }
-                            }
-                        } finally {
-                            cleanupFailed =
-                                withContext(NonCancellable) {
-                                    runCatching {
-                                        frameioController.releaseExternalDelivery(prepared)
-                                    }.isFailure
-                                }
-                        }
-                    deliveryMessage =
-                        result.operatorMessage(
-                            MediaGalleryOmissions(
-                                temporaryCleanupFailureCount = if (cleanupFailed) 1 else 0,
-                            ),
-                        )
+                    frameioController.deliver(listOf(artifact), options)
+                    deliveryMessage = "Uploaded to Frame.io."
                 } catch (error: CancellationException) {
                     throw error
-                } catch (_: Exception) {
-                    deliveryMessage = "Couldn't prepare ${clip.filename} for Gallery."
+                } catch (error: Exception) {
+                    deliveryMessage = error.message ?: "Couldn't deliver this clip to Frame.io."
                 } finally {
-                    if (resumeAfterSave && pendingAction == null) activePlayer?.play()
+                    if (resumeAfter && pendingAction == null) activePlayer?.play()
                     if (deliveryJob === runningJob) {
                         deliveryJob = null
                         deliveryInProgress = false
@@ -585,70 +545,90 @@ private fun PlaybackClipSession(
                     )
                     .padding(horizontal = 16.dp, vertical = 14.dp),
             ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                PlaybackButton("‹", "Back", enabled = !actionInProgress) { requestClose() }
-                Text(
-                    clip.filename,
-                    modifier = Modifier.weight(1f),
-                    style = chromeStyle(14f, FontWeight.SemiBold),
-                    color = LiveDesign.text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                PlaybackButton(
-                    if (favorite) "★" else "☆",
-                    if (favorite) "Remove ${clip.filename} from favorites" else "Add ${clip.filename} to favorites",
-                    enabled = !actionInProgress,
-                    onClick = onToggleFavorite,
-                )
-            }
-            when (shareState) {
-                PlaybackShareState.BUFFERING ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    PlaybackIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        enabled = !actionInProgress,
+                        circular = true,
+                        size = 34.dp,
+                        onClick = { requestClose() },
+                    )
                     Text(
-                        "Buffering camera proxy. Delivery unlocks after the private cache completes.",
-                        modifier = Modifier.padding(start = 54.dp, top = 5.dp, end = 8.dp),
-                        style = chromeStyle(10.5f, FontWeight.Medium),
-                        color = LiveDesign.muted,
+                        clip.filename,
+                        modifier = Modifier.weight(1f),
+                        style = chromeStyle(14f, FontWeight.SemiBold),
+                        color = LiveDesign.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    PlaybackIconButton(
+                        icon = if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription =
+                            if (favorite) {
+                                "Remove ${clip.filename} from favorites"
+                            } else {
+                                "Add ${clip.filename} to favorites"
+                            },
+                        enabled = !actionInProgress,
+                        circular = true,
+                        size = 34.dp,
+                        tint = if (favorite) LiveDesign.accent else LiveDesign.text,
+                        onClick = onToggleFavorite,
+                    )
+                }
+                when (shareState) {
+                    PlaybackShareState.BUFFERING ->
+                        Text(
+                            "Buffering camera proxy. Delivery unlocks after the private cache completes.",
+                            modifier = Modifier.padding(start = 44.dp, top = 5.dp, end = 8.dp),
+                            style = chromeStyle(10.5f, FontWeight.Medium),
+                            color = LiveDesign.muted,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    PlaybackShareState.UNAVAILABLE,
+                    PlaybackShareState.READY,
+                    -> Unit
+                }
+                deliveryMessage?.let { message ->
+                    Text(
+                        message,
+                        modifier = Modifier.padding(start = 44.dp, top = 5.dp, end = 8.dp),
+                        style = chromeStyle(11f, FontWeight.Medium),
+                        color = LiveDesign.accent,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                PlaybackShareState.UNAVAILABLE,
-                PlaybackShareState.READY,
-                -> Unit
-            }
-            deliveryMessage?.let { message ->
-                Text(
-                    message,
-                    modifier = Modifier.padding(start = 54.dp, top = 5.dp, end = 8.dp),
-                    style = chromeStyle(11f, FontWeight.Medium),
-                    color = LiveDesign.accent,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+                }
             }
         }
 
         if (deliveryChooserPresented) {
-            NativeMediaDeliveryDialog(
-                selectedCount = 1,
-                shareReadyCount = 1,
-                galleryReadyCount = 1,
-                busy = deliveryInProgress,
+            MediaDeliveryPopup(
+                clipCount = 1,
+                readyCount = if (shareState == PlaybackShareState.READY) 1 else 0,
+                cameraConnected = true,
                 selectedLut = deliveryLut.takeIf { deliveryLutLabel != null },
                 selectedLutLabel = deliveryLutLabel,
+                frameioController = frameioController,
+                busy = deliveryInProgress,
                 onDismiss = { deliveryChooserPresented = false },
-                onShare = { configuration ->
+                onNativeShare = { configuration ->
                     deliveryChooserPresented = false
                     beginShare(configuration)
                 },
                 onSaveToGallery = { configuration ->
                     deliveryChooserPresented = false
                     beginGallerySave(configuration)
+                },
+                onFrameioDeliver = { options ->
+                    deliveryChooserPresented = false
+                    beginFrameioDelivery(options)
                 },
             )
         }
@@ -884,7 +864,15 @@ private fun ProgressivePlayer(
         while (isActive) {
             position = max(0L, player.currentPosition)
             duration = player.duration.takeIf { it > 0L && it != C.TIME_UNSET } ?: 0L
-            bufferedFraction = entry.progress.toFloat().coerceIn(0f, 1f)
+            // Prefer ExoPlayer buffered window; fall back to cache-download progress.
+            val playerBuffered =
+                if (duration > 0L) {
+                    (player.bufferedPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+            bufferedFraction =
+                max(playerBuffered, entry.progress.toFloat().coerceIn(0f, 1f))
             playing = player.isPlaying
             playbackState = player.playbackState
             playbackError = player.playerError
@@ -1293,7 +1281,7 @@ private fun ProgressivePlayer(
                 if (assistMode) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         AssistToolbar(
                             state = playbackAssistState.assists,
@@ -1326,61 +1314,65 @@ private fun ProgressivePlayer(
                                 assistOptionsTool = tool
                             },
                         )
-                        PlaybackButton(
-                            "VIEW",
-                            "Hide playback assist toolbar",
+                        PlaybackIconButton(
+                            icon = Icons.Outlined.CenterFocusWeak,
+                            contentDescription = "Hide playback assist toolbar",
                             highlighted = true,
-                        ) {
-                            assistOptionsTool = null
-                            assistMode = false
-                        }
+                            action = true,
+                            onClick = {
+                                assistOptionsTool = null
+                                assistMode = false
+                            },
+                        )
                     }
                 } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // iOS scrubber row: time · scrubber · duration
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
                         TimeLabel(if (scrubbing) scrubPosition.toLong() else position)
-                        Slider(
-                            value = scrubPosition.coerceIn(0f, max(1f, duration.toFloat())),
-                            onValueChange = { value ->
-                                if (!scrubbing) {
+                        PlaybackScrubber(
+                            progressMs = if (scrubbing) scrubPosition.toLong() else position,
+                            durationMs = duration,
+                            bufferedFraction = bufferedFraction,
+                            onScrubbingChanged = { active ->
+                                if (active && !scrubbing) {
                                     wasPlayingBeforeScrub = player.isPlaying
                                     player.pause()
                                     player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
                                     scrubbing = true
+                                } else if (!active) {
+                                    scrubbing = false
                                 }
-                                val target = clampScrub(value)
+                            },
+                            onProgressChange = { target ->
+                                scrubPosition = target.toFloat()
                                 val now = SystemClock.elapsedRealtime()
                                 if (PlaybackTimeline.shouldPreviewSeek(lastPreviewSeekAt, now)) {
                                     player.seekTo(target)
                                     lastPreviewSeekAt = now
                                 }
                             },
-                            onValueChangeFinished = {
-                                val target = clampScrub(scrubPosition)
+                            onSeek = { target ->
                                 player.setSeekParameters(SeekParameters.EXACT)
                                 player.seekTo(target)
                                 position = target
+                                scrubPosition = target.toFloat()
                                 scrubbing = false
                                 reachedEnd = target >= duration && duration > 0L
                                 if (wasPlayingBeforeScrub) player.play()
                             },
-                            valueRange = 0f..max(1f, duration.toFloat()),
                             modifier = Modifier.weight(1f),
-                            colors =
-                                SliderDefaults.colors(
-                                    thumbColor = LiveDesign.accent,
-                                    activeTrackColor = LiveDesign.accent,
-                                    inactiveTrackColor = LiveDesign.hairline,
-                                ),
                         )
                         TimeLabel(duration)
                     }
+                    // iOS transport: −15 · play/pause · +15 · spacer · mute · view assist · share
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        // iOS SF-style compact glyphs (gobackward.15 / play / goforward.15 /
-                        // speaker) — keep labels short for landscape phone height.
-                        PlaybackButton("↩15", "Back 15 seconds") {
+                        PlaybackSkipButton(seconds = 15, reverse = true) {
                             val target =
                                 PlaybackTimeline.clampPosition(
                                     player.currentPosition - 15_000L,
@@ -1389,11 +1381,19 @@ private fun ProgressivePlayer(
                             player.seekTo(target)
                             reachedEnd = false
                         }
-                        PlaybackButton(
-                            if (reachedEnd) "↺" else if (playing) "❚❚" else "▶",
-                            if (reachedEnd) "Replay from beginning" else "Play or pause",
-                        ) { togglePlayback() }
-                        PlaybackButton("15↪", "Forward 15 seconds") {
+                        PlaybackIconButton(
+                            icon =
+                                when {
+                                    reachedEnd -> Icons.Filled.Replay
+                                    playing -> Icons.Filled.Pause
+                                    else -> Icons.Filled.PlayArrow
+                                },
+                            contentDescription =
+                                if (reachedEnd) "Replay from beginning" else "Play or pause",
+                            primary = true,
+                            onClick = { togglePlayback() },
+                        )
+                        PlaybackSkipButton(seconds = 15, reverse = false) {
                             val target =
                                 PlaybackTimeline.clampPosition(
                                     player.currentPosition + 15_000L,
@@ -1403,29 +1403,35 @@ private fun ProgressivePlayer(
                             if (target < duration) reachedEnd = false
                         }
                         Spacer(Modifier.weight(1f))
-                        PlaybackButton(
-                            if (audioMode == PlaybackAudioMode.MUTED) "🔇" else "🔊",
-                            if (audioMode == PlaybackAudioMode.MUTED) "Unmute" else "Mute",
-                        ) {
-                            audioMode = audioMode.toggled()
-                            player.volume = audioMode.volume
-                        }
-                        PlaybackButton(
-                            "VIEW",
-                            "Show playback assist toolbar",
-                            highlighted = playbackAssistState.hasAnyVisibleAssist,
-                        ) {
-                            assistMode = true
-                        }
-                        // iOS places Share on the bottom transport row (not the top bar).
-                        if (shareReady) {
-                            PlaybackButton(
-                                if (deliveryInProgress) "…" else "⇧",
-                                "Share or deliver this clip",
-                                enabled = !deliveryInProgress,
-                                onClick = onShare,
-                            )
-                        }
+                        PlaybackIconButton(
+                            icon =
+                                if (audioMode == PlaybackAudioMode.MUTED) {
+                                    Icons.Filled.VolumeOff
+                                } else {
+                                    Icons.Filled.VolumeUp
+                                },
+                            contentDescription =
+                                if (audioMode == PlaybackAudioMode.MUTED) "Unmute" else "Mute",
+                            action = true,
+                            onClick = {
+                                audioMode = audioMode.toggled()
+                                player.volume = audioMode.volume
+                            },
+                        )
+                        PlaybackIconButton(
+                            icon = Icons.Outlined.CenterFocusWeak,
+                            contentDescription = "Show playback assist toolbar",
+                            highlighted = playbackAssistState.hasAnyVisibleAssist || assistMode,
+                            action = true,
+                            onClick = { assistMode = true },
+                        )
+                        PlaybackIconButton(
+                            icon = Icons.Filled.Share,
+                            contentDescription = "Share or deliver this clip",
+                            enabled = shareReady && !deliveryInProgress,
+                            action = true,
+                            onClick = onShare,
+                        )
                     }
                 }
             }
@@ -1521,34 +1527,97 @@ private fun PlaybackNavigationButton(
     }
 }
 
+/** iOS transport/action glass button with Material vector (SF Symbol stand-in). */
 @Composable
-private fun PlaybackButton(
-    label: String,
+private fun PlaybackIconButton(
+    icon: ImageVector,
     contentDescription: String,
     enabled: Boolean = true,
     highlighted: Boolean = false,
+    primary: Boolean = false,
+    action: Boolean = false,
+    circular: Boolean = false,
+    size: androidx.compose.ui.unit.Dp? = null,
+    tint: Color? = null,
     onClick: () -> Unit,
 ) {
+    val width =
+        size
+            ?: if (action) {
+                PlaybackChrome.actionButtonWidth
+            } else {
+                PlaybackChrome.transportButtonWidth
+            }
+    val height = size ?: if (action) PlaybackChrome.actionButtonHeight else PlaybackChrome.transportButtonHeight
+    val iconSize =
+        when {
+            primary -> PlaybackChrome.primaryTransportIconSize
+            action || circular -> PlaybackChrome.actionIconSize
+            else -> PlaybackChrome.transportIconSize
+        }
+    val shape = if (circular || size != null) CircleShape else PlaybackChrome.corner
     Box(
-        Modifier.size(width = if (label.length > 2) 54.dp else 44.dp, height = 40.dp)
-            .glass(CircleShape)
+        Modifier.size(width = width, height = height)
+            .then(
+                if (highlighted && !circular) {
+                    Modifier.background(LiveDesign.accentDim, shape)
+                } else {
+                    Modifier
+                },
+            )
+            .glass(shape)
             .semantics {
                 this.contentDescription = contentDescription
                 role = Role.Button
                 if (!enabled) disabled()
-            }.chromeClickable { if (enabled) onClick() },
+            }
+            .chromeClickable { if (enabled) onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            label,
-            style = chromeStyle(if (label.length > 2) 9f else 16f, FontWeight.SemiBold),
-            color =
-                when {
-                    !enabled -> LiveDesign.faint
-                    highlighted -> LiveDesign.accent
-                    else -> LiveDesign.text
-                },
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(iconSize),
+            tint =
+                tint
+                    ?: when {
+                        !enabled -> LiveDesign.faint
+                        highlighted -> LiveDesign.accent
+                        else -> LiveDesign.text
+                    },
         )
+    }
+}
+
+/** iOS `gobackward.15` / `goforward.15` compact skip control. */
+@Composable
+private fun PlaybackSkipButton(seconds: Int, reverse: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(
+                width = PlaybackChrome.transportButtonWidth,
+                height = PlaybackChrome.transportButtonHeight,
+            )
+            .glass(PlaybackChrome.corner)
+            .semantics {
+                contentDescription =
+                    if (reverse) "Back $seconds seconds" else "Forward $seconds seconds"
+                role = Role.Button
+            }
+            .chromeClickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                if (reverse) "↺" else "↻",
+                style = chromeStyle(11f, FontWeight.SemiBold),
+                color = LiveDesign.text,
+            )
+            Text(
+                "$seconds",
+                style = chromeStyle(8f, FontWeight.Bold, mono = true),
+                color = LiveDesign.text,
+            )
+        }
     }
 }
 
@@ -1556,7 +1625,7 @@ private fun PlaybackButton(
 private fun TimeLabel(milliseconds: Long) {
     Text(
         formatPlaybackTime(milliseconds),
-        modifier = Modifier.size(width = 42.dp, height = 18.dp),
+        modifier = Modifier.size(width = 40.dp, height = 18.dp),
         style = chromeStyle(10f, FontWeight.Medium, mono = true),
         color = LiveDesign.muted,
     )

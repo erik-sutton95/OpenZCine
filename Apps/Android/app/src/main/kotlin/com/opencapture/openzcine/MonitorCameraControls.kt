@@ -237,8 +237,9 @@ internal fun monitorCaptureSettings(
     val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
     val focus =
         dashboard.sideSections.firstOrNull { it.kind == CommandSideSectionKind.FOCUS }?.cells.orEmpty()
-    val exposure =
-        dashboard.sideSections.firstOrNull { it.kind == CommandSideSectionKind.EXPOSURE }?.cells.orEmpty()
+    // Capture-bar exposure helpers live off the DISP 3 side column (iOS CommandSideColumn
+    // has no Exposure section); still project Base ISO / shutter mode / WB tint here.
+    val exposure = dashboard.captureExposureCells
 
     fun mode(label: String, tile: CommandTilePresentation?): MonitorPickerModePresentation? =
         tile?.request

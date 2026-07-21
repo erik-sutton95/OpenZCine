@@ -72,9 +72,16 @@ class MonitorPreviewPolicyTest {
 
         assertNull(monitorPreviewFrameSource(source, isCommandMode = true))
         assertEquals(timecode, retention.timecodeFor(connectedA))
+        // Disabled / missing headers must not wipe the last good camera TC
+        // (Nikon briefly reports on=false around record transitions).
         retention.accept(LiveFrameTimecode(false, 0, 0, 0, 0))
-        assertNull(retention.timecodeFor(connectedA))
-        retention.accept(timecode)
+        assertEquals(timecode, retention.timecodeFor(connectedA))
+        retention.accept(null)
+        assertEquals(timecode, retention.timecodeFor(connectedA))
+        // Second boundary must publish immediately (frame-only ticks are rate-limited).
+        val advanced = LiveFrameTimecode(true, 1, 2, 4, 0)
+        retention.accept(advanced)
+        assertEquals(advanced, retention.timecodeFor(connectedA))
         assertNull(retention.timecodeFor(CameraSessionState.Disconnected))
         assertNull(retention.timecodeFor(CameraSessionState.Connected(cameraB)))
         assertNull(

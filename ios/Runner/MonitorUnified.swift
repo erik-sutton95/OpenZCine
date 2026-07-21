@@ -170,7 +170,6 @@ struct MonitorInfoBar: View {
         @Environment(NativeAppModel.self) private var model
 
         var body: some View {
-            let tc = model.cameraState.timecode
             ZStack {
                 // Storage/minutes centered on the SCREEN, not the leftover space (spec §1): a bare
                 // Text in the ZStack centers within the full bar width regardless of siblings.
@@ -180,13 +179,10 @@ struct MonitorInfoBar: View {
                     .lineLimit(1)
 
                 HStack {
-                    // Same accent-frames split as the landscape timecode: HH:MM:SS text, :FF accent.
-                    (Text(String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second))
-                        .foregroundStyle(LiveDesign.text)
-                        + Text(String(format: ":%02d", tc.frame))
-                        .foregroundStyle(LiveDesign.accent))
-                        .font(.system(size: 15, weight: .regular, design: .monospaced))
-                        .lineLimit(1)
+                    // Must read `liveTimecode` (not `cameraState.timecode`) — per-frame telemetry
+                    // is held separately so the HUD struct is not invalidated every tick.
+                    // A nested leaf observes that property so only this text re-renders.
+                    PortraitInfoBarTimecode()
 
                     Spacer(minLength: 8)
 
@@ -209,6 +205,23 @@ struct MonitorInfoBar: View {
                 isCharging: model.cameraBatteryCharging,
                 layout: .inline
             )
+        }
+    }
+
+    /// Portrait top-bar timecode leaf — same source as landscape (`liveTimecode`), isolated so
+    /// the ~30 Hz tick does not invalidate the whole info bar.
+    private struct PortraitInfoBarTimecode: View {
+        @Environment(NativeAppModel.self) private var model
+
+        var body: some View {
+            let tc = model.liveTimecode
+            return
+                (Text(String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second))
+                .foregroundStyle(LiveDesign.text)
+                + Text(String(format: ":%02d", tc.frame))
+                .foregroundStyle(LiveDesign.accent))
+                .font(.system(size: 15, weight: .regular, design: .monospaced))
+                .lineLimit(1)
         }
     }
 }

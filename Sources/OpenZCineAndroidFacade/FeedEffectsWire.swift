@@ -291,8 +291,13 @@ public enum FeedEffectsWire {
         let peak = peakingColor.rgb
         let highlight = zebraRGB(highlightColor)
         let midtone = zebraRGB(midtoneColor)
+        // Peaking de-log matches iOS ImageEffectsCompositor exactly: always
+        // redLog3G10 quarter-axis samples (not the live camera curve). Using
+        // the active camera mapping expands N-Log noise and over-peaks defocus.
         let deLog = (0...4).map { index in
-            Float(mapping.monitorPercent(signalNative: Double(index) / 4 * 255) / 100)
+            Float(
+                ExposureScale.referenceIRE(
+                    signalNative: Double(index) / 4 * 255, curve: .redLog3G10) / 100)
         }
         return [
             Float(curveOrdinal(mapping.curve)),

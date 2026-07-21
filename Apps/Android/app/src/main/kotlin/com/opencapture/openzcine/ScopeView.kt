@@ -68,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.bridge.ScopeAnchors
 import com.opencapture.openzcine.bridge.ScopeTraces
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -916,19 +917,24 @@ internal fun FloatingScopePanel(
             width = frame.width + SCOPE_RESIZE_GRIP_PAD,
             height = frame.height + SCOPE_RESIZE_GRIP_PAD,
         )
-    Box(
-        Modifier
-            .zone(outerFrame)
-            .graphicsLayer {
-                val lifted = isDragging || isResizing
-                scaleX = if (lifted) 1.03f else 1f
-                scaleY = if (lifted) 1.03f else 1f
-                shadowElevation = if (lifted) 18.dp.toPx() else 0f
-            },
-    ) {
+    val lifted = isDragging || isResizing
+    // Outer box is only layout + grip hit area — never elevate it (empty pad
+    // made a hard rectangular "box under" shadow). Lift/shadow match iOS soft
+    // shadow on the panel chrome only.
+    Box(Modifier.zone(outerFrame)) {
         Box(
             Modifier
                 .size(frame.width.dp, frame.height.dp)
+                .zIndex(if (lifted) 1f else 0f)
+                .graphicsLayer {
+                    scaleX = if (lifted) 1.03f else 1f
+                    scaleY = if (lifted) 1.03f else 1f
+                    shadowElevation = if (lifted) 18.dp.toPx() else 0f
+                    shape = ChromeShape
+                    clip = true
+                    ambientShadowColor = Color.Black.copy(alpha = 0.5f)
+                    spotShadowColor = Color.Black.copy(alpha = 0.5f)
+                }
                 .semantics {
                     contentDescription = panelDescription
                     if (placementStore != null) {
@@ -2074,27 +2080,44 @@ private class ScopeTickStats(private val log: (String) -> Unit) {
 
 // ── Drawing ──
 
-/** iOS `scopePlotRect`: 6pt side insets, 26pt title clearance, 8pt bottom. */
-private fun DrawScope.plotRect(): Rect =
-    Rect(
-        6.dp.toPx(),
-        26.dp.toPx(),
-        size.width - 6.dp.toPx(),
-        size.height - 8.dp.toPx(),
-    )
+/** Base histogram panel width used for proportional edge-chrome scaling. */
+private const val HISTOGRAM_BASE_WIDTH_DP = 250f
+
+/**
+ * Edge traffic-light chrome scale relative to panel width. Centered in the
+ * plot band; kept just under 1.0 so a 3-high stack never clips the bottom.
+ */
+private const val HISTOGRAM_TRAFFIC_LIGHT_SCALE = 0.92f
 
 /** Leaves the iOS-matched left/right clearance for histogram RGB edge blocks. */
-private fun DrawScope.histogramPlotRect(showTrafficLights: Boolean): Rect =
-    if (!showTrafficLights) {
-        plotRect()
+private fun DrawScope.histogramPlotRect(showTrafficLights: Boolean): Rect {
+    val uiScale = histogramUiScale()
+    return if (!showTrafficLights) {
+        plotRect(uiScale)
     } else {
         Rect(
-            26.dp.toPx(),
-            26.dp.toPx(),
-            size.width - 26.dp.toPx(),
-            size.height - 8.dp.toPx(),
+            26.dp.toPx() * uiScale,
+            26.dp.toPx() * uiScale,
+            size.width - 26.dp.toPx() * uiScale,
+            size.height - 8.dp.toPx() * uiScale,
         )
     }
+}
+
+/** Panel-relative scale so edge chrome grows/shrinks with histogram resize. */
+private fun DrawScope.histogramUiScale(): Float {
+    val baseWidthPx = HISTOGRAM_BASE_WIDTH_DP.dp.toPx()
+    return if (baseWidthPx <= 0f) 1f else (size.width / baseWidthPx).coerceAtLeast(0.01f)
+}
+
+/** iOS `scopePlotRect`: 6pt side insets, 26pt title clearance, 8pt bottom. */
+private fun DrawScope.plotRect(uiScale: Float = 1f): Rect =
+    Rect(
+        6.dp.toPx() * uiScale,
+        26.dp.toPx() * uiScale,
+        size.width - 6.dp.toPx() * uiScale,
+        size.height - 8.dp.toPx() * uiScale,
+    )
 
 /** iOS `scopeLevelY`: display level 0…1 to y, with the 4% top/bottom buffer. */
 private fun levelY(level: Float, plot: Rect): Float =
@@ -2253,15 +2276,26 @@ private fun DrawScope.drawHistogramClipZone(plot: Rect, lights: TrafficLightsRea
 
 /** Small RGB edge blocks flanking the histogram — left crush, right clip. */
 private fun DrawScope.drawHistogramTrafficLights(reading: TrafficLightsReading) {
-    val blockWidth = 7.5.dp.toPx()
-    val blockHeight = 15.dp.toPx()
-    val gap = 3.dp.toPx()
-    // iOS sits the columns just below the HISTO / RGBL title row; the title
-    // band is the 26dp plot clearance, hugged up slightly.
-    val top = 24.dp.toPx()
-    val left = 11.dp.toPx()
-    val right = size.width - 11.dp.toPx() - blockWidth
-    val corner = CornerRadius(2.dp.toPx())
+    val uiScale = histogramUiScale() * HISTOGRAM_TRAFFIC_LIGHT_SCALE
+    val blockWidth = 7.dp.toPx() * uiScale
+    val blockHeight = 13.5.dp.toPx() * uiScale
+    val gap = 2.75.dp.toPx() * uiScale
+    val columnHeight = blockHeight * 3f + gap * 2f
+    // Vertically center the RGB stack in the plot band (below title, above bottom).
+    val plotTop = 26.dp.toPx() * histogramUiScale()
+    val plotBottom = size.height - 8.dp.toPx() * histogramUiScale()
+    val plotMid = (plotTop + plotBottom) * 0.5f
+    var top = plotMid - columnHeight * 0.5f
+    // Keep inside the panel with a little margin.
+    val minTop = 4.dp.toPx() * histogramUiScale()
+    val maxBottom = size.height - 4.dp.toPx() * histogramUiScale()
+    if (top < minTop) top = minTop
+    if (top + columnHeight > maxBottom) top = (maxBottom - columnHeight).coerceAtLeast(minTop)
+    val sideInset = 11.dp.toPx() * histogramUiScale()
+    val left = sideInset
+    val right = size.width - sideInset - blockWidth
+    val corner = CornerRadius(2.dp.toPx() * uiScale)
+    val stroke = (1.4.dp.toPx() * uiScale).coerceAtLeast(1f)
     val channels =
         listOf(
             Triple(ScopePalette.trafficRed, reading.red.crush, reading.red.clip),
@@ -2283,7 +2317,7 @@ private fun DrawScope.drawHistogramTrafficLights(reading: TrafficLightsReading) 
             topLeft = Offset(x, y),
             size = Size(blockWidth, blockHeight),
             cornerRadius = corner,
-            style = Stroke(1.5.dp.toPx()),
+            style = Stroke(stroke),
         )
     }
 

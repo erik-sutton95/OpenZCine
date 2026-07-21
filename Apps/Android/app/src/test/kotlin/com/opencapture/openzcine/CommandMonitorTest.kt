@@ -483,25 +483,37 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
+        // iOS CommandSideColumn: Image / Focus / Audio / Monitor (no Exposure).
         assertEquals(
-            listOf("Image", "Exposure", "Focus", "Audio"),
+            listOf("Image", "Focus", "Audio", "Monitor"),
             presentation.sideSections.map { it.title },
         )
-        assertEquals(4, presentation.sideSections.first { it.title == "Image" }.cells.size)
+        val image = presentation.sideSections.first { it.title == "Image" }.cells
+        assertEquals(2, image.size)
+        assertEquals("Tone", image[0].title)
+        assertEquals("Picture Profile", image[1].title)
+        assertTrue(image[1].muted)
         val focus = presentation.sideSections.first { it.title == "Focus" }.cells
         assertEquals(CameraControl.FOCUS_MODE, assertNotNull(focus[0].request).control)
         assertEquals(CameraControl.FOCUS_AREA, assertNotNull(focus[1].request).control)
         assertEquals(CameraControl.FOCUS_SUBJECT, assertNotNull(focus[2].request).control)
         assertContains(assertNotNull(focus[2].request).options, "Airplane")
 
+        // iOS Audio order: Sens, 32-bit Float, Input, Wind, Atten
         val audio = presentation.sideSections.first { it.title == "Audio" }.cells
         assertEquals(CameraControl.AUDIO_SENSITIVITY, assertNotNull(audio[0].request).control)
-        assertEquals(CameraControl.AUDIO_INPUT, assertNotNull(audio[1].request).control)
-        assertEquals(CameraControl.WIND_FILTER, assertNotNull(audio[2].request).control)
-        assertEquals(CameraControl.ATTENUATOR, assertNotNull(audio[3].request).control)
-        assertEquals(CameraControl.AUDIO_32_BIT_FLOAT, assertNotNull(audio[4].request).control)
+        assertEquals(CameraControl.AUDIO_32_BIT_FLOAT, assertNotNull(audio[1].request).control)
+        assertEquals(CameraControl.AUDIO_INPUT, assertNotNull(audio[2].request).control)
+        assertEquals(CameraControl.WIND_FILTER, assertNotNull(audio[3].request).control)
+        assertEquals(CameraControl.ATTENUATOR, assertNotNull(audio[4].request).control)
         assertContains(assertNotNull(audio[0].request).options, "20")
-        assertContains(assertNotNull(audio[1].request).options, "Microphone")
+        assertContains(assertNotNull(audio[2].request).options, "Microphone")
+        assertEquals(
+            "Grid",
+            presentation.sideSections.first { it.title == "Monitor" }.cells.single().title,
+        )
+        // Capture-bar helpers stay available off the side column.
+        assertEquals(4, presentation.captureExposureCells.size)
     }
 
     @Test
@@ -553,10 +565,11 @@ class CommandMonitorTest {
                 presentation.sideSections.first { it.title == "Focus" }.cells.first().request,
             ).options,
         )
+        // Audio order is Sens, 32-bit, Input — Input is index 2.
         assertEquals(
             listOf("Line"),
             assertNotNull(
-                presentation.sideSections.first { it.title == "Audio" }.cells[1].request,
+                presentation.sideSections.first { it.title == "Audio" }.cells[2].request,
             ).options,
         )
     }
@@ -584,35 +597,74 @@ class CommandMonitorTest {
     }
 
     @Test
-    fun `electronic VR consumes only the Swift authorized capability`() {
-        fun electronicVr(options: List<String>): CommandTilePresentation {
-            val presentation =
-                commandDashboardPresentation(
-                    snapshot =
-                        CameraPropertySnapshot(
-                            codec = "N-RAW",
-                            electronicVr = "OFF",
-                            controlCapabilities =
-                                CameraControlCapabilities(electronicVr = options),
-                        ),
-                    refreshStatus = CameraPropertyRefreshStatus.Ready,
-                    sessionState =
-                        CameraSessionState.Connected(
-                            CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
-                        ),
-                    tileOrder = CommandTileKind.entries.toList(),
-                )
-            return presentation.sideSections.first { it.title == "Image" }.cells.first {
-                it.title == "e-VR"
-            }
-        }
+    fun `electronic VR is only on the primary VR tile not the side column`() {
+        // iOS removed Assist/DISP/Guides and side-column VR/e-VR — VR lives on the
+        // primary grid as "VR / e-VR". Side Image is Tone + Picture Profile only.
+        val presentation =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        codec = "N-RAW",
+                        electronicVr = "OFF",
+                        vibrationReduction = "ON",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                vibrationReduction = listOf("OFF", "ON"),
+                                electronicVr = listOf("OFF", "ON"),
+                            ),
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+        assertEquals(
+            listOf("Tone", "Picture Profile"),
+            presentation.sideSections.first { it.title == "Image" }.cells.map { it.title },
+        )
+        val vr = presentation.tiles.first { it.kind == CommandTileKind.STABILIZATION }
+        assertEquals("ON / OFF", vr.value)
+        assertNotNull(vr.request)
+        assertEquals(CameraControl.VIBRATION_REDUCTION, vr.request!!.control)
+    }
 
-        val unavailable = electronicVr(emptyList())
-        assertEquals(null, unavailable.request)
-        assertContains(unavailable.unavailableReason.orEmpty(), "active codec")
-        val authorized = assertNotNull(electronicVr(listOf("OFF", "ON")).request)
-        assertEquals(CameraControl.ELECTRONIC_VR, authorized.control)
-        assertEquals(listOf("OFF", "ON"), authorized.options)
+    @Test
+    fun `side section rows match iOS CmdRow packing`() {
+        val audio =
+            CommandSideSectionPresentation(
+                kind = CommandSideSectionKind.AUDIO,
+                title = "Audio",
+                cells =
+                    listOf(
+                        CommandTilePresentation(title = "Sens", value = "Auto"),
+                        CommandTilePresentation(title = "32-bit Float", value = "ON"),
+                        CommandTilePresentation(title = "Input", value = "MIC"),
+                        CommandTilePresentation(title = "Wind", value = "OFF"),
+                        CommandTilePresentation(title = "Atten", value = "OFF"),
+                    ),
+            )
+        val rows = commandSideSectionRows(audio)
+        assertEquals(3, rows.size)
+        assertEquals(listOf("Sens", "32-bit Float"), rows[0].map { it.title })
+        assertEquals(listOf("Input", "Wind"), rows[1].map { it.title })
+        assertEquals(listOf("Atten"), rows[2].map { it.title })
+
+        val focus =
+            CommandSideSectionPresentation(
+                kind = CommandSideSectionKind.FOCUS,
+                title = "Focus",
+                cells =
+                    listOf(
+                        CommandTilePresentation(title = "Mode", value = "AF-C"),
+                        CommandTilePresentation(title = "Area", value = "Wide-L"),
+                        CommandTilePresentation(title = "Subject", value = "People"),
+                    ),
+            )
+        val focusRows = commandSideSectionRows(focus)
+        assertEquals(listOf("Mode", "Area"), focusRows[0].map { it.title })
+        assertEquals(listOf("Subject"), focusRows[1].map { it.title })
     }
 
     @Test

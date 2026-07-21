@@ -293,6 +293,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.compose.material3)
+    // Playback transport SF-symbol stand-ins (play/pause/share/volume/star).
+    implementation(libs.compose.material.icons.extended)
     // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
     implementation(libs.kyant.backdrop)
     // Capsule shape used by the catalog LiquidSlider (runtime of backdrop; compile-visible here).

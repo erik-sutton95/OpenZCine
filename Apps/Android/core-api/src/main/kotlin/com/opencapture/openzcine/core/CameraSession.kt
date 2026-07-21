@@ -14,6 +14,8 @@ private val noCameraProperties: StateFlow<CameraPropertySnapshot> =
 private val noCameraPropertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
     MutableStateFlow(CameraPropertyRefreshStatus.Idle)
 
+private val alwaysReadyInitialMonitorProperties: StateFlow<Boolean> = MutableStateFlow(true)
+
 private val noCameraRoundTripMilliseconds: StateFlow<Double?> = MutableStateFlow(null)
 
 private val noCameraConnectionProgress: StateFlow<CameraConnectionProgress> =
@@ -632,6 +634,17 @@ public interface CameraSession {
      */
     public val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus>
         get() = noCameraPropertyRefreshStatus
+
+    /**
+     * True after the first post-connect property bootstrap has finished (or
+     * when this session does not perform a bootstrap).
+     *
+     * Production sessions set this false while the full AF/lens/focus/audio
+     * burst runs, then true so the monitor can open live view. Transport-only
+     * and demo sessions default to true so they never block the feed.
+     */
+    public val initialMonitorPropertiesReady: StateFlow<Boolean>
+        get() = alwaysReadyInitialMonitorProperties
 
     /**
      * Latest real serialized PTP command round-trip duration.

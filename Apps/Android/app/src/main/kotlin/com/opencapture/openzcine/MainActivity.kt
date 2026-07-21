@@ -74,9 +74,15 @@ import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.media.MediaCacheStore
+import com.opencapture.openzcine.media.MediaDeliveryCompletionToast
+import com.opencapture.openzcine.media.MediaDeliveryCoordinator
+import com.opencapture.openzcine.media.MediaDeliveryProgressOverlay
 import com.opencapture.openzcine.media.MediaLibraryCameraBucket
 import com.opencapture.openzcine.media.MediaLibraryIndex
 import com.opencapture.openzcine.media.SharedPreferencesMediaLibraryPreferences
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
@@ -177,6 +183,7 @@ class MainActivity : ComponentActivity() {
             // branded splash is LaunchSplashOverlay (rounded logo + wordmark).
             SideEffect { composeFirstFrameDrawn.set(true) }
             OpenZCineTheme {
+                Box(Modifier.fillMaxSize()) {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 // A monitor reached from a saved card retains that exact
                 // profile. Link settings may then leave the monitor without
@@ -204,6 +211,17 @@ class MainActivity : ComponentActivity() {
                     }
                 val frameioController =
                     remember { frameioDeliveryController(applicationContext, lutLibrary) }
+                // App-scoped share/export progress (iOS MediaDeliveryCoordinator).
+                val mediaDeliveryCoordinator =
+                    remember(frameioController) {
+                        MediaDeliveryCoordinator(
+                            appContext = applicationContext,
+                            frameioController = frameioController,
+                        )
+                    }
+                LaunchedEffect(frameioController.deliveryState) {
+                    mediaDeliveryCoordinator.bindFrameioDeliveryState(frameioController.deliveryState)
+                }
                 val liveViewGuide =
                     remember {
                         LiveViewGuideController(applicationContext, diagnostics::record)
@@ -380,6 +398,7 @@ class MainActivity : ComponentActivity() {
                         operatorSettings = operatorSettings,
                         lutLibrary = lutLibrary,
                         frameioController = frameioController,
+                        mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                         selectedLut = offlineAssist.selectedLut,
                         onClose = { offlineMediaBuckets = null },
                     )
@@ -409,12 +428,6 @@ class MainActivity : ComponentActivity() {
                                         // complete on-device cache bucket.
                                         offlineMediaBuckets =
                                             completedMediaBuckets.values.toList()
-                                    },
-                                    cachedMediaCameraIDs = completedMediaBuckets.keys,
-                                    onOpenCachedMedia = { record ->
-                                        completedMediaBuckets[record.id]?.let { bucket ->
-                                            offlineMediaBuckets = listOf(bucket)
-                                        }
                                     },
                                     requestedReconnectID = requestedReconnectID,
                                     onReconnectRequestConsumed = { requestedReconnectID = null },
@@ -694,6 +707,7 @@ class MainActivity : ComponentActivity() {
                                         operatorSettings = operatorSettings,
                                         lutLibrary = lutLibrary,
                                         frameioController = frameioController,
+                                        mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                                         selectedLut = assist.selectedLut,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         galleryFailureInjection =
@@ -713,6 +727,33 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                // Global delivery progress (iOS MediaDeliveryGlobalOverlay) — survives
+                // leaving media browser / playback while export or Frame.io upload runs.
+                mediaDeliveryCoordinator.overlayState?.let { state ->
+                    Box(
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .windowInsetsPadding(WindowInsets.safeDrawing)
+                            .padding(top = 12.dp, start = 16.dp, end = 16.dp),
+                    ) {
+                        MediaDeliveryProgressOverlay(
+                            state = state,
+                            expanded = mediaDeliveryCoordinator.isExpanded,
+                            onCancel = mediaDeliveryCoordinator::cancel,
+                            onExpandToggle = {
+                                mediaDeliveryCoordinator.isExpanded =
+                                    !mediaDeliveryCoordinator.isExpanded
+                            },
+                        )
+                    }
+                }
+                mediaDeliveryCoordinator.completionToast?.let { toast ->
+                    MediaDeliveryCompletionToast(
+                        message = toast,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+                }
+                } // app-root Box
             }
         }
     }

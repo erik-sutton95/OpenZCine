@@ -67,7 +67,7 @@ enum StartupConnectionCopy {
         case .reconnecting:
             return "Reconnecting"
         case .preparingLiveView:
-            return "Starting"
+            return "Reading"
         case .connected:
             return "Connected"
         }
@@ -167,7 +167,10 @@ struct StartupHeader: View {
 
     private var statusColor: Color {
         if isBusy
-            || ["Looking", "Pairing", "Reconnecting", "Starting", "Discovering", "Preparing"]
+            || [
+                "Looking", "Pairing", "Reconnecting", "Starting", "Reading", "Discovering",
+                "Preparing",
+            ]
                 .contains(statusTitle)
         {
             return StartupColors.accent
@@ -176,20 +179,26 @@ struct StartupHeader: View {
     }
 }
 
-/// Minimal inline state shown while live view starts automatically after a successful
-/// connection. Replaces the former full-screen "Camera ready" landing page.
+/// Minimal inline state shown while the post-connect property burst and first
+/// live-view frame run after a successful connection (Android "Reading camera
+/// settings…" parity). Replaces the former full-screen "Camera ready" landing.
 struct StartupPreparingLiveView: View {
     @Environment(NativeAppModel.self) private var model
     let compact: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            StartupIconSquare(systemName: "checkmark.circle", size: 48)
+            HStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.regular)
+                    .tint(StartupColors.accent)
+                StartupIconSquare(systemName: "camera.aperture", size: 48)
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(
                     model.userFacingConnectionMessage.isEmpty
-                        ? "Starting live view…"
+                        ? "Reading camera settings…"
                         : model.userFacingConnectionMessage
                 )
                 .font(.system(size: 15, weight: .semibold, design: .rounded))

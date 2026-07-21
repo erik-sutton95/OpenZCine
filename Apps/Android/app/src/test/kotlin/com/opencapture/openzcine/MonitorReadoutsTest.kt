@@ -1,12 +1,15 @@
 package com.opencapture.openzcine
 
 import android.os.BatteryManager
+import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -113,15 +116,22 @@ class MonitorReadoutsTest {
     }
 
     @Test
-    fun `timecode uses exact enabled camera fields and never an elapsed clock`() {
+    fun `timecode uses exact camera header fields and never an elapsed clock`() {
         val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 4)
         assertEquals(camera, authoritativeTimecode(camera))
         assertEquals("01:02:03:04", cameraTimecodeLabel(camera))
 
-        val disabled = camera.copy(on = false)
-        assertNull(authoritativeTimecode(disabled))
-        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(disabled))
+        // Pure off/zero is unavailable (no invented clock).
+        val offZero = LiveFrameTimecode(on = false, hour = 0, minute = 0, second = 0, frame = 0)
+        assertNull(authoritativeTimecode(offZero))
+        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(offZero))
         assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(null))
+
+        // Nikon can leave the header "on" flag clear while still advancing H:M:S:F
+        // during a take — digits must still be accepted (iOS liveTimecode parity).
+        val rollingWithFlagOff = camera.copy(on = false)
+        assertEquals(rollingWithFlagOff, authoritativeTimecode(rollingWithFlagOff))
+        assertEquals("01:02:03:04", cameraTimecodeLabel(rollingWithFlagOff))
     }
 
     @Test
@@ -130,6 +140,25 @@ class MonitorReadoutsTest {
 
         assertNull(authoritativeTimecode(invalid))
         assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(invalid))
+    }
+
+    @Test
+    fun `timecode retention mirrors camera headers mid-take`() {
+        val owner = CameraIdentity("ZR", "ZR", "1")
+        val retention = MonitorTimecodeRetention(owner)
+        val connected = CameraSessionState.Connected(owner)
+        val seed = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 0)
+        retention.accept(seed)
+        assertEquals(seed, retention.timecodeFor(connected))
+
+        // Constant sync: mid-take headers update the display immediately.
+        val midTake = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 10, frame = 12)
+        retention.accept(midTake)
+        assertEquals(midTake, retention.timecodeFor(connected))
+
+        // Empty/off zero must not wipe the last good camera sample.
+        retention.accept(LiveFrameTimecode(on = false, hour = 0, minute = 0, second = 0, frame = 0))
+        assertEquals(midTake, retention.timecodeFor(connected))
     }
 
     @Test
