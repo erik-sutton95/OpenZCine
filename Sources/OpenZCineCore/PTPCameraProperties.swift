@@ -466,13 +466,19 @@ public enum PTPCameraPropertyDecoders {
     /// Implausible entries are dropped so a wrongly anchored parse can't surface a value we'd write.
     public static func screenSizeModes(fromDescriptor data: Data) -> [PTPCameraScreenSizeMode] {
         let bytes = [UInt8](data)
-        // Enumeration form: a FormFlag byte 0x02, then a UINT16 count, then count × 8-byte values
-        // that run flush to the end of the descriptor (same exact-fit anchor as the 2/4-byte reader).
+        // Enumeration form: FormFlag 0x02, UINT16 count, then count × 8-byte values. Prefer an
+        // exact flush-to-end fit (standard DevicePropDesc), but also accept a trailing padding
+        // tail some Nikon Ex responses append after the enum block.
+        var best: [PTPCameraScreenSizeMode] = []
         for index in bytes.indices where bytes[index] == 0x02 {
             guard index + 3 <= bytes.count else { continue }
             let count = Int(ByteCoding.readUInt16LE(bytes, at: index + 1))
             let start = index + 3
-            guard count > 0, start + count * 8 == bytes.count else { continue }
+            let payloadBytes = count * 8
+            guard count > 0, count <= 256, start + payloadBytes <= bytes.count else { continue }
+            let trailing = bytes.count - (start + payloadBytes)
+            // Exact fit, or a short padding/name tail (not another full enum).
+            guard trailing == 0 || trailing <= 64 else { continue }
             var modes: [PTPCameraScreenSizeMode] = []
             for slot in 0..<count {
                 let raw = ByteCoding.readUInt64LE(bytes, at: start + slot * 8)
@@ -487,9 +493,12 @@ public enum PTPCameraPropertyDecoders {
                             pixelWidth: size.width, pixelHeight: size.height,
                             frameRate: Double(size.fps))))
             }
-            if !modes.isEmpty { return modes }
+            if modes.count > best.count {
+                best = modes
+                if trailing == 0 { return best }
+            }
         }
-        return []
+        return best
     }
 
     /// Decodes file type from raw value.

@@ -152,28 +152,18 @@ enum ImageEffectsCompositor {
 
     // MARK: - Focus peaking
 
-    /// Focus peaking: gradient-magnitude edge detection thresholded and tinted. First-derivative
-    /// magnitude peaks ON the edge — one line per edge (a |fine − coarse| DoG is second-derivative
-    /// and double-lines every edge). Defocus rejection: an in-focus edge loses most gradient energy
-    /// to a small blur while a defocused one barely changes, so `fine − k·coarse` clears
-    /// high-contrast background edges a plain threshold flags. Log-encoded feeds MUST be de-logged
-    /// first — same path as live view.
+    /// Thin, strict first-derivative peaking (Android GLES parity).
+    /// Sobel-class edges via mild blur + CIEdges, hard threshold (narrow AA),
+    /// hairline under-stroke only. Log feeds de-logged first (redLog3G10).
     static func applyPeaking(
         over base: CIImage, source: CIImage, settings: PeakingSettings, extent: CGRect
     ) -> CIImage {
-        // Stored sensitivity thresholds predate this detector; map them onto the defocus-cancelled
-        // gradient response instead of migrating saved settings. Calibrate ONLY on the demo-log
-        // path (`ZC_DEMO_LOG_FEED=1`), which shares this exact pipeline with the real log feed:
-        // sharp de-logged detail responds ~0.004–0.01, defocused edges stay well below 0.002.
-        let threshold = settings.threshold * 0.06
-        let rampGain = 160.0
-        // Pre-blur before the fine edge pass — the sensor-noise floor.
-        let noiseFloorRadius = 0.8
-        // Edges that survive this blur count as defocused background, not subject detail.
-        let defocusBlurRadius = 2.6
-        // How strongly coarse-scale edge energy cancels the fine response.
-        let defocusRejection = 1.35
-        let edgeInset = CGFloat(defocusBlurRadius) * 4
+        // Match Android: threshold×0.06 × 30, clamped — stricter Med for set use.
+        let threshold = min(0.14, max(0.045, settings.threshold * 0.06 * 30.0))
+        let aa = threshold * 0.10  // narrow AA — thin strokes
+        // Minimal denoise: CIEdges alone is noisy; ~0.2 keeps ridges thin.
+        let noiseFloorRadius = 0.2
+        let edgeInset: CGFloat = 6
 
         var source = source
         if demoLogFeed {
@@ -211,56 +201,77 @@ enum ImageEffectsCompositor {
         }
         let deLogged = grey.applyingFilter("CIToneCurve", parameters: deLog)
 
-        let fineEdges =
+        let edges =
             deLogged
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: noiseFloorRadius])
             .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 1.0])
-        let coarseEdges =
-            deLogged
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: defocusBlurRadius])
-            .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 1.0])
-        // sharpness = fineEdges − defocusRejection·coarseEdges, negatives clamped away below.
-        // The bias keeps alpha at 1: a zero-alpha layer premultiplies its RGB away and the
-        // compositing would silently ignore the cancellation.
-        let cancel = coarseEdges.applyingFilter(
-            "CIColorMatrix",
-            parameters: [
-                "inputRVector": CIVector(x: -defocusRejection, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: -defocusRejection, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: -defocusRejection, w: 0),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-            ])
-        let mask =
-            fineEdges
-            .applyingFilter(
-                "CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: cancel]
-            )
             .cropped(to: extent.insetBy(dx: edgeInset, dy: edgeInset))
+
+        // Narrow AA band only — thin strokes, not soft highlighter.
+        let gain = 1.0 / max(aa, 0.008)
+        let bias = -threshold * gain
+        let coreMask =
+            edges
             .applyingFilter(
                 "CIColorMatrix",
                 parameters: [
-                    "inputRVector": CIVector(x: rampGain, y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: rampGain, y: 0, z: 0, w: 0),
-                    "inputBVector": CIVector(x: rampGain, y: 0, z: 0, w: 0),
+                    "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                    "inputBVector": CIVector(x: gain, y: 0, z: 0, w: 0),
                     "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                    "inputBiasVector": CIVector(
-                        x: -threshold * rampGain, y: -threshold * rampGain,
-                        z: -threshold * rampGain,
-                        w: 1),
+                    "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 1),
+                ]
+            )
+            .applyingFilter("CIColorClamp")
+        let underGain = gain * 1.2
+        let underBias = -(threshold - aa * 0.5) * underGain
+        let underMask =
+            edges
+            .applyingFilter(
+                "CIColorMatrix",
+                parameters: [
+                    "inputRVector": CIVector(x: underGain, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: underGain, y: 0, z: 0, w: 0),
+                    "inputBVector": CIVector(x: underGain, y: 0, z: 0, w: 0),
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                    "inputBiasVector": CIVector(x: underBias, y: underBias, z: underBias, w: 1),
                 ]
             )
             .applyingFilter("CIColorClamp")
 
+        let dark =
+            CIImage(color: CIColor(red: 0.04, green: 0.04, blue: 0.05)).cropped(to: extent)
         let (red, green, blue) = settings.color.rgb
         let tint = CIImage(color: CIColor(red: red, green: green, blue: blue)).cropped(to: extent)
+
+        // Hairline under only where core is not already solid.
+        let underOnly =
+            underMask
+            .applyingFilter(
+                "CIColorMatrix",
+                parameters: [
+                    "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: 0, y: 1, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0),
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                    "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                ]
+            )
+        let withUnder =
+            (CIFilter(
+                name: "CIBlendWithMask",
+                parameters: [
+                    kCIInputImageKey: dark, kCIInputBackgroundImageKey: base,
+                    kCIInputMaskImageKey: underOnly,
+                ])?.outputImage ?? base)
+            .cropped(to: extent)
         return
             (CIFilter(
                 name: "CIBlendWithMask",
                 parameters: [
-                    kCIInputImageKey: tint, kCIInputBackgroundImageKey: base,
-                    kCIInputMaskImageKey: mask,
-                ])?.outputImage ?? base)
+                    kCIInputImageKey: tint, kCIInputBackgroundImageKey: withUnder,
+                    kCIInputMaskImageKey: coreMask,
+                ])?.outputImage ?? withUnder)
             .cropped(to: extent)
     }
 

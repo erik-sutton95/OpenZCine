@@ -101,30 +101,24 @@ class OfflineMediaMainActivityTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
 
-        val entry = device.waitForText("Browse cached media")
+        // iOS openCachedMediaLibrary: intro-card Media Library, not a per-row button.
+        val entry = device.waitForText("Media Library")
         saveDeviceScreenshot("openzcine-android-offline-media-startup.png")
         entry.click()
 
         assertNotNull(device.waitForText(CACHED_FILENAME))
-        assertNotNull(
-            device.wait(
-                Until.findObject(By.desc("Show On device media")),
-                UI_TIMEOUT_MILLIS,
-            ),
-        )
-        assertNotNull(device.waitForText("ON DEVICE"))
         saveDeviceScreenshot("openzcine-android-offline-media-library.png")
     }
 
     @Test
-    fun clearingStandaloneSettingsImmediatelyRemovesTheCachedMediaAction() {
+    fun clearingStandaloneSettingsStillLeavesMediaLibraryEntryOnIntroCard() {
         scenario =
             ActivityScenario.launch(
                 Intent(context, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
 
-        assertNotNull(device.waitForText("Browse cached media"))
+        assertNotNull(device.waitForText("Media Library"))
         device.waitForText("Settings").click()
         val clearAction =
             device.wait(
@@ -141,12 +135,9 @@ class OfflineMediaMainActivityTest {
         )
 
         device.pressBack()
-        val removed =
-            device.wait(
-                Until.gone(By.text("Browse cached media")),
-                UI_TIMEOUT_MILLIS,
-            )
-        if (!removed) throw AssertionError("Cached-media action remained after clearing Settings")
+        // Intro Media Library remains (iOS always shows it); emptied caches open
+        // an empty offline library instead of hiding the entry point.
+        assertNotNull(device.waitForText("Media Library"))
     }
 
     private fun UiDevice.waitForText(text: String): UiObject2 =

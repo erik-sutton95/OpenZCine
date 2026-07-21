@@ -145,10 +145,10 @@ import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /**
- * Operator Setup rail tabs — the Android v1 subset of the iOS
- * `OperatorSettingsTab` set (Link / View Assist / Controls / Display /
- * Storage / System). The Link tab is bound to the active Android session;
- * every other tab exposes controls the shell can already honor.
+ * Operator Setup rail tabs — 1:1 with the iOS `OperatorSettingsTab` set
+ * (Link / View Assist / Controls / Display / Storage / System). The Link tab
+ * binds to the active Android session; every other tab exposes the same
+ * operator controls as the iOS baseline.
  */
 public enum class OperatorSettingsTab(
     @StringRes public val titleResource: Int,
@@ -202,7 +202,7 @@ internal fun OperatorSettingsScreen(
     onShowGuideNow: (() -> Unit)? = null,
     onShowGuideOnNextRealFrame: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
-    initialTab: OperatorSettingsTab = OperatorSettingsTab.ASSIST,
+    initialTab: OperatorSettingsTab = OperatorSettingsTab.LINK,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -479,45 +479,26 @@ private fun SettingsLiveTile(
     }
 }
 
-/** Horizontal tab selector used when the landscape rail cannot fit. */
+/**
+ * Horizontal tab selector used when the landscape rail cannot fit — the same
+ * tab buttons as the vertical rail (iOS `settingsTabStrip`), scrolled when the
+ * strip is wider than the screen.
+ */
 @Composable
 private fun SettingsTabStrip(
     selected: OperatorSettingsTab,
     onSelect: (OperatorSettingsTab) -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().glass(ChromeShape).padding(5.dp),
+        Modifier.fillMaxWidth()
+            .glass(ChromeShape)
+            .horizontalScroll(rememberScrollState())
+            .padding(6.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         OperatorSettingsTab.entries.forEach { tab ->
-            val active = tab == selected
-            Column(
-                Modifier.weight(1f)
-                    .height(43.dp)
-                    .background(
-                        if (active) LiveDesign.surface else LiveDesign.surface.copy(alpha = 0f),
-                        ChromeShape,
-                    )
-                    .settingsClickable(role = Role.Tab) { onSelect(tab) }
-                    .padding(horizontal = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    stringResource(tab.compactTitleResource),
-                    style = chromeStyle(11.5f, FontWeight.SemiBold),
-                    color = if (active) LiveDesign.text else LiveDesign.muted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Box(
-                    Modifier.padding(top = 3.dp)
-                        .size(width = 18.dp, height = 3.dp)
-                        .background(
-                            if (active) LiveDesign.accent else LiveDesign.accent.copy(alpha = 0f),
-                            CircleShape,
-                        )
-                )
+            Box(Modifier.width(146.dp)) {
+                SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
             }
         }
     }
@@ -712,7 +693,11 @@ private fun SettingsContentPane(
     }
 }
 
-/** Active camera transport, health, and Swift-owned preview policy. */
+/**
+ * Link tab — 1:1 with iOS `linkRows`: dash-scale health meter, then one row card
+ * with transport, stream preset, Size/Quality bias, connection action, and the
+ * fixed threshold / reconnect readouts.
+ */
 @Composable
 private fun LinkRows(
     session: CameraSession?,
@@ -724,193 +709,122 @@ private fun LinkRows(
     onReconnect: (() -> Unit)?,
     onInteraction: () -> Unit,
 ) {
-    val disconnectedProperties = remember { MutableStateFlow(CameraPropertySnapshot()) }
-    val cameraProperties by (session?.cameraProperties ?: disconnectedProperties).collectAsState()
-    val noPreviewApplication =
-        remember { MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle) }
-    val previewApplication by
-        (liveViewSource?.previewState ?: noPreviewApplication).collectAsState()
+    // liveViewSource is accepted for call-site parity; iOS Link no longer surfaces
+    // preview-apply diagnostics in this tab.
+    @Suppress("UNUSED_PARAMETER")
+    val unusedLiveViewSource = liveViewSource
+    val disconnectedState = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
+    val state by (session?.state ?: disconnectedState).collectAsState()
+    val linked = state is CameraSessionState.Connected
     val health = linkHealth?.presentation ?: LinkHealthPresentation()
-    val thermalTier = rememberAndroidThermalTier()
-    val warningLabel =
-        when (cameraProperties.temperatureStatus) {
-            CameraTemperatureStatus.NORMAL -> stringResource(R.string.temperature_ok)
-            CameraTemperatureStatus.WARNING -> stringResource(R.string.temperature_check)
-            CameraTemperatureStatus.HOT -> stringResource(R.string.temperature_hot)
-            null -> stringResource(R.string.settings_not_reported)
-        }
-    val thermalPreviewLabel =
-        when (thermalTier) {
-            AndroidThermalTier.NOMINAL -> stringResource(R.string.thermal_nominal)
-            AndroidThermalTier.FAIR -> stringResource(R.string.thermal_fair)
-            AndroidThermalTier.SERIOUS -> stringResource(R.string.thermal_serious)
-            AndroidThermalTier.CRITICAL -> stringResource(R.string.thermal_critical)
-        }
-    val previewApplicationLabel =
-        when (val state = previewApplication) {
-            SwiftLiveViewPreviewState.Idle -> stringResource(R.string.preview_waiting)
-            is SwiftLiveViewPreviewState.Pending -> stringResource(R.string.preview_applying)
-            is SwiftLiveViewPreviewState.Applied -> stringResource(R.string.preview_applied)
-            is SwiftLiveViewPreviewState.Rejected ->
-                if (state.retainedRequest != null) {
-                    stringResource(R.string.preview_rejected_retained)
-                } else {
-                    stringResource(R.string.preview_rejected_paused)
-                }
-        }
-
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_link_health),
-        caption =
-            if (session == null) {
-                stringResource(R.string.settings_link_no_camera_caption)
-            } else {
-                health.detail
-            },
-    ) {
-        LinkHealthMeter(score = health.score, signalBars = health.signalBars)
-        SettingsInlineRow(title = stringResource(R.string.settings_health), showTopDivider = false) {
-            SettingsValueText(
-                if (session == null) stringResource(R.string.settings_no_link)
-                else stringResource(R.string.settings_health_score, health.score),
-            )
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_current_transport)) {
-            SettingsValueText(activeTransportLabel ?: stringResource(R.string.settings_not_reported))
-        }
-    }
-
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_preview_stream),
-        caption = stringResource(R.string.settings_preview_caption),
-    ) {
-        Text(
-            stringResource(R.string.settings_stream_preset),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        Row(
-            Modifier.fillMaxWidth().selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            LiveViewStreamPreset.entries.forEach { preset ->
-                FramingAssistChoice(
-                    label =
-                        stringResource(
-                            when (preset) {
-                                LiveViewStreamPreset.FAST -> R.string.preview_preset_fast
-                                LiveViewStreamPreset.BALANCED -> R.string.preview_preset_balanced
-                                LiveViewStreamPreset.QUALITY -> R.string.preview_preset_quality
-                            },
-                        ),
-                    selected = settings.streamPreset == preset,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    settings.streamPreset = preset
-                    onInteraction()
-                }
-            }
-        }
-        Text(
-            stringResource(R.string.settings_quality_bias),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        Row(
-            Modifier.fillMaxWidth().selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            LiveViewQualityBias.entries.forEach { bias ->
-                FramingAssistChoice(
-                    label =
-                        stringResource(
-                            when (bias) {
-                                LiveViewQualityBias.LATENCY -> R.string.preview_bias_latency
-                                LiveViewQualityBias.BALANCED -> R.string.preview_preset_balanced
-                                LiveViewQualityBias.DETAIL -> R.string.preview_bias_detail
-                            },
-                        ),
-                    selected = settings.qualityBias == bias,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    settings.qualityBias = bias
-                    onInteraction()
-                }
-            }
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_thermal_preview), showTopDivider = false) {
-            SettingsValueText(thermalPreviewLabel)
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_preview_apply)) {
-            SettingsValueText(
-                if (liveViewSource == null) {
-                    stringResource(R.string.settings_native_source_unavailable)
-                } else {
-                    previewApplicationLabel
-                },
-            )
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_camera_warning)) {
-            SettingsValueText(warningLabel)
-        }
-    }
-
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_connection),
-        caption = stringResource(R.string.settings_connection_caption),
-    ) {
-        SettingsInlineRow(title = stringResource(R.string.action_disconnect), showTopDivider = false) {
-            if (onDisconnect == null) {
-                SettingsValueText(
-                    stringResource(
-                        if (session == null) R.string.settings_no_active_camera
-                        else R.string.settings_no_saved_profile,
-                    ),
-                )
-            } else {
-                SettingsLinkAction(stringResource(R.string.action_disconnect), onClick = onDisconnect)
-            }
-        }
-        SettingsInlineRow(title = stringResource(R.string.action_reconnect)) {
-            if (onReconnect == null) {
-                SettingsValueText(stringResource(R.string.settings_no_saved_profile))
-            } else {
-                SettingsLinkAction(stringResource(R.string.action_reconnect), onClick = onReconnect)
-            }
-        }
-    }
-}
-
-/** Compact iOS-style dash meter backed by the shared Swift score and bars. */
-@Composable
-private fun LinkHealthMeter(score: Int, signalBars: Int) {
-    val tint =
+    val scoreBand =
         when {
-            signalBars >= 3 -> LiveDesign.good
-            signalBars == 2 -> LiveDesign.accent
-            signalBars == 1 -> LiveDesign.rec
-            else -> LiveDesign.faint
+            health.score >= 80 -> "Stable"
+            health.score >= 50 -> "Watch"
+            else -> "Poor"
         }
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        repeat(12) { index ->
-            val threshold = (index + 1) * 100 / 12
-            Box(
-                Modifier.weight(1f)
-                    .height(6.dp)
-                    .background(if (score >= threshold) tint else LiveDesign.hairline, CircleShape),
-            )
+    val healthCaption =
+        if (session == null || !linked) {
+            health.detail.ifBlank { stringResource(R.string.settings_link_no_camera_caption) }
+        } else {
+            val detail = health.detail.ifBlank { stringResource(R.string.settings_active_link) }
+            "$detail · $scoreBand"
+        }
+    val transportValue =
+        when {
+            session == null && activeTransportLabel == null ->
+                stringResource(R.string.settings_transport_not_connected)
+            !linked -> stringResource(R.string.settings_transport_not_connected)
+            else ->
+                stringResource(
+                    R.string.settings_transport_active,
+                    activeTransportLabel ?: "Wi-Fi",
+                )
+        }
+    // iOS collapses the 3-way core bias to the mockup Size / Quality pair.
+    val qualityBiasSizeSelected = settings.qualityBias != LiveViewQualityBias.DETAIL
+    val connectionTitle =
+        if (linked && onDisconnect != null) {
+            stringResource(R.string.action_disconnect)
+        } else {
+            stringResource(R.string.settings_connect_over_wifi)
+        }
+
+    SettingsDashScale(
+        title = stringResource(R.string.settings_link_health),
+        caption = healthCaption,
+        score = if (linked) health.score else 0,
+    )
+
+    SettingsRowCard {
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_current_transport),
+            showTopDivider = false,
+        ) {
+            SettingsValueText(transportValue)
+        }
+        SettingsInlineRow(title = stringResource(R.string.settings_stream_preset)) {
+            Row(
+                Modifier.selectableGroup(),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                LiveViewStreamPreset.entries.forEach { preset ->
+                    AssistChoice(
+                        label = preset.label,
+                        selected = settings.streamPreset == preset,
+                    ) {
+                        settings.streamPreset = preset
+                        onInteraction()
+                    }
+                }
+            }
+        }
+        SettingsInlineRow(title = stringResource(R.string.settings_quality_bias)) {
+            Row(
+                Modifier.selectableGroup(),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                AssistChoice(
+                    label = stringResource(R.string.settings_quality_bias_size),
+                    selected = qualityBiasSizeSelected,
+                ) {
+                    settings.qualityBias = LiveViewQualityBias.LATENCY
+                    onInteraction()
+                }
+                AssistChoice(
+                    label = stringResource(R.string.settings_quality_bias_quality),
+                    selected = !qualityBiasSizeSelected,
+                ) {
+                    settings.qualityBias = LiveViewQualityBias.DETAIL
+                    onInteraction()
+                }
+            }
+        }
+        SettingsInlineRow(title = stringResource(R.string.settings_connection_action)) {
+            SettingsActionPill(connectionTitle) {
+                if (linked) {
+                    onDisconnect?.invoke()
+                } else {
+                    onReconnect?.invoke()
+                }
+                onInteraction()
+            }
+        }
+        SettingsInlineRow(title = stringResource(R.string.settings_health_threshold)) {
+            SettingsValueText(stringResource(R.string.preview_preset_balanced))
+        }
+        SettingsInlineRow(title = stringResource(R.string.settings_reconnect_window)) {
+            SettingsValueText(stringResource(R.string.settings_reconnect_window_value))
         }
     }
 }
 
 /**
- * View Assist tab. Effect switches are alternate controls for the monitor's
- * shared [AssistState]; local framing controls use [OperatorSettings] and
- * therefore persist independently from every camera-owned setting.
+ * View Assist tab — 1:1 with iOS `ViewAssistSettingsRows`: eight per-tool cards
+ * (False Color, Zebra, Waveform, Parade, Histogram, Vectorscope, Peaking,
+ * Traffic Lights). Landscape uses the same two-column masonry reading order;
+ * portrait is a single full-width column. Tool on/off and LUT library stay on
+ * the monitor toolbar popups, matching iOS.
  */
 @Composable
 private fun AssistRows(
@@ -922,298 +836,112 @@ private fun AssistRows(
     onAssistToggle: (AssistTool) -> Unit,
     onInteraction: () -> Unit,
 ) {
-    val configuration = settings.feedEffectsConfiguration
+    @Suppress("UNUSED_PARAMETER")
+    val unusedLutLibrary = lutLibrary
+    @Suppress("UNUSED_PARAMETER")
+    val unusedSettingToggle = onSettingToggle
     val imageEffectsAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
-    SettingsRowCard {
-        // Local framing tools have their own configuration group below. They
-        // do not belong to AssistState, which intentionally owns only image
-        // effects, scopes, and audio metering.
-        AssistTool.entries
-            .filterNot { it in AssistTool.framingTools }
-            .filter { imageEffectsAvailable || it !in imageEffectTools }
-            .forEachIndexed { index, tool ->
-            SettingsSwitchRow(
-                stringResource(tool.titleResource()),
-                isOn = assistState.isOn(tool),
-                showTopDivider = index != 0,
-            ) { onAssistToggle(tool) }
-        }
-    }
-    if (imageEffectsAvailable) {
-        if (lutLibrary != null) {
-            StoredLutLibraryRows(
-                library = lutLibrary,
-                assistState = assistState,
-                onInteraction = onInteraction,
-            )
-            RedLutWorkflowRows()
-        }
-        SettingsGroupCard(
-            title = stringResource(R.string.settings_monitor_lut),
-            caption = stringResource(R.string.settings_monitor_lut_caption),
-        ) {
-            SettingsInlineRow(title = stringResource(R.string.settings_lut_look), showTopDivider = false) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    FeedLut.entries.forEach { lut ->
-                        AssistChoice(
-                            label = feedLutLabel(lut),
-                            selected = assistState.selectedLut == FeedLutSelection.BuiltIn(lut),
-                        ) {
-                            assistState.selectLut(lut)
-                            onInteraction()
-                        }
-                    }
+    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+
+    @Composable
+    fun FalseColorCard() {
+        if (!imageEffectsAvailable) {
+            SettingsRowCard(title = stringResource(R.string.settings_false_color)) {
+                SettingsInlineRow(
+                    title = stringResource(R.string.settings_image_processing),
+                    showTopDivider = false,
+                    stacked = true,
+                ) {
+                    SettingsValueText(stringResource(R.string.settings_image_processing_unavailable))
                 }
             }
+            return
         }
-        SettingsGroupCard(
+        val configuration = settings.feedEffectsConfiguration
+        SettingsRowCard(
             title = stringResource(R.string.settings_false_color),
-            caption = stringResource(R.string.settings_false_color_caption),
             onReset = {
                 assistState.resetFalseColorSelection()
                 settings.resetFalseColorConfiguration()
                 onInteraction()
             },
         ) {
-            SettingsInlineRow(title = stringResource(R.string.settings_scale), showTopDivider = false) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    FeedFalseColorScale.entries.forEach { scale ->
-                        AssistChoice(
-                            label = stringResource(scale.labelResource()),
-                            selected = assistState.selectedFalseColorScale == scale,
-                        ) {
-                            assistState.selectFalseColorScale(scale)
-                            onInteraction()
-                        }
+            SettingsInlineRow(
+                title = stringResource(R.string.settings_scale),
+                showTopDivider = false,
+                stacked = true,
+            ) {
+                SettingsSegmented(
+                    options = FeedFalseColorScale.entries.map { it.label },
+                    selected = assistState.selectedFalseColorScale.label,
+                ) { label ->
+                    FeedFalseColorScale.entries.firstOrNull { it.label == label }?.let { scale ->
+                        assistState.selectFalseColorScale(scale)
+                        onInteraction()
                     }
                 }
             }
             SettingsSwitchRow(
                 stringResource(R.string.settings_reference_display),
-                isOn = settings.feedEffectsConfiguration.falseColorReferenceEnabled,
+                isOn = configuration.falseColorReferenceEnabled,
+                stacked = true,
             ) {
                 val enabled = !configuration.falseColorReferenceEnabled
                 settings.feedEffectsConfiguration =
-                    settings.feedEffectsConfiguration.copy(
-                        falseColorReferenceEnabled = enabled,
-                    )
-                // iOS makes the key immediately useful by revealing False Color
-                // when it is enabled. Preserve the existing LUT activation; the
-                // renderer decides the visual precedence for the selected scale.
+                    configuration.copy(falseColorReferenceEnabled = enabled)
                 if (enabled && !assistState.isOn(AssistTool.FALSE)) {
                     onAssistToggle(AssistTool.FALSE)
                 } else {
                     onInteraction()
                 }
             }
-            Text(
-                stringResource(R.string.settings_reference_caption),
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.muted,
-            )
         }
+    }
+
+    @Composable
+    fun PeakingCard() {
+        if (!imageEffectsAvailable) return
         PeakingSettingsRows(settings, onInteraction)
+    }
+
+    @Composable
+    fun ZebraCard() {
+        if (!imageEffectsAvailable) return
         ZebraSettingsRows(settings, cameraInput, onInteraction)
+    }
+
+    if (isPortrait) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            FalseColorCard()
+            ZebraCard()
+            WaveformSettingsCard(settings, onInteraction)
+            ParadeSettingsCard(settings, onInteraction)
+            HistogramSettingsCard(settings, onInteraction)
+            VectorscopeSettingsCard(settings, onInteraction)
+            PeakingCard()
+            TrafficLightsSettingsCard(settings, onInteraction)
+        }
     } else {
-        SettingsGroupCard(
-            title = stringResource(R.string.settings_image_processing),
-            caption = stringResource(R.string.settings_image_processing_caption),
+        // iOS masonry: left = odd cards (FC, Waveform, Histogram, Peaking),
+        // right = even (Zebra, Parade, Vectorscope, Traffic Lights).
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top,
         ) {
-            Text(
-                stringResource(R.string.settings_image_processing_unavailable),
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.muted,
-            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FalseColorCard()
+                WaveformSettingsCard(settings, onInteraction)
+                HistogramSettingsCard(settings, onInteraction)
+                PeakingCard()
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ZebraCard()
+                ParadeSettingsCard(settings, onInteraction)
+                VectorscopeSettingsCard(settings, onInteraction)
+                TrafficLightsSettingsCard(settings, onInteraction)
+            }
         }
-    }
-    ScopeSettingsRows(settings, onInteraction)
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_traffic_lights),
-        caption = stringResource(R.string.settings_traffic_lights_caption),
-        onReset = {
-            settings.resetTrafficLightsConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_panel_scale), showTopDivider = false) {
-            ScopeScaleSlider(
-                selected = settings.scopeAssistConfiguration.trafficLightsScale,
-                onSelect = { value ->
-                    settings.scopeAssistConfiguration =
-                        settings.scopeAssistConfiguration.copy(trafficLightsScale = value)
-                    onInteraction()
-                },
-            )
-        }
-        SettingsSwitchRow(
-            stringResource(R.string.settings_histogram_traffic_lights),
-            isOn = settings.histogramTrafficLightsEnabled.value,
-            showTopDivider = false,
-        ) {
-            settings.histogramTrafficLightsEnabled.toggle()
-            onInteraction()
-        }
-        Text(
-            stringResource(R.string.settings_histogram_traffic_caption),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
-        Text(
-            stringResource(R.string.settings_crush_clip),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        ScopeCrushClipCompensationChoices(
-            selected = settings.scopeCrushClipCompensation,
-            onSelect = { compensation ->
-                settings.scopeCrushClipCompensation = compensation
-                onInteraction()
-            },
-        )
-        Text(
-            stringResource(R.string.settings_crush_clip_caption),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
-    }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_local_framing),
-        caption = stringResource(R.string.settings_local_framing_caption),
-    ) {
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_show_delivery_guides),
-            isOn = settings.guidesVisible.value,
-            showTopDivider = false,
-        ) {
-            // Use the same seeding behavior as the monitor toolbar: turning
-            // on an empty guide selection must produce the iOS-default 2.39:1
-            // frame instead of an apparently broken empty overlay.
-            settings.toggleLocalFramingTool(AssistTool.GUIDES)
-            onInteraction()
-        }
-        Text(
-            stringResource(R.string.settings_delivery_family),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        FramingGuideFamilyChoices(
-            selected = settings.guideFamily,
-            onSelect = { family ->
-                settings.guideFamily = family
-                onInteraction()
-            },
-        )
-        FramingGuideChoices(
-            family = settings.guideFamily,
-            selected = settings.selectedGuideRatios,
-            onToggle = { ratio ->
-                settings.toggleGuideRatio(ratio)
-                onInteraction()
-            },
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_mask_frames),
-            isOn = settings.guideMaskEnabled.value,
-        ) {
-            onSettingToggle(settings.guideMaskEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_composition_grid),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_show_composition_grid),
-            isOn = settings.localGridVisible.value,
-        ) {
-            // Likewise, re-enabling an otherwise empty grid starts with
-            // thirds so the visible result always matches the control state.
-            settings.toggleLocalFramingTool(AssistTool.GRID)
-            onInteraction()
-        }
-        FramingGridChoices(
-            thirds = settings.ruleOfThirdsEnabled.value,
-            phi = settings.phiGridEnabled.value,
-            diagonal = settings.diagonalGridEnabled.value,
-            onToggleThirds = { onSettingToggle(settings.ruleOfThirdsEnabled) },
-            onTogglePhi = { onSettingToggle(settings.phiGridEnabled) },
-            onToggleDiagonal = { onSettingToggle(settings.diagonalGridEnabled) },
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_centre_crosshair),
-            isOn = settings.centerCrosshairEnabled.value,
-        ) {
-            onSettingToggle(settings.centerCrosshairEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_desqueeze),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_enable_desqueeze),
-            isOn = settings.desqueezeEnabled.value,
-        ) {
-            onSettingToggle(settings.desqueezeEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_ratio),
-            style = chromeStyle(11.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        DesqueezeRatioChoices(
-            selected = settings.desqueezeRatio,
-            onSelect = { ratio ->
-                settings.desqueezeRatio = ratio
-                onInteraction()
-            },
-        )
-        Text(
-            stringResource(R.string.settings_compressed_axis),
-            style = chromeStyle(11.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        DesqueezeOrientationChoices(
-            selected = settings.desqueezeOrientation,
-            onSelect = { orientation ->
-                settings.desqueezeOrientation = orientation
-                onInteraction()
-            },
-        )
-        Text(
-            stringResource(R.string.settings_local_assists_caption),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
-    }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_camera_level),
-        caption = stringResource(R.string.settings_camera_level_caption),
-    ) {
-        FramingAssistSwitchRow(
-            title = stringResource(R.string.settings_level),
-            isOn = settings.levelAssistEnabled.value,
-            showTopDivider = false,
-        ) {
-            onSettingToggle(settings.levelAssistEnabled)
-        }
-        Text(
-            stringResource(R.string.settings_style),
-            style = chromeStyle(12.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-        LevelStyleChoices(
-            selected = settings.levelStyle,
-            onSelect = { style ->
-                settings.levelStyle = style
-                onInteraction()
-            },
-        )
-        Text(
-            stringResource(R.string.settings_level_fallback),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
     }
 }
 
@@ -1304,52 +1032,48 @@ private fun desqueezeRatioLabel(value: LocalDesqueezeRatio): String =
         },
     )
 
-/** iOS-matched peaking choices; Swift resolves the actual detector values and RGB. */
+/** iOS peaking rows: segmented sensitivity + colour dots (not text chips). */
 @Composable
 private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
     val configuration = settings.feedEffectsConfiguration
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_focus_peaking),
-        caption = stringResource(R.string.settings_peaking_caption),
+    SettingsRowCard(
+        title = stringResource(R.string.settings_peaking),
         onReset = {
             settings.resetPeakingConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_sensitivity), showTopDivider = false) {
-            Row(
-                Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                FeedPeakingSensitivity.entries.forEach { sensitivity ->
-                    AssistChoice(
-                        label = peakingSensitivityLabel(sensitivity),
-                        selected = configuration.peakingSensitivity == sensitivity,
-                    ) {
-                        settings.feedEffectsConfiguration =
-                            configuration.copy(peakingSensitivity = sensitivity)
-                        onInteraction()
-                    }
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_sensitivity),
+            showTopDivider = false,
+            stacked = true,
+        ) {
+            SettingsSegmented(
+                options = FeedPeakingSensitivity.entries.map { it.label },
+                selected = configuration.peakingSensitivity.label,
+            ) { label ->
+                FeedPeakingSensitivity.entries.firstOrNull { it.label == label }?.let { sensitivity ->
+                    settings.feedEffectsConfiguration =
+                        configuration.copy(peakingSensitivity = sensitivity)
+                    onInteraction()
                 }
             }
         }
-        SettingsInlineRow(title = stringResource(R.string.settings_color)) {
-            Row(
-                Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                FeedPeakingColor.entries.forEach { color ->
-                    AssistChoice(label = peakingColorLabel(color), selected = configuration.peakingColor == color) {
-                        settings.feedEffectsConfiguration = configuration.copy(peakingColor = color)
-                        onInteraction()
-                    }
+        SettingsInlineRow(title = stringResource(R.string.settings_color), stacked = true) {
+            SettingsColorDots(
+                dots = SettingsPalette.peaking,
+                selectedName = configuration.peakingColor.label,
+            ) { name ->
+                FeedPeakingColor.entries.firstOrNull { it.label == name }?.let { color ->
+                    settings.feedEffectsConfiguration = configuration.copy(peakingColor = color)
+                    onInteraction()
                 }
             }
         }
     }
 }
 
-/** Dual-zone zebra settings retain canonical monitor percentages across unit changes. */
+/** iOS zebra: units segmented + compact zone rows (switch + number + colour dots). */
 @Composable
 private fun ZebraSettingsRows(
     settings: OperatorSettings,
@@ -1357,127 +1081,128 @@ private fun ZebraSettingsRows(
     onInteraction: () -> Unit,
 ) {
     val configuration = settings.feedEffectsConfiguration
-    SettingsGroupCard(
+    SettingsRowCard(
         title = stringResource(R.string.settings_zebra),
-        caption = stringResource(R.string.settings_zebra_caption),
         onReset = {
             settings.resetZebraConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_units), showTopDivider = false) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                FeedZebraUnit.entries.forEach { unit ->
-                    AssistChoice(
-                        label =
-                            stringResource(
-                                if (unit == FeedZebraUnit.NATIVE) R.string.zebra_unit_native
-                                else R.string.false_color_scale_ire,
-                            ),
-                        selected = configuration.zebraUnit == unit,
-                    ) {
-                        settings.feedEffectsConfiguration = configuration.copy(zebraUnit = unit)
-                        onInteraction()
-                    }
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_units),
+            showTopDivider = false,
+            stacked = true,
+        ) {
+            SettingsSegmented(
+                options = FeedZebraUnit.entries.map { it.label },
+                selected = configuration.zebraUnit.label,
+            ) { label ->
+                FeedZebraUnit.entries.firstOrNull { it.label == label }?.let { unit ->
+                    settings.feedEffectsConfiguration = configuration.copy(zebraUnit = unit)
+                    onInteraction()
                 }
             }
         }
-        SettingsSwitchRow(stringResource(R.string.settings_highlight), isOn = configuration.zebraHighlightEnabled) {
-            settings.feedEffectsConfiguration =
-                configuration.copy(zebraHighlightEnabled = !configuration.zebraHighlightEnabled)
-            onInteraction()
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_highlight_threshold)) {
-            ZebraThresholdStepper(
-                cameraInput = cameraInput,
-                unit = configuration.zebraUnit,
-                monitorPercent = configuration.zebraHighlightIre,
-                onChange = { monitorPercent ->
+        ZebraZoneRow(
+            title = stringResource(R.string.settings_highlight),
+            enabled = configuration.zebraHighlightEnabled,
+            onEnabledToggle = {
+                settings.feedEffectsConfiguration =
+                    configuration.copy(zebraHighlightEnabled = !configuration.zebraHighlightEnabled)
+                onInteraction()
+            },
+            cameraInput = cameraInput,
+            unit = configuration.zebraUnit,
+            monitorPercent = configuration.zebraHighlightIre,
+            onThreshold = { percent ->
+                settings.feedEffectsConfiguration = configuration.copy(zebraHighlightIre = percent)
+                onInteraction()
+            },
+            palette = SettingsPalette.highlight,
+            selectedColor = configuration.zebraHighlightColor.label,
+            onColor = { name ->
+                FeedZebraStripeColor.entries.firstOrNull { it.label == name }?.let { color ->
                     settings.feedEffectsConfiguration =
-                        configuration.copy(zebraHighlightIre = monitorPercent)
+                        configuration.copy(zebraHighlightColor = color)
                     onInteraction()
-                },
-            )
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_highlight_color)) {
-            ZebraColorChoices(
-                selected = configuration.zebraHighlightColor,
-                onSelect = { color ->
-                    settings.feedEffectsConfiguration = configuration.copy(zebraHighlightColor = color)
-                    onInteraction()
-                },
-            )
-        }
-        SettingsSwitchRow(stringResource(R.string.settings_midtone), isOn = configuration.zebraMidtoneEnabled) {
-            settings.feedEffectsConfiguration =
-                configuration.copy(zebraMidtoneEnabled = !configuration.zebraMidtoneEnabled)
-            onInteraction()
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_midtone_threshold)) {
-            ZebraThresholdStepper(
-                cameraInput = cameraInput,
-                unit = configuration.zebraUnit,
-                monitorPercent = configuration.zebraMidtoneIre,
-                onChange = { monitorPercent ->
+                }
+            },
+        )
+        ZebraZoneRow(
+            title = stringResource(R.string.settings_midtone),
+            enabled = configuration.zebraMidtoneEnabled,
+            onEnabledToggle = {
+                settings.feedEffectsConfiguration =
+                    configuration.copy(zebraMidtoneEnabled = !configuration.zebraMidtoneEnabled)
+                onInteraction()
+            },
+            cameraInput = cameraInput,
+            unit = configuration.zebraUnit,
+            monitorPercent = configuration.zebraMidtoneIre,
+            onThreshold = { percent ->
+                settings.feedEffectsConfiguration = configuration.copy(zebraMidtoneIre = percent)
+                onInteraction()
+            },
+            palette = SettingsPalette.midtone,
+            selectedColor = configuration.zebraMidtoneColor.label,
+            onColor = { name ->
+                FeedZebraStripeColor.entries.firstOrNull { it.label == name }?.let { color ->
                     settings.feedEffectsConfiguration =
-                        configuration.copy(zebraMidtoneIre = monitorPercent)
+                        configuration.copy(zebraMidtoneColor = color)
                     onInteraction()
-                },
-            )
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_midtone_color)) {
-            ZebraColorChoices(
-                selected = configuration.zebraMidtoneColor,
-                onSelect = { color ->
-                    settings.feedEffectsConfiguration = configuration.copy(zebraMidtoneColor = color)
-                    onInteraction()
-                },
-            )
-        }
+                }
+            },
+        )
     }
 }
 
-/** Swift-only native/IRE conversion stepper: no Kotlin exposure conversion is permitted here. */
+/**
+ * iOS `zebraZoneRow` (compact): title stacked above switch + number field + colour
+ * dots on one control row.
+ */
 @Composable
-private fun ZebraThresholdStepper(
+private fun ZebraZoneRow(
+    title: String,
+    enabled: Boolean,
+    onEnabledToggle: () -> Unit,
     cameraInput: ExposureAssistCameraInput,
     unit: FeedZebraUnit,
     monitorPercent: Float,
-    onChange: (Float) -> Unit,
+    onThreshold: (Float) -> Unit,
+    palette: List<SettingsColorDot>,
+    selectedColor: String,
+    onColor: (String) -> Unit,
 ) {
     val editorValue =
         remember(cameraInput, unit, monitorPercent) {
             zebraEditorValue(cameraInput, unit, monitorPercent)
-        } ?: return
-    val maximum = if (unit == FeedZebraUnit.NATIVE) 255f else 100f
-    val rounded = editorValue.roundToInt().coerceIn(0, maximum.roundToInt())
-    val thresholdDescription =
-        stringResource(R.string.settings_zebra_threshold_description, maximum.roundToInt())
-    var directEntry by remember(unit, rounded) { mutableStateOf(rounded.toString()) }
-    fun adjust(delta: Float) {
-        zebraMonitorPercent(cameraInput, unit, (editorValue + delta).coerceIn(0f, maximum))?.let(onChange)
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-        AssistChoice(label = "−", selected = false) { adjust(-1f) }
-        OutlinedTextField(
-            value = directEntry,
-            onValueChange = { raw ->
-                val digits = raw.filter(Char::isDigit).take(3)
-                val normalized = normalizedZebraEntry(digits, maximum.roundToInt())
-                directEntry = normalized?.toString() ?: digits
-                if (normalized != null) {
-                    zebraMonitorPercent(cameraInput, unit, normalized.toFloat())?.let(onChange)
+        }
+    val maximum = if (unit == FeedZebraUnit.NATIVE) 255 else 100
+    SettingsInlineRow(title = title, stacked = true) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.settingsClickable(role = Role.Switch, onClick = onEnabledToggle)) {
+                SettingsSwitchGraphic(isOn = enabled)
+            }
+            if (editorValue != null) {
+                SettingsNumberField(
+                    value = editorValue.roundToInt().coerceIn(0, maximum),
+                    maximum = maximum,
+                ) { value ->
+                    zebraMonitorPercent(cameraInput, unit, value.toFloat())?.let(onThreshold)
                 }
-            },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            textStyle = chromeStyle(12.5f, FontWeight.SemiBold),
-            modifier =
-                Modifier.width(72.dp).semantics {
-                    contentDescription = thresholdDescription
-                },
-        )
-        AssistChoice(label = "+", selected = false) { adjust(1f) }
+            }
+            Spacer(Modifier.weight(1f))
+            SettingsColorDots(
+                dots = palette,
+                selectedName = selectedColor,
+                compact = true,
+                onSelect = onColor,
+            )
+        }
     }
 }
 
@@ -1485,49 +1210,30 @@ private fun ZebraThresholdStepper(
 internal fun normalizedZebraEntry(raw: String, maximum: Int): Int? =
     raw.toIntOrNull()?.coerceIn(0, maximum)
 
-@Composable
-private fun ZebraColorChoices(
-    selected: FeedZebraStripeColor,
-    onSelect: (FeedZebraStripeColor) -> Unit,
-) {
-    Row(
-        Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        FeedZebraStripeColor.entries.forEach { color ->
-            AssistChoice(label = zebraColorLabel(color), selected = selected == color) {
-                onSelect(color)
-            }
-        }
-    }
-}
-
 /** Canvas-only scope controls. Each option below has a corresponding render/sampler path. */
+/** Waveform card — iOS segmented mode, percent slider, guide switches. */
 @Composable
-private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
+private fun WaveformSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
     val configuration = settings.scopeAssistConfiguration
-    SettingsGroupCard(
+    SettingsRowCard(
         title = stringResource(R.string.settings_waveform),
-        caption = stringResource(R.string.settings_waveform_caption),
         onReset = {
             settings.resetWaveformConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_mode), showTopDivider = false) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                ScopeWaveformMode.entries.forEach { mode ->
-                    AssistChoice(
-                        label =
-                            stringResource(
-                                if (mode == ScopeWaveformMode.LUMA) R.string.scope_chip_luma
-                                else R.string.scope_chip_rgb,
-                            ),
-                        selected = configuration.waveformMode == mode,
-                    ) {
-                        settings.scopeAssistConfiguration = configuration.copy(waveformMode = mode)
-                        onInteraction()
-                    }
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_mode),
+            showTopDivider = false,
+            stacked = true,
+        ) {
+            SettingsSegmented(
+                options = ScopeWaveformMode.entries.map { it.label },
+                selected = configuration.waveformMode.label,
+            ) { label ->
+                ScopeWaveformMode.entries.firstOrNull { it.label == label }?.let { mode ->
+                    settings.scopeAssistConfiguration = configuration.copy(waveformMode = mode)
+                    onInteraction()
                 }
             }
         }
@@ -1535,13 +1241,6 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
             brightness = configuration.waveformBrightness,
             onSelect = { value ->
                 settings.scopeAssistConfiguration = configuration.copy(waveformBrightness = value)
-                onInteraction()
-            },
-        )
-        ScopeScaleRow(
-            scale = configuration.waveformScale,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(waveformScale = value)
                 onInteraction()
             },
         )
@@ -1553,28 +1252,31 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
             },
         )
     }
-    SettingsGroupCard(
+}
+
+/** Parade card — iOS segmented mode, percent slider, guide switches. */
+@Composable
+private fun ParadeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
+    val configuration = settings.scopeAssistConfiguration
+    SettingsRowCard(
         title = stringResource(R.string.settings_parade),
-        caption = stringResource(R.string.settings_parade_caption),
         onReset = {
             settings.resetParadeConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_mode), showTopDivider = false) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                ScopeParadeMode.entries.forEach { mode ->
-                    AssistChoice(
-                        label =
-                            stringResource(
-                                if (mode == ScopeParadeMode.RGB) R.string.scope_chip_rgb
-                                else R.string.scope_chip_yrgb,
-                            ),
-                        selected = configuration.paradeMode == mode,
-                    ) {
-                        settings.scopeAssistConfiguration = configuration.copy(paradeMode = mode)
-                        onInteraction()
-                    }
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_mode),
+            showTopDivider = false,
+            stacked = true,
+        ) {
+            SettingsSegmented(
+                options = ScopeParadeMode.entries.map { it.label },
+                selected = configuration.paradeMode.label,
+            ) { label ->
+                ScopeParadeMode.entries.firstOrNull { it.label == label }?.let { mode ->
+                    settings.scopeAssistConfiguration = configuration.copy(paradeMode = mode)
+                    onInteraction()
                 }
             }
         }
@@ -1582,13 +1284,6 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
             brightness = configuration.paradeBrightness,
             onSelect = { value ->
                 settings.scopeAssistConfiguration = configuration.copy(paradeBrightness = value)
-                onInteraction()
-            },
-        )
-        ScopeScaleRow(
-            scale = configuration.paradeScale,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(paradeScale = value)
                 onInteraction()
             },
         )
@@ -1600,31 +1295,31 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
             },
         )
     }
-    SettingsGroupCard(
+}
+
+/** Vectorscope card — iOS trace zoom + brightness slider. */
+@Composable
+private fun VectorscopeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
+    val configuration = settings.scopeAssistConfiguration
+    SettingsRowCard(
         title = stringResource(R.string.settings_vectorscope),
-        caption = stringResource(R.string.settings_vectorscope_caption),
         onReset = {
             settings.resetVectorscopeConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_trace_zoom), showTopDivider = false) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                ScopeVectorscopeZoom.entries.forEach { zoom ->
-                    AssistChoice(
-                        label =
-                            stringResource(
-                                when (zoom.wireOrdinal) {
-                                    0 -> R.string.scope_zoom_1
-                                    1 -> R.string.scope_zoom_2
-                                    else -> R.string.scope_zoom_4
-                                },
-                            ),
-                        selected = configuration.vectorscopeZoom == zoom,
-                    ) {
-                        settings.scopeAssistConfiguration = configuration.copy(vectorscopeZoom = zoom)
-                        onInteraction()
-                    }
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_trace_zoom),
+            showTopDivider = false,
+            stacked = true,
+        ) {
+            SettingsSegmented(
+                options = ScopeVectorscopeZoom.entries.map { it.label },
+                selected = configuration.vectorscopeZoom.label,
+            ) { label ->
+                ScopeVectorscopeZoom.entries.firstOrNull { it.label == label }?.let { zoom ->
+                    settings.scopeAssistConfiguration = configuration.copy(vectorscopeZoom = zoom)
+                    onInteraction()
                 }
             }
         }
@@ -1635,27 +1330,62 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
                 onInteraction()
             },
         )
-        ScopeScaleRow(
-            scale = configuration.vectorscopeScale,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(vectorscopeScale = value)
-                onInteraction()
-            },
-        )
     }
-    SettingsGroupCard(
+}
+
+/**
+ * Histogram card — iOS: Traffic Lights switch + Crush/Clip Compensation (panel
+ * scale is not an operator-setup control on iOS).
+ */
+@Composable
+private fun HistogramSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
+    SettingsRowCard(
         title = stringResource(R.string.settings_histogram),
-        caption = stringResource(R.string.settings_histogram_caption),
         onReset = {
             settings.resetHistogramConfiguration()
             onInteraction()
         },
     ) {
-        SettingsInlineRow(title = stringResource(R.string.settings_histogram_scale), showTopDivider = false) {
-            ScopeScaleSlider(
-                selected = configuration.histogramScale,
-                onSelect = { value ->
-                    settings.scopeAssistConfiguration = configuration.copy(histogramScale = value)
+        SettingsSwitchRow(
+            stringResource(R.string.settings_traffic_lights),
+            isOn = settings.histogramTrafficLightsEnabled.value,
+            showTopDivider = false,
+            stacked = true,
+        ) {
+            settings.histogramTrafficLightsEnabled.toggle()
+            onInteraction()
+        }
+        SettingsInlineRow(title = stringResource(R.string.settings_crush_clip), stacked = true) {
+            CrushClipSegmentedControl(
+                selected = settings.scopeCrushClipCompensation,
+                onSelect = { compensation ->
+                    settings.scopeCrushClipCompensation = compensation
+                    onInteraction()
+                },
+            )
+        }
+    }
+}
+
+/** Traffic Lights card — iOS: Crush/Clip Compensation only (shared with histogram). */
+@Composable
+private fun TrafficLightsSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
+    SettingsRowCard(
+        title = stringResource(R.string.settings_traffic_lights),
+        onReset = {
+            settings.resetTrafficLightsConfiguration()
+            onInteraction()
+        },
+    ) {
+        SettingsInlineRow(
+            title = stringResource(R.string.settings_crush_clip),
+            showTopDivider = false,
+            stacked = true,
+        ) {
+            CrushClipSegmentedControl(
+                selected = settings.scopeCrushClipCompensation,
+                onSelect = { compensation ->
+                    settings.scopeCrushClipCompensation = compensation
                     onInteraction()
                 },
             )
@@ -1664,60 +1394,51 @@ private fun ScopeSettingsRows(settings: OperatorSettings, onInteraction: () -> U
 }
 
 @Composable
+private fun CrushClipSegmentedControl(
+    selected: ScopeCrushClipCompensation,
+    onSelect: (ScopeCrushClipCompensation) -> Unit,
+) {
+    SettingsCrushClipSegmented(
+        options = ScopeCrushClipCompensation.entries.map { it.label to it.compactLabel },
+        selectedLabel = selected.label,
+    ) { label ->
+        ScopeCrushClipCompensation.entries.firstOrNull { it.label == label }?.let(onSelect)
+    }
+}
+
+@Composable
 private fun ScopeBrightnessRow(brightness: Int, onSelect: (Int) -> Unit) {
-    SettingsInlineRow(title = stringResource(R.string.settings_brightness)) {
-        Row(
-            Modifier.widthIn(max = 250.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Slider(
-                value = brightness.toFloat(),
-                onValueChange = { onSelect(it.roundToInt()) },
-                valueRange =
-                    ScopeAssistConfiguration.MIN_BRIGHTNESS.toFloat()..
-                        ScopeAssistConfiguration.MAX_BRIGHTNESS.toFloat(),
-                steps = ScopeAssistConfiguration.MAX_BRIGHTNESS - ScopeAssistConfiguration.MIN_BRIGHTNESS - 1,
-                modifier = Modifier.weight(1f),
-            )
-            SettingsValueText(stringResource(R.string.settings_percent, brightness))
-        }
-    }
-}
-
-@Composable
-private fun ScopeScaleRow(scale: Float, onSelect: (Float) -> Unit) {
-    SettingsInlineRow(title = stringResource(R.string.settings_panel_scale)) {
-        ScopeScaleSlider(scale, onSelect)
-    }
-}
-
-@Composable
-private fun ScopeScaleSlider(selected: Float, onSelect: (Float) -> Unit) {
-    Row(
-        Modifier.widthIn(max = 250.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Slider(
-            value = selected,
-            onValueChange = { value -> onSelect((value * 100).roundToInt() / 100f) },
-            valueRange = ScopeAssistConfiguration.MIN_SCALE..ScopeAssistConfiguration.MAX_SCALE,
-            modifier = Modifier.weight(1f),
+    SettingsInlineRow(title = stringResource(R.string.settings_brightness), stacked = true) {
+        SettingsPercentSlider(
+            value = brightness,
+            range =
+                ScopeAssistConfiguration.MIN_BRIGHTNESS..ScopeAssistConfiguration.MAX_BRIGHTNESS,
+            onChange = onSelect,
         )
-        SettingsValueText(stringResource(R.string.settings_percent, (selected * 100).roundToInt()))
     }
 }
 
 @Composable
 private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) -> Unit) {
-    SettingsSwitchRow(stringResource(R.string.settings_safe_border_clip), isOn = guides.clip) {
+    SettingsSwitchRow(
+        stringResource(R.string.settings_safe_border_clip),
+        isOn = guides.clip,
+        stacked = true,
+    ) {
         onChange(guides.copy(clip = !guides.clip))
     }
-    SettingsSwitchRow(stringResource(R.string.settings_safe_border_crush), isOn = guides.crush) {
+    SettingsSwitchRow(
+        stringResource(R.string.settings_safe_border_crush),
+        isOn = guides.crush,
+        stacked = true,
+    ) {
         onChange(guides.copy(crush = !guides.crush))
     }
-    SettingsSwitchRow(stringResource(R.string.settings_middle_gray), isOn = guides.middle) {
+    SettingsSwitchRow(
+        stringResource(R.string.settings_middle_gray),
+        isOn = guides.middle,
+        stacked = true,
+    ) {
         onChange(guides.copy(middle = !guides.middle))
     }
 }
@@ -2282,33 +2003,24 @@ private fun ControlsRows(
     settings: OperatorSettings,
     onToggle: (OperatorSettings.Toggle) -> Unit,
 ) {
+    // iOS Controls is one switch card: Record Confirmation, Bluetooth Remote
+    // Shutter, Haptics, Keep Screen Awake — no extra captions under rows.
     SettingsRowCard {
         SettingsSwitchRow(
             stringResource(R.string.settings_record_confirmation),
             isOn = settings.recordConfirmationEnabled.value,
             showTopDivider = false,
         ) { onToggle(settings.recordConfirmationEnabled) }
+        SettingsSwitchRow(
+            stringResource(R.string.settings_media_remote),
+            isOn = settings.mediaRemoteShutterEnabled.value,
+        ) { onToggle(settings.mediaRemoteShutterEnabled) }
         SettingsSwitchRow(stringResource(R.string.settings_haptics), isOn = settings.hapticsEnabled.value) {
             onToggle(settings.hapticsEnabled)
         }
         SettingsSwitchRow(stringResource(R.string.settings_keep_awake), isOn = settings.keepScreenAwake.value) {
             onToggle(settings.keepScreenAwake)
         }
-    }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_media_remote),
-        caption = stringResource(R.string.settings_media_remote_caption),
-    ) {
-        SettingsSwitchRow(
-            stringResource(R.string.settings_enable_media_remote),
-            isOn = settings.mediaRemoteShutterEnabled.value,
-            showTopDivider = false,
-        ) { onToggle(settings.mediaRemoteShutterEnabled) }
-        Text(
-            stringResource(R.string.settings_media_remote_detail),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-        )
     }
 }
 
@@ -2789,33 +2501,15 @@ private fun DisplayRows(
     parentScrollState: ScrollState,
     viewportBounds: Rect?,
 ) {
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_monitor_chrome),
-        caption = stringResource(R.string.settings_monitor_chrome_caption),
-    ) {
-        DisplayToggleGrid(
-            compact = compact,
-            entries =
-                listOf(
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_status), settings.statusBarVisible.value) {
-                        onToggle(settings.statusBarVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_rails), settings.sideRailsVisible.value) {
-                        onToggle(settings.sideRailsVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_assists), settings.assistToolbarVisible.value) {
-                        onToggle(settings.assistToolbarVisible)
-                    },
-                    DisplayToggleEntry(stringResource(R.string.settings_toggle_values), settings.cameraValuesVisible.value) {
-                        onToggle(settings.cameraValuesVisible)
-                    },
-                ),
-            twoColumnOrder = listOf(0, 2, 1, 3),
-        )
-    }
+    // iOS Display: View Assist toolbar, Live Status Readouts, DISP Button Order.
+    // Reset lives in each card header (iOS SettingsGroupCard onReset).
     SettingsGroupCard(
         title = stringResource(R.string.settings_assist_toolbar),
         caption = stringResource(R.string.settings_assist_toolbar_caption),
+        onReset = {
+            settings.resetAssistToolbarPreferences()
+            onInteraction()
+        },
     ) {
         AssistToolbarOrderList(
             settings = settings,
@@ -2823,10 +2517,6 @@ private fun DisplayRows(
             parentScrollState = parentScrollState,
             viewportBounds = viewportBounds,
         )
-        SettingsLinkAction(stringResource(R.string.settings_reset_toolbar)) {
-            settings.resetAssistToolbarPreferences()
-            onInteraction()
-        }
     }
     SettingsGroupCard(
         title = stringResource(R.string.settings_live_readouts),
@@ -2854,12 +2544,12 @@ private fun DisplayRows(
     SettingsGroupCard(
         title = stringResource(R.string.settings_disp_order),
         caption = stringResource(R.string.settings_disp_order_caption),
-    ) {
-        DisplayModeOrderList(settings, onInteraction)
-        SettingsLinkAction(stringResource(R.string.settings_reset_disp)) {
+        onReset = {
             settings.resetDisplayModePreferences()
             onInteraction()
-        }
+        },
+    ) {
+        DisplayModeOrderList(settings, onInteraction)
     }
 }
 
@@ -2946,7 +2636,6 @@ private fun StorageRows(
     val storageState = remember(mediaCacheStore) { MediaCacheSettingsState(mediaCacheStore) }
     var snapshot by remember(mediaCacheStore) { mutableStateOf<MediaCacheStorageSnapshot?>(null) }
     var loadFailure by remember(mediaCacheStore) { mutableStateOf<String?>(null) }
-    var showClearConfirmation by remember { mutableStateOf(false) }
     var clearing by remember { mutableStateOf(false) }
 
     LaunchedEffect(storageState) {
@@ -2958,115 +2647,54 @@ private fun StorageRows(
         }
     }
 
-    SettingsGroupCard(
-        title = stringResource(R.string.cache_title),
-        caption =
-            if (condensed) {
-                stringResource(R.string.cache_caption_condensed)
-            } else {
-                stringResource(R.string.cache_caption)
-            },
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(if (condensed) 4.dp else 11.dp)) {
-            if (condensed) {
-                CondensedStorageRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
-                    SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
-                }
-            } else {
-                SettingsInlineRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
-                    SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
-                }
-            }
-            snapshot?.usage?.let { usage ->
-                if (usage.incompleteEntryCount > 0) {
-                    if (condensed) {
-                        CondensedStorageRow(title = stringResource(R.string.cache_incomplete_transfers)) {
-                            SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
-                        }
-                    } else {
-                        SettingsInlineRow(title = stringResource(R.string.cache_incomplete_transfers)) {
-                            SettingsValueText(cacheSizeLabel(context, usage.incompleteBytes))
-                        }
-                        Text(
-                            stringResource(R.string.cache_incomplete_caption),
-                            style = chromeStyle(10.5f, FontWeight.Normal),
-                            color = LiveDesign.muted,
-                        )
-                    }
-                }
-            }
-            if (condensed) {
-                CondensedStorageRow(title = stringResource(R.string.cache_clear)) {
-                    StorageClearAction(clearing) { showClearConfirmation = true }
-                }
-            } else {
-                SettingsInlineRow(title = stringResource(R.string.cache_clear)) {
-                    StorageClearAction(clearing) { showClearConfirmation = true }
-                }
-                Text(
-                    stringResource(R.string.cache_clear_caption),
-                    style = chromeStyle(10.5f, FontWeight.Normal),
-                    color = LiveDesign.muted,
-                )
-            }
-            snapshot?.clearResult?.let { result ->
-                Text(
-                    clearResultLabel(context, result),
-                    style = chromeStyle(10.5f, FontWeight.Normal),
-                    color = LiveDesign.good,
-                )
-            }
-            loadFailure?.let { message ->
-                Text(
-                    message,
-                    style = chromeStyle(10.5f, FontWeight.Normal),
-                    color = LiveDesign.accent,
-                )
+    // iOS order: Frame.io first, then one Local Media Cache / Clear Cache card.
+    frameioController?.let { controller ->
+        FrameioStorageRows(controller, condensed)
+    }
+    fun clearNow() {
+        clearing = true
+        loadFailure = null
+        scope.launch {
+            try {
+                snapshot = withContext(Dispatchers.IO) { storageState.clearCompleted() }
+                onCompletedMediaCacheCleared()
+            } catch (error: Exception) {
+                loadFailure = error.message ?: resources.getString(R.string.cache_clear_failed)
+            } finally {
+                clearing = false
             }
         }
     }
-
-    if (showClearConfirmation) {
-        AlertDialog(
-            onDismissRequest = { showClearConfirmation = false },
-            title = { Text(stringResource(R.string.cache_clear_title)) },
-            text = {
-                Text(
-                    stringResource(R.string.cache_clear_message),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearConfirmation = false
-                        clearing = true
-                        loadFailure = null
-                        scope.launch {
-                            try {
-                                snapshot = withContext(Dispatchers.IO) { storageState.clearCompleted() }
-                                onCompletedMediaCacheCleared()
-                            } catch (error: Exception) {
-                                loadFailure =
-                                    error.message ?: resources.getString(R.string.cache_clear_failed)
-                            } finally {
-                                clearing = false
-                            }
-                        }
-                    },
-                ) {
-                    Text(stringResource(R.string.cache_clear_action))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearConfirmation = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-
-    frameioController?.let { controller ->
-        FrameioStorageRows(controller, condensed)
+    SettingsRowCard {
+        if (condensed) {
+            CondensedStorageRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
+                SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
+            }
+            CondensedStorageRow(title = stringResource(R.string.cache_clear)) {
+                StorageClearAction(clearing, ::clearNow)
+            }
+        } else {
+            SettingsInlineRow(title = stringResource(R.string.cache_cached_media), showTopDivider = false) {
+                SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
+            }
+            SettingsInlineRow(title = stringResource(R.string.cache_clear)) {
+                StorageClearAction(clearing, ::clearNow)
+            }
+        }
+        snapshot?.clearResult?.let { result ->
+            Text(
+                clearResultLabel(context, result),
+                style = chromeStyle(10.5f, FontWeight.Normal),
+                color = LiveDesign.good,
+            )
+        }
+        loadFailure?.let { message ->
+            Text(
+                message,
+                style = chromeStyle(10.5f, FontWeight.Normal),
+                color = LiveDesign.accent,
+            )
+        }
     }
 }
 
@@ -3085,6 +2713,8 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
         }
     }
 
+    @Suppress("UNUSED_PARAMETER")
+    val unusedCondensed = condensed
     val connectionLabel =
         when (controller.connectionState) {
             FrameioConnectionState.UNCONFIGURED -> stringResource(R.string.status_not_configured)
@@ -3093,43 +2723,29 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
             FrameioConnectionState.CONNECTED -> stringResource(R.string.status_connected)
             FrameioConnectionState.ERROR -> stringResource(R.string.status_needs_attention)
         }
-    val networkLabel =
-        when (controller.networkState) {
-            FrameioNetworkState.ONLINE -> stringResource(R.string.network_ready)
-            FrameioNetworkState.CAMERA_ACCESS_POINT -> stringResource(R.string.network_camera_wifi)
-            FrameioNetworkState.OFFLINE -> stringResource(R.string.status_offline)
-        }
-    val caption =
-        if (!controller.isConfigured) {
-            stringResource(R.string.frameio_unconfigured_caption)
-        } else if (condensed) {
-            stringResource(R.string.frameio_condensed_caption)
-        } else {
-            stringResource(R.string.frameio_caption)
-        }
 
-    SettingsGroupCard(title = stringResource(R.string.frameio_delivery), caption = caption) {
-        SettingsInlineRow(title = stringResource(R.string.settings_connection), showTopDivider = false) {
+    // iOS Storage: single "Frame.io" row with Log out / Sign in / status value.
+    SettingsRowCard {
+        SettingsInlineRow(title = stringResource(R.string.frameio_delivery), showTopDivider = false) {
             when (controller.connectionState) {
                 FrameioConnectionState.CONNECTED ->
-                    SettingsLinkAction(stringResource(R.string.action_disconnect)) {
+                    SettingsLinkAction(stringResource(R.string.action_log_out)) {
                         controller.disconnect()
                     }
+                FrameioConnectionState.UNCONFIGURED ->
+                    SettingsValueText(stringResource(R.string.frameio_not_set_up))
                 FrameioConnectionState.SIGNED_OUT ->
-                    SettingsLinkAction(stringResource(R.string.action_sign_in)) { beginSignIn() }
+                    if (controller.networkState == FrameioNetworkState.CAMERA_ACCESS_POINT) {
+                        SettingsLinkAction(stringResource(R.string.frameio_sign_in_over_internet)) {
+                            beginSignIn()
+                        }
+                    } else {
+                        SettingsLinkAction(stringResource(R.string.action_sign_in)) { beginSignIn() }
+                    }
                 FrameioConnectionState.ERROR ->
                     SettingsLinkAction(stringResource(R.string.action_try_again)) { beginSignIn() }
-                else -> SettingsValueText(connectionLabel)
+                FrameioConnectionState.AUTHORIZING -> SettingsValueText(connectionLabel)
             }
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_internet)) {
-            SettingsValueText(networkLabel)
-        }
-        SettingsInlineRow(title = stringResource(R.string.frameio_upload_project)) {
-            SettingsValueText(
-                controller.selectedDestination?.projectName
-                    ?: stringResource(R.string.frameio_choose_media),
-            )
         }
         controller.errorMessage?.let { message ->
             Text(
@@ -3235,10 +2851,8 @@ internal fun SystemRows(
         }
     }
 
-    SettingsGroupCard(
-        title = stringResource(R.string.system_help_feedback),
-        caption = stringResource(R.string.system_help_caption),
-    ) {
+    // iOS System uses titled SettingsRowCard sections (no captions / no licenses row).
+    SettingsRowCard(title = stringResource(R.string.system_help_feedback)) {
         SettingsInlineRow(stringResource(R.string.system_support), showTopDivider = false) {
             SettingsLinkAction(
                 stringResource(R.string.action_open),
@@ -3246,11 +2860,7 @@ internal fun SystemRows(
             ) { runAction(actions::openSupport) }
         }
         SettingsInlineRow(stringResource(R.string.system_report_problem)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_report),
-                stringResource(R.string.system_report_android_problem),
-                onReportProblem,
-            )
+            SettingsActionPill(stringResource(R.string.action_report), onReportProblem)
         }
         SettingsInlineRow(stringResource(R.string.system_request_feature)) {
             SettingsLinkAction(
@@ -3261,47 +2871,22 @@ internal fun SystemRows(
             }
         }
         SettingsInlineRow(stringResource(R.string.system_share_diagnostics)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_share),
-                stringResource(R.string.system_share_diagnostics),
-            ) {
+            SettingsActionPill(stringResource(R.string.action_share)) {
                 runAction(actions::shareDiagnostics)
             }
         }
-    }
-
-    SettingsGroupCard(
-        title = stringResource(R.string.system_live_view_guide),
-        caption = stringResource(R.string.system_live_view_guide_caption),
-    ) {
-        SettingsInlineRow(stringResource(R.string.system_guide_status), showTopDivider = false) {
-            SettingsValueText(stringResource(guideController.status.labelResource))
-        }
-        SettingsInlineRow(stringResource(R.string.system_replay)) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (onShowGuideNow != null && guideController.canReplayNow) {
-                    SettingsLinkAction(
-                        stringResource(R.string.action_now),
-                        stringResource(R.string.system_show_guide_now),
-                        onShowGuideNow,
-                    )
+        SettingsInlineRow(stringResource(R.string.system_live_view_guide)) {
+            SettingsActionPill(stringResource(R.string.action_show_again)) {
+                if (onShowGuideNow != null) {
+                    onShowGuideNow()
+                } else {
+                    onShowGuideOnNextRealFrame()
                 }
-                SettingsLinkAction(
-                    stringResource(R.string.action_next_frame),
-                    stringResource(R.string.system_show_guide_next_frame),
-                    onShowGuideOnNextRealFrame,
-                )
             }
         }
     }
 
-    SettingsGroupCard(
-        title = stringResource(R.string.system_project_legal),
-        caption = stringResource(R.string.system_project_legal_caption),
-    ) {
+    SettingsRowCard(title = stringResource(R.string.system_project_legal)) {
         SettingsInlineRow(stringResource(R.string.system_source_code), showTopDivider = false) {
             SettingsLinkAction(
                 stringResource(R.string.action_open),
@@ -3320,15 +2905,9 @@ internal fun SystemRows(
                 stringResource(R.string.system_open_terms),
             ) { runAction(actions::openTerms) }
         }
-        SettingsInlineRow(stringResource(R.string.system_licenses)) {
-            SettingsValueText(stringResource(R.string.system_third_party_notices))
-        }
     }
 
-    SettingsGroupCard(
-        title = stringResource(R.string.system_app_information),
-        caption = stringResource(R.string.system_app_information_caption),
-    ) {
+    SettingsRowCard(title = stringResource(R.string.system_app_information)) {
         SettingsInlineRow(stringResource(R.string.system_theme), showTopDivider = false) {
             SettingsValueText(stringResource(R.string.system_theme_warm_dark))
         }

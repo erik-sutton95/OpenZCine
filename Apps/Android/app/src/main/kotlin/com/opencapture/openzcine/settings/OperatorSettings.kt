@@ -269,7 +269,7 @@ public enum class ScopeCrushClipCompensation(
 
 /** Plot channel arrangement for the waveform panel, matching iOS. */
 public enum class ScopeWaveformMode(public val label: String) {
-    LUMA("LUMA"),
+    LUMA("Luma"),
     RGB("RGB"),
 }
 
@@ -284,9 +284,9 @@ public enum class ScopeVectorscopeZoom(
     public val wireOrdinal: Int,
     public val label: String,
 ) {
-    X1(0, "1×"),
-    X2(1, "2×"),
-    X4(2, "4×"),
+    X1(0, "1x"),
+    X2(1, "2x"),
+    X4(2, "4x"),
 }
 
 /** Independently toggleable waveform/parade reference lines. */

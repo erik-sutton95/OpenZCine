@@ -6,6 +6,8 @@ enum LiveDesign {
     static let background = Color(red: 0.072, green: 0.064, blue: 0.053)
     static let surface = Color(red: 0.145, green: 0.128, blue: 0.102)
     static let glass = Color(red: 0.105, green: 0.092, blue: 0.073).opacity(0.64)
+    /// Pre–Liquid Glass fallback: solid-looking chrome fill (no fake frost/blur).
+    static let glassOpaque = Color(red: 0.105, green: 0.092, blue: 0.073).opacity(0.90)
     static let glassBright = Color(red: 0.178, green: 0.155, blue: 0.122).opacity(0.68)
     static let hairline = Color(red: 0.968, green: 0.937, blue: 0.882).opacity(0.14)
     static let hairlineStrong = Color(red: 0.968, green: 0.937, blue: 0.882).opacity(0.22)
@@ -831,7 +833,7 @@ struct CaptureSettingButton: View {
         case "SHUTTER": "1/16000"  // X/XXXXX
         case "IRIS": "f/2.8"  // f/X.X
         case "FOCUS": "Wide-L"
-        case "WB": "5600K"  // Kelvin readouts; presets render as icons (narrower)
+        case "WB": "5560K"  // Kelvin dial step; presets render as icons (narrower)
         default: value.value
         }
     }

@@ -68,17 +68,17 @@ import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
  */
 enum class AssistTool(val label: String, val settingsTitle: String) {
     LUT("LUT", "LUT"),
-    PEAK("PEAK", "Focus Peaking"),
+    PEAK("PEAK", "Peaking"),
     FALSE("FALSE", "False Color"),
     ZEBRA("ZEBRA", "Zebra"),
     WAVE("WAVE", "Waveform"),
-    PARADE("PARADE", "Parade"),
+    PARADE("PARADE", "RGB Parade"),
     HISTO("HISTO", "Histogram"),
     VECTOR("VECTOR", "Vectorscope"),
     LIGHTS("LIGHTS", "Traffic Lights"),
-    GUIDES("GUIDES", "Frame Guides"),
-    GRID("GRID", "Composition Grid"),
-    CROSS("CROSS", "Centre Crosshair"),
+    GUIDES("GUIDES", "Guides"),
+    GRID("GRID", "Grid"),
+    CROSS("CROSS", "Crosshair"),
     LEVEL("LEVEL", "Horizon"),
     DESQ("DE-SQ", "Desqueeze"),
     AUDIO("AUDIO", "Audio Levels"),
@@ -570,7 +570,14 @@ fun AssistToolbar(
     val view = LocalView.current
     val leadingFade = scroll.canScrollBackward
     val trailingFade = scroll.canScrollForward
-    Box(modifier.glass(ChromeShape)) {
+    // iOS anchors the options popup to the whole toolbar's frame (trailing
+    // edge, band above), not to the pressed cell.
+    var toolbarBounds by remember { mutableStateOf<Rect?>(null) }
+    Box(
+        modifier
+            .onGloballyPositioned { toolbarBounds = it.boundsInRoot() }
+            .glass(ChromeShape),
+    ) {
         Row(
             Modifier
                 .fillMaxHeight()
@@ -606,7 +613,9 @@ fun AssistToolbar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             supportedTools.forEachIndexed { index, tool ->
-                if (index > 0 && index % 3 == 0) {
+                // Tools group in threes; AUDIO always rides its own trailing
+                // section after a divider (iOS MonitorAssistStrip).
+                if (index > 0 && (tool == AssistTool.AUDIO || index % 3 == 0)) {
                     Box(
                         Modifier.padding(horizontal = 4.dp)
                             .size(width = 1.dp, height = 28.dp)
@@ -620,45 +629,54 @@ fun AssistToolbar(
                     } else {
                         state.isOn(tool)
                     }
-                AssistToolCell(
-                    tool = tool,
-                    isOn = isOn,
-                    enabled = enabled,
-                    onLongClick =
-                        if (tool.hasConfiguration &&
-                            (onLongPressTool != null || onLongPressToolAnchored != null)
-                        ) {
-                            { anchor ->
-                                if (tool in AssistTool.scopeTools &&
-                                    !isOn &&
-                                    maximumActiveScopes != null &&
-                                    state.selectedScopes.size >= maximumActiveScopes
-                                ) {
-                                    onScopeLimitReached()
-                                } else {
-                                    if (hapticsEnabled) {
-                                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                val capBlocked =
+                    tool in AssistTool.scopeTools &&
+                        !isOn &&
+                        maximumActiveScopes != null &&
+                        state.selectedScopes.size >= maximumActiveScopes
+                // iOS renders a cap-blocked scope button at 0.35 opacity while
+                // keeping it tappable so the refusal toast can explain.
+                Box(Modifier.alpha(if (capBlocked) 0.35f else 1f)) {
+                    AssistToolCell(
+                        tool = tool,
+                        isOn = isOn,
+                        enabled = enabled,
+                        onLongClick =
+                            if (tool.hasConfiguration &&
+                                (onLongPressTool != null || onLongPressToolAnchored != null)
+                            ) {
+                                { anchor ->
+                                    if (capBlocked) {
+                                        onScopeLimitReached()
+                                    } else {
+                                        if (hapticsEnabled) {
+                                            view.performHapticFeedback(
+                                                HapticFeedbackConstants.LONG_PRESS,
+                                            )
+                                        }
+                                        onLongPressToolAnchored?.invoke(
+                                            tool,
+                                            toolbarBounds ?: anchor,
+                                        ) ?: onLongPressTool?.invoke(tool)
                                     }
-                                    onLongPressToolAnchored?.invoke(tool, anchor)
-                                        ?: onLongPressTool?.invoke(tool)
                                 }
-                            }
+                            } else {
+                                null
+                            },
+                    ) {
+                        var changed = true
+                        if (isFramingTool) {
+                            onToggleFramingTool(tool)
                         } else {
-                            null
-                        },
-                ) {
-                    var changed = true
-                    if (isFramingTool) {
-                        onToggleFramingTool(tool)
-                    } else {
-                        changed = state.toggle(tool, maximumActiveScopes)
-                    }
-                    if (!changed) {
-                        onScopeLimitReached()
-                        return@AssistToolCell
-                    }
-                    if (hapticsEnabled) {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            changed = state.toggle(tool, maximumActiveScopes)
+                        }
+                        if (!changed) {
+                            onScopeLimitReached()
+                            return@AssistToolCell
+                        }
+                        if (hapticsEnabled) {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        }
                     }
                 }
             }
@@ -708,11 +726,8 @@ internal fun PortraitFillAssistRail(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                stringResource(R.string.assist_view),
-                style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = LiveDesign.accent,
-            )
+            // iOS collapsed rail shows the slider.horizontal.3 glyph, not text.
+            SliderHorizontal3Glyph(LiveDesign.accent, Modifier.size(18.dp))
         }
         return
     }
@@ -745,11 +760,8 @@ internal fun PortraitFillAssistRail(
                 .semantics { contentDescription = closeDescription },
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                stringResource(R.string.assist_view),
-                style = chromeStyle(9f, FontWeight.Bold, mono = true),
-                color = LiveDesign.accent,
-            )
+            // iOS collapse handle is a chevron, not a text label.
+            ChevronCollapseGlyph(LiveDesign.accent, Modifier.size(13.dp))
         }
         supportedTools.forEach { tool ->
             val isFramingTool = tool in AssistTool.framingTools
@@ -911,7 +923,7 @@ private fun Modifier.assistToolClickable(
 
 /** Canvas stand-ins for the iOS SF Symbol per tool (`MonitorAssistTool.icon`). */
 @Composable
-private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = Modifier) {
+internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val stroke = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
         when (tool) {
@@ -1115,5 +1127,44 @@ private fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier = 
                 }
             }
         }
+    }
+}
+
+/** Canvas stand-in for SF `slider.horizontal.3` (the fill-rail collapsed pill). */
+@Composable
+internal fun SliderHorizontal3Glyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val stroke = size.minDimension * 0.085f
+        val knobRadius = size.minDimension * 0.09f
+        val rows = listOf(0.24f, 0.5f, 0.76f)
+        val knobs = listOf(0.68f, 0.34f, 0.58f)
+        rows.forEachIndexed { index, rowY ->
+            val y = size.height * rowY
+            drawLine(
+                tint,
+                Offset(size.width * 0.06f, y),
+                Offset(size.width * 0.94f, y),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round,
+            )
+            drawCircle(tint, radius = knobRadius, center = Offset(size.width * knobs[index], y))
+        }
+    }
+}
+
+/** Canvas stand-in for SF `chevron.left` (the fill-rail collapse handle). */
+@Composable
+internal fun ChevronCollapseGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val path = Path().apply {
+            moveTo(size.width * 0.62f, size.height * 0.22f)
+            lineTo(size.width * 0.38f, size.height * 0.5f)
+            lineTo(size.width * 0.62f, size.height * 0.78f)
+        }
+        drawPath(
+            path,
+            tint,
+            style = Stroke(width = size.minDimension * 0.12f, cap = StrokeCap.Round),
+        )
     }
 }

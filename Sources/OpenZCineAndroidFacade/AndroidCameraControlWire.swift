@@ -35,6 +35,24 @@ enum AndroidCameraControl: Hashable, Sendable {
         self != .exposureMode
     }
 
+    /// When the capability domain is still empty (descriptor bootstrap pending, or
+    /// mode-dependent options not yet known), allow an encode attempt for controls
+    /// that the shared core can map from a human label. Codec/resolution and other
+    /// raw-descriptor-only writes stay fail-closed until the body advertises them —
+    /// matching iOS, which never invents packed MovScreenSize / MovFileType values.
+    var allowsEncodeWithoutCapabilityDomain: Bool {
+        switch self {
+        case .iso, .shutter, .iris, .whiteBalance, .focusMode, .focusArea, .focusSubject,
+            .exposureMode, .audioSensitivity, .audioInput, .windFilter, .attenuator,
+            .audio32BitFloat, .shutterMode, .shutterLock, .vibrationReduction, .baseISO:
+            // baseISO: the capture-bar dual-base tabs always send Low/High; encode when the
+            // active codec is dual-base even if the MovieBaseISO descriptor has not landed.
+            true
+        case .whiteBalanceTint, .resolutionFrameRate, .codec, .electronicVR:
+            false
+        }
+    }
+
     /// Existing label-based controls whose byte policy already lives in the
     /// portable shared core.
     var sharedControl: PTPCameraControl? {

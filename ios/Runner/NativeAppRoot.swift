@@ -656,9 +656,35 @@ final class NativeAppModel {
     /// write, so we never send an invalid combination the body rejects by closing the connection.
     var cameraScreenModes: [PTPCameraScreenSizeMode] = []
     /// Deduped mode labels for the resolution/frame-rate picker (in the camera's advertised order).
+    /// On Nikon ZR with R3D NE / N-RAW, documented FX/DX image areas get `[FX]` / `[DX]` prefixes
+    /// (shared policy with Android) so operators see the same RAW crop semantics as the body.
     var resolutionOptions: [String] {
         var seen = Set<String>()
-        return cameraScreenModes.map(\.label).filter { seen.insert($0).inserted }
+        let codec = cameraPropertySnapshot.fileType
+        return cameraScreenModes.map {
+            screenSizePresentationLabel(for: $0, codec: codec)
+        }.filter { seen.insert($0).inserted }
+    }
+
+    /// Whether the connected body is a Nikon ZR (enables ZR-only RAW crop presentation).
+    private var isConnectedNikonZR: Bool {
+        guard let identity = connectedIdentity else { return false }
+        let manufacturer = identity.manufacturer.uppercased()
+        let model = identity.model.uppercased()
+        // Match the Android facade: manufacturer Nikon + model ZR / NIKON ZR only.
+        return manufacturer.contains("NIKON")
+            && (model == "ZR" || model == "NIKON ZR" || model.hasSuffix(" ZR"))
+    }
+
+    /// Operator-facing screen-size label, including ZR RAW FX/DX tags when applicable.
+    private func screenSizePresentationLabel(
+        for mode: PTPCameraScreenSizeMode,
+        codec: String?
+    ) -> String {
+        NikonZRRawCropPresentation.label(
+            for: mode,
+            currentCodec: codec,
+            isNikonZR: isConnectedNikonZR)
     }
     /// Codecs the camera advertises (`MovFileType` descriptor) — the only codec values we'll write.
     var cameraFileTypeModes: [PTPCameraFileTypeMode] = []
@@ -2129,8 +2155,8 @@ final class NativeAppModel {
         }
         connection = .preparingLiveView
         connectionPhase = .preparingLiveView
-        connectionMessage =
-            "Opening live view…"
+        // Matches Android: fill AF / lens / subject / audio before the feed opens.
+        connectionMessage = "Reading camera settings…"
         startLiveView(session: session)
     }
 
@@ -3199,6 +3225,16 @@ final class NativeAppModel {
         liveViewTask?.cancel()
         resetCameraPropertyState()
         liveViewTask = Task {
+            // Android parity: one full property + descriptor burst before the first
+            // StartLiveView so AF mode / lens / subject land immediately and the
+            // command channel is not shared with GetLiveViewImageEx during fill-in.
+            // A brief semi-stable (or held) feed for 1–3 s is preferred to 20–30 s of
+            // drip-fed one-property-per-frame polls.
+            connectionMessage = "Reading camera settings…"
+            await bootstrapCameraProperties(session: session)
+            guard !Task.isCancelled, cameraSession === session else { return }
+            connectionMessage = "Opening live view…"
+
             // Jittered exponential backoff (≈1s → cap 8s) so repeated stalls against a flaky AP don't
             // resync into a restart burst; the random spread de-correlates successive attempts.
             let backoff = ReconnectBackoff(
@@ -3633,7 +3669,7 @@ final class NativeAppModel {
             consecutiveBadLiveFrames = 0
             frameRate.recordFrame(at: CACurrentMediaTime())
             measuredLiveViewFPS = frameRate.displayFPS
-            liveTimecode = firstFrame.timecode
+            applyLiveViewHeaderTimecode(firstFrame.timecode)
             liveFPS = frameRate.formatted
             cameraState = cameraState.updating(phoneBatteryPercent: currentPhoneBatteryPercent)
             connectionMessage = "Live view streaming from \(session.identity.displayName)."
@@ -3756,7 +3792,7 @@ final class NativeAppModel {
                     } else if scopeAssist != .empty {
                         clearScopeAssist()
                     }
-                    if frame.timecode != liveTimecode { liveTimecode = frame.timecode }
+                    applyLiveViewHeaderTimecode(frame.timecode)
                     let fpsLabel = frameRate.formatted
                     if fpsLabel != liveFPS { liveFPS = fpsLabel }
                     await runLiveViewControlSafePoint(
@@ -4311,8 +4347,7 @@ final class NativeAppModel {
                     data: pending.write.data
                 )
             }
-            cameraState = cameraState.applyingCameraProperties(
-                cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+            publishCameraDisplayState()
             syncFocusFromSnapshot()
             syncShutterLockFromSnapshot()
             // The camera accepted the change, so this control isn't locked (any more).
@@ -4350,8 +4385,7 @@ final class NativeAppModel {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
                     cameraPropertySnapshot = cameraPropertySnapshot.applying(
                         property: pending.write.property, data: actual)
-                    cameraState = cameraState.applyingCameraProperties(
-                        cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+                    publishCameraDisplayState()
                 }
                 syncFocusFromSnapshot()
                 syncShutterLockFromSnapshot()
@@ -4364,8 +4398,7 @@ final class NativeAppModel {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
                     cameraPropertySnapshot = cameraPropertySnapshot.applying(
                         property: pending.write.property, data: actual)
-                    cameraState = cameraState.applyingCameraProperties(
-                        cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+                    publishCameraDisplayState()
                     syncFocusFromSnapshot()
                 }
                 syncShutterLockFromSnapshot()
@@ -4380,8 +4413,7 @@ final class NativeAppModel {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
                     cameraPropertySnapshot = cameraPropertySnapshot.applying(
                         property: pending.write.property, data: actual)
-                    cameraState = cameraState.applyingCameraProperties(
-                        cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+                    publishCameraDisplayState()
                     syncFocusFromSnapshot()
                 }
                 syncShutterLockFromSnapshot()
@@ -4427,6 +4459,38 @@ final class NativeAppModel {
         return false
     }
 
+    /// Constant camera-header TC sync — every live-view frame updates the hero readout.
+    private func applyLiveViewHeaderTimecode(_ timecode: Timecode) {
+        if timecode != liveTimecode { liveTimecode = timecode }
+    }
+
+    /// Full live-order property + storage + descriptor burst (Android bootstrap parity).
+    /// Call once after connect / before the first `StartLiveView`.
+    private func bootstrapCameraProperties(session: NativeCameraSession) async {
+        logConnection("property-bootstrap: starting full live-order burst")
+        for property in PTPPropertyCode.liveMonitorPollOrder {
+            guard !Task.isCancelled, cameraSession === session else { return }
+            await readAndApplyCameraProperty(session: session, property: property)
+        }
+        propertyPollIndex = 0
+        guard !Task.isCancelled, cameraSession === session else { return }
+        // Force the slow maintenance groups immediately (don't wait for 60 s cadence).
+        lastStorageRefreshAt = nil
+        lastDescriptorRefreshAt = nil
+        await refreshStorageInfo(session: session)
+        lastStorageRefreshAt = Date()
+        guard !Task.isCancelled, cameraSession === session else { return }
+        await refreshLensApertures(session: session)
+        await refreshScreenModes(session: session)
+        await refreshFileTypeModes(session: session)
+        await refreshControlOptions(session: session)
+        lastDescriptorRefreshAt = Date()
+        publishCameraDisplayState()
+        syncFocusFromSnapshot()
+        syncShutterLockFromSnapshot()
+        logConnection("property-bootstrap: complete")
+    }
+
     private func pollNextCameraProperty(session: NativeCameraSession) async {
         let pollOrder = PTPPropertyCode.monitorPollOrder(isRecording: isRecording)
         guard !pollOrder.isEmpty else { return }
@@ -4439,48 +4503,55 @@ final class NativeAppModel {
         } else if property == .movieBaseISO, shouldSuppressBaseISOPoll() {
             // Same for dual-base ISO — keep the picker tab on the circuit the operator chose.
         } else {
-            do {
-                let data = try await session.readCameraProperty(property)
-                if Self.commandTileDiagnosticProps.contains(property),
-                    commandTileDiagnosticLogged.insert(property).inserted
-                {
-                    let hex = data.map { String(format: "%02x", $0) }.joined()
-                    logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
-                }
-                cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                    property: property, data: data)
-                cameraState = cameraState.applyingCameraProperties(
-                    cameraPropertySnapshot, mediaStatus: currentMediaStatus())
-                syncFocusFromSnapshot()
-                syncShutterLockFromSnapshot()
-                if property == .warningStatus {
-                    applyThermalStreamStepDownIfNeeded()
-                }
-                if property == .movieShutterMode,
-                    let pending = pendingShutterMode,
-                    cameraPropertySnapshot.shutterMode == pending
-                {
-                    pendingShutterMode = nil
-                    await refreshShutterModeDependentOptions(
-                        session: session, mode: pending)
-                }
-                if property == .movieTVLockSetting,
-                    let pending = pendingShutterLockState,
-                    cameraPropertySnapshot.shutterLocked == !pending
-                {
-                    pendingShutterLockState = nil
-                }
-            } catch {
-                // Some properties are mode/lens dependent — keep the last known values. Log the
-                // first command-tile failure so an on-hardware "—" is diagnosable from Console.
-                if Self.commandTileDiagnosticProps.contains(property),
-                    commandTileDiagnosticLogged.insert(property).inserted
-                {
-                    logConnection("cmd-tile \(property) read failed: \(error)")
-                }
-            }
+            await readAndApplyCameraProperty(session: session, property: property)
         }
         await refreshCameraMaintenanceIfDue(session: session)
+    }
+
+    /// One property read applied into the snapshot and derived monitor state.
+    private func readAndApplyCameraProperty(
+        session: NativeCameraSession,
+        property: PTPPropertyCode
+    ) async {
+        do {
+            let data = try await session.readCameraProperty(property)
+            if Self.commandTileDiagnosticProps.contains(property),
+                commandTileDiagnosticLogged.insert(property).inserted
+            {
+                let hex = data.map { String(format: "%02x", $0) }.joined()
+                logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
+            }
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: property, data: data)
+            publishCameraDisplayState()
+            syncFocusFromSnapshot()
+            syncShutterLockFromSnapshot()
+            if property == .warningStatus {
+                applyThermalStreamStepDownIfNeeded()
+            }
+            if property == .movieShutterMode,
+                let pending = pendingShutterMode,
+                cameraPropertySnapshot.shutterMode == pending
+            {
+                pendingShutterMode = nil
+                await refreshShutterModeDependentOptions(
+                    session: session, mode: pending)
+            }
+            if property == .movieTVLockSetting,
+                let pending = pendingShutterLockState,
+                cameraPropertySnapshot.shutterLocked == !pending
+            {
+                pendingShutterLockState = nil
+            }
+        } catch {
+            // Some properties are mode/lens dependent — keep the last known values. Log the
+            // first command-tile failure so an on-hardware "—" is diagnosable from Console.
+            if Self.commandTileDiagnosticProps.contains(property),
+                commandTileDiagnosticLogged.insert(property).inserted
+            {
+                logConnection("cmd-tile \(property) read failed: \(error)")
+            }
+        }
     }
 
     /// Refreshes slow-changing descriptors on a conservative cadence. The first non-recording poll
@@ -4517,8 +4588,7 @@ final class NativeAppModel {
         guard let data = try? await session.readCameraProperty(.warningStatus) else { return }
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: .warningStatus, data: data)
-        cameraState = cameraState.applyingCameraProperties(
-            cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+        publishCameraDisplayState()
         applyThermalStreamStepDownIfNeeded()
     }
 
@@ -4608,8 +4678,7 @@ final class NativeAppModel {
                 let data = try await session.readCameraProperty(.movieShutterMode)
                 cameraPropertySnapshot = cameraPropertySnapshot.applying(
                     property: .movieShutterMode, data: data)
-                cameraState = cameraState.applyingCameraProperties(
-                    cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+                publishCameraDisplayState()
                 if cameraPropertySnapshot.shutterMode == expected { return true }
             } catch {
                 if cameraPropertySnapshot.shutterMode == expected { return true }
@@ -4732,8 +4801,7 @@ final class NativeAppModel {
         do {
             if let info = try await session.readStorageInfo() {
                 lastKnownStorage = info
-                cameraState = cameraState.applyingCameraProperties(
-                    cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+                publishCameraDisplayState()
             }
         } catch {
             // Storage query not supported or transiently unavailable — keep the last value.
@@ -4759,6 +4827,23 @@ final class NativeAppModel {
         )
         return MediaStatus(
             gigabytesFree: gigabytes, percentFree: percent, minutesRemaining: minutes)
+    }
+
+    /// Publishes property snapshot → monitor readouts, including ZR RAW `[FX]` / `[DX]` tags on the
+    /// resolution/frame-rate bar (shared policy with Android).
+    private func publishCameraDisplayState(mediaStatus: MediaStatus? = nil) {
+        var next = cameraState.applyingCameraProperties(
+            cameraPropertySnapshot,
+            mediaStatus: mediaStatus ?? currentMediaStatus())
+        let labeled = NikonZRRawCropPresentation.label(
+            baseLabel: next.resolutionFrameRate,
+            rawScreenSize: cameraPropertySnapshot.rawScreenSize,
+            currentCodec: cameraPropertySnapshot.fileType,
+            isNikonZR: isConnectedNikonZR)
+        if labeled != next.resolutionFrameRate {
+            next = next.updating(resolutionFrameRate: labeled)
+        }
+        cameraState = next
     }
 
     func cycleDisplayMode() {
@@ -5534,8 +5619,7 @@ final class NativeAppModel {
         if control == .focusMode {
             cameraPropertySnapshot = cameraPropertySnapshot.applying(
                 property: write.property, data: write.data)
-            cameraState = cameraState.applyingCameraProperties(
-                cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+            publishCameraDisplayState()
             syncFocusFromSnapshot()
         }
         enqueueCameraWrite(PendingCameraWrite(picker: .focus, value: value, write: write))
@@ -5666,8 +5750,7 @@ final class NativeAppModel {
         let write = PTPCameraPropertyWrite(property: .movieBaseISO, data: Data([raw]))
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: write.property, data: write.data)
-        cameraState = cameraState.applyingCameraProperties(
-            cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+        publishCameraDisplayState()
         guard !isDemoSession else { return }
         pendingBaseISOHigh = highBase
         enqueueCameraWrite(
@@ -5686,8 +5769,7 @@ final class NativeAppModel {
         let write = PTPCameraPropertyWrite.shutterMode(mode)
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: write.property, data: write.data)
-        cameraState = cameraState.applyingCameraProperties(
-            cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+        publishCameraDisplayState()
         guard !isDemoSession else { return }
         guard reported != mode else { return }
         pendingShutterMode = mode
@@ -5713,8 +5795,7 @@ final class NativeAppModel {
         guard let write = PTPCameraPropertyWrite.vibrationReduction(label: label) else { return }
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: write.property, data: write.data)
-        cameraState = cameraState.applyingCameraProperties(
-            cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+        publishCameraDisplayState()
         guard !isDemoSession else { return }
         enqueueCameraWrite(
             PendingCameraWrite(picker: .stabilization, value: label, write: write))
@@ -5727,8 +5808,7 @@ final class NativeAppModel {
         let write = PTPCameraPropertyWrite.electronicVR(on: on)
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: write.property, data: write.data)
-        cameraState = cameraState.applyingCameraProperties(
-            cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+        publishCameraDisplayState()
         guard !isDemoSession else { return }
         enqueueCameraWrite(
             PendingCameraWrite(
@@ -6192,7 +6272,15 @@ final class NativeAppModel {
         // written *during* live view via the standard SetDevicePropValue (0x1016) — no teardown.
         let writes: [PTPCameraPropertyWrite]
         if cameraControl == .resolution {
-            guard let mode = cameraScreenModes.first(where: { $0.label == value }) else {
+            let codec = cameraPropertySnapshot.fileType
+            guard
+                let mode = cameraScreenModes.first(where: {
+                    screenSizePresentationLabel(for: $0, codec: codec) == value
+                        || $0.label == value
+                        || NikonZRRawCropPresentation.bareLabel($0.label)
+                            == NikonZRRawCropPresentation.bareLabel(value)
+                })
+            else {
                 connectionMessage =
                     "\(value) isn't a recording mode the camera reported — pick a listed one."
                 return
@@ -6220,8 +6308,7 @@ final class NativeAppModel {
             cameraPropertySnapshot = cameraPropertySnapshot.applying(
                 property: write.property, data: write.data)
         }
-        cameraState = cameraState.applyingCameraProperties(
-            cameraPropertySnapshot, mediaStatus: currentMediaStatus())
+        publishCameraDisplayState()
         syncFocusFromSnapshot()
         connectionMessage =
             isMonitorPresented
@@ -6391,7 +6478,9 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .iso: ["500", "640", "800", "1000", "1250", "1600", "3200", "6400"]
         case .shutter: ["150.0°", "172.8°", "180.0°", "210.0°", "270.0°", "1/50", "1/100"]
         case .iris: ["f/1.4", "f/2.0", "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0"]
-        case .whiteBalance: ["3200K", "4300K", "5400K", "5500K", "5600K", "5700K", "6500K"]
+        // Nikon K [Choose color temperature]: 2500–10000 K discrete steps
+        // (`WhiteBalanceKelvinPolicy` — ZR K [Choose color temperature] dial).
+        case .whiteBalance: WhiteBalanceKelvinPolicy.kelvinOptions
         case .focus: ["MF", "AF-S", "AF-C", "AF-F", "Wide-L", "Auto Subject"]
         case .resolution: ["6K · 24p", "6K · 25p", "6K · 30p", "6K · 50p", "4K · 60p"]
         case .codec: ["R3D NE", "N-RAW", "ProRes RAW HQ", "ProRes 422 HQ", "H.265 10-bit"]
@@ -6447,8 +6536,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             [
                 PickerMode(
                     title: "Kelvin",
-                    options: ["3200K", "4300K", "5400K", "5500K", "5600K", "5700K", "6500K"],
-                    base: "5600K"),
+                    options: WhiteBalanceKelvinPolicy.kelvinOptions,
+                    base: WhiteBalanceKelvinPolicy.defaultLabel),
                 // Nikon ZR white-balance presets (labels match PTPCameraPropertyDecoders.wbModeNames
                 // so they round-trip with the camera's reported mode).
                 PickerMode(

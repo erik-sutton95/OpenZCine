@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,6 +25,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -50,6 +53,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameTimecode
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
@@ -78,6 +82,40 @@ fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier =
         indication = null,
         onClick = onClick,
     )
+
+/**
+ * iOS `.zcTapTarget` press feedback: while pressed the control drops to 60%
+ * opacity and scales to 0.97 — chrome buttons read as buttons without a
+ * Material ripple.
+ */
+@Composable
+fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val alpha by
+        androidx.compose.animation.core.animateFloatAsState(
+            if (pressed) 0.6f else 1f,
+            androidx.compose.animation.core.tween(durationMillis = 120),
+            label = "chrome press alpha",
+        )
+    val scale by
+        androidx.compose.animation.core.animateFloatAsState(
+            if (pressed) 0.97f else 1f,
+            androidx.compose.animation.core.tween(durationMillis = 120),
+            label = "chrome press scale",
+        )
+    return graphicsLayer {
+        this.alpha = alpha
+        scaleX = scale
+        scaleY = scale
+    }
+        .clickable(
+            enabled = true,
+            interactionSource = interaction,
+            indication = null,
+            onClick = onClick,
+        )
+}
 
 /** Text style matching iOS `.system(size:weight:design:)` closely enough. */
 fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextStyle =
@@ -130,6 +168,27 @@ fun CameraTimecodeReadout(
     }
 }
 
+/**
+ * Leaf timecode readout that alone observes [MonitorTimecodeRetention] state.
+ * Call sites must not read the retention in a large parent body — that was
+ * recomposing the entire monitor chrome on every live frame (~25 Hz).
+ */
+@Composable
+internal fun RetainedCameraTimecodeReadout(
+    retention: MonitorTimecodeRetention,
+    sessionState: CameraSessionState,
+    sizeSp: Float,
+    weight: FontWeight = FontWeight.Normal,
+    modifier: Modifier = Modifier,
+) {
+    CameraTimecodeReadout(
+        timecode = retention.timecodeFor(sessionState),
+        sizeSp = sizeSp,
+        weight = weight,
+        modifier = modifier,
+    )
+}
+
 /** STBY/REC pill: state dot + label in a glass capsule (iOS `RecordChip`). */
 @Composable
 fun RecordChip(recording: Boolean) {
@@ -150,24 +209,50 @@ fun RecordChip(recording: Boolean) {
                 ),
             style = chromeStyle(11f, FontWeight.Bold, mono = true),
             color = if (recording) LiveDesign.text else LiveDesign.muted,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
 
 /** Glyph + value in a glass capsule (iOS `inlineReadout`). */
 @Composable
-fun ReadoutPill(value: String, icon: @Composable () -> Unit) {
+fun ReadoutPill(
+    value: String,
+    active: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    icon: @Composable (Color) -> Unit,
+) {
+    // Active = the iOS readout-button treatment: accent-dim capsule + an
+    // accent-dim border (iOS strokes with accentDim, not full accent) with
+    // glyph and value going gold while its picker is open.
+    val surface =
+        if (active) {
+            Modifier.background(LiveDesign.accentDim, CircleShape)
+                .border(1.dp, LiveDesign.accentDim, CircleShape)
+        } else {
+            Modifier.chipGlass(CircleShape)
+        }
     Row(
-        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier =
+            surface
+                .then(
+                    // iOS readout buttons always press like buttons; disabled
+                    // handlers no-op silently rather than losing button feel.
+                    if (onClick != null) Modifier.chromePressable(onClick) else Modifier
+                )
+                .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        icon()
+        icon(if (active) LiveDesign.accent else LiveDesign.muted)
         Text(
-            text = value,
+            // iOS collapses " · " to "·" in the tight top-bar pills.
+            text = value.replace(" · ", "·"),
             style = chromeStyle(15f, FontWeight.Medium, mono = true),
-            color = LiveDesign.text,
+            color = if (active) LiveDesign.accent else LiveDesign.text,
             maxLines = 1,
+            softWrap = false,
         )
     }
 }
@@ -192,11 +277,15 @@ fun FpsChip(signalBars: Int, fps: String) {
             stringResource(R.string.monitor_fps),
             style = chromeStyle(8f, FontWeight.Bold, mono = true),
             color = LiveDesign.faint,
+            maxLines = 1,
         )
+        // Mirror iOS: two-decimal FPS must never wrap to "25.0" / "0".
         Text(
             fps,
             style = chromeStyle(12f, FontWeight.Medium, mono = true),
             color = LiveDesign.text,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
@@ -205,15 +294,39 @@ fun FpsChip(signalBars: Int, fps: String) {
  * One exposure readout: small label over a large mono value (iOS
  * `CaptureSettingButton`). [widestValue] reserves the cell's width so the bar
  * never shifts when a value changes — the iOS `widestValue` hidden-overlay trick.
+ *
+ * Active pickers tint label + value accent (iOS `isActive`); WB presets can
+ * render as [wbIcon] instead of text; [controlLocked] shows a lock glyph.
  */
 @Composable
-fun CaptureSettingCell(label: String, value: String, widestValue: String = value) {
+internal fun CaptureSettingCell(
+    label: String,
+    value: String,
+    widestValue: String = value,
+    active: Boolean = false,
+    controlLocked: Boolean = false,
+    wbIcon: CaptureWbIcon? = null,
+) {
+    val labelColor = if (active) LiveDesign.accent.copy(alpha = 0.85f) else LiveDesign.faint
+    val valueColor = if (active) LiveDesign.accent else LiveDesign.text
     Column(
         modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Text(label, style = chromeStyle(9f, FontWeight.SemiBold), color = LiveDesign.faint)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, style = chromeStyle(9f, FontWeight.SemiBold), color = labelColor)
+            if (controlLocked) {
+                PadlockGlyph(
+                    tint = LiveDesign.accent.copy(alpha = 0.9f),
+                    filled = true,
+                    modifier = Modifier.size(7.5.dp, 9.dp),
+                )
+            }
+        }
         Box(contentAlignment = Alignment.Center) {
             Text(
                 widestValue,
@@ -221,12 +334,16 @@ fun CaptureSettingCell(label: String, value: String, widestValue: String = value
                 color = Color.Transparent,
                 maxLines = 1,
             )
-            Text(
-                value,
-                style = chromeStyle(19f, FontWeight.Medium, mono = true),
-                color = LiveDesign.text,
-                maxLines = 1,
-            )
+            if (wbIcon != null) {
+                CaptureWbGlyph(icon = wbIcon, tint = valueColor)
+            } else {
+                Text(
+                    value,
+                    style = chromeStyle(19f, FontWeight.Medium, mono = true),
+                    color = valueColor,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

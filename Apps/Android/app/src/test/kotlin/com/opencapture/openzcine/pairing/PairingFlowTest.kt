@@ -49,18 +49,23 @@ class PairingFlowTest {
     }
 
     @Test
-    fun `usb path skips Wi-Fi setup and ends at attached-camera discovery`() {
+    fun `usb path includes a cable network step then attached-camera discovery`() {
         var state = PairingFlowState.initial(permissionGranted = false)
         state = state.advance().choose(PairingPath.USB_C)
 
         assertEquals(PairingStep.PREPARE, state.step)
-        assertEquals(4, state.stepCount)
+        assertEquals(5, state.stepCount)
         assertEquals(3, state.displayStepNumber)
+
+        state = state.advance()
+        assertEquals(PairingStep.NETWORK, state.step)
+        assertFalse(state.isFinalStep)
+        assertEquals(4, state.displayStepNumber)
 
         state = state.advance()
         assertEquals(PairingStep.DISCOVER, state.step)
         assertTrue(state.isFinalStep)
-        assertEquals(4, state.displayStepNumber)
+        assertEquals(5, state.displayStepNumber)
     }
 
     @Test

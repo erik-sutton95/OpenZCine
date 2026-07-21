@@ -94,6 +94,15 @@ public interface UsbPtpCameraSource : Closeable {
     /** Current compatible USB cameras, updated for attach/detach/permission events. */
     public val cameras: StateFlow<List<UsbPtpCamera>>
 
+    /**
+     * Re-enumerates the currently attached USB devices on demand. Samsung (and
+     * some other OEMs) do NOT deliver `ACTION_USB_DEVICE_ATTACHED` to a
+     * runtime-registered receiver, so a camera plugged in after the source was
+     * constructed never reaches [cameras] via the broadcast path. The discover
+     * UI polls this while it waits so an attached camera is still found.
+     */
+    public fun refresh()
+
     /** Requests Android's per-device permission for a [UsbPtpCameraAccess.NEEDS_PERMISSION] camera. */
     public fun requestPermission(camera: UsbPtpCamera)
 
@@ -222,6 +231,13 @@ public class AndroidUsbPtpCameraSource(
         }
         val bulkIn = endpoint(usbInterface, selection.bulkInAddress)
         val bulkOut = endpoint(usbInterface, selection.bulkOutAddress)
+        // The system MTP handler (com.android.mtp) grabs a PTP camera on attach
+        // and often leaves a stuck session: its aborted OpenSession stalls the
+        // bulk pipes, so our first write fails with -1 even after a force-claim.
+        // The PTP class recovery is a Device Reset (class request 0x66) followed
+        // by clearing any HALT on the bulk endpoints — the standard sequence
+        // libptp/gPhoto use to take a camera another host left mid-transaction.
+        recoverStalledPtpInterface(connection, usbInterface.id, bulkIn.address, bulkOut.address)
         val eventIn = endpoint(usbInterface, selection.eventInAddress)
         val eventRequest = UsbRequest()
         if (!eventRequest.initialize(connection, eventIn)) {
@@ -286,6 +302,34 @@ public class AndroidUsbPtpCameraSource(
         runCatching { appContext.unregisterReceiver(receiver) }
         transports.forEach(AndroidUsbPtpTransport::close)
         mutableCameras.value = emptyList()
+    }
+
+    /**
+     * Clears a PTP interface another USB host (Samsung's com.android.mtp) may
+     * have left mid-transaction, so our first bulk write does not fail with -1.
+     * Status-driven: a camera whose class status already reads OK is left
+     * untouched — a blind Device Reset on a healthy ZR makes it silently drop
+     * the next command container, which desyncs the whole session.
+     *
+     * 1. PTP class GET_DEVICE_STATUS (bmRequestType 0xA1, bRequest 0x67). OK
+     *    (0x2001) means clean — do nothing.
+     * 2. Otherwise: Device Reset Request (0x21, 0x66), CLEAR_FEATURE(HALT) on
+     *    both bulk pipes, then poll GET_DEVICE_STATUS until the body reports
+     *    OK again (the reset is not instant on the ZR).
+     */
+    private fun recoverStalledPtpInterface(
+        connection: UsbDeviceConnection,
+        interfaceId: Int,
+        bulkInAddress: Int,
+        bulkOutAddress: Int,
+    ) {
+        if (ptpDeviceStatus(connection, interfaceId, timeoutMillis = 500) == PTP_STATUS_OK) return
+        ptpResetAndSettle(connection, interfaceId, bulkInAddress, bulkOutAddress, USB_DIAG_TAG)
+    }
+
+
+    override fun refresh() {
+        refresh(excludingToken = null)
     }
 
     private fun refresh(excludingToken: String? = null) {
@@ -396,7 +440,58 @@ public class AndroidUsbPtpCameraSource(
         const val NIKON_VENDOR_ID: Int = 0x04B0
         const val USB_PERMISSION_REQUEST_CODE: Int = 54054
         const val usbPermissionAction: String = "com.opencapture.openzcine.USB_PTP_PERMISSION"
+        const val USB_DIAG_TAG: String = "UsbPtpDiag"
     }
+}
+
+private const val PTP_STATUS_OK: Int = 0x2001
+
+/** PTP class GET_DEVICE_STATUS; returns the status code or 0 on failure. */
+private fun ptpDeviceStatus(
+    connection: UsbDeviceConnection,
+    interfaceId: Int,
+    timeoutMillis: Int,
+): Int {
+    val buffer = ByteArray(4)
+    val read = runCatching {
+        connection.controlTransfer(0xA1, 0x67, 0, interfaceId, buffer, buffer.size, timeoutMillis)
+    }.getOrDefault(-1)
+    if (read < 4) return 0
+    return (buffer[2].toInt() and 0xFF) or ((buffer[3].toInt() and 0xFF) shl 8)
+}
+
+/**
+ * PTP class Device Reset + CLEAR_FEATURE(HALT) on both bulk pipes, then poll
+ * GET_DEVICE_STATUS until the body reports OK again. The reset is not
+ * instant on the ZR — a command sent before it completes is silently
+ * dropped, which desyncs every later transaction, so the settle poll is as
+ * load-bearing as the reset itself.
+ */
+private fun ptpResetAndSettle(
+    connection: UsbDeviceConnection,
+    interfaceId: Int,
+    bulkInAddress: Int,
+    bulkOutAddress: Int,
+    tag: String,
+) {
+    val controlTimeoutMillis = 500
+    runCatching {
+        connection.controlTransfer(0x21, 0x66, 0, interfaceId, null, 0, controlTimeoutMillis)
+    }
+    for (endpointAddress in intArrayOf(bulkInAddress, bulkOutAddress)) {
+        runCatching {
+            connection.controlTransfer(0x02, 0x01, 0, endpointAddress, null, 0, controlTimeoutMillis)
+        }
+    }
+    repeat(15) {
+        runCatching { Thread.sleep(200L) }
+        val status = ptpDeviceStatus(connection, interfaceId, controlTimeoutMillis)
+        if (status == PTP_STATUS_OK) {
+            android.util.Log.i(tag, "PTP reset settled")
+            return
+        }
+    }
+    android.util.Log.i(tag, "PTP reset did not settle to OK")
 }
 
 /** Platform byte adapter for one claimed USB PTP interface. */
@@ -411,9 +506,21 @@ private class AndroidUsbPtpTransport(
     private val commandLock = Any()
     private val eventLock = Any()
     @Volatile private var closed: Boolean = false
+    private var deadWriteRecoveryDone: Boolean = false
     private var onClosed: (() -> Unit)? = null
     /** A timed-out `requestWait` leaves the request queued; retain its buffer until completion. */
     private var pendingEventBuffer: ByteBuffer? = null
+
+    init {
+        // Keep one interrupt-IN read pending from claim time: the body only
+        // delivers events when the host has a transfer queued. Entering
+        // application mode makes the ZR emit StoreRemoved here, and it stalls
+        // that switch until the event is drained (see the Swift establish's
+        // concurrent event pump). This just ensures a buffer is already
+        // waiting before the pump's first read.
+        val fresh = ByteBuffer.allocate(INITIAL_EVENT_BYTES)
+        if (eventRequest.queue(fresh)) pendingEventBuffer = fresh
+    }
 
     fun setOnClosed(callback: () -> Unit) {
         val closeNow: Boolean
@@ -427,7 +534,20 @@ private class AndroidUsbPtpTransport(
     override fun writeBulk(bytes: ByteArray, timeoutMillis: Int): Int =
         synchronized(commandLock) {
             if (closed) return@synchronized -1
-            connection.bulkTransfer(bulkOut, bytes, bytes.size, timeoutMillis)
+            val count = connection.bulkTransfer(bulkOut, bytes, bytes.size, timeoutMillis)
+            if (count < 0 && !closed && !deadWriteRecoveryDone) {
+                // GET_DEVICE_STATUS reads OK even while the body's bulk-out
+                // is wedged (Samsung's com.android.mtp left an aborted session
+                // on attach), so a dead write is the only reliable wedge
+                // signal. Reset once so the NEXT attempt starts on a healthy
+                // interface; this attempt still reports failure.
+                deadWriteRecoveryDone = true
+                android.util.Log.i(USB_DIAG_TAG, "USB bulk-out wedged; PTP reset")
+                ptpResetAndSettle(
+                    connection, usbInterface.id, bulkIn.address, bulkOut.address, USB_DIAG_TAG,
+                )
+            }
+            count
         }
 
     override fun readBulk(maxBytes: Int, timeoutMillis: Int): ByteArray? =
@@ -503,5 +623,7 @@ private class AndroidUsbPtpTransport(
 
     private companion object {
         const val MAX_READ_BYTES: Int = 1024 * 1024
+        const val INITIAL_EVENT_BYTES: Int = 512
+        const val USB_DIAG_TAG: String = "UsbPtpDiag"
     }
 }

@@ -26,44 +26,120 @@ class MonitorCameraControlsTest {
 
         val settings = monitorCaptureSettings(dashboard, strings)
 
+        // iOS CameraDisplayState.preview order: ISO · SHUTTER · IRIS · WB · FOCUS.
         assertEquals(
             listOf(
                 MonitorPickerKind.ISO,
                 MonitorPickerKind.SHUTTER,
                 MonitorPickerKind.IRIS,
-                MonitorPickerKind.FOCUS,
                 MonitorPickerKind.WHITE_BALANCE,
+                MonitorPickerKind.FOCUS,
             ),
             settings.map(MonitorCaptureSettingPresentation::kind),
         )
         assertEquals("800", settings[0].value)
         assertEquals("180°", settings[1].value)
         assertEquals("f/2.8", settings[2].value)
-        assertEquals("AF-C", settings[3].value)
-        assertEquals("5600K", settings[4].value)
+        assertEquals("5560K", settings[3].value)
+        assertEquals("AF-C", settings[4].value)
+        // R3D NE → dual-base ISO (iOS ISOPickerPolicy): Low Base / High Base.
         assertEquals(
-            listOf(CameraControl.ISO, CameraControl.BASE_ISO),
+            listOf("Low Base", "High Base"),
+            settings[0].picker?.modes?.map(MonitorPickerModePresentation::label),
+        )
+        assertEquals(
+            listOf(CameraControl.ISO, CameraControl.ISO),
             settings[0].picker?.modes?.map { it.request.control },
         )
         assertEquals(
-            listOf(CameraControl.SHUTTER, CameraControl.SHUTTER_MODE, CameraControl.SHUTTER_LOCK),
+            IsoPickerPolicy.lowBaseOptions,
+            settings[0].picker?.modes?.first()?.request?.options,
+        )
+        assertEquals(
+            IsoPickerPolicy.highBaseOptions,
+            settings[0].picker?.modes?.get(1)?.request?.options,
+        )
+        assertEquals("Sensitivity · dual base", settings[0].picker?.subtitle)
+        assertEquals("800 · 200-3200", settings[0].picker?.modes?.first()?.detail)
+        // iOS CameraPicker.shutter: Angle / Speed dual circuit (not Value/Mode/Lock).
+        assertEquals(
+            listOf("Angle", "Speed"),
+            settings[1].picker?.modes?.map(MonitorPickerModePresentation::label),
+        )
+        assertEquals(
+            listOf(CameraControl.SHUTTER, CameraControl.SHUTTER),
             settings[1].picker?.modes?.map { it.request.control },
+        )
+        // Multi-value camera angle enum is preferred over the hardcoded ladder.
+        assertEquals(
+            listOf("90°", "180°"),
+            settings[1].picker?.modes?.first()?.request?.options,
+        )
+        // Speed circuit falls back to the full iOS ladder.
+        assertEquals(
+            ShutterPickerPolicy.speedOptions,
+            settings[1].picker?.modes?.get(1)?.request?.options,
+        )
+        assertEquals(ShutterPickerPolicy.SUBTITLE, settings[1].picker?.subtitle)
+        assertEquals(
+            CameraControl.SHUTTER_MODE,
+            settings[1].picker?.modes?.first()?.activateRequest?.control,
+        )
+        // iOS CameraPicker.whiteBalance: Kelvin / Preset / Tint.
+        assertEquals(
+            listOf("Kelvin", "Preset", "Tint"),
+            settings[3].picker?.modes?.map(MonitorPickerModePresentation::label),
+        )
+        assertEquals(
+            listOf(
+                CameraControl.WHITE_BALANCE,
+                CameraControl.WHITE_BALANCE,
+                CameraControl.WHITE_BALANCE_TINT,
+            ),
+            settings[3].picker?.modes?.map { it.request.control },
+        )
+        assertEquals(WbPickerPolicy.SUBTITLE, settings[3].picker?.subtitle)
+        assertEquals(0, settings[3].picker?.initialModeIndex) // 5560K → Kelvin
+        // iOS CameraPicker.focus: AF Mode / Area / Subject (independent tabs).
+        assertEquals(
+            listOf("AF Mode", "Area", "Subject"),
+            settings[4].picker?.modes?.map(MonitorPickerModePresentation::label),
         )
         assertEquals(
             listOf(CameraControl.FOCUS_MODE, CameraControl.FOCUS_AREA, CameraControl.FOCUS_SUBJECT),
-            settings[3].picker?.modes?.map { it.request.control },
-        )
-        assertEquals(
-            listOf(CameraControl.WHITE_BALANCE, CameraControl.WHITE_BALANCE_TINT),
             settings[4].picker?.modes?.map { it.request.control },
         )
+        assertEquals(FocusPickerPolicy.SUBTITLE, settings[4].picker?.subtitle)
+        // Sparse camera AF enum still expands to the full iOS AF Mode ladder.
+        assertEquals(
+            FocusPickerPolicy.afModeOptions,
+            settings[4].picker?.modes?.first()?.request?.options,
+        )
+        assertEquals(
+            FocusPickerPolicy.areaOptions,
+            settings[4].picker?.modes?.get(1)?.request?.options,
+        )
+        assertEquals(
+            FocusPickerPolicy.subjectOptions,
+            settings[4].picker?.modes?.get(2)?.request?.options,
+        )
+        assertEquals(0, settings[4].picker?.initialModeIndex) // AF-C → AF Mode
         assertEquals(
             MonitorPickerKind.FOCUS,
             monitorPickerKindForRequest(
                 settings,
-                requireNotNull(settings[3].picker).modes[1].request,
+                requireNotNull(settings[4].picker).modes[1].request,
             ),
         )
+    }
+
+    @Test
+    fun `capture bar shortens Auto Subject and maps WB preset icons`() {
+        assertEquals("Auto-S", captureBarDisplayValue("Auto Subject"))
+        assertEquals("AF-C", captureBarDisplayValue("AF-C"))
+        assertEquals(CaptureWbIcon.AUTO, captureBarWbIcon("Auto"))
+        assertEquals(CaptureWbIcon.SUNNY, captureBarWbIcon("Sunny"))
+        assertNull(captureBarWbIcon("5560K"))
     }
 
     @Test
@@ -79,10 +155,14 @@ class MonitorCameraControlsTest {
                 ),
                 strings,
             ).first { it.kind == MonitorPickerKind.SHUTTER }
-        val lockedModes = requireNotNull(lockedShutter.picker).modes.map { it.request.control }
-        assertTrue(CameraControl.SHUTTER !in lockedModes)
-        assertTrue(CameraControl.SHUTTER_LOCK in lockedModes)
+        // iOS still opens Angle/Speed when locked; drum is dimmed + lock banner.
+        val lockedPicker = requireNotNull(lockedShutter.picker)
+        assertEquals(listOf("Angle", "Speed"), lockedPicker.modes.map { it.label })
+        assertTrue(lockedPicker.interactionLocked)
+        assertNotNull(lockedPicker.lockBanner)
         assertEquals("Shutter is locked on the camera.", lockedShutter.unavailableReason)
+        assertTrue(lockedShutter.controlLocked)
+        assertTrue(lockedShutter.dimmed)
     }
 
     @Test
@@ -90,27 +170,31 @@ class MonitorCameraControlsTest {
         val settings = monitorCaptureSettings(dashboard(cameraSnapshot()), strings)
 
         val shutter = requireNotNull(settings[1].picker)
+        // Camera advertised multi-angle enum replaces the hardcoded angle ladder.
         assertEquals(
             listOf("90°", "180°"),
-            shutter.modes.first { it.request.control == CameraControl.SHUTTER }.request.options,
+            shutter.modes.first { it.label == "Angle" }.request.options,
         )
+        // Speed falls back to the full iOS ladder when the camera only advertised angles.
         assertEquals(
-            listOf("Angle", "Speed"),
-            shutter.modes.first { it.request.control == CameraControl.SHUTTER_MODE }.request.options,
+            ShutterPickerPolicy.speedOptions,
+            shutter.modes.first { it.label == "Speed" }.request.options,
         )
-        assertEquals(
-            listOf("Unlocked", "Locked"),
-            shutter.modes.first { it.request.control == CameraControl.SHUTTER_LOCK }.request.options,
-        )
-        assertTrue(shutter.modes.none { "1/50" in it.request.options })
+        assertTrue("1/50" in shutter.modes.first { it.label == "Speed" }.request.options)
 
-        val whiteBalance = requireNotNull(settings[4].picker)
+        val whiteBalance = requireNotNull(settings[3].picker)
+        // Sparse camera enum (one Kelvin + one preset) → full iOS ladders per tab.
+        assertEquals(
+            WbPickerPolicy.kelvinOptions,
+            whiteBalance.modes.first { it.label == "Kelvin" }.request.options,
+        )
+        assertEquals(
+            WbPickerPolicy.presetOptions,
+            whiteBalance.modes.first { it.label == "Preset" }.request.options,
+        )
         assertEquals(
             listOf("A2 · G1", "B1 · G1"),
-            whiteBalance.modes
-                .first { it.request.control == CameraControl.WHITE_BALANCE_TINT }
-                .request
-                .options,
+            whiteBalance.modes.first { it.label == "Tint" }.request.options,
         )
     }
 
@@ -218,6 +302,70 @@ class MonitorCameraControlsTest {
                 cameraCommandPending = false,
             ),
         )
+        // Top-bar resolution/codec pickers stay open without the capture strip.
+        assertTrue(
+            retainMonitorPickerForChrome(
+                mode = MonitorDisplayMode.LIVE,
+                cameraValuesVisible = false,
+                cameraCommandPending = false,
+                isTopBarPicker = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `top pill pickers open only with camera advertised options`() {
+        // Unwritable static ladders must not seed the drum (they always fail apply).
+        val empty = monitorTopPillPickers(dashboard(CameraPropertySnapshot()), strings)
+        assertTrue(empty.isEmpty())
+
+        val advertised =
+            monitorTopPillPickers(
+                dashboard(
+                    cameraSnapshot().copy(
+                        resolutionFrameRate = "6K · 25p",
+                        codec = "R3D NE",
+                        codecSelection = "R3D NE",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                resolutionFrameRates = listOf("4K · 60p", "6K · 25p"),
+                                codecs = listOf("H.265", "R3D NE"),
+                            ),
+                    ),
+                ),
+                strings,
+            )
+        assertEquals(
+            listOf("4K · 60p", "6K · 25p"),
+            advertised.getValue(MonitorPickerKind.RESOLUTION).modes.single().request.options,
+        )
+        assertEquals(
+            "6K · 25p",
+            advertised.getValue(MonitorPickerKind.RESOLUTION).modes.single().request.currentValue,
+        )
+        assertEquals(
+            listOf("H.265", "R3D NE"),
+            advertised.getValue(MonitorPickerKind.CODEC).modes.single().request.options,
+        )
+    }
+
+    @Test
+    fun `raw resolution tile value maps onto compact camera option`() {
+        assertEquals(
+            "6K · 25p",
+            matchRecordingModeOption(
+                "6048x3402 · 25p",
+                listOf("6K · 24p", "6K · 25p", "[FX] 6K · 25p"),
+            ),
+        )
+        assertEquals(
+            "[FX] 6K · 25p",
+            matchRecordingModeOption(
+                "6K · 25p",
+                listOf("[FX] 6K · 24p", "[FX] 6K · 25p"),
+            ),
+        )
+        assertEquals("6K · 25p", compactRecordingModeFromRawDisplay("6048x3402 · 25p"))
     }
 
     @Test
@@ -291,8 +439,98 @@ class MonitorCameraControlsTest {
                 anchor = MonitorPickerAnchor.CAPTURE_STRIP,
             )
 
-        assertTrue(frame.x >= zones.feed.x + 8f)
-        assertTrue(frame.x + frame.width <= zones.feed.x + zones.feed.width - 8f)
+        // iOS trailing-aligns to the capture bar (not feed ± 8). Side rails stay
+        // outside the capture strip / feed band by zone-map construction.
+        val strip = requireNotNull(zones.captureStrip)
+        assertEquals(strip.x, frame.x, 0.01f)
+        assertEquals(strip.x + strip.width, frame.x + frame.width, 0.01f)
+        assertTrue(frame.x >= viewport.x)
+        assertTrue(frame.x + frame.width <= viewport.x + viewport.width)
+    }
+
+    @Test
+    fun `landscape picker is tall enough for the WB tint pad cluster`() {
+        // SM-A12-class short landscape (~853×384 dp). Tint needs header +
+        // 180dp pad cluster (28+8+108+8+28) + mode tabs + GlassPanel padding.
+        val viewport = ZoneFrame(0f, 0f, 853f, 384f)
+        val zones =
+            portraitZones(captureStrip = ZoneFrame(430f, 320f, 363f, 48f)).copy(
+                feed = ZoneFrame(59f, 0f, 734f, 384f),
+                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            )
+
+        val frame =
+            monitorPickerFrame(
+                viewport,
+                zones,
+                isPortrait = false,
+                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
+            )
+
+        // 16+16 padding + ~28 header + 14 gap + 180 pad + 14 gap + ~36 tabs ≈ 304.
+        assertTrue(
+            frame.height >= 300f,
+            "picker height ${frame.height} must fit tint pad (≥ 300dp)",
+        )
+        assertTrue(frame.y + frame.height <= requireNotNull(zones.captureStrip).y - 10f)
+    }
+
+    @Test
+    fun `landscape measured capture bar trailing-aligns the picker`() {
+        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val zones =
+            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
+                feed = ZoneFrame(59f, 0f, 734f, 393f),
+                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            )
+        // Content-hugging glass is narrower and trailing inside the zone slot.
+        val measured = ZoneFrame(520f, 332f, 260f, 44f)
+
+        val frame =
+            monitorPickerFrame(
+                viewport,
+                zones,
+                isPortrait = false,
+                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
+                measuredCaptureBar = measured,
+            )
+
+        assertEquals(measured.width, frame.width, 0.01f)
+        assertEquals(measured.x + measured.width, frame.x + frame.width, 0.01f)
+        assertEquals(measured.y - 10f, frame.y + frame.height, 0.01f)
+    }
+
+    @Test
+    fun `ISO unified codecs use a single drum without base tabs`() {
+        val dashboard =
+            dashboard(
+                cameraSnapshot().copy(
+                    codec = "N-RAW",
+                    codecSelection = "N-RAW",
+                ),
+            )
+        val iso = monitorCaptureSettings(dashboard, strings).first { it.kind == MonitorPickerKind.ISO }
+        assertEquals("Sensitivity", iso.picker?.subtitle)
+        assertEquals(1, iso.picker?.modes?.size)
+        assertEquals(IsoPickerPolicy.unifiedOptions, iso.picker?.modes?.single()?.request?.options)
+    }
+
+    @Test
+    fun `top bar res codec frame drops below the info bar at 340dp`() {
+        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val zones =
+            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
+                feed = ZoneFrame(59f, 0f, 734f, 393f),
+                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            )
+        val frame = monitorTopBarPickerFrame(viewport, zones, isCommandCenter = false)
+        assertEquals(340f, frame.width)
+        assertTrue(frame.y >= zones.infoBar.y + zones.infoBar.height + 8f - 0.1f)
+        assertTrue(frame.x >= viewport.x + 8f)
+        assertTrue(frame.x + frame.width <= viewport.x + viewport.width - 8f)
+        assertTrue(MonitorPickerKind.RESOLUTION.isTopBarPicker())
+        assertTrue(MonitorPickerKind.CODEC.isTopBarPicker())
+        assertTrue(!MonitorPickerKind.ISO.isTopBarPicker())
     }
 
     @Test
@@ -370,18 +608,20 @@ class MonitorCameraControlsTest {
             shutterAngle = "180°",
             iris = "f/2.8",
             whiteBalanceMode = "Color temp",
-            whiteBalanceKelvin = 5_600,
+            whiteBalanceKelvin = 5_560,
             whiteBalanceTint = "A2 · G1",
             focusMode = "AF-C",
             focusArea = "Wide-L",
             focusSubject = "People",
             baseIso = "Low",
+            codec = "R3D NE",
+            codecSelection = "R3D NE",
             controlCapabilities =
                 CameraControlCapabilities(
                     isoValues = listOf("800", "1600"),
                     shutterValues = listOf("90°", "180°"),
                     irisValues = listOf("f/2.8", "f/4"),
-                    whiteBalanceValues = listOf("5600K", "Sunny"),
+                    whiteBalanceValues = listOf("5560K", "Sunny"),
                     focusModes = listOf("AF-C", "MF"),
                     focusAreas = listOf("Wide-L", "Subject"),
                     focusSubjects = listOf("People", "Animal"),
@@ -389,6 +629,7 @@ class MonitorCameraControlsTest {
                     shutterModes = listOf("Angle", "Speed"),
                     shutterLocks = listOf("Unlocked", "Locked"),
                     whiteBalanceTints = listOf("A2 · G1", "B1 · G1"),
+                    codecs = listOf("R3D NE", "N-RAW"),
                 ),
         )
 

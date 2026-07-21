@@ -14,7 +14,63 @@ private val noCameraProperties: StateFlow<CameraPropertySnapshot> =
 private val noCameraPropertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus> =
     MutableStateFlow(CameraPropertyRefreshStatus.Idle)
 
+private val alwaysReadyInitialMonitorProperties: StateFlow<Boolean> = MutableStateFlow(true)
+
 private val noCameraRoundTripMilliseconds: StateFlow<Double?> = MutableStateFlow(null)
+
+private val noCameraConnectionProgress: StateFlow<CameraConnectionProgress> =
+    MutableStateFlow(CameraConnectionProgress())
+
+/**
+ * The operator-visible stage of a camera connection attempt.
+ *
+ * This deliberately distinguishes PTP-IP reachability from Nikon profile
+ * pairing. A successful Init handshake only reaches [HANDSHAKING]; a camera
+ * is not paired until its pairing request has been accepted and the profile
+ * has survived the camera-side confirmation/reconnect cycle.
+ */
+public enum class CameraConnectionPhase {
+    /** No connection work is active. */
+    IDLE,
+
+    /** The operator can now join the camera network. */
+    READY_TO_JOIN,
+
+    /** Android is joining the camera's Wi-Fi network. */
+    JOINING_WIFI,
+
+    /** The app is looking for a reachable camera endpoint. */
+    DISCOVERING,
+
+    /** PTP-IP transport/session establishment is in progress. */
+    HANDSHAKING,
+
+    /** Nikon first-time pairing is in progress. */
+    PAIRING,
+
+    /** The Nikon accepted pairing; confirm on the camera body and await its restart. */
+    CONFIRM_ON_CAMERA,
+
+    /** A validated profile is opening the live-view surface. */
+    PREPARING_LIVE_VIEW,
+
+    /** The camera profile is validated and ready for control. */
+    CONNECTED,
+
+    /** The current connection attempt failed. */
+    FAILED,
+}
+
+/**
+ * A connection phase and optional operator-facing detail from a camera session.
+ *
+ * The detail carries only display-safe information, such as a camera name or
+ * pairing PIN. It must never contain Wi-Fi credentials or raw protocol data.
+ */
+public data class CameraConnectionProgress(
+    public val phase: CameraConnectionPhase = CameraConnectionPhase.IDLE,
+    public val detail: String = "",
+)
 
 /**
  * Connection lifecycle of a [CameraSession].
@@ -550,6 +606,15 @@ public interface CameraSession {
     /** Current connection state, updated as the session progresses. */
     public val state: StateFlow<CameraSessionState>
 
+    /**
+     * The granular operator-visible progress of the current connection.
+     *
+     * Transport-only and test sessions expose [CameraConnectionPhase.IDLE]
+     * until they opt into this richer lifecycle.
+     */
+    public val connectionProgress: StateFlow<CameraConnectionProgress>
+        get() = noCameraConnectionProgress
+
     /** Current movie-record lifecycle for this session. */
     public val recordingState: StateFlow<CameraRecordingState>
 
@@ -569,6 +634,17 @@ public interface CameraSession {
      */
     public val propertyRefreshStatus: StateFlow<CameraPropertyRefreshStatus>
         get() = noCameraPropertyRefreshStatus
+
+    /**
+     * True after the first post-connect property bootstrap has finished (or
+     * when this session does not perform a bootstrap).
+     *
+     * Production sessions set this false while the full AF/lens/focus/audio
+     * burst runs, then true so the monitor can open live view. Transport-only
+     * and demo sessions default to true so they never block the feed.
+     */
+    public val initialMonitorPropertiesReady: StateFlow<Boolean>
+        get() = alwaysReadyInitialMonitorProperties
 
     /**
      * Latest real serialized PTP command round-trip duration.

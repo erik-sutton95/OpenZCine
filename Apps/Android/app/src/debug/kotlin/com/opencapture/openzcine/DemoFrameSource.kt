@@ -18,11 +18,15 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.shareIn
 
 /**
  * Debug-only [LiveFrameSource] that synthesizes JPEG frames on the fly —
@@ -32,6 +36,9 @@ import kotlinx.coroutines.flow.flowOn
  *
  * Emission is paced against an absolute schedule (`start + n * period`), not
  * per-frame sleeps, so compression cost doesn't skew the rate.
+ *
+ * [frames] is shared so the live feed and scope sampler do not each spin a
+ * second generator (same multi-subscriber issue as [DemoVideoFrameSource]).
  */
 class DemoFrameSource(
     private val width: Int = 1280,
@@ -40,7 +47,9 @@ class DemoFrameSource(
     /** Omit the synthetic level only when visually exercising device-tilt fallback. */
     private val includeDebugCameraLevel: Boolean = true,
 ) : LiveFrameSource {
-    override val frames: Flow<LiveFrame> =
+    private val producerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val producer: Flow<LiveFrame> =
         flow {
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
@@ -71,6 +80,13 @@ class DemoFrameSource(
         }
             .flowOn(Dispatchers.Default)
 
+    override val frames: Flow<LiveFrame> =
+        producer.shareIn(
+            scope = producerScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 0),
+            replay = 1,
+        )
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -95,6 +111,19 @@ class DemoFrameSource(
         }
         paint.color = Color.BLACK
         canvas.drawRect(0f, height * 0.7f, width.toFloat(), height.toFloat(), paint)
+        // Horizontal luminance ramp: the classic scope verification signal —
+        // every column lands on a different level, so a healthy waveform
+        // plots one continuous diagonal trace (flat bars alone collapse each
+        // column onto a single dot, which reads as "no signal").
+        val rampTop = height * 0.72f
+        val rampBottom = height * 0.86f
+        val steps = width / 2
+        val stepWidth = width / steps.toFloat()
+        for (step in 0 until steps) {
+            val level = (step * 255 / (steps - 1)).coerceIn(0, 255)
+            paint.color = Color.rgb(level, level, level)
+            canvas.drawRect(step * stepWidth, rampTop, (step + 1) * stepWidth, rampBottom, paint)
+        }
 
         val seconds = frameIndex / framesPerSecond
         val timecode =

@@ -10,6 +10,7 @@
     "docs/design/",
     "ios/",
     "android/",
-    "build/"
+    "build/",
+    "Apps/Android/app/src/main/assets/shaders/vulkan/"
   ]
 }

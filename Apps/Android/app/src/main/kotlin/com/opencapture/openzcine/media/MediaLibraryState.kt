@@ -393,6 +393,8 @@ internal object MediaLibraryFiltering {
         sortOrder: MediaLibrarySortOrder,
         filters: MediaLibraryFilters = MediaLibraryFilters(),
         todayToken: String = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
+        /** Offline multi-camera libraries resolve favorites with the owning bucket. */
+        libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
     ): List<MediaClipRecord> {
         var filtered =
             when (category) {
@@ -405,7 +407,7 @@ internal object MediaLibraryFiltering {
                 MediaLibraryCategory.PHOTOS ->
                     clips.filter { it.contentKind == MediaContentKind.STILL_PHOTO }
                 MediaLibraryCategory.FAVORITES ->
-                    clips.filter { it.libraryKey(cameraID) in favoriteIDs }
+                    clips.filter { libraryKey(it) in favoriteIDs }
             }
         if (filters.containers.isNotEmpty()) {
             filtered = filtered.filter { clip -> clip.containerFilter() in filters.containers }
@@ -488,12 +490,43 @@ internal object MediaLibrarySelection {
     /** Sweeps only add unseen items, avoiding a repeated drag toggling an item back off. */
     fun addSweep(current: Set<String>, identities: Collection<String>): Set<String> = current + identities
 
+    /**
+     * Photos-style range paint (iOS `MediaSweepSelectGesture.paint`): selection is the
+     * pre-sweep [snapshot] with the contiguous `[anchor…current]` range painted on or off.
+     * Shrinking the range restores trailing cells from the snapshot.
+     */
+    fun paintRange(
+        snapshot: Set<String>,
+        orderedIDs: List<String>,
+        anchorIndex: Int,
+        currentIndex: Int,
+        paintSelect: Boolean,
+    ): Set<String> {
+        if (orderedIDs.isEmpty()) return snapshot
+        val lo = minOf(anchorIndex, currentIndex).coerceIn(0, orderedIDs.lastIndex)
+        val hi = maxOf(anchorIndex, currentIndex).coerceIn(0, orderedIDs.lastIndex)
+        val result = snapshot.toMutableSet()
+        for (index in lo..hi) {
+            val id = orderedIDs[index]
+            if (paintSelect) result.add(id) else result.remove(id)
+        }
+        return result
+    }
+
     fun retainVisible(current: Set<String>, visible: Set<String>): Set<String> = current.intersect(visible)
 }
 
 /** Stable private favorite/index identity — never a filename-only key. */
 internal fun MediaClipRecord.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageId, handle, captureDate, filename)
+
+/**
+ * Bucket-independent object identity used to map offline multi-camera clips
+ * back to their owning cache cameraID.
+ */
+internal fun MediaClipRecord.offlineObjectKey(): String =
+    listOf(storageId.toString(), handle.toString(), captureDate, filename)
+        .joinToString(separator = "\u0000")
 
 private fun MediaObjectIdentity.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageID, handle, captureDate, filename)

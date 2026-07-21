@@ -11,8 +11,13 @@ internal val testPhoneStrings =
             R.string.command_section_exposure -> "Exposure"
             R.string.command_section_focus -> "Focus"
             R.string.command_section_audio -> "Audio"
+            R.string.command_section_monitor -> "Monitor"
             R.string.command_title_tone -> "Tone"
+            R.string.command_title_picture_profile -> "Picture Profile"
+            R.string.command_title_grid -> "Grid"
             R.string.command_title_evr -> "e-VR"
+            R.string.command_reason_picture_profile ->
+                "Picture Profile is not available from the camera yet."
             R.string.temperature_ok -> "OK"
             R.string.command_failure_unsupported -> "Limited by camera"
             R.string.command_limited_readback ->

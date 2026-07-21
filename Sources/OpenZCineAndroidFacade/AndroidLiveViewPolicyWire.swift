@@ -25,18 +25,38 @@ public struct AndroidLiveViewRequest: Equatable, Sendable {
 /// ``LiveViewLoadPolicy`` in Swift, keeping camera protocol policy out of
 /// Compose. The result controls only a disposable preview stream; it never
 /// changes the camera's recording configuration.
+///
+/// Preview pull cadence is fixed at a **60 Hz ceiling**. Thermal shedding may
+/// lengthen the interval; it never speeds past 60 fps.
 public enum AndroidLiveViewPolicyWire {
-    /// The existing Android facade live-view cadence, approximately 30 fps.
-    public static let standardFrameIntervalNanoseconds: UInt64 = 33_000_000
+    /// Fixed monitor pull rate (max / default).
+    public static let targetFrameRate = 60
+
+    /// Fastest preview pull (~60 fps).
+    public static let minimumFrameIntervalNanoseconds: UInt64 =
+        1_000_000_000 / UInt64(targetFrameRate)
+
+    /// Slowest preview pull under thermal shedding (~10 fps).
+    public static let maximumFrameIntervalNanoseconds: UInt64 = 100_000_000
+
+    /// Nominal 60 Hz interval (no thermal shedding).
+    public static let standardFrameIntervalNanoseconds: UInt64 =
+        minimumFrameIntervalNanoseconds
 
     /// Resolves a safe Android preview request, or `nil` for an unknown wire value.
+    ///
+    /// - Parameter recordingFrameRate: Ignored. Kept on the wire so older JNI
+    ///   callers that still pass a body frame rate stay binary-compatible; the
+    ///   monitor always targets ``targetFrameRate`` (60 Hz) before thermal.
     public static func resolve(
         streamPresetRaw: Int,
         qualityBiasRaw: Int,
         thermalTierRaw: Int,
         isRecording: Bool,
-        cameraOverheating: Bool
+        cameraOverheating: Bool,
+        recordingFrameRate: Int? = nil
     ) -> AndroidLiveViewRequest? {
+        _ = recordingFrameRate
         guard
             let streamPreset = OperatorPreferences.StreamPreset.allCases[safe: streamPresetRaw],
             let qualityBias = OperatorPreferences.QualityBias.allCases[safe: qualityBiasRaw],
@@ -48,12 +68,21 @@ public enum AndroidLiveViewPolicyWire {
             isRecording: isRecording,
             thermalTier: thermalTier,
             cameraOverheating: cameraOverheating)
-        let interval = UInt64(
-            (Double(standardFrameIntervalNanoseconds) * thermalTier.cadenceMultiplier).rounded())
         return AndroidLiveViewRequest(
             imageSize: imageSize,
             compression: compression(for: qualityBias),
-            frameIntervalNanoseconds: max(standardFrameIntervalNanoseconds, interval))
+            frameIntervalNanoseconds: frameIntervalNanoseconds(thermalTier: thermalTier))
+    }
+
+    /// Preview pull interval at the fixed 60 Hz ceiling, after thermal shedding.
+    public static func frameIntervalNanoseconds(
+        thermalTier: ThermalTier = .nominal
+    ) -> UInt64 {
+        let baseNanos = Double(standardFrameIntervalNanoseconds)
+        let scaled = UInt64((baseNanos * thermalTier.cadenceMultiplier).rounded())
+        return min(
+            max(scaled, minimumFrameIntervalNanoseconds),
+            maximumFrameIntervalNanoseconds)
     }
 
     /// Encodes the safe request as `size<TAB>compression<TAB>intervalNanos` for JNI.

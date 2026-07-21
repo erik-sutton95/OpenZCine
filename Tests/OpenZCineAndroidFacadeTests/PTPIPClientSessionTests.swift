@@ -22,12 +22,14 @@ import Testing
 struct PTPIPClientSessionTests {
     private func connect(
         to server: FakeZRServer,
+        strategy: PTPIPClientSession.ConnectionStrategy = .restoreProfileThenPairing,
         onPhase: (CameraConnectionPhase, String) -> Void = { _, _ in }
     ) throws -> PTPIPClientSession {
         try PTPIPClientSession.connect(
             host: "127.0.0.1",
             port: server.port,
             timeoutMilliseconds: 2_000,
+            strategy: strategy,
             onPhase: onPhase)
     }
 
@@ -47,12 +49,14 @@ struct PTPIPClientSessionTests {
         }
     }
 
-    @Test func connectsWithSavedProfileAndIdentifies() throws {
+    @Test func connectsWithExplicitSavedProfileAndIdentifies() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
 
         var phases: [CameraConnectionPhase] = []
-        let session = try connect(to: server) { phase, _ in phases.append(phase) }
+        let session = try connect(to: server, strategy: .savedProfile) { phase, _ in
+            phases.append(phase)
+        }
         defer { session.disconnect() }
 
         #expect(phases == [.handshaking, .connected])
@@ -68,7 +72,7 @@ struct PTPIPClientSessionTests {
         #expect(operations.prefix(2) == [.openSession, .changeApplicationMode])
     }
 
-    @Test func fallsBackToFirstTimePairingWhenAppControlIsRefused() throws {
+    @Test func compatibilityStrategyFallsBackToFirstTimePairingWhenAppControlIsRefused() throws {
         var options = FakeZRServer.Options()
         options.acceptsAppControlImmediately = false
         let server = try FakeZRServer(options: options)
@@ -81,18 +85,105 @@ struct PTPIPClientSessionTests {
         #expect(phases.map(\.0) == [.handshaking, .pairing, .confirmOnCamera, .connected])
         // The pairing PIN extracted by the core from the challenge bytes.
         #expect(phases.first(where: { $0.0 == .confirmOnCamera })?.1 == "1234")
-        #expect(session.identity.model == "ZR")
+        // First-time Wi-Fi pairing stops after ConfirmPairing; full identity
+        // arrives on the post-body-confirm saved-profile reconnect.
+        #expect(session.identity.model.isEmpty || session.identity.model == "ZR")
 
         let operations = server.receivedOperations()
         // Probe attempt: open + refused app mode + graceful CloseSession…
         #expect(operations.prefix(3) == [.openSession, .changeApplicationMode, .closeSession])
-        // …then the fresh pairing session in the iOS-verified order.
+        // …then the temporary pairing session. No ChangeApplicationMode after
+        // ConfirmPairing — that races the body-confirm AP restart on hardware.
         #expect(
-            operations.dropFirst(3).prefix(5)
+            operations.dropFirst(3).prefix(3)
                 == [
-                    .openSession, .getPairingInfo, .confirmPairing, .changeApplicationMode,
-                    .getDeviceInfo,
+                    .openSession, .getPairingInfo, .confirmPairing,
                 ])
+    }
+
+    @Test func firstTimePairingSkipsSavedProfileProbeAndConfirmsAfterPairingSucceeds() throws {
+        var options = FakeZRServer.Options()
+        options.acceptsAppControlImmediately = false
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [(CameraConnectionPhase, String)] = []
+        var confirmPhaseFollowedSuccessfulConfirm = false
+        let session = try connect(to: server, strategy: .firstTimePairing) { phase, detail in
+            phases.append((phase, detail))
+            if phase == .confirmOnCamera {
+                confirmPhaseFollowedSuccessfulConfirm = server.receivedOperations().contains(
+                    .confirmPairing)
+            }
+        }
+        defer { session.disconnect() }
+
+        #expect(phases.map(\.0) == [.handshaking, .pairing, .confirmOnCamera, .connected])
+        #expect(phases.first(where: { $0.0 == .confirmOnCamera })?.1 == "1234")
+        #expect(confirmPhaseFollowedSuccessfulConfirm)
+        // Unknown Wi-Fi cameras must never probe `ChangeApplicationMode`: that
+        // ejects the ZR from its pairing wizard before it yields a challenge.
+        // After ConfirmPairing we also skip app-control/identify so the shell
+        // can wait for body Confirm + AP restart (real ZR behavior).
+        #expect(
+            server.receivedOperations()
+                == [
+                    .openSession, .getPairingInfo, .confirmPairing,
+                ])
+    }
+
+    @Test func savedProfileRejectsWithoutStartingFirstTimePairing() throws {
+        var options = FakeZRServer.Options()
+        options.acceptsAppControlImmediately = false
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [CameraConnectionPhase] = []
+        #expect(throws: PTPIPClientSessionError.savedProfileRequired) {
+            try connect(to: server, strategy: .savedProfile) { phase, _ in
+                phases.append(phase)
+            }
+        }
+
+        #expect(phases == [.handshaking])
+        #expect(
+            server.receivedOperations()
+                == [.openSession, .changeApplicationMode, .closeSession])
+    }
+
+    @Test func restoreStrategyDoesNotPairAfterTransportFailure() throws {
+        var options = FakeZRServer.Options()
+        options.disconnectsOnChangeApplicationMode = true
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        #expect(throws: PTPIPClientSessionError.self) {
+            try connect(to: server, strategy: .restoreProfileThenPairing)
+        }
+
+        let operations = server.receivedOperations()
+        #expect(operations.prefix(2) == [.openSession, .changeApplicationMode])
+        #expect(!operations.contains(.getPairingInfo))
+        #expect(!operations.contains(.confirmPairing))
+    }
+
+    @Test func firstTimePairingDoesNotReportCameraConfirmationWhenConfirmIsRejected() throws {
+        var options = FakeZRServer.Options()
+        options.confirmPairingResponseCode = PTPResponseCode.deviceBusy.rawValue
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+
+        var phases: [CameraConnectionPhase] = []
+        #expect(
+            throws: PTPIPClientSessionError.operationRejected(.confirmPairing, .deviceBusy)
+        ) {
+            try connect(to: server, strategy: .firstTimePairing) { phase, _ in
+                phases.append(phase)
+            }
+        }
+
+        #expect(phases == [.handshaking, .pairing])
+        #expect(!server.receivedOperations().contains(.changeApplicationMode))
     }
 
     @Test func readsBatteryAndRecordingStateProperties() throws {
@@ -149,9 +240,18 @@ struct PTPIPClientSessionTests {
             session.configureLiveView(
                 imageSize: 1,
                 compression: 3,
-                frameIntervalNanoseconds: 49_500_000))
+                // Fixed 60 Hz monitor cadence (1e9 / 60).
+                frameIntervalNanoseconds: 1_000_000_000 / 60))
+        // Thermal-lengthened interval must also be accepted.
         #expect(
-            server.receivedPropertyWrites()
+            session.configureLiveView(
+                imageSize: 1,
+                compression: 3,
+                frameIntervalNanoseconds: 33_000_000))
+        let writes = server.receivedPropertyWrites()
+        #expect(writes.count == 4)
+        #expect(
+            writes.prefix(2)
                 == [
                     FakeZRPropertyWrite(
                         operation: .setDevicePropValueEx,
@@ -227,7 +327,7 @@ struct PTPIPClientSessionTests {
             bootstrap.controls.irisValues == [
                 "f/2.8", "f/4.0", "f/5.6", "f/8.0", "f/11.0", "f/16.0", "f/22.0",
             ])
-        #expect(bootstrap.controls.whiteBalanceValues.contains("5600K"))
+        #expect(bootstrap.controls.whiteBalanceValues.contains("5560K"))
         #expect(bootstrap.controls.focusAreas.contains("Subject"))
         #expect(bootstrap.controls.audioSensitivities.last == "20")
         #expect(bootstrap.controls.audioInputs == ["Microphone", "Line"])
@@ -317,6 +417,233 @@ struct PTPIPClientSessionTests {
             try session.applyAndroidControl(.resolutionFrameRate, label: "6K · 60p")
         }
         #expect(server.receivedPropertyWrites().count == rejectedBaseline)
+    }
+
+    @Test func rawCodecChangesRefreshZRFrameSizeModesAndPreserveExactWrites() throws {
+        let h265: UInt32 = 0x0001_0A01
+        let r3dNE: UInt32 = 0x0031_0A03
+        let nRAW: UInt32 = 0x0002_0C02
+        let h265ScreenSize: UInt64 = 0x0F00_0870_003C_0000
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let fx4K50 = UInt64(4_032) << 48 | UInt64(2_268) << 32 | UInt64(50) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = h265
+        options.movieRecordScreenSizeRaw = h265ScreenSize
+        options.descriptorEnumOverrides[.movieFileType] = [h265, r3dNE, nRAW]
+        options.screenSizeModesByFileType = [
+            h265: [h265ScreenSize],
+            r3dNE: [fx6K25, fx4K50, dx4K100],
+            nRAW: [fx6K25, fx4K50, dx4K100],
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.codec == "H.265")
+        #expect(bootstrap.controls.resolutionFrameRate == "4K · 60p")
+        #expect(bootstrap.controls.resolutionFrameRates == ["4K · 60p"])
+
+        let screenSizeDescriptorReadsBeforeCodecChange =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+        server.setCameraMovieFileType(r3dNE)
+
+        let r3dReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieFileType.rawValue))
+        #expect(r3dReadback.result == .accepted)
+        #expect(r3dReadback.controls.codec == "R3D NE")
+        #expect(r3dReadback.controls.resolutionFrameRate == "[FX] 6K · 25p")
+        #expect(
+            r3dReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[FX] 4K · 50p", "[DX] 4K · 100p"])
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeDescriptorReadsBeforeCodecChange + 1)
+
+        let writeBaseline = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.resolutionFrameRate, label: "[DX] 4K · 100p")
+        #expect(
+            server.receivedPropertyWrites().dropFirst(writeBaseline).first
+                == FakeZRPropertyWrite(
+                    operation: .setDevicePropValue,
+                    property: PTPPropertyCode.movieRecordScreenSize.rawValue,
+                    data: Data(ByteCoding.uint64LE(dx4K100))))
+
+        let dxReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieRecordScreenSize.rawValue))
+        #expect(dxReadback.controls.resolutionFrameRate == "[DX] 4K · 100p")
+
+        let screenSizeDescriptorReadsBeforeNRAWWrite =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+        let screenSizeValueReadsBeforeNRAWWrite =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropValueEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+        try session.applyAndroidControl(.codec, label: "N-RAW")
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeDescriptorReadsBeforeNRAWWrite + 1)
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropValueEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeValueReadsBeforeNRAWWrite + 1)
+        let nRAWReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.batteryLevel.rawValue))
+        #expect(nRAWReadback.result == .accepted)
+        #expect(nRAWReadback.controls.codec == "N-RAW")
+        #expect(nRAWReadback.controls.resolutionFrameRate == "[FX] 6K · 25p")
+        #expect(
+            nRAWReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[FX] 4K · 50p", "[DX] 4K · 100p"])
+    }
+
+    @Test func rawCodecChangeWithholdsStaleFrameSizeWhileD0A0ReadbackSettles() throws {
+        let h265: UInt32 = 0x0001_0A01
+        let r3dNE: UInt32 = 0x0031_0A03
+        let h265ScreenSize: UInt64 = 0x0F00_0870_003C_0000
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = h265
+        options.movieRecordScreenSizeRaw = h265ScreenSize
+        options.descriptorEnumOverrides[.movieFileType] = [h265, r3dNE]
+        options.screenSizeModesByFileType = [
+            h265: [h265ScreenSize],
+            r3dNE: [fx6K25, dx4K100],
+        ]
+        options.shortPropertyCodesAfterFirstRead = [PTPPropertyCode.movieRecordScreenSize.rawValue]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.resolutionFrameRate == "4K · 60p")
+
+        server.setCameraMovieFileType(r3dNE)
+        let settlingReadback = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieFileType.rawValue))
+        #expect(settlingReadback.result == .transportFailed)
+        #expect(settlingReadback.controls.codec == "R3D NE")
+        #expect(settlingReadback.controls.resolutionFrameRate == nil)
+        #expect(
+            settlingReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[DX] 4K · 100p"])
+    }
+
+    @Test func rawCodecPollRefreshesFrameSizeModesWhenEventIsMissed() throws {
+        let h265: UInt32 = 0x0001_0A01
+        let r3dNE: UInt32 = 0x0031_0A03
+        let h265ScreenSize: UInt64 = 0x0F00_0870_003C_0000
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = h265
+        options.movieRecordScreenSizeRaw = h265ScreenSize
+        options.descriptorEnumOverrides[.movieFileType] = [h265, r3dNE]
+        options.screenSizeModesByFileType = [
+            h265: [h265ScreenSize],
+            r3dNE: [fx6K25, dx4K100],
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.codec == "H.265")
+        #expect(bootstrap.controls.resolutionFrameRates == ["4K · 60p"])
+        let screenSizeDescriptorReadsBeforeCodecChange =
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count
+
+        // The event may be delayed, dropped, or reordered. The regular monitor poll must still
+        // invalidate and rebuild the codec-dependent D0A0 descriptor after it observes D0AF.
+        server.setCameraMovieFileType(r3dNE)
+        let requestBaseline = server.receivedRequests().count
+        let pollOrder = PTPIPClientSession.androidMonitorPollOrder(isRecording: false)
+        guard let codecPollIndex = pollOrder.firstIndex(of: .movieFileType) else {
+            Issue.record("The live monitor poll must include MovFileType.")
+            return
+        }
+        var r3dReadback = bootstrap
+        for _ in 0...codecPollIndex {
+            r3dReadback = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
+        }
+
+        #expect(r3dReadback.result == .accepted)
+        #expect(r3dReadback.controls.codec == "R3D NE")
+        #expect(r3dReadback.controls.resolutionFrameRate == "[FX] 6K · 25p")
+        #expect(
+            r3dReadback.controls.resolutionFrameRates
+                == ["[FX] 6K · 25p", "[DX] 4K · 100p"])
+        #expect(
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropDescEx
+                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+            }.count == screenSizeDescriptorReadsBeforeCodecChange + 1)
+        #expect(
+            Array(server.receivedRequests().dropFirst(requestBaseline).suffix(3))
+                == [
+                    FakeZRRequest(
+                        operation: .getDevicePropValueEx,
+                        parameters: [PTPPropertyCode.movieFileType.rawValue],
+                        dataPhase: .dataIn),
+                    FakeZRRequest(
+                        operation: .getDevicePropDescEx,
+                        parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
+                        dataPhase: .dataIn),
+                    FakeZRRequest(
+                        operation: .getDevicePropValueEx,
+                        parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
+                        dataPhase: .dataIn),
+                ])
+    }
+
+    @Test func rawImageAreaLabelsAreRestrictedToNikonZR() throws {
+        let r3dNE: UInt32 = 0x0031_0A03
+        let fx6K25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let dx4K100 = UInt64(3_984) << 48 | UInt64(2_240) << 32 | UInt64(100) << 16
+
+        func resolutionFrameRates(model: String) throws -> [String] {
+            var options = FakeZRServer.Options()
+            options.model = model
+            options.movieFileTypeRaw = r3dNE
+            options.movieRecordScreenSizeRaw = fx6K25
+            options.descriptorEnumOverrides[.movieFileType] = [r3dNE]
+            options.screenSizeModesByFileType = [r3dNE: [fx6K25, dx4K100]]
+            let server = try FakeZRServer(options: options)
+            defer { server.stop() }
+            let session = try connect(to: server)
+            defer { session.disconnect() }
+            return session.refreshAndroidPropertySnapshot(.bootstrap).controls.resolutionFrameRates
+        }
+
+        #expect(
+            try resolutionFrameRates(model: "ZR")
+                == ["[FX] 6K · 25p", "[DX] 4K · 100p"])
+        #expect(
+            try resolutionFrameRates(model: "Z8")
+                == ["6K · 25p", "4K · 100p"])
     }
 
     @Test func dynamicAndroidControlsPreserveAdvertisedRawValuesEndToEnd() throws {
@@ -604,7 +931,7 @@ struct PTPIPClientSessionTests {
         #expect(server.receivedPropertyWrites().isEmpty)
     }
 
-    @Test func descriptorIdentityAndDataTypeMismatchesFailClosed() throws {
+    @Test func descriptorIdentityAndDataTypeMismatchesStayIsolated() throws {
         func bootstrap(_ options: FakeZRServer.Options) throws -> AndroidCameraPropertyReadback {
             let server = try FakeZRServer(options: options)
             defer { server.stop() }
@@ -613,22 +940,28 @@ struct PTPIPClientSessionTests {
             return session.refreshAndroidPropertySnapshot(.bootstrap)
         }
 
+        // A wrong identity on D0A0 must not abort the whole catalog as transportFailed.
+        // Flexible enum scan may still recover the form tail; invented packs are never used.
         var identityOptions = FakeZRServer.Options()
         identityOptions.descriptorIdentityOverrides[
             PTPPropertyCode.movieRecordScreenSize.rawValue
         ] = PTPPropertyCode.movieFileType.rawValue
         let invalidIdentity = try bootstrap(identityOptions)
-        #expect(invalidIdentity.result == .transportFailed)
-        #expect(invalidIdentity.controls == .empty)
+        #expect(invalidIdentity.result == .accepted || invalidIdentity.result == .unsupported)
+        #expect(invalidIdentity.controls.codecs.contains("R3D NE"))
+        #expect(!invalidIdentity.controls.irisValues.isEmpty)
 
+        // Wrong data type on MovFileType: ZR codec fallback + remaining catalog survive.
         var typeOptions = FakeZRServer.Options()
         typeOptions.descriptorDataTypeOverrides[PTPPropertyCode.movieFileType.rawValue] = 0x0004
         let invalidType = try bootstrap(typeOptions)
-        #expect(invalidType.result == .transportFailed)
-        #expect(invalidType.controls == .empty)
+        #expect(invalidType.result == .accepted)
+        #expect(invalidType.controls.codecs.contains("R3D NE"))
+        #expect(!invalidType.controls.resolutionFrameRates.isEmpty)
     }
 
-    @Test func partialDescriptorTransportFailureClearsTheWholeCapabilityGeneration() throws {
+    @Test func partialDescriptorTransportFailureRetainsTheLastCompleteCapabilityGeneration() throws
+    {
         var options = FakeZRServer.Options()
         options.malformedDescriptorCodesAfterFirstRead = [
             PTPPropertyCode.movieAudioInputSensitivity.rawValue
@@ -642,14 +975,17 @@ struct PTPIPClientSessionTests {
         #expect(first.result == .accepted)
         #expect(!first.controls.codecs.isEmpty)
         #expect(!first.controls.audioSensitivities.isEmpty)
+        let retainedCodecs = first.controls.codecs
 
-        let failed = session.refreshAndroidPropertySnapshot(.bootstrap)
-        #expect(failed.result == .transportFailed)
-        #expect(failed.controls == .empty)
-        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("codec", "H.265")) {
-            try session.applyAndroidControl(.codec, label: "H.265")
-        }
-        #expect(server.receivedPropertyWrites().isEmpty)
+        // A later bootstrap that hits a malformed single descriptor must not blank every
+        // control. Malformed parse is unsupported (not transport) so the new generation
+        // still completes with ZR fallbacks for the bad property and retains others.
+        let second = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(second.result == .unsupported || second.result == .accepted)
+        #expect(second.controls.codecs == retainedCodecs)
+        #expect(!second.controls.audioSensitivities.isEmpty)
+        try session.applyAndroidControl(.codec, label: retainedCodecs[0])
+        #expect(!server.receivedPropertyWrites().isEmpty)
     }
 
     @Test func kelvinOptionsRequireAnAdvertisedColorTemperatureMode() throws {
@@ -670,6 +1006,78 @@ struct PTPIPClientSessionTests {
             try session.applyAndroidControl(.whiteBalance, label: "5000K")
         }
         #expect(server.receivedPropertyWrites().isEmpty)
+    }
+
+    @Test func captureBarLabelsEncodeBeforeDescriptorCapabilitiesLand() throws {
+        // Capture-bar / top-bar pickers open on iOS policy ladders even while the
+        // Android capability snapshot is still empty. Those labels must still
+        // encode through the shared core — an empty domain must not hard-reject
+        // every write with "not supported".
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        // Seed only the property values the shared shutter/ISO encoders need —
+        // no control-descriptor bootstrap, so capability option lists stay empty.
+        _ = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieShutterMode.rawValue))
+        _ = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.movieISOSensitivity.rawValue))
+
+        let emptyDomain = session.refreshAndroidPropertySnapshot(
+            .propertyChanged(PTPPropertyCode.batteryLevel.rawValue)
+        ).controls
+        #expect(emptyDomain.isoValues.isEmpty)
+        #expect(emptyDomain.shutterValues.isEmpty)
+        #expect(emptyDomain.focusModes.isEmpty)
+
+        try session.applyAndroidControl(.iso, label: "800")
+        try session.applyAndroidControl(.shutter, label: "180°")
+        try session.applyAndroidControl(.focusMode, label: "AF-C")
+        try session.applyAndroidControl(.shutterMode, label: "Speed")
+        try session.applyAndroidControl(.shutterLock, label: "Locked")
+        try session.applyAndroidControl(.vibrationReduction, label: "ON")
+
+        let writes = server.receivedPropertyWrites()
+        #expect(
+            writes.contains {
+                $0.property == PTPPropertyCode.movieISOSensitivity.rawValue
+            })
+        #expect(
+            writes.contains {
+                $0.property == PTPPropertyCode.movieShutterAngle.rawValue
+            })
+        #expect(
+            writes.contains {
+                $0.property == PTPPropertyCode.movieFocusMode.rawValue
+            })
+        #expect(
+            writes.contains {
+                $0.property == PTPPropertyCode.movieShutterMode.rawValue
+            })
+        #expect(
+            writes.contains {
+                $0.property == PTPPropertyCode.movieTVLockSetting.rawValue
+            })
+        #expect(
+            writes.contains {
+                $0.property == PTPPropertyCode.movieVibrationReduction.rawValue
+            })
+
+        // Codec/resolution stay fail-closed until the body advertises raw modes.
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "codec", "H.265")
+        ) {
+            try session.applyAndroidControl(.codec, label: "H.265")
+        }
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "resolutionFrameRate", "6K · 25p")
+        ) {
+            try session.applyAndroidControl(.resolutionFrameRate, label: "6K · 25p")
+        }
     }
 
     @Test func acceptedControlWriteRequiresMatchingAuthoritativeReadback() throws {
@@ -702,11 +1110,124 @@ struct PTPIPClientSessionTests {
 
         let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
         #expect(bootstrap.result == .unsupported)
-        #expect(bootstrap.controls.codecs.isEmpty)
+        // ZR falls back to lab-proven MovFileType raws when the descriptor is rejected so CODEC
+        // stays writable; e-VR stays empty because the active codec is raw (or unknown).
+        #expect(bootstrap.controls.codecs.contains("R3D NE"))
         #expect(bootstrap.controls.electronicVR.isEmpty)
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
         #expect(bootstrap.controls.shutterValues == ["90°", "180°", "360°"])
         #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
+    }
+
+    @Test func resolutionWriteUsesExactAdvertisedCatalogPackLikeIOS() throws {
+        // iOS baseline: label → first matching camera-advertised raw. No live-pack rewrite.
+        let enum25 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let enum30 = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(30) << 16
+
+        let r3d: UInt32 = 0x0031_0A03
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = r3d
+        // FakeZR GetDevicePropValue uses the first listed mode when the map is set.
+        options.movieRecordScreenSizeRaw = enum30
+        options.descriptorEnumOverrides[.movieFileType] = [r3d]
+        options.screenSizeModesByFileType = [r3d: [enum30, enum25]]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        let label25 =
+            bootstrap.controls.resolutionFrameRates.first { $0.contains("25p") } ?? "6K · 25p"
+        #expect(bootstrap.controls.resolutionFrameRates.contains { $0.contains("25p") })
+        let before = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.resolutionFrameRate, label: label25)
+        let writes = Array(server.receivedPropertyWrites().dropFirst(before))
+        #expect(writes.count == 1)
+        #expect(writes[0].property == PTPPropertyCode.movieRecordScreenSize.rawValue)
+        #expect(writes[0].data == Data(ByteCoding.uint64LE(enum25)))
+    }
+
+    @Test func screenSizeReadbackMatchesOnDecodedGeometryNotExactBytes() {
+        let writtenRaw = UInt64(6_048) << 48 | UInt64(3_402) << 32 | UInt64(25) << 16
+        let liveRaw = writtenRaw | 0x8000
+        let write = PTPCameraPropertyWrite.screenSize(raw: writtenRaw)
+        #expect(
+            PTPIPClientSession.propertyWriteMatchesReadback(
+                write: write,
+                readback: Data(ByteCoding.uint64LE(liveRaw))))
+        #expect(
+            !PTPIPClientSession.propertyWriteMatchesReadback(
+                write: write,
+                readback: Data(
+                    ByteCoding.uint64LE(
+                        UInt64(3_840) << 48 | UInt64(2_160) << 32 | UInt64(25) << 16))))
+    }
+
+    @Test func focusModeReadbackMatchesOnLabelIncludingDualMFRaws() {
+        // Menu MF (4) vs lens-ring MF (3) both decode to "MF".
+        let writeMF = PTPCameraPropertyWrite(
+            property: .movieFocusMode, data: Data([4]))
+        #expect(
+            PTPIPClientSession.propertyWriteMatchesReadback(write: writeMF, readback: Data([4])))
+        #expect(
+            PTPIPClientSession.propertyWriteMatchesReadback(write: writeMF, readback: Data([3])))
+        // AF-F must not match residual MF.
+        let writeAFF = PTPCameraPropertyWrite(
+            property: .movieFocusMode, data: Data([2]))
+        #expect(
+            PTPIPClientSession.propertyWriteMatchesReadback(write: writeAFF, readback: Data([2])))
+        #expect(
+            !PTPIPClientSession.propertyWriteMatchesReadback(write: writeAFF, readback: Data([3])))
+    }
+
+    @Test func invalidScreenSizeDescriptorDoesNotWipeTheControlCatalog() throws {
+        // A single unparsable D0A0 used to be classified as transportFailed and aborted every
+        // subsequent descriptor, leaving the whole Android control surface empty.
+        var options = FakeZRServer.Options()
+        options.descriptorIdentityOverrides = [
+            PTPPropertyCode.movieRecordScreenSize.rawValue: 0xDEAD_BEEF
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        // Catalog still completes; other controls keep their descriptors.
+        #expect(bootstrap.controls.irisValues.contains("f/2.8"))
+        #expect(bootstrap.controls.codecs.contains("R3D NE"))
+        #expect(bootstrap.controls.vibrationReduction == ["OFF", "ON", "SPORT"])
+        // Flexible enum scan still recovers the form tail even with a wrong property-code header
+        // (FakeZR keeps a valid enum block). No invented lab packs are used.
+        #expect(bootstrap.controls.resolutionFrameRates.contains("6K · 25p"))
+        try session.applyAndroidControl(.resolutionFrameRate, label: "4K · 60p")
+        #expect(
+            server.receivedPropertyWrites().contains {
+                $0.property == PTPPropertyCode.movieRecordScreenSize.rawValue
+            })
+    }
+
+    @Test func inventedScreenSizeFallbacksAreNeverOfferedOrWritten() throws {
+        // Empty / rejected D0A0 must not surface lab-invented packs — those reboot real ZRs.
+        var options = FakeZRServer.Options()
+        options.unsupportedPropertyCodes = [PTPPropertyCode.movieRecordScreenSize.rawValue]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+        #expect(bootstrap.controls.resolutionFrameRates.isEmpty)
+        #expect(
+            throws: PTPIPClientSessionError.unsupportedAndroidControl(
+                "resolutionFrameRate", "6K · 25p")
+        ) {
+            try session.applyAndroidControl(.resolutionFrameRate, label: "6K · 25p")
+        }
+        #expect(server.receivedPropertyWrites().isEmpty)
+        // Other controls still land.
+        #expect(!bootstrap.controls.codecs.isEmpty)
     }
 
     @Test func whiteBalanceTintOptionsRespectTheAdvertisedDescriptorRange() throws {

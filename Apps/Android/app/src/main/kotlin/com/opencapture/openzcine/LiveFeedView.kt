@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -114,29 +116,30 @@ internal fun liveFeedContentRect(
     )
 }
 
-/** One immutable image-and-metadata record accepted by the latest-wins feed. */
-@Immutable
-private data class LiveFeedPresentation(
-    val image: ImageBitmap,
-    val sourceWidth: Int,
-    val sourceHeight: Int,
-    val colorMode: LiveFeedColorMode,
-    val focus: LiveFocusInfo?,
-    val level: LiveCameraLevel?,
-)
-
 /**
  * Presentation data paired with the bitmap that the feed actually accepted
- * after latest-wins conflation. It prevents focus and virtual-horizon overlays
- * from drifting onto a different decoded frame by publishing one immutable
- * image-and-metadata record, rather than a sequence of mutable fields.
+ * after latest-wins conflation.
+ *
+ * **Split state on purpose:** [frameEpoch] invalidates only the feed Canvas
+ * draw. Geometry / focus / level use separate Snapshot fields that only write
+ * when values change — a single `mutableStateOf(presentation)` was forcing the
+ * entire monitor chrome tree to recompose at feed rate (~25 Hz) on every
+ * frame and janking the UI thread on A12-class devices.
  */
 @Stable
 public class LiveFeedPresentationState {
-    private var presentation: LiveFeedPresentation? by mutableStateOf(null)
+    /** Bumped when the feed Canvas should redraw; feed Canvas is the only intended reader. */
+    private var frameEpoch by mutableLongStateOf(0L)
+    private var latestBitmap: Bitmap? = null
+    /** Cap Compose draw invalidations so UI thread keeps free time for input. */
+    private var lastDrawPublishNanos: Long = 0L
     private var textureSourceGeometry: FeedTextureSourceGeometry? by mutableStateOf(null)
     private var presentedColorMode: LiveFeedColorMode by mutableStateOf(LiveFeedColorMode.UNKNOWN)
     private var focusGestureGeometrySignature: FocusGestureGeometrySignature? = null
+    private var retainedSourceWidth by mutableIntStateOf(0)
+    private var retainedSourceHeight by mutableIntStateOf(0)
+    private var retainedFocus: LiveFocusInfo? by mutableStateOf(null)
+    private var retainedLevel: LiveCameraLevel? by mutableStateOf(null)
 
     /** Changes only when source or camera focus-coordinate geometry changes. */
     internal var focusGestureGeometryGeneration: Long by mutableLongStateOf(0L)
@@ -146,25 +149,33 @@ public class LiveFeedPresentationState {
     internal val feedTextureSourceGeometry: FeedTextureSourceGeometry?
         get() = textureSourceGeometry
 
-    /** The exact image whose metadata the other accessors describe. */
-    internal val image: ImageBitmap?
-        get() = presentation?.image
+    /**
+     * Latest decoded bitmap. Reading this also observes [frameEpoch] so the
+     * feed Canvas redraws without publishing a new presentation object.
+     */
+    internal val bitmap: Bitmap?
+        get() {
+            // Touch frameEpoch so Canvas invalidates on every present.
+            @Suppress("UNUSED_EXPRESSION")
+            frameEpoch
+            return latestBitmap
+        }
 
     /** Width of the decoded image currently on screen, or zero before a frame. */
     public val sourceWidth: Int
-        get() = presentation?.sourceWidth ?: 0
+        get() = retainedSourceWidth
 
     /** Height of the decoded image currently on screen, or zero before a frame. */
     public val sourceHeight: Int
-        get() = presentation?.sourceHeight ?: 0
+        get() = retainedSourceHeight
 
     /** Camera-origin focus metadata paired with the visible image. */
     public val focus: LiveFocusInfo?
-        get() = presentation?.focus
+        get() = retainedFocus
 
     /** Camera-origin virtual-horizon metadata paired with the visible image. */
     public val level: LiveCameraLevel?
-        get() = presentation?.level
+        get() = retainedLevel
 
     /** Electrical color contract of the decoded frame currently on screen. */
     internal val colorMode: LiveFeedColorMode
@@ -187,15 +198,18 @@ public class LiveFeedPresentationState {
             focusGestureGeometryGeneration += 1
         }
         if (presentedColorMode != colorMode) presentedColorMode = colorMode
-        presentation =
-            LiveFeedPresentation(
-                image = bitmap.asImageBitmap(),
-                sourceWidth = bitmap.width,
-                sourceHeight = bitmap.height,
-                colorMode = colorMode,
-                focus = frame.focus,
-                level = frame.level,
-            )
+        if (retainedSourceWidth != bitmap.width) retainedSourceWidth = bitmap.width
+        if (retainedSourceHeight != bitmap.height) retainedSourceHeight = bitmap.height
+        if (retainedFocus != frame.focus) retainedFocus = frame.focus
+        if (retainedLevel != frame.level) retainedLevel = frame.level
+        latestBitmap = bitmap
+        // Always keep the newest bitmap; only invalidate Compose draw at ~20 Hz
+        // so the UI thread is not saturated by 25–30 full-frame Skia blits/s.
+        val now = System.nanoTime()
+        if (lastDrawPublishNanos == 0L || now - lastDrawPublishNanos >= MIN_DRAW_INTERVAL_NANOS) {
+            lastDrawPublishNanos = now
+            frameEpoch += 1
+        }
         val nextTextureGeometry =
             retainedFeedTextureSourceGeometry(
                 current = textureSourceGeometry,
@@ -212,9 +226,20 @@ public class LiveFeedPresentationState {
             focusGestureGeometrySignature = null
             focusGestureGeometryGeneration += 1
         }
-        presentation = null
+        latestBitmap = null
+        lastDrawPublishNanos = 0L
+        frameEpoch += 1
+        if (retainedSourceWidth != 0) retainedSourceWidth = 0
+        if (retainedSourceHeight != 0) retainedSourceHeight = 0
+        if (retainedFocus != null) retainedFocus = null
+        if (retainedLevel != null) retainedLevel = null
         textureSourceGeometry = null
         presentedColorMode = LiveFeedColorMode.UNKNOWN
+    }
+
+    private companion object {
+        /** ~20 fps max Compose feed redraws — leaves headroom for chrome input. */
+        const val MIN_DRAW_INTERVAL_NANOS: Long = 50_000_000L
     }
 }
 
@@ -254,6 +279,10 @@ public class LiveFeedEffectsPresentationState {
  *   ring fills, the steady state is zero per-frame allocation — the JPEG is
  *   decoded straight into an existing buffer. Sustains the 25 fps stream with
  *   ~2/3 of the frame budget idle on the test device.
+ * - **Subsample via [maxLongSide]**: full 1080p texture upload every frame was
+ *   janking the UI thread on A12-class (gfxinfo ~50 ms draw). Cap the long
+ *   side near display resolution so Skia uploads ~¼ the pixels without
+ *   visible quality loss on a phone monitor.
  * - **ImageDecoder**: allocates a fresh (often hardware) bitmap per frame —
  *   25 allocations/s of ~2.7 MB each is pure GC churn with no quality upside
  *   for a monitor feed.
@@ -261,16 +290,17 @@ public class LiveFeedEffectsPresentationState {
  *   [LiveFeedView]); no decoder on the SM-A127F and rarely present on any
  *   SoC, so it can only ever be an opportunistic fast path — not worth a
  *   second pipeline for the spike.
- * - **SurfaceView / AndroidExternalSurface**: a software-canvas blit plus its
- *   own lifecycle and pacing. A Compose draw-scope state read invalidates
- *   *draw only* (no recomposition, no layout), which measures equivalently
- *   smooth here with far less code; revisit only if profiling shows the
- *   texture upload hurting.
  *
  * The ring is 3 deep so the bitmap being decoded into is never the one the
  * RenderThread may still be drawing (current frame + one in flight).
  */
-class JpegFrameDecoder {
+class JpegFrameDecoder(
+    /**
+     * Maximum long-side pixels for the decoded bitmap. `0` keeps the source
+     * resolution; default [DEFAULT_MAX_LONG_SIDE] matches phone feed size.
+     */
+    private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE,
+) {
     private val pool = arrayOfNulls<Bitmap>(3)
     private var next = 0
     private val options =
@@ -284,13 +314,22 @@ class JpegFrameDecoder {
 
     /** Decodes [jpeg] into the next pooled bitmap; null if the data is invalid. */
     fun decode(jpeg: ByteArray): Bitmap? {
+        options.inSampleSize = 1
+        if (maxLongSide > 0) {
+            options.inJustDecodeBounds = true
+            options.inBitmap = null
+            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
+            options.inSampleSize =
+                jpegSampleSizeForLongSide(options.outWidth, options.outHeight, maxLongSide)
+            options.inJustDecodeBounds = false
+        }
+        // Prefer pool reuse; IllegalArgumentException resets the ring slot.
         options.inBitmap = pool[next]
         val decoded =
             try {
                 BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
             } catch (_: IllegalArgumentException) {
-                // Pooled bitmap incompatible (feed size changed) — decode fresh
-                // and let the ring re-fill at the new size.
+                // Pooled bitmap incompatible (size/sample change) — decode fresh.
                 options.inBitmap = null
                 BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
             } ?: return null
@@ -298,6 +337,26 @@ class JpegFrameDecoder {
         next = (next + 1) % pool.size
         return decoded
     }
+
+    companion object {
+        /**
+         * Phone feed long side (≈540p after sample-2 of 1080p). Full 1080p
+         * uploads were ~50 ms UI-thread draw on SM-A127F (gfxinfo).
+         */
+        const val DEFAULT_MAX_LONG_SIDE: Int = 960
+    }
+}
+
+/** Power-of-two [BitmapFactory.Options.inSampleSize] so long side ≤ [maxLongSide]. */
+internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int): Int {
+    if (maxLongSide <= 0 || width <= 0 || height <= 0) return 1
+    val longSide = maxOf(width, height)
+    var sample = 1
+    // Grow sample until decoded long side is at most maxLongSide.
+    while (longSide / sample > maxLongSide) {
+        sample *= 2
+    }
+    return sample
 }
 
 /**
@@ -321,15 +380,21 @@ class JpegFrameDecoder {
  * [presentationState], when supplied, retains the same frame's camera
  * metadata and image dimensions for feed-aligned overlays.
  *
- * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra,
- * see [FeedEffectsRenderer]) into the drawn frame. The default preserves the
- * plain feed unless the debug harness switched effects on. API 33+ uses AGSL;
- * API 29-32 uses the same immutable plan through a GLES2 surface. Builds
- * without the staged Swift core, and frames outside the supported original
- * SDR working space, always render plain.
+ * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra)
+ * into the drawn frame. The default preserves the plain feed. Presentation:
+ * - **FLAT glass / no glass:** graded frames go to a GLES/Vulkan [SurfaceView]
+ *   (A12-class path; AGSL live grade janked ~99% frames with LUT).
+ * - **FULL liquid glass:** Compose [Canvas] (+ AGSL [FeedEffectsRenderer] when
+ *   graded). Kyant `layerBackdrop` only records HWUI/Compose draw commands —
+ *   a SurfaceView is a separate buffer and never appears under glass blur.
+ * Builds without the staged Swift core, and frames outside original SDR,
+ * always render plain.
  * [configuration] is local operator choice only; [cameraInput] is forwarded
  * unchanged to Swift, which owns camera curve/clip policy for both the
  * renderer and the optional false-colour reference key.
+ *
+ * @param preferComposablePresentation When true (FULL liquid glass), force the
+ *   Compose Canvas present path so chrome/popups can blur the live feed.
  */
 @Composable
 fun LiveFeedView(
@@ -344,35 +409,38 @@ fun LiveFeedView(
     lutLibrary: AndroidLutLibrary? = null,
     effectsPresentationState: LiveFeedEffectsPresentationState? = null,
     aspectFill: Boolean = false,
+    preferComposablePresentation: Boolean = false,
 ) {
     val applicationContext = LocalContext.current.applicationContext
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
     val fallbackColorMode = remember(source) { mutableStateOf(LiveFeedColorMode.UNKNOWN) }
-    val legacySurfaceState = remember(source) { LegacyLiveFeedSurfaceState() }
+    // GPU present (Vulkan preferred, GLES fallback) for FLAT glass. FULL glass
+    // must stay on Compose Canvas so Kyant can sample the feed.
+    val gpuBackend = remember(source) { LiveFeedGpuBackendFactory.create(applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
-    DisposableEffect(legacySurfaceState) {
-        onDispose { legacySurfaceState.dispose() }
+    DisposableEffect(gpuBackend) {
+        onDispose { gpuBackend.dispose() }
     }
-    DisposableEffect(lifecycleOwner, legacySurfaceState) {
+    DisposableEffect(lifecycleOwner, gpuBackend) {
         val lifecycle = lifecycleOwner.lifecycle
         val observer =
             LifecycleEventObserver { _, event ->
                 when (event) {
-                    Lifecycle.Event.ON_RESUME -> legacySurfaceState.resume()
+                    Lifecycle.Event.ON_RESUME -> gpuBackend.resume()
                     Lifecycle.Event.ON_PAUSE,
                     Lifecycle.Event.ON_DESTROY,
-                    -> legacySurfaceState.pause()
+                    -> gpuBackend.pause()
                     else -> Unit
                 }
             }
         lifecycle.addObserver(observer)
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            legacySurfaceState.resume()
+            gpuBackend.resume()
         }
         onDispose {
             lifecycle.removeObserver(observer)
-            legacySurfaceState.pause()
+            gpuBackend.pause()
         }
     }
     // Stored selections are prepared off the UI thread. Until the shared Swift parser has produced
@@ -384,8 +452,11 @@ fun LiveFeedView(
     }
     val colorMode = presentationState?.colorMode ?: fallbackColorMode.value
     var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
-    var renderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
-    var legacyPreviewBaker by remember { mutableStateOf<LegacyFeedEffectsPreviewBaker?>(null) }
+    // Wear / small preview baker only (not the live monitor path).
+    var previewBaker by remember { mutableStateOf<LiveFramePreviewBaker?>(null) }
+    // AGSL grade for the Compose present path (FULL glass). Mid/high devices
+    // only — A12 stays on FLAT + GPU SurfaceView.
+    var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
         effects,
         configuration,
@@ -393,21 +464,23 @@ fun LiveFeedView(
         lutLibrary,
         lutRenderGeneration,
         colorMode,
+        preferComposablePresentation,
+        aspectFill,
     ) {
-        // Never retain a renderer for a superseded selection while its
-        // replacement is prepared. Cube baking and bitmap upload are native/
-        // CPU work, so keep the Compose thread responsive during configuration
-        // changes such as repeated zebra threshold taps.
-        renderPlan = null
-        renderer = null
-        legacyPreviewBaker = null
-        if (effects.isIdentity) return@LaunchedEffect
-        if (!liveFeedEffectsCanRender(Build.VERSION.SDK_INT, SwiftCore.isAvailable, colorMode)) {
+        // Keep the *current* plan on screen while the next one bakes. Clearing
+        // plan / SurfaceView mid-toggle was the black flash on LUT/peak/zebra.
+        if (
+            !effects.isIdentity &&
+                !liveFeedEffectsCanRender(Build.VERSION.SDK_INT, SwiftCore.isAvailable, colorMode)
+        ) {
             if (colorMode != LiveFeedColorMode.UNKNOWN) {
                 Log.w(TAG, "feed effects unavailable for $colorMode live input; rendering the plain feed")
             }
             return@LaunchedEffect
         }
+        if (!SwiftCore.isAvailable) return@LaunchedEffect
+        val previousBaker = previewBaker
+        val previousComposable = composableEffectsRenderer
         val nextPlan =
             withContext(Dispatchers.Default) {
                 FeedEffectsRenderPlanFactory.create(
@@ -417,36 +490,56 @@ fun LiveFeedView(
                     lutLibrary,
                 )
             }
-        renderPlan = nextPlan
-        renderer =
-            if (Build.VERSION.SDK_INT >= 33 && nextPlan != null) {
-                withContext(Dispatchers.Default) { FeedEffectsRenderer.create(nextPlan) }
-            } else {
-                null
-            }
-        legacyPreviewBaker =
-            if (Build.VERSION.SDK_INT in 29..32 && nextPlan != null) {
-                LegacyFeedEffectsPreviewBaker(applicationContext, nextPlan)
-            } else {
-                null
-            }
-    }
-    val legacyPlan = renderPlan.takeIf { Build.VERSION.SDK_INT in 29..32 }
-    SideEffect {
-        if (legacyPlan != null) legacySurfaceState.update(legacyPlan, aspectFill)
-    }
-    val legacySurfaceActive = legacyPlan != null && !legacySurfaceState.renderFailed
-    val legacyFramesRequested = legacySurfaceActive
-    val latestLegacyFramesRequested = rememberUpdatedState(legacyFramesRequested)
-    LaunchedEffect(legacyFramesRequested) {
-        if (!legacyFramesRequested) legacySurfaceState.clear()
-    }
-    val falseColorReady =
-        if (Build.VERSION.SDK_INT >= 33) {
-            renderer?.falseColorReady == true
-        } else {
-            legacySurfaceActive && renderPlan?.falseColorReady == true
+        if (nextPlan == null) return@LaunchedEffect
+        // Atomic present-path swap: push GPU uniforms first, then Compose state.
+        if (!preferComposablePresentation) {
+            gpuBackend.updatePlan(nextPlan, aspectFill)
         }
+        renderPlan = nextPlan
+        val nextBaker =
+            withContext(Dispatchers.Default) {
+                LegacyFeedEffectsPreviewBaker(applicationContext, nextPlan)
+            }
+        previewBaker = nextBaker
+        if (previousBaker !== nextBaker) {
+            (previousBaker as? AutoCloseable)?.close()
+        }
+        if (preferComposablePresentation && Build.VERSION.SDK_INT >= 33) {
+            val nextComposable =
+                withContext(Dispatchers.Default) {
+                    runCatching { FeedEffectsRenderer.create(nextPlan) }.getOrNull()
+                }
+            composableEffectsRenderer = nextComposable
+            if (previousComposable !== nextComposable) {
+                (previousComposable as? AutoCloseable)?.close()
+            }
+        } else if (composableEffectsRenderer != null) {
+            (composableEffectsRenderer as? AutoCloseable)?.close()
+            composableEffectsRenderer = null
+        }
+    }
+    SideEffect {
+        val plan = renderPlan
+        if (!preferComposablePresentation && plan != null && !gpuBackend.renderFailed) {
+            gpuBackend.updatePlan(plan, aspectFill)
+        }
+    }
+    // SurfaceView is a separate buffer — Kyant layerBackdrop cannot sample it.
+    // FULL liquid glass therefore stays on Compose Canvas even when graded.
+    // Keep the GPU surface mounted whenever the Swift core can grade so toggles
+    // never remount AndroidView (another source of flash).
+    val gpuSurfaceActive =
+        !preferComposablePresentation &&
+            SwiftCore.isAvailable &&
+            !gpuBackend.renderFailed &&
+            renderPlan != null
+    val gpuFramesRequested = gpuSurfaceActive
+    val latestGpuFramesRequested = rememberUpdatedState(gpuFramesRequested)
+    // Do not clearFrame when the surface briefly becomes inactive — that blacked
+    // the swapchain between effect plans. Source teardown clears explicitly.
+    val falseColorReady =
+        (gpuSurfaceActive || composableEffectsRenderer != null) &&
+            renderPlan?.falseColorReady == true
     LaunchedEffect(
         falseColorReady,
         effects.falseColor,
@@ -461,30 +554,48 @@ fun LiveFeedView(
             if (reference != null) effectsPresentationState?.present(scale, reference)
         }
     }
-    val ownedRenderer = renderer
-    val ownedLegacyPreviewBaker = legacyPreviewBaker
-    val activePreviewBaker: LiveFramePreviewBaker? =
-        ownedRenderer ?: ownedLegacyPreviewBaker.takeIf { legacySurfaceActive }
-    val latestPreviewBaker = rememberUpdatedState(activePreviewBaker)
-    DisposableEffect(ownedRenderer, ownedLegacyPreviewBaker) {
-        onDispose {
-            if (Build.VERSION.SDK_INT >= 33) ownedRenderer?.close()
-            ownedLegacyPreviewBaker?.close()
-        }
+    val ownedPreviewBaker = previewBaker
+    val latestPreviewBaker = rememberUpdatedState(ownedPreviewBaker)
+    DisposableEffect(ownedPreviewBaker) {
+        onDispose { (ownedPreviewBaker as? AutoCloseable)?.close() }
+    }
+    val ownedComposableRenderer = composableEffectsRenderer
+    DisposableEffect(ownedComposableRenderer) {
+        onDispose { (ownedComposableRenderer as? AutoCloseable)?.close() }
     }
 
     LaunchedEffect(source, presentationState) {
         presentationState?.clear()
         fallbackFrame.value = null
         fallbackColorMode.value = LiveFeedColorMode.UNKNOWN
-        legacySurfaceState.clear()
+        gpuBackend.clearFrame()
         if (BuildConfig.DEBUG) {
-            Log.d(TAG, "hardware MJPEG decoder available: ${hasMjpegDecoder()}")
+            Log.d(
+                TAG,
+                "hardware MJPEG decoder available: ${LiveFeedMjpegHardware.isAvailable()} " +
+                    "gpuBackend=${gpuBackend.kind} composablePresent=$preferComposablePresentation",
+            )
         }
-        val decoder = JpegFrameDecoder()
+        // Low-RAM devices (A12 class): slightly smaller decode when assists are
+        // active so GPU grade bandwidth stays under the frame budget.
+        val lowEnd =
+            runCatching {
+                val am =
+                    applicationContext.getSystemService(Context.ACTIVITY_SERVICE)
+                        as android.app.ActivityManager
+                val info = android.app.ActivityManager.MemoryInfo().also(am::getMemoryInfo)
+                am.isLowRamDevice || info.totalMem < MIN_FULL_GLASS_RAM_BYTES
+            }.getOrDefault(false)
+        val decoder =
+            JpegFrameDecoder(
+                maxLongSide =
+                    if (lowEnd && !effects.isIdentity) {
+                        720
+                    } else {
+                        JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE
+                    },
+            )
         val stats = FramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
-        // ponytail: pumps while composed; lifecycle pause/resume lands with the
-        // real camera source wiring.
         withContext(Dispatchers.Default) {
             pumpFramesWithSourceFrame(
                 frames = source.frames,
@@ -498,15 +609,12 @@ fun LiveFeedView(
                         fallbackFrame.value = bitmap.asImageBitmap()
                         fallbackColorMode.value = frameColorMode
                     }
-                    if (latestLegacyFramesRequested.value &&
+                    if (latestGpuFramesRequested.value &&
                         frameColorMode == LiveFeedColorMode.SDR
                     ) {
-                        legacySurfaceState.submit(bitmap)
+                        gpuBackend.submitFrame(bitmap)
                     } else {
-                        // Fail closed on the decode thread too. This prevents
-                        // a newly arrived HDR/unsupported frame from reaching
-                        // the previous SDR plan before Compose recomposes.
-                        legacySurfaceState.clear()
+                        gpuBackend.clearFrame()
                     }
                     onFrame?.invoke(bitmap)
                     latestPresentedFrame.value?.invoke(
@@ -521,44 +629,60 @@ fun LiveFeedView(
         }
     }
 
-    if (legacySurfaceActive) {
+    if (gpuSurfaceActive) {
         AndroidView(
             factory = { context ->
-                LegacyLiveFeedGlSurface(context).also(legacySurfaceState::attach)
+                gpuBackend.createView(context).also { view ->
+                    gpuBackend.attach(view)
+                }
             },
             modifier = modifier,
             update = {
-                legacySurfaceState.update(requireNotNull(renderPlan), aspectFill)
+                val plan = renderPlan
+                if (plan != null) gpuBackend.updatePlan(plan, aspectFill)
             },
-            onRelease = legacySurfaceState::detach,
+            onRelease = { view -> gpuBackend.detach(view) },
         )
     } else {
+        // Compose Canvas is what Kyant layerBackdrop records for liquid glass.
+        // Graded FULL glass uses AGSL; plain feed is a direct bitmap blit.
+        val agslRenderer = composableEffectsRenderer
         Canvas(modifier) {
-            val image = presentationState?.image ?: fallbackFrame.value ?: return@Canvas
+            val androidBitmap =
+                presentationState?.bitmap
+                    ?: fallbackFrame.value?.asAndroidBitmap()
+                    ?: return@Canvas
             val content =
                 liveFeedContentRect(
                     containerWidth = size.width,
                     containerHeight = size.height,
-                    sourceWidth = image.width,
-                    sourceHeight = image.height,
+                    sourceWidth = androidBitmap.width,
+                    sourceHeight = androidBitmap.height,
                     aspectFill = aspectFill,
                 ) ?: return@Canvas
-            val dstSize = IntSize(content.width, content.height)
-            val dstOffset = IntOffset(content.left, content.top)
-            val activeRenderer = renderer
-            val androidBitmap = image.asAndroidBitmap()
-            val frameIsOriginalSdr = decodedLiveFeedColorMode(androidBitmap) == LiveFeedColorMode.SDR
-            if (Build.VERSION.SDK_INT >= 33 && activeRenderer != null && frameIsOriginalSdr) {
-                activeRenderer.draw(
-                    canvas = drawContext.canvas.nativeCanvas,
-                    frame = androidBitmap,
-                    dstLeft = dstOffset.x.toFloat(),
-                    dstTop = dstOffset.y.toFloat(),
-                    dstWidth = dstSize.width.toFloat(),
-                    dstHeight = dstSize.height.toFloat(),
-                )
-            } else {
-                drawImage(image, dstOffset = dstOffset, dstSize = dstSize)
+            drawIntoCanvas { canvas ->
+                if (agslRenderer != null &&
+                    Build.VERSION.SDK_INT >= 33 &&
+                    decodedLiveFeedColorMode(androidBitmap) == LiveFeedColorMode.SDR
+                ) {
+                    agslRenderer.draw(
+                        canvas.nativeCanvas,
+                        androidBitmap,
+                        content.left.toFloat(),
+                        content.top.toFloat(),
+                        content.width.toFloat(),
+                        content.height.toFloat(),
+                    )
+                } else {
+                    val dst =
+                        android.graphics.Rect(
+                            content.left,
+                            content.top,
+                            content.left + content.width,
+                            content.top + content.height,
+                        )
+                    canvas.nativeCanvas.drawBitmap(androidBitmap, null, dst, null)
+                }
             }
         }
     }
@@ -685,9 +809,20 @@ internal fun FalseColorReferenceOverlay(
                     stringResource(R.string.false_color_axis_clipped),
                 ),
         )
+    var isDragging by remember { mutableStateOf(false) }
     Canvas(
         modifier
             .zone(frame)
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                scaleX = if (isDragging) 1.03f else 1f
+                scaleY = if (isDragging) 1.03f else 1f
+                shadowElevation = if (isDragging) 18.dp.toPx() else 0f
+                shape = ChromeShape
+                clip = true
+                ambientShadowColor = Color.Black.copy(alpha = 0.5f)
+                spotShadowColor = Color.Black.copy(alpha = 0.5f)
+            }
             .glass(ChromeShape)
             .semantics {
                 contentDescription = referenceDescription
@@ -705,11 +840,16 @@ internal fun FalseColorReferenceOverlay(
             .pointerInput(default, resolvedLayout, placementRevision, hapticsEnabled) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
+                        isDragging = true
                         if (hapticsEnabled) {
                             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         }
                     },
-                    onDragEnd = { saveFrame(frame) },
+                    onDragEnd = {
+                        isDragging = false
+                        saveFrame(frame)
+                    },
+                    onDragCancel = { isDragging = false },
                 ) { change, dragAmount ->
                     change.consume()
                     val snapped =

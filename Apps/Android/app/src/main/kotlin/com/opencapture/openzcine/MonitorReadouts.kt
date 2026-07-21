@@ -31,25 +31,45 @@ internal data class MonitorBatteryPresentation(
 )
 
 /**
- * Last camera timecode accepted by the existing display decoder.
+ * Live-view header timecode retention for one connected camera.
  *
- * The holder is remembered by connected-camera identity, not by preview source,
- * so DISP 3 can release every frame collector without discarding its camera-owned
- * hero value. A disconnect or replacement camera receives a new empty holder.
+ * Always mirrors camera-header TC (standby and rolling). Keeps the last good
+ * sample when Nikon briefly reports empty/off around record transitions.
+ * UI publishes are lightly rate-limited so second ticks stay smooth without
+ * thrashing composition on every frame.
  */
 internal class MonitorTimecodeRetention(private val cameraIdentity: CameraIdentity?) {
     private var retainedTimecode: LiveFrameTimecode? by mutableStateOf(null)
+    private var lastPublishNanos: Long = 0L
 
-    /** Retains the exact timecode state paired with the latest displayed frame. */
+    /** Ingest a live-view header sample and publish when it advances. */
     fun accept(timecode: LiveFrameTimecode?): Unit {
-        retainedTimecode =
-            if (cameraIdentity == null) null else authoritativeTimecode(timecode)
+        if (cameraIdentity == null) return
+        val next = liveViewHeaderTimecode(timecode) ?: return
+        publish(next)
     }
 
     /** Returns the retained value only while the same camera is still connected. */
     fun timecodeFor(sessionState: CameraSessionState): LiveFrameTimecode? {
         val currentIdentity = (sessionState as? CameraSessionState.Connected)?.identity
         return retainedTimecode.takeIf { cameraIdentity != null && currentIdentity == cameraIdentity }
+    }
+
+    private fun publish(next: LiveFrameTimecode) {
+        if (next == retainedTimecode) return
+        val now = System.nanoTime()
+        val previous = retainedTimecode
+        val secondChanged =
+            previous == null ||
+                previous.hour != next.hour ||
+                previous.minute != next.minute ||
+                previous.second != next.second
+        // Always publish second boundaries immediately; frame ticks ~30 Hz max.
+        if (!secondChanged && lastPublishNanos != 0L && now - lastPublishNanos < 33_000_000L) {
+            return
+        }
+        lastPublishNanos = now
+        retainedTimecode = next
     }
 }
 
@@ -118,21 +138,226 @@ internal fun monitorBatteryPresentation(
     )
 }
 
+// ── iOS top-bar readout parity (MonitorTextFormat + MediaStatus + FrameRateSampler) ──
+
+/** iOS `MonitorTextFormat.resolutionLabel(fromProperty:)`: `"6048x3402"` + fps → `"6K · 25p"`. */
+internal fun monitorResolutionLabel(
+    resolution: String?,
+    frameRate: Int?,
+    fallback: String,
+): String {
+    val property = resolution.monitorValueOrNull() ?: return fallback
+    val parts = property.split("x")
+    val width = parts.getOrNull(0)?.trim()?.toIntOrNull()
+    val height = parts.getOrNull(1)?.trim()?.toIntOrNull()
+    if (parts.size != 2 || width == null || height == null) return fallback
+    val resolutionClass =
+        when {
+            width >= 7680 -> "8K"
+            width >= 5000 -> "6K"
+            width >= 3500 -> "4K"
+            else -> "$width"
+        }
+    return "$resolutionClass · ${frameRate ?: 0}p"
+}
+
+/** iOS `MonitorTextFormat.codecShortLabel`: `"R3D NE 12-bit R3D"` → `"R3D NE"`. */
+internal fun monitorCodecShortLabel(codec: String): String {
+    val stripped = codec.trim()
+    val redundantQualifier = Regex("""\s+\d+-bit\s+.+$""").find(stripped) ?: return stripped
+    return stripped.substring(0, redundantQualifier.range.first).trim()
+}
+
+/** iOS `MonitorTextFormat.codecCompactLabel`: `ProRes`→`PR`, H.26x drops the bit depth. */
+internal fun monitorCodecCompactLabel(codec: String?, fallback: String): String {
+    val value = codec.monitorValueOrNull() ?: return fallback
+    var label = monitorCodecShortLabel(value).replace("ProRes", "PR")
+    if (label.startsWith("H.26")) {
+        Regex("""\s+\d+-bit$""").find(label)?.let { label = label.substring(0, it.range.first) }
+    }
+    return label.trim()
+}
+
+/** iOS `MediaStatus`: free space plus the conservative remaining-minutes estimate. */
+internal data class MonitorMediaStatus(
+    val gigabytesFree: Long,
+    val percentFree: Long,
+    val minutesRemaining: Int,
+) {
+    /** iOS `MediaStatus.capacityLabel`. */
+    val capacityLabel: String get() = "$gigabytesFree GB · $percentFree%"
+
+    /** iOS `MediaStatus.durationLabel`. */
+    val durationLabel: String get() = "$minutesRemaining Min"
+}
+
 /**
- * Keeps only enabled, structurally valid camera timecode. No shell clock or
- * elapsed-time extrapolation is allowed to stand in for a missing frame value.
+ * iOS `RecordDurationEstimator`, ported table and scaling verbatim: per-codec
+ * base Mbps at UHD 24p, scaled by pixel count and frame rate, rounded down so
+ * the "Min" readout under-promises.
  */
-internal fun authoritativeTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
+internal object MonitorRecordDurationEstimator {
+    private val baseBitrateMbps =
+        mapOf(
+            "R3D NE" to 600.0,
+            "N-RAW" to 470.0,
+            "ProRes RAW HQ" to 1700.0,
+            "ProRes 422 HQ" to 707.0,
+            "H.265" to 190.0,
+            "H.264" to 75.0,
+        )
+    private const val FALLBACK_BITRATE_MBPS = 250.0
+    private const val REFERENCE_PIXELS = 3840.0 * 2160.0
+    private const val REFERENCE_FRAME_RATE = 24.0
+
+    fun minutesRemaining(
+        codecShortLabel: String,
+        resolutionWidth: Int,
+        resolutionHeight: Int,
+        frameRate: Int,
+        gigabytesFree: Long,
+    ): Int {
+        if (gigabytesFree <= 0L) return 0
+        val base = baseBitrateMbps[codecShortLabel] ?: FALLBACK_BITRATE_MBPS
+        val mbps =
+            base * (resolutionWidth.toDouble() * resolutionHeight / REFERENCE_PIXELS) *
+                (frameRate / REFERENCE_FRAME_RATE)
+        if (!mbps.isFinite() || mbps <= 0.0) return 0
+        val seconds = gigabytesFree * 8_000.0 / mbps
+        return (seconds / 60.0).toInt()
+    }
+}
+
+/** Builds the iOS-parity media status from an internally consistent storage readback. */
+internal fun monitorMediaStatus(
+    storage: CameraStorageStatus?,
+    codec: String?,
+    resolution: String?,
+    frameRate: Int?,
+): MonitorMediaStatus? {
+    if (storage == null || storage.totalCapacityBytes <= 0L) return null
+    if (storage.freeSpaceBytes !in 0L..storage.totalCapacityBytes) return null
+    val gigabytesFree = storage.freeSpaceBytes / 1_000_000_000L
+    val percentFree =
+        (storage.freeSpaceBytes.toDouble() * 100.0 / storage.totalCapacityBytes.toDouble()).toLong()
+    val parts = resolution.orEmpty().split("x")
+    val width = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 0
+    val height = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
+    val minutes =
+        MonitorRecordDurationEstimator.minutesRemaining(
+            codecShortLabel = codec?.let(::monitorCodecShortLabel).orEmpty(),
+            resolutionWidth = width,
+            resolutionHeight = height,
+            frameRate = validMonitorFrameRate(frameRate) ?: 0,
+            gigabytesFree = gigabytesFree,
+        )
+    return MonitorMediaStatus(gigabytesFree, percentFree, minutes)
+}
+
+/**
+ * iOS never blanks a top-bar readout: values seed from `CameraDisplayState.preview`
+ * and each later camera readback replaces its field while missing fields hold
+ * the previous value. Scoped per connected-camera identity like the timecode.
+ */
+internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentity?) {
+    var resolution: String by mutableStateOf(PREVIEW_RESOLUTION)
+        private set
+    var codec: String by mutableStateOf(PREVIEW_CODEC)
+        private set
+    var media: MonitorMediaStatus by mutableStateOf(PREVIEW_MEDIA)
+        private set
+
+    fun update(snapshot: CameraPropertySnapshot) {
+        // Camera is the source of truth: prefer the control presentation
+        // (`resolutionFrameRate`, including ZR `[FX]`/`[DX]` tags) over held
+        // dimensions, then fall back to WxH+fps, then keep the last value only
+        // when this poll omitted those fields entirely.
+        resolution =
+            snapshot.resolutionFrameRate.monitorValueOrNull()
+                ?: monitorResolutionLabel(
+                    snapshot.resolution,
+                    snapshot.frameRate,
+                    resolution,
+                )
+        codec =
+            snapshot.codecSelection.monitorValueOrNull()?.let { monitorCodecCompactLabel(it, it) }
+                ?: monitorCodecCompactLabel(snapshot.codec, codec)
+        media =
+            monitorMediaStatus(
+                snapshot.storage, snapshot.codec, snapshot.resolution, snapshot.frameRate,
+            ) ?: media
+    }
+
+    private companion object {
+        // iOS `CameraDisplayState.preview` seeds.
+        const val PREVIEW_RESOLUTION = "6K · 25p"
+        const val PREVIEW_CODEC = "R3D NE"
+        val PREVIEW_MEDIA = MonitorMediaStatus(gigabytesFree = 521, percentFree = 47, minutesRemaining = 47)
+    }
+}
+
+/**
+ * iOS `FrameRateSampler`: live-measured delivery rate over a rolling 30-interval
+ * window, published at most ~1 Hz, `"%.2f"`. Starts as iOS's `"READY"` until the
+ * first measurable interval.
+ */
+internal class MonitorFrameRateSampler {
+    private val intervals = ArrayDeque<Double>()
+    private var lastFrameNanos = 0L
+    private var lastPublishNanos = 0L
+
+    var formatted: String by mutableStateOf(READY)
+        private set
+
+    fun accept(nowNanos: Long) {
+        if (lastFrameNanos != 0L) {
+            val seconds = (nowNanos - lastFrameNanos) / 1e9
+            if (seconds > 0.0) {
+                intervals.addLast(seconds)
+                while (intervals.size > WINDOW) intervals.removeFirst()
+            }
+        }
+        lastFrameNanos = nowNanos
+        if (intervals.isNotEmpty() && nowNanos - lastPublishNanos >= 1_000_000_000L) {
+            lastPublishNanos = nowNanos
+            formatted = String.format(Locale.ROOT, "%.2f", intervals.size / intervals.sum())
+        }
+    }
+
+    private companion object {
+        const val WINDOW = 30
+        const val READY = "READY"
+    }
+}
+
+/**
+ * Live-view header timecode acceptance (iOS parity).
+ *
+ * iOS always applies `frame.timecode` digits to the hero readout without
+ * requiring the header "on" flag. Nikon can leave `on=0` while still advancing
+ * H:M:S:F during a take; requiring `on` froze Android TC for the whole roll.
+ *
+ * Pure zero + off is treated as "not available" so we never invent a clock.
+ * Any other in-range H:M:S:F from the camera header is accepted as-is.
+ */
+internal fun liveViewHeaderTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
     timecode?.takeIf {
-        it.on &&
-            it.hour in 0..23 &&
+        it.hour in 0..23 &&
             it.minute in 0..59 &&
             it.second in 0..59 &&
-            it.frame in 0..255
+            it.frame in 0..255 &&
+            (it.on || it.hour != 0 || it.minute != 0 || it.second != 0 || it.frame != 0)
     }
+
+/**
+ * Same acceptance as [liveViewHeaderTimecode] — kept as the public name used by
+ * chrome / tests for "camera-owned, not synthetic" values.
+ */
+internal fun authoritativeTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
+    liveViewHeaderTimecode(timecode)
 
 /** Exact camera timecode label, or the explicit unavailable placeholder. */
 internal fun cameraTimecodeLabel(timecode: LiveFrameTimecode?): String =
-    authoritativeTimecode(timecode)?.let {
+    liveViewHeaderTimecode(timecode)?.let {
         String.format(Locale.ROOT, "%02d:%02d:%02d:%02d", it.hour, it.minute, it.second, it.frame)
     } ?: UNAVAILABLE_TIMECODE

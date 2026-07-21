@@ -666,15 +666,18 @@
     public func swiftCoreResolveLiveViewRequest(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, streamPreset: jint,
         qualityBias: jint, thermalTier: jint, isRecording: jboolean,
-        cameraOverheating: jboolean
+        cameraOverheating: jboolean, recordingFrameRate: jint
     ) -> jstring? {
+        // JNI cannot pass optional ints; non-positive means "unknown".
+        let frameRate = Int(recordingFrameRate)
         guard
             let request = AndroidLiveViewPolicyWire.resolve(
                 streamPresetRaw: Int(streamPreset),
                 qualityBiasRaw: Int(qualityBias),
                 thermalTierRaw: Int(thermalTier),
                 isRecording: isRecording != 0,
-                cameraOverheating: cameraOverheating != 0)
+                cameraOverheating: cameraOverheating != 0,
+                recordingFrameRate: frameRate > 0 ? frameRate : nil)
         else { return nil }
         return javaString(env, AndroidLiveViewPolicyWire.encode(request))
     }
@@ -884,15 +887,34 @@
         }
     }
 
-    /// `SwiftCore.sessionConnect(host, connectionOwner, listener)` — async connect: PTP-IP Init
-    /// handshake + Nikon open/pair/identify on a Swift background thread, with
-    /// phases pushed to the listener (`onPhase`), ending in `onConnected` or
-    /// `onFailed`. The established session parks in the process-wide slot for
+    /// Decodes the stable Kotlin strategy ordinal at the JNI boundary.
+    ///
+    /// Kotlin never sends raw PTP operations here: this only chooses one of
+    /// the audited facade connection lifecycles.
+    private func sessionConnectionStrategy(
+        _ value: jint
+    ) -> PTPIPClientSession.ConnectionStrategy? {
+        switch value {
+        case 0:
+            return .savedProfile
+        case 1:
+            return .firstTimePairing
+        case 2:
+            return .restoreProfileThenPairing
+        default:
+            return nil
+        }
+    }
+
+    /// `SwiftCore.sessionConnect(host, connectionOwner, strategy, guid, listener)` — async
+    /// connect: PTP-IP Init handshake + the selected Nikon establish sequence on a Swift
+    /// background thread, with phases pushed to the listener (`onPhase`), ending in
+    /// `onConnected` or `onFailed`. The established session parks in the process-wide slot for
     /// `sessionReadProperty` / `sessionDisconnect`.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConnect")
     public func swiftCoreSessionConnect(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, host: jstring?, owner: jlong,
-        listener: jobject?
+        strategy: jint, guid: jbyteArray?, listener: jobject?
     ) {
         let fns = table(env)
         var vm: UnsafeMutablePointer<JavaVM?>?
@@ -914,21 +936,37 @@
             onFailed: onFailed)
         let hostString = swiftString(env, host) ?? ""
         let connectionOwner = Int64(owner)
+        guard let connectionStrategy = sessionConnectionStrategy(strategy),
+            let guidBytes = swiftBytes(env, guid, maximumCount: 16), guidBytes.count == 16
+        else {
+            let message = javaString(env, "Android provided an invalid camera connection identity.")
+            var arguments = [jvalue(l: message)]
+            fns.CallVoidMethodA!(env, global, onFailed, &arguments)
+            if let message { fns.DeleteLocalRef!(env, message) }
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
         ActiveSessionSlot.shared.beginConnection(owner: connectionOwner)?.close()
         Thread.detachNewThread {
-            runSessionConnect(handle, host: hostString, owner: connectionOwner)
+            runSessionConnect(
+                handle,
+                host: hostString,
+                owner: connectionOwner,
+                guid: Data(guidBytes),
+                strategy: connectionStrategy
+            )
         }
     }
 
-    /// `SwiftCore.sessionConnectUsb(transport, host, cameraNameHint, connectionOwner, listener)`
-    /// — async USB PTP connect. Kotlin retains Android USB ownership and
+    /// `SwiftCore.sessionConnectUsb(transport, host, cameraNameHint, connectionOwner, strategy,
+    /// listener)` — async USB PTP connect. Kotlin retains Android USB ownership and
     /// provides raw endpoint I/O only; the Swift facade frames generic PTP
     /// containers, performs the same open/pair/identify sequence as Wi-Fi,
     /// and retains the raw transport for the active session lifetime.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionConnectUsb")
     public func swiftCoreSessionConnectUsb(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, transport: jobject?,
-        host: jstring?, cameraNameHint: jstring?, owner: jlong, listener: jobject?
+        host: jstring?, cameraNameHint: jstring?, owner: jlong, strategy: jint, listener: jobject?
     ) {
         let fns = table(env)
         var vm: UnsafeMutablePointer<JavaVM?>?
@@ -955,6 +993,15 @@
         let listenerHandle = SessionListenerHandle(
             vm: vm, listener: global, onPhase: onPhase, onConnected: onConnected,
             onFailed: onFailed)
+        guard let connectionStrategy = sessionConnectionStrategy(strategy) else {
+            closeKotlinUSBTransport(env, transport)
+            let message = javaString(env, "Android provided an invalid camera connection strategy.")
+            var arguments = [jvalue(l: message)]
+            fns.CallVoidMethodA!(env, global, onFailed, &arguments)
+            if let message { fns.DeleteLocalRef!(env, message) }
+            fns.DeleteGlobalRef!(env, global)
+            return
+        }
         guard let transportHandle = JNIUSBPTPTransportHandle(env: env, transport: transport) else {
             closeKotlinUSBTransport(env, transport)
             let message = javaString(env, "Android could not initialize the USB camera transport.")
@@ -978,7 +1025,8 @@
                 transport: facadeTransport,
                 host: hostString,
                 cameraNameHint: cameraName,
-                owner: connectionOwner
+                owner: connectionOwner,
+                strategy: connectionStrategy
             )
         }
     }
@@ -988,7 +1036,9 @@
     private func runSessionConnect(
         _ handle: SessionListenerHandle,
         host: String,
-        owner: Int64
+        owner: Int64,
+        guid: Data,
+        strategy: PTPIPClientSession.ConnectionStrategy
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -1013,9 +1063,14 @@
         }
 
         do {
-            let session = try PTPIPClientSession.connect(host: host) { phase, detail in
-                callStrings(handle.onPhase, [String(describing: phase), detail])
-            }
+            let session = try PTPIPClientSession.connect(
+                host: host,
+                guid: guid,
+                strategy: strategy,
+                onPhase: { phase, detail in
+                    callStrings(handle.onPhase, [String(describing: phase), detail])
+                }
+            )
             let completion = ActiveSessionSlot.shared.completeConnection(
                 owner: owner,
                 session: session
@@ -1050,7 +1105,8 @@
         transport: AndroidUSBPTPTransport,
         host: String,
         cameraNameHint: String,
-        owner: Int64
+        owner: Int64,
+        strategy: PTPIPClientSession.ConnectionStrategy
     ) {
         // SAFETY: JavaVM handle and invoke table are JVM-provided and non-nil.
         let invoke = handle.vm.pointee!.pointee
@@ -1080,6 +1136,7 @@
                 transport: transport,
                 host: host,
                 cameraNameHint: cameraNameHint,
+                strategy: strategy,
                 onPhase: { phase, detail in
                     callStrings(handle.onPhase, [String(describing: phase), detail])
                 }

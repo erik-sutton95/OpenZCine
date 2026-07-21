@@ -2,6 +2,8 @@ package com.opencapture.openzcine.bridge
 
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
+import com.opencapture.openzcine.core.CameraConnectionPhase
+import com.opencapture.openzcine.core.CameraConnectionProgress
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraIdentity
@@ -14,6 +16,7 @@ import com.opencapture.openzcine.transport.UsbPtpTransport
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
@@ -102,6 +105,59 @@ class SwiftCoreCameraSessionTest {
         assertEquals(
             CameraSessionState.Connected(CameraIdentity("ZR", "NIKON ZR", "6001234")),
             session.state.value,
+        )
+    }
+
+    @Test
+    fun `first pair passes its direct strategy and stable initiator identity to Swift`() = runTest {
+        val bridge = FakeBridge()
+        val initiatorGuid = ByteArray(16) { index -> index.toByte() }
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                connectionStrategy = PtpIpConnectionStrategy.FIRST_TIME_PAIRING,
+                initiatorGuid = initiatorGuid,
+            )
+
+        val connecting = async { session.connect() }
+        runCurrent()
+
+        assertEquals(
+            PtpIpConnectionStrategy.FIRST_TIME_PAIRING,
+            bridge.ptpIpConnects.single().connectionStrategy,
+        )
+        assertContentEquals(initiatorGuid, bridge.ptpIpConnects.single().initiatorGuid)
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+    }
+
+    @Test
+    fun `pairing progress does not collapse an accepted Nikon challenge into a handshake`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+
+        val connecting = async { session.connect() }
+        runCurrent()
+        val listener = bridge.listeners.single()
+
+        listener.onPhase("pairing", "")
+        assertEquals(
+            CameraConnectionProgress(CameraConnectionPhase.PAIRING),
+            session.connectionProgress.value,
+        )
+        listener.onPhase("confirmOnCamera", "123456")
+        assertEquals(
+            CameraConnectionProgress(CameraConnectionPhase.CONFIRM_ON_CAMERA, "123456"),
+            session.connectionProgress.value,
+        )
+
+        listener.onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        assertEquals(
+            CameraConnectionProgress(CameraConnectionPhase.CONNECTED, "ZR"),
+            session.connectionProgress.value,
         )
     }
 
@@ -455,19 +511,110 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
-    fun `unexpected event channel end makes the session disconnected`() = runTest {
+    fun `PTP-IP event channel end keeps the command session connected`() = runTest {
         val bridge = FakeBridge()
-        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val phases = mutableListOf<Pair<String, String>>()
+        val session =
+            SwiftCoreCameraSession(
+                "192.168.1.1",
+                { phase, detail -> phases += phase to detail },
+                bridge,
+            )
         val connecting = async { session.connect() }
         runCurrent()
         bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
         connecting.await()
 
         bridge.eventListeners.single().onEnded("The camera closed the connection.")
-        bridge.eventListeners.single().onEvent(0xC10A, 10, longArrayOf())
+
+        assertEquals(
+            CameraSessionState.Connected(CameraIdentity("ZR", "NIKON ZR", "6001234")),
+            session.state.value,
+        )
+        assertEquals(listOf("eventChannelEnded" to "The camera closed the connection."), phases)
+
+        session.setRecording(true)
+        assertEquals(listOf(true), bridge.recordingRequests)
+
+        session.disconnect()
+        assertEquals(1, bridge.disconnects)
+    }
+
+    @Test
+    fun `USB event channel end tears down its native owner`() = runTest {
+        val bridge = FakeBridge()
+        val transport = FakeUsbTransport()
+        val session =
+            SwiftCoreCameraSession(
+                host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                automaticallyRefreshProperties = false,
+                usbTransport = transport,
+                cameraNameHint = "Nikon USB camera",
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        bridge.eventListeners.single().onEnded("The camera closed the USB event endpoint.")
+
+        assertEquals(CameraSessionState.Connecting, session.state.value)
+        runCurrent()
+        assertEquals(CameraSessionState.Disconnected, session.state.value)
+        assertEquals(1, bridge.disconnects)
+        assertTrue(transport.isClosed())
+    }
+
+    @Test
+    fun `USB event teardown waits for an in-flight camera command`() = runTest {
+        val bridge = FakeBridge()
+        val transport = FakeUsbTransport()
+        val session =
+            SwiftCoreCameraSession(
+                host = "usb:5d6f4d746ecf9da40a1b0ce273d3d8d3",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                automaticallyRefreshProperties = false,
+                usbTransport = transport,
+                cameraNameHint = "Nikon USB camera",
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        val commandStarted = CountDownLatch(1)
+        val releaseCommand = CountDownLatch(1)
+        bridge.controlHandler = { _, _ ->
+            commandStarted.countDown()
+            check(releaseCommand.await(5, TimeUnit.SECONDS))
+            SwiftCore.CONTROL_COMMAND_ACCEPTED
+        }
+        val command = async(Dispatchers.Default) { session.applyControl(CameraControl.ISO, "800") }
+        try {
+            assertTrue(commandStarted.await(5, TimeUnit.SECONDS))
+            bridge.eventListeners.single().onEnded("The camera closed the USB event endpoint.")
+            runCurrent()
+
+            assertEquals(CameraSessionState.Connecting, session.state.value)
+            assertEquals(0, bridge.disconnects)
+
+            releaseCommand.countDown()
+            command.await()
+            runCurrent()
+        } finally {
+            releaseCommand.countDown()
+        }
 
         assertEquals(CameraSessionState.Disconnected, session.state.value)
-        assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
+        assertEquals(1, bridge.disconnects)
+        assertTrue(transport.isClosed())
     }
 
     @Test
@@ -790,6 +937,13 @@ class SwiftCoreCameraSessionTest {
     }
 
     private class FakeBridge : SwiftCoreSessionBridge {
+        data class PtpIpConnect(
+            val host: String,
+            val connectionOwner: Long,
+            val connectionStrategy: PtpIpConnectionStrategy,
+            val initiatorGuid: ByteArray,
+        )
+
         data class UsbConnect(
             val transport: UsbPtpTransport,
             val host: String,
@@ -808,6 +962,7 @@ class SwiftCoreCameraSessionTest {
             get() = available
         val listeners = mutableListOf<SwiftCore.SessionListener>()
         val hostConnects = mutableListOf<String>()
+        val ptpIpConnects = mutableListOf<PtpIpConnect>()
         val usbConnects = mutableListOf<UsbConnect>()
         val eventListeners = mutableListOf<SwiftCore.SessionEventListener>()
         val recordingRequests = mutableListOf<Boolean>()
@@ -836,6 +991,24 @@ class SwiftCoreCameraSessionTest {
             listener: SwiftCore.SessionListener,
         ) {
             hostConnects += host
+            listeners += listener
+        }
+
+        override fun connect(
+            host: String,
+            connectionOwner: Long,
+            connectionStrategy: PtpIpConnectionStrategy,
+            initiatorGuid: ByteArray,
+            listener: SwiftCore.SessionListener,
+        ) {
+            hostConnects += host
+            ptpIpConnects +=
+                PtpIpConnect(
+                    host = host,
+                    connectionOwner = connectionOwner,
+                    connectionStrategy = connectionStrategy,
+                    initiatorGuid = initiatorGuid.copyOf(),
+                )
             listeners += listener
         }
 

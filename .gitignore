@@ -3,6 +3,8 @@
 # NEVER commit these.
 vendor/
 ref/
+# TestFlight / App Store Connect feedback dumps (screenshots + random IDs).
+feedback/
 
 # ── Secrets & credentials (see docs/commit-hygiene.md) ─────────────────────────
 .env
@@ -135,3 +137,5 @@ captures/
 # Local test footage (real camera clips are large; never commit)
 samples/
 .worktrees/
+Apps/Android/app/.cxx/
+feedback/

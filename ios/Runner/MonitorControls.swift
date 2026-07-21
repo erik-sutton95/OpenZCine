@@ -67,7 +67,11 @@ struct RecordChip: View {
             Text(state.label)
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(state == .recording ? LiveDesign.text : LiveDesign.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
+        // Top-bar chips must never wrap to two lines under deck compression.
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .glassCapsule()
@@ -97,10 +101,18 @@ struct FPSChip: View {
             Text("FPS")
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(LiveDesign.faint)
+                .lineLimit(1)
+            // `frameRate.formatted` is two decimals (e.g. "25.00") — without a hard
+            // single-line policy the monospaced value wraps under deck squeeze as
+            // "25.0" / "0". Never allow multi-line in the top bar.
             Text(fps)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(LiveDesign.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .fixedSize(horizontal: true, vertical: false)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
         .glassCapsule()

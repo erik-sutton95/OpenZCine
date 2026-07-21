@@ -893,6 +893,22 @@ struct PickerPanel: View {
             && activePickerModes[selectedMode].title == "Tint"
     }
 
+    /// WB's "Kelvin" tab — dial ladder plus −10 / +10 beside the selected value.
+    private var isKelvinMode: Bool {
+        picker == .whiteBalance
+            && activePickerModes.indices.contains(selectedMode)
+            && activePickerModes[selectedMode].title == "Kelvin"
+    }
+
+    private func applyKelvinSideStep(delta: Int) {
+        guard
+            let next = WhiteBalanceKelvinPolicy.fineAdjust(from: selection, delta: delta),
+            next != selection
+        else { return }
+        selection = next
+        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+    }
+
     var body: some View {
         GlassPanel(
             padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)
@@ -914,7 +930,27 @@ struct PickerPanel: View {
                         options: currentOptions,
                         selection: $selection,
                         markedValues: markedValues,
-                        isInteractive: !isPickerInteractionLocked
+                        isInteractive: !isPickerInteractionLocked,
+                        // −10 / +10 permanently flank the selected Kelvin value.
+                        sideAdjust: isKelvinMode
+                            ? DrumSideAdjust(
+                                minusEnabled: !isPickerInteractionLocked
+                                    && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                        from: selection,
+                                        delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
+                                plusEnabled: !isPickerInteractionLocked
+                                    && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                        from: selection,
+                                        delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
+                                onMinus: {
+                                    applyKelvinSideStep(
+                                        delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
+                                },
+                                onPlus: {
+                                    applyKelvinSideStep(
+                                        delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
+                                }
+                            ) : nil
                     )
                     // Fresh wheel per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
                     // *and* the centred value at once, which `.scrollPosition` alone doesn't follow
@@ -1151,6 +1187,10 @@ struct PickerPanel: View {
             return ISOPickerPolicy.options(
                 codec: model.cameraState.codec, modeIndex: selectedMode)
         }
+        // Kelvin dial ladder, with the live / fine-tuned value inserted when off-ladder.
+        if isKelvinMode {
+            return WhiteBalanceKelvinPolicy.options(including: selection)
+        }
         // Camera-advertised options for the active mode (focus tabs, shutter angle/speed, WB preset)
         // take precedence over the hardcoded list. Read live from the model — the ZR refreshes the
         // speed enum only after switching to speed mode, so a one-shot capture on appear would stick
@@ -1252,6 +1292,14 @@ struct StabilizationPickerPanel: View {
 /// to each value like a drum, with the centred value enlarged and gold, the rest dimmed, bracketed
 /// by hairlines and faded at the edges. The centred value is reported through `selection`, updating
 /// as the drum locks onto each detent.
+/// −10 / +10 flanking the settled drum value (Kelvin fine-tune).
+struct DrumSideAdjust {
+    var minusEnabled: Bool
+    var plusEnabled: Bool
+    var onMinus: () -> Void
+    var onPlus: () -> Void
+}
+
 struct AccentDrumWheel: View {
     let options: [String]
     @Binding var selection: String
@@ -1264,6 +1312,8 @@ struct AccentDrumWheel: View {
     var wheelHeight: CGFloat = 176
     /// Optional native long-press action for removable values. Omit it for protected wheels.
     var onDeleteOption: ((String) -> Void)? = nil
+    /// −10 / +10 on either side of the selected row (Kelvin). Nil hides the controls.
+    var sideAdjust: DrumSideAdjust? = nil
 
     /// Row pitch — a good bit taller than the glyphs so there's clear spacing between options.
     private let rowHeight: CGFloat = 52
@@ -1309,13 +1359,55 @@ struct AccentDrumWheel: View {
                 Rectangle().fill(LiveDesign.hairlineStrong).frame(height: 1)
                     .offset(y: rowHeight / 2)
             }
+            .overlay {
+                if let sideAdjust {
+                    HStack {
+                        kelvinSideButton(
+                            title: "−10", enabled: sideAdjust.minusEnabled,
+                            label: "Decrease Kelvin by 10", action: sideAdjust.onMinus)
+                        Spacer(minLength: 0)
+                        kelvinSideButton(
+                            title: "+10", enabled: sideAdjust.plusEnabled,
+                            label: "Increase Kelvin by 10", action: sideAdjust.onPlus)
+                    }
+                    .padding(.horizontal, 4)
+                    .frame(height: rowHeight)
+                }
+            }
             // `scrollPosition` only reacts to *changes*, not the initial value, so place the wheel on
             // the current selection explicitly once the rows have laid out. (Switching tabs makes a
             // fresh wheel, so its own onAppear lands it on that tab's look.)
             .onAppear {
                 DispatchQueue.main.async { proxy.scrollTo(selection, anchor: .center) }
             }
+            .accessibilityHint(
+                sideAdjust != nil
+                    ? "Use minus 10 and plus 10 beside the selected value to fine-adjust" : "")
         }
+    }
+
+    private func kelvinSideButton(
+        title: String, enabled: Bool, label: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
+                .frame(width: 56, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(LiveDesign.accentDim)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(
+                            enabled ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder private func optionRow(_ option: String, isCentered: Bool) -> some View {

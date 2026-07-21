@@ -1,9 +1,12 @@
 package com.opencapture.openzcine
 
+import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
+import com.opencapture.openzcine.core.CameraConnectionPhase
+import com.opencapture.openzcine.core.CameraConnectionProgress
 import com.opencapture.openzcine.core.CameraIdentity
 import com.opencapture.openzcine.core.CameraRecordingException
 import com.opencapture.openzcine.core.CameraRecordingState
@@ -38,17 +41,22 @@ import kotlinx.coroutines.flow.flow
  * stub, so release builds physically cannot activate demo behaviour — the
  * Android equivalent of the iOS `#if DEBUG` isolation.
  *
- * Activate the synthetic feed:
+ * Activate the demo feed:
  * ```
  * adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true
  * ```
+ * Prefers a local sample video when available (gitignored `samples/` clips
+ * staged into debug assets; prefers `A002_C057_0704BT.MP4`). Override with
+ * `--es zc.demo.video /path/on/device.mp4`. Falls back to the synthetic
+ * colour-bar generator when no sample is present.
+ *
  * Add `--es zc.demo.levelSource none` to omit the fixture horizon and exercise
  * the visibly labelled device-tilt fallback instead.
  *
  * Drive the pairing wizard to any state (screenshot verification):
  * ```
  * adb shell am start -n com.opencapture.openzcine/.MainActivity \
- *   --es zc.demo.pairing permissions|choose|prepare|network|discover|connecting \
+ *   --es zc.demo.pairing permissions|choose|prepare|network|discover|connecting|pairing|confirm|reconnecting \
  *   --es zc.demo.pairingPath ap|hotspot|usb
  *   --es zc.demo.usbState empty|needs-permission|denied|ready
  * ```
@@ -83,6 +91,13 @@ object DemoHarness {
     const val EXTRA_DEMO_FEED = "zc.demo.feed"
 
     /**
+     * Optional on-device path to a sample video used as the demo live feed
+     * (`--es zc.demo.video /sdcard/Download/clip.mp4`). When unset, debug
+     * assets under `demo/` (staged from repo `samples/`) are preferred.
+     */
+    const val EXTRA_DEMO_VIDEO = "zc.demo.video"
+
+    /**
      * Debug-only virtual-horizon source selector. `none` omits synthetic
      * camera-level metadata so the monitor exercises its device-gravity
      * fallback; every other value keeps the explicitly labelled fixture.
@@ -91,6 +106,12 @@ object DemoHarness {
 
     /** String intent extra selecting the pairing wizard state to script. */
     const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
+
+    /**
+     * Stages the connect popup over the network step (`ready`/`joining`/`failed`),
+     * mirroring iOS `ZC_DEMO_JOIN_POPUP`: `--es zc.demo.joinPopup ready`.
+     */
+    const val EXTRA_JOIN_POPUP = "zc.demo.joinPopup"
 
     /** String intent extra selecting a standalone settings tab for visual verification. */
     private const val EXTRA_SETTINGS_TAB = "zc.demo.settings"
@@ -104,14 +125,15 @@ object DemoHarness {
      */
     const val EXTRA_USB_STATE = "zc.demo.usbState"
 
-    /** String intent extra forcing a glass tier (`full`/`blur`/`flat`) for testing. */
+    /** String intent extra forcing a glass tier (`full`/`flat`) for testing. */
     const val EXTRA_GLASS_TIER = "zc.glass.tier"
 
     /**
-     * Glass-tier override: `--es zc.glass.tier blur` (or `flat`/`full`) pins
-     * the chrome glass to that tier so each fallback can be exercised on one
-     * device. Null (the default, and always in release) lets [resolveTier]
-     * pick the platform ceiling. The override can only lower the tier.
+     * Glass-tier override: `--es zc.glass.tier flat` (or `full`) pins chrome
+     * glass. FLAT is the opaque-fill floor; legacy `blur` maps to FLAT. Null
+     * (default / release) lets [resolveTier] pick the platform ceiling. The
+     * override can only lower the tier — low-RAM devices stay FLAT even if
+     * `"full"` is requested.
      */
     fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
 
@@ -184,6 +206,11 @@ object DemoHarness {
     /** Debug-only standalone settings selector; release builds always return null. */
     internal fun settingsTab(intent: Intent): OperatorSettingsTab? =
         when (intent.getStringExtra(EXTRA_SETTINGS_TAB)) {
+            "link" -> OperatorSettingsTab.LINK
+            "assist" -> OperatorSettingsTab.ASSIST
+            "controls" -> OperatorSettingsTab.CONTROLS
+            "display" -> OperatorSettingsTab.DISPLAY
+            "storage" -> OperatorSettingsTab.STORAGE
             "system" -> OperatorSettingsTab.SYSTEM
             else -> null
         }
@@ -209,9 +236,12 @@ object DemoHarness {
      * launch: `zc.session.host` makes the shell session a real
      * [SwiftCoreCameraSession] (null frame source — the shell streams the
      * session's own live view once connected); `zc.demo.feed` pairs a fake
-     * session with the synthetic 25 fps frame source.
+     * session with a sample-video or synthetic 25 fps frame source.
      */
-    fun demoLiveFeed(intent: Intent): Pair<CameraSession, LiveFrameSource?>? {
+    fun demoLiveFeed(
+        intent: Intent,
+        context: Context? = null,
+    ): Pair<CameraSession, LiveFrameSource?>? {
         intent.getStringExtra(EXTRA_SESSION_HOST)?.let { host ->
             if (!SwiftCore.isAvailable) {
                 Log.w(TAG, "libOpenZCineAndroid.so not bundled — run `just android-core` first")
@@ -224,10 +254,32 @@ object DemoHarness {
         if (!intent.getBooleanExtra(EXTRA_DEMO_FEED, false)) return null
         val session =
             FakeCameraSession(
-                CameraIdentity(name = "Demo Feed", model = "OpenZCine Demo", serialNumber = "DEMO"),
+                discoverable =
+                    CameraIdentity(
+                        name = "Demo Feed",
+                        model = "OpenZCine Demo",
+                        serialNumber = "DEMO",
+                    ),
+                startConnected = true,
             )
         val includeDebugCameraLevel = intent.getStringExtra(EXTRA_DEMO_LEVEL_SOURCE) != "none"
-        return session to DemoFrameSource(includeDebugCameraLevel = includeDebugCameraLevel)
+        val videoPath = intent.getStringExtra(EXTRA_DEMO_VIDEO)
+        val videoSource =
+            context?.let {
+                DemoVideoFrameSource.resolve(
+                    context = it,
+                    explicitPath = videoPath,
+                    includeDebugCameraLevel = includeDebugCameraLevel,
+                )
+            }
+        val frameSource =
+            videoSource
+                ?: DemoFrameSource(includeDebugCameraLevel = includeDebugCameraLevel).also {
+                    if (context != null) {
+                        Log.i(TAG, "demo feed ← synthetic colour bars (no sample video)")
+                    }
+                }
+        return session to frameSource
     }
 
     /**
@@ -237,6 +289,17 @@ object DemoHarness {
      * session connects slowly enough to screenshot the connecting state.
      */
     fun pairingScript(intent: Intent): PairingScript? {
+        intent.getStringExtra(EXTRA_JOIN_POPUP)?.let { popup ->
+            return PairingScript(
+                start =
+                    PairingFlowState(
+                        step = PairingStep.NETWORK,
+                        path = PairingPath.CAMERA_ACCESS_POINT,
+                    ),
+                environment = scriptedEnvironment(null, ScriptedPairingMode.STABLE),
+                joinPopup = popup,
+            )
+        }
         val raw = intent.getStringExtra(EXTRA_PAIRING_STEP) ?: return null
         val requestedHotspot = intent.getStringExtra(EXTRA_PAIRING_PATH) == "hotspot"
         val requestedUsb = intent.getStringExtra(EXTRA_PAIRING_PATH) == "usb"
@@ -251,7 +314,8 @@ object DemoHarness {
                 "permissions" -> PairingStep.PERMISSIONS
                 "choose" -> PairingStep.CHOOSE_PATH
                 "prepare" -> PairingStep.PREPARE
-                "network", "connecting" -> PairingStep.NETWORK
+                "network", "connecting", "pairing", "confirm", "reconnecting" ->
+                    PairingStep.NETWORK
                 "discover" -> PairingStep.DISCOVER
                 else -> PairingStep.CHOOSE_PATH
             }
@@ -265,12 +329,15 @@ object DemoHarness {
             }
         return PairingScript(
             start = PairingFlowState(step = step, path = path),
-            environment = scriptedEnvironment(usbState),
-            autoConnect = raw == "connecting",
+            environment = scriptedEnvironment(usbState, ScriptedPairingMode.parse(raw)),
+            autoConnect = raw in setOf("connecting", "pairing", "confirm", "reconnecting"),
         )
     }
 
-    private fun scriptedEnvironment(usbState: ScriptedUsbState?): PairingEnvironment {
+    private fun scriptedEnvironment(
+        usbState: ScriptedUsbState?,
+        firstPairMode: ScriptedPairingMode,
+    ): PairingEnvironment {
         val credentials =
             object : PairingCredentials {
                 override var lastSsid: String? = null
@@ -302,11 +369,35 @@ object DemoHarness {
                         )
                     )
             },
-            createSession = { ScriptedPairingSession() },
+            createSession = { ScriptedPairingSession(ScriptedPairingMode.STABLE) },
+            createFirstTimePairingSession = { ScriptedPairingSession(firstPairMode) },
             usbCameraSource = usbState?.let(::ScriptedUsbCameraSource),
-            createUsbSession = { ScriptedPairingSession() },
+            createUsbSession = { ScriptedPairingSession(ScriptedPairingMode.STABLE) },
+            createFirstTimePairingUsbSession = { ScriptedPairingSession(firstPairMode) },
             credentials = credentials,
+            awaitCameraApRestart = { true },
         )
+    }
+
+    /** Deterministic first-pair lifecycle stage for debug screenshot verification. */
+    private enum class ScriptedPairingMode {
+        STABLE,
+        HANDSHAKING,
+        PAIRING,
+        CONFIRM,
+        RECONNECTING,
+        ;
+
+        companion object {
+            fun parse(raw: String): ScriptedPairingMode =
+                when (raw) {
+                    "connecting" -> HANDSHAKING
+                    "pairing" -> PAIRING
+                    "confirm" -> CONFIRM
+                    "reconnecting" -> RECONNECTING
+                    else -> STABLE
+                }
+        }
     }
 
     /** Debug-only USB discovery variants for screenshot verification. */
@@ -338,6 +429,8 @@ object DemoHarness {
         private val mutableCameras = MutableStateFlow(camerasFor(initialState))
         override val cameras: StateFlow<List<UsbPtpCamera>> =
             mutableCameras.asStateFlow()
+
+        override fun refresh() = Unit
 
         override fun requestPermission(camera: UsbPtpCamera) {
             if (camera.token == DEBUG_USB_TOKEN) {
@@ -387,13 +480,16 @@ object DemoHarness {
         }
     }
 
-    /** Connects slowly (8 s) so the connecting state can be screenshotted. */
-    private class ScriptedPairingSession : CameraSession {
+    /** Connects slowly enough for every first-pair phase to be screenshotted. */
+    private class ScriptedPairingSession(private val mode: ScriptedPairingMode) : CameraSession {
         private val mutableState =
             MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
+        private val mutableConnectionProgress = MutableStateFlow(CameraConnectionProgress())
         private val mutableRecordingState = MutableStateFlow(CameraRecordingState.STANDBY)
 
         override val state: StateFlow<CameraSessionState> = mutableState.asStateFlow()
+        override val connectionProgress: StateFlow<CameraConnectionProgress> =
+            mutableConnectionProgress.asStateFlow()
         override val recordingState: StateFlow<CameraRecordingState> =
             mutableRecordingState.asStateFlow()
 
@@ -401,11 +497,43 @@ object DemoHarness {
             // Idempotent: the monitor shell re-connects the handed-off session.
             if (mutableState.value is CameraSessionState.Connected) return
             mutableState.value = CameraSessionState.Connecting
-            delay(8_000)
+            mutableConnectionProgress.value =
+                CameraConnectionProgress(CameraConnectionPhase.HANDSHAKING)
+            when (mode) {
+                ScriptedPairingMode.STABLE,
+                ScriptedPairingMode.HANDSHAKING,
+                -> delay(PHASE_HOLD_MILLIS)
+                ScriptedPairingMode.PAIRING -> {
+                    delay(250)
+                    mutableConnectionProgress.value =
+                        CameraConnectionProgress(CameraConnectionPhase.PAIRING)
+                    delay(PHASE_HOLD_MILLIS)
+                }
+                ScriptedPairingMode.CONFIRM -> {
+                    delay(250)
+                    mutableConnectionProgress.value =
+                        CameraConnectionProgress(CameraConnectionPhase.PAIRING)
+                    delay(250)
+                    mutableConnectionProgress.value =
+                        CameraConnectionProgress(CameraConnectionPhase.CONFIRM_ON_CAMERA, "123456")
+                    delay(PHASE_HOLD_MILLIS)
+                }
+                ScriptedPairingMode.RECONNECTING -> {
+                    delay(250)
+                    mutableConnectionProgress.value =
+                        CameraConnectionProgress(CameraConnectionPhase.PAIRING)
+                    delay(250)
+                    mutableConnectionProgress.value =
+                        CameraConnectionProgress(CameraConnectionPhase.CONFIRM_ON_CAMERA, "123456")
+                    delay(250)
+                }
+            }
             mutableState.value =
                 CameraSessionState.Connected(
                     CameraIdentity(name = "Nikon ZR", model = "NIKON ZR", serialNumber = "6001234")
                 )
+            mutableConnectionProgress.value =
+                CameraConnectionProgress(CameraConnectionPhase.CONNECTED, "Nikon ZR")
         }
 
         override suspend fun setRecording(recording: Boolean) {
@@ -420,7 +548,12 @@ object DemoHarness {
 
         override suspend fun disconnect() {
             mutableState.value = CameraSessionState.Disconnected
+            mutableConnectionProgress.value = CameraConnectionProgress()
             mutableRecordingState.value = CameraRecordingState.STANDBY
+        }
+
+        private companion object {
+            const val PHASE_HOLD_MILLIS: Long = 30_000L
         }
     }
 }

@@ -20,8 +20,8 @@ public data class SwiftLiveViewRequest(
     init {
         require(imageSize in 1..3) { "Preview image size must be 1...3." }
         require(compression in 1..3) { "Preview compression must be 1...3." }
-        require(frameIntervalNanoseconds >= STANDARD_FRAME_INTERVAL_NANOS) {
-            "Preview interval must not exceed the standard request rate."
+        require(frameIntervalNanoseconds in MIN_FRAME_INTERVAL_NANOS..MAX_FRAME_INTERVAL_NANOS) {
+            "Preview interval must be between ${MIN_FRAME_INTERVAL_NANOS}ns and ${MAX_FRAME_INTERVAL_NANOS}ns."
         }
     }
 
@@ -30,8 +30,13 @@ public data class SwiftLiveViewRequest(
         get() = NANOS_PER_SECOND.toDouble() / frameIntervalNanoseconds.toDouble()
 
     internal companion object {
-        const val STANDARD_FRAME_INTERVAL_NANOS = 33_000_000L
         const val NANOS_PER_SECOND = 1_000_000_000L
+        /** Fixed 60 Hz monitor pull ceiling. */
+        const val MIN_FRAME_INTERVAL_NANOS = NANOS_PER_SECOND / 60L
+        /** ~10 fps floor under thermal shedding. */
+        const val MAX_FRAME_INTERVAL_NANOS = 100_000_000L
+        /** Nominal cadence: fixed 60 Hz before thermal shedding. */
+        const val STANDARD_FRAME_INTERVAL_NANOS = MIN_FRAME_INTERVAL_NANOS
         val DEFAULT = SwiftLiveViewRequest(2, 2, STANDARD_FRAME_INTERVAL_NANOS)
     }
 }
@@ -43,6 +48,11 @@ internal data class SwiftLiveViewPolicyInput(
     val thermalTier: Int,
     val isRecording: Boolean,
     val cameraOverheating: Boolean,
+    /**
+     * Unused — monitor cadence is fixed at 60 Hz. Kept so call sites that
+     * still pass a body frame rate compile cleanly.
+     */
+    val recordingFrameRate: Int? = null,
 )
 
 /** Injectable coarse JNI seam for unit tests; protocol policy remains in Swift. */
@@ -61,6 +71,7 @@ internal object ProductionSwiftLiveViewPolicyBridge : SwiftLiveViewPolicyBridge 
                 thermalTier = input.thermalTier,
                 isRecording = input.isRecording,
                 cameraOverheating = input.cameraOverheating,
+                recordingFrameRate = input.recordingFrameRate ?: 0,
             ) ?: return null
         return parseLiveViewRequest(payload)
     }
@@ -199,6 +210,8 @@ public class AndroidLinkHealthMonitor internal constructor(
     private var recentCommandFailures = 0
     private var roundTripMilliseconds: Double? = null
     private var resetBars = true
+    /** Last JNI health score time — throttles score() off the per-frame hot path. */
+    private var lastScoreNanos: Long = 0L
 
     /** Replaces connection truth from the real session state flow. */
     internal fun updateSession(
@@ -250,7 +263,19 @@ public class AndroidLinkHealthMonitor internal constructor(
         lastGoodFrameNanos = timestamp
         recentFrameTimes.addLast(timestamp)
         trimOldFrames(timestamp)
-        refresh(nowNanos = timestamp)
+        // Cheap timestamp bookkeeping every frame; JNI health scoring is rate-limited.
+        // Per-frame score() was a main-thread hitch (~every 20–30 frames under load).
+        // Still score immediately for the first two frames so FPS / STREAMING
+        // presentation arms without waiting a full score interval.
+        val needsColdStartScore = recentFrameTimes.size <= 2
+        if (
+            needsColdStartScore ||
+                lastScoreNanos == 0L ||
+                timestamp - lastScoreNanos >= SCORE_INTERVAL_NANOS
+        ) {
+            lastScoreNanos = timestamp
+            refresh(nowNanos = timestamp)
+        }
     }
 
     /** Records only an observed command-channel transport failure, never a guessed radio event. */
@@ -346,5 +371,7 @@ public class AndroidLinkHealthMonitor internal constructor(
     private companion object {
         const val FPS_WINDOW_NANOS = SwiftLiveViewRequest.NANOS_PER_SECOND
         const val STALE_STREAM_NANOS = 1_500_000_000L
+        /** Score at most ~4 Hz from frame arrivals; the 1 s UI loop still refreshes. */
+        const val SCORE_INTERVAL_NANOS = SwiftLiveViewRequest.NANOS_PER_SECOND / 4L
     }
 }

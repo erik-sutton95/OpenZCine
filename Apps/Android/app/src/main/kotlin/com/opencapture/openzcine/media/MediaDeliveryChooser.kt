@@ -121,7 +121,7 @@ internal fun NativeMediaDeliveryDialog(
 }
 
 @Composable
-private fun NativeExportOptions(
+internal fun NativeExportOptions(
     bakeLut: Boolean,
     exportContainer: MediaExportContainer,
     includeMetadata: Boolean,

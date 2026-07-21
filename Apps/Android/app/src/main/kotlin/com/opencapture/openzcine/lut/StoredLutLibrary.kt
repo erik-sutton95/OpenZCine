@@ -270,8 +270,22 @@ internal class StoredLutLibrary(
         packed[selection]
     }
 
+    /**
+     * Imports a RED IPP2 cube (from zip extract or lone file) into the RED
+     * category using the same Swift validation path as custom imports.
+     */
+    suspend fun importRed(utf8: ByteArray, displayHint: String?): CustomLutImportResult =
+        importIntoCategory(StoredLutCategory.RED, utf8, displayHint)
+
     /** Imports a custom LUT after the Android shell has read a selected document into bounded bytes. */
     suspend fun importCustom(utf8: ByteArray, displayHint: String?): CustomLutImportResult =
+        importIntoCategory(StoredLutCategory.CUSTOM, utf8, displayHint)
+
+    private suspend fun importIntoCategory(
+        category: StoredLutCategory,
+        utf8: ByteArray,
+        displayHint: String?,
+    ): CustomLutImportResult =
         withContext(Dispatchers.IO) {
             if (utf8.size > SHARED_LUT_SOURCE_LIMIT_BYTES) {
                 return@withContext CustomLutImportResult.Rejected(
@@ -285,7 +299,7 @@ internal class StoredLutLibrary(
             }
             val selection =
                 StoredLutSelection.generated(
-                    category = StoredLutCategory.CUSTOM,
+                    category = category,
                     fileName = generatedFileName(displayHint),
                 )
             val validation = core.validate(utf8, selection.category, selection.fileName)
@@ -535,6 +549,39 @@ class AndroidLutLibrary private constructor(
             }
         store.importCustom(bytes, displayNameFor(uri))
     }
+
+    /**
+     * Imports a RED cube from a local file (zip extract or DownloadManager
+     * result) into the RED category. Returns the entry on success, null if
+     * Swift rejected the cube.
+     */
+    suspend fun importRedCubeFile(file: File): StoredLutEntry? =
+        withContext(Dispatchers.IO) {
+            val bytes =
+                try {
+                    FileInputStream(file).use { input ->
+                        val buffer = ByteArrayOutputStream()
+                        val chunk = ByteArray(LUT_READ_BUFFER_BYTES)
+                        var total = 0
+                        while (true) {
+                            val read = input.read(chunk)
+                            if (read < 0) break
+                            total += read
+                            if (total > SHARED_LUT_SOURCE_LIMIT_BYTES) {
+                                return@withContext null
+                            }
+                            buffer.write(chunk, 0, read)
+                        }
+                        buffer.toByteArray()
+                    }
+                } catch (_: IOException) {
+                    return@withContext null
+                }
+            when (val result = store.importRed(bytes, file.name)) {
+                is CustomLutImportResult.Imported -> result.entry
+                is CustomLutImportResult.Rejected -> null
+            }
+        }
 
     suspend fun prepare(selection: StoredLutSelection): Boolean = store.prepare(selection)
 

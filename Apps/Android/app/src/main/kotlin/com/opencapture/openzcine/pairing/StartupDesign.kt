@@ -3,9 +3,11 @@ package com.opencapture.openzcine.pairing
 import android.content.Intent
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,15 +32,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,6 +98,39 @@ public fun Modifier.startupBackdrop(): Modifier = drawBehind {
     )
 }
 
+/**
+ * Fades out the bottom edge of a scrollable viewport while more content lies
+ * below the fold — the "there's more" affordance. Apply before the
+ * `verticalScroll` modifier that shares [scrollState].
+ */
+@Composable
+public fun Modifier.fadeOverflowBottom(scrollState: ScrollState, height: Dp = 28.dp): Modifier {
+    val fade by
+        animateFloatAsState(
+            targetValue = if (scrollState.canScrollForward) 1f else 0f,
+            label = "overflow-edge-fade",
+        )
+    return graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            if (fade > 0f) {
+                val bandHeight = height.toPx()
+                drawRect(
+                    brush =
+                        Brush.verticalGradient(
+                            colors =
+                                listOf(Color.Black, Color.Black.copy(alpha = 1f - fade)),
+                            startY = size.height - bandHeight,
+                            endY = size.height,
+                        ),
+                    topLeft = Offset(0f, size.height - bandHeight),
+                    size = Size(size.width, bandHeight),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+        }
+}
+
 /** Rounded card surface for the two-column startup screens (iOS `StartupCardBackground`). */
 public fun Modifier.startupCard(): Modifier =
     clip(RoundedCornerShape(20.dp))
@@ -137,8 +178,7 @@ public fun StartupHeader(
                 Intent(Intent.ACTION_VIEW, AndroidSupportLinks.TERMS.toUri()),
             )
         }
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val compact = maxWidth < 600.dp
+    Box(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -148,27 +188,18 @@ public fun StartupHeader(
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 1.3.sp,
                 )
-                if (compact) {
-                    StartupHeaderTitle(title)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StartupLegalLink(
-                            stringResource(R.string.startup_privacy),
-                            openPrivacy,
-                        )
-                        StartupLegalLink(stringResource(R.string.startup_terms), openTerms)
-                    }
-                } else {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        StartupHeaderTitle(title, Modifier.weight(1f, fill = false))
-                        StartupLegalLink(
-                            stringResource(R.string.startup_privacy),
-                            openPrivacy,
-                        )
-                        StartupLegalLink(stringResource(R.string.startup_terms), openTerms)
-                    }
+                // Title with the quiet legal links inline after it — iOS keeps
+                // this single-row shape on iPhone portrait too.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    StartupHeaderTitle(title, Modifier.weight(1f, fill = false))
+                    StartupLegalLink(
+                        stringResource(R.string.startup_privacy),
+                        openPrivacy,
+                    )
+                    StartupLegalLink(stringResource(R.string.startup_terms), openTerms)
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -211,6 +242,7 @@ private fun StartupHeaderTitle(title: String, modifier: Modifier = Modifier) {
         fontSize = 17.sp,
         fontWeight = FontWeight.Bold,
         maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         modifier = modifier,
     )
 }

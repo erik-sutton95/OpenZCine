@@ -8,9 +8,9 @@ import com.opencapture.openzcine.lut.StoredLutSelection
  * Swift facade — the core generates each look's cube, Kotlin only uploads it.
  */
 enum class FeedLut(val id: String, val wireOrdinal: Int, val label: String) {
-    LOG3G10_709("log3g10", 0, "LOG→709"),
-    NLOG_709("nlog", 1, "N-LOG"),
-    MONO("mono", 2, "MONO");
+    LOG3G10_709("log3g10", 0, "Log3G10→709"),
+    NLOG_709("nlog", 1, "N-Log→709"),
+    MONO("mono", 2, "Mono");
 
     companion object {
         fun fromId(id: String): FeedLut? = entries.firstOrNull { it.id == id }
@@ -64,32 +64,32 @@ data class ExposureAssistCameraInput(
 
 /** iOS `Peaking.Sensitivity`, with ordinals owned by the Swift facade. */
 enum class FeedPeakingSensitivity(val wireOrdinal: Int, val label: String) {
-    LOW(0, "LOW"),
-    MEDIUM(1, "MED"),
-    HIGH(2, "HIGH"),
+    LOW(0, "Low"),
+    MEDIUM(1, "Med"),
+    HIGH(2, "High"),
 }
 
 /** iOS `Peaking.Color`, with the actual RGB resolved only by Swift. */
 enum class FeedPeakingColor(val wireOrdinal: Int, val label: String) {
-    WHITE(0, "WHITE"),
-    BLUE(1, "BLUE"),
-    RED(2, "RED"),
-    GREEN(3, "GREEN"),
+    WHITE(0, "White"),
+    BLUE(1, "Blue"),
+    RED(2, "Red"),
+    GREEN(3, "Green"),
 }
 
 /** Editor units for the shared-core zebra thresholds. */
 enum class FeedZebraUnit(val wireOrdinal: Int, val label: String) {
-    NATIVE(0, "0–255"),
+    NATIVE(0, "0-255"),
     IRE(1, "IRE"),
 }
 
 /** iOS `AssistConfiguration.Zebra.StripeColor`; Swift resolves its RGB value. */
 enum class FeedZebraStripeColor(val wireOrdinal: Int, val label: String) {
-    WHITE(0, "WHITE"),
-    AMBER(1, "AMBER"),
-    RED(2, "RED"),
-    CYAN(3, "CYAN"),
-    GREEN(4, "GREEN"),
+    WHITE(0, "White"),
+    AMBER(1, "Amber"),
+    RED(2, "Red"),
+    CYAN(3, "Cyan"),
+    GREEN(4, "Green"),
 }
 
 /**

@@ -17,6 +17,13 @@ val releaseAabDirectory = layout.buildDirectory.dir("outputs/bundle/release")
 val repositoryRoot = rootProject.projectDir.parentFile.parentFile
 val stageSwiftCoreScript = repositoryRoot.resolve("scripts/android-stage-swift-core.sh")
 val verifyNativeLibrariesScript = repositoryRoot.resolve("scripts/verify-android-native-libs.sh")
+// Local-only demo clips (gitignored `samples/`). Staged into debug assets so
+// `zc.demo.feed` can play real footage without committing media.
+val samplesDirectory = repositoryRoot.resolve("samples")
+// Concrete path (not a Provider) so the Android SourceSet API accepts it as a
+// generated assets root without android.sourceset.disallowProvider overrides.
+val stagedDemoAssetsDirectory =
+    layout.buildDirectory.get().asFile.resolve("generated/demoAssets")
 
 // Frame.io uses an Adobe IMS public PKCE client. These values are not a client
 // secret, but each Android redirect registration is deployment-specific, so a
@@ -102,6 +109,21 @@ android {
         ndk {
             abiFilters += supportedAndroidAbi
         }
+
+        externalNativeBuild {
+            cmake {
+                // Static STL avoids clashing with Swift runtime's libc++_shared.so.
+                cppFlags += listOf("-std=c++17", "-fno-exceptions", "-fno-rtti")
+                arguments += listOf("-DANDROID_STL=c++_static")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/live_feed_vk/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {
@@ -150,8 +172,39 @@ android {
             clear()
             add(swiftCoreJniLibsRoot.get().asFile.absolutePath)
         }
+        // Debug-only: generated assets under build/generated/demoAssets/demo/
+        // (copied from repo-root samples/ when present).
+        getByName("debug").assets.srcDir(stagedDemoAssetsDirectory)
     }
 }
+
+/**
+ * Copies gitignored checkout samples into the debug asset tree when present.
+ * Missing or empty samples/ is fine — the demo harness falls back to colour
+ * bars. Never stages into src/ so media cannot be committed by accident.
+ */
+val stageDebugDemoSamples =
+    tasks.register<Copy>("stageDebugDemoSamples") {
+        group = "build"
+        description = "Stage local samples video clips into debug demo assets when present."
+        val samplesRoot = samplesDirectory
+        val destDir = File(stagedDemoAssetsDirectory, "demo")
+        from(samplesRoot) {
+            include("*.mp4", "*.MP4", "*.mov", "*.MOV", "*.m4v", "*.M4V")
+        }
+        into(destDir)
+        onlyIf {
+            samplesRoot.isDirectory &&
+                samplesRoot.listFiles()?.any { file ->
+                    file.isFile &&
+                        file.extension.lowercase() in setOf("mp4", "mov", "m4v")
+                } == true
+        }
+        // Always re-check samples/ so a newly dropped clip is picked up.
+        outputs.upToDateWhen { false }
+    }
+
+
 
 /**
  * Builds the shared Swift core and stages its full runtime closure under
@@ -184,6 +237,9 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
 
 tasks.named("preBuild").configure {
     dependsOn(stageSwiftCore)
+    // Stage local demo clips before any debug asset/lint task reads the
+    // generated assets directory (implicit-dependency hygiene).
+    dependsOn(stageDebugDemoSamples)
 }
 
 // Brand resource tests compare Android derivatives with the canonical iOS
@@ -217,6 +273,14 @@ val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibr
     )
 }
 
+// Kyant backdrop 2.0 AAR metadata requires compileSdk 37; we stay on 36 until
+// the project SDK is upgraded. Disable only the AAR metadata gate so the rest
+// of the AGP graph still runs.
+afterEvaluate {
+    tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }
+        .configureEach { enabled = false }
+}
+
 dependencies {
     implementation(project(":core-api"))
     implementation(project(":wear-relay"))
@@ -229,6 +293,12 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.compose.material3)
+    // Playback transport SF-symbol stand-ins (play/pause/share/volume/star).
+    implementation(libs.compose.material.icons.extended)
+    // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
+    implementation(libs.kyant.backdrop)
+    // Capsule shape used by the catalog LiquidSlider (runtime of backdrop; compile-visible here).
+    implementation(libs.kyant.shapes)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)

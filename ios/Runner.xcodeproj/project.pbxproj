@@ -24,13 +24,11 @@
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
 		331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */; };
-		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
-		DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DIAG00000000000000000001 /* AppDiagnostics.swift */; };
-		FTUE00000000000000000002 /* LiveViewOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTUE00000000000000000001 /* LiveViewOnboarding.swift */; };
 		354E32F45664AA90999EF23C /* MonitorLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */; };
 		3B2081943B1D2A36C4DA228C /* ScopeSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A11 /* ScopeSampler.swift */; };
 		3B2081943B1D2A36C4DA228D /* AudioLevelMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */; };
 		3C4D5E6F708192A3B4C5D6E7 /* ScopeDisplayScale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F708192A3B4C5D6 /* ScopeDisplayScale.swift */; };
+		423CA695D3E84B5249A7F032 /* NikonZRRawCropPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75AC8027661C6865EFA2A916 /* NikonZRRawCropPresentation.swift */; };
 		46C255DF9F950970DD29C3C8 /* LiveFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705C589D7D31926D41CEF6A /* LiveFrameProcessor.swift */; };
 		4D5E6F708192A3B4C5D6E7F8 /* ImageEffectsCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6F708192A3B4C5D6E7F809 /* ImageEffectsCompositor.swift */; };
 		503189555B5DB867F6C29F0F /* FalseColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0205F75CD14D96A1E9B884E9 /* FalseColor.swift */; };
@@ -47,8 +45,8 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */; };
-		AB12CD34EF56AB12CD34EF01 /* ScopeTraceMetalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF56AB12CD34EF02 /* ScopeTraceMetalView.swift */; };
 		A652A40C5850105E136F0739 /* LiveFrameRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852060CB19F3A779DA73A8F3 /* LiveFrameRenderer.swift */; };
+		AB12CD34EF56AB12CD34EF01 /* ScopeTraceMetalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF56AB12CD34EF02 /* ScopeTraceMetalView.swift */; };
 		B61762BD19CC1640C62FBF9E /* FocusAssist.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7929C792624D92E4643373 /* FocusAssist.swift */; };
 		B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */; };
 		BRND00000000000000000002 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BRND00000000000000000001 /* Branding.swift */; };
@@ -81,7 +79,6 @@
 		C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003D /* LiveViewWatchdog.swift */; };
 		C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003F /* RecordDurationEstimator.swift */; };
 		C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000041 /* CameraLinkHealth.swift */; };
-		C0DE000000000000000000CA /* LinkSignalBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000CB /* LinkSignalBars.swift */; };
 		C0DE00000000000000000042 /* PTPEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000043 /* PTPEvent.swift */; };
 		C0DE00000000000000000044 /* CameraWarningStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000045 /* CameraWarningStatus.swift */; };
 		C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000051 /* ConnectionProgressSheet.swift */; };
@@ -100,16 +97,19 @@
 		C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C5 /* MonitorUnified.swift */; };
 		C0DE000000000000000000C6 /* DemoHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C7 /* DemoHarness.swift */; };
 		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
+		C0DE000000000000000000CA /* LinkSignalBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000CB /* LinkSignalBars.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
 		CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */; };
 		CEBC16AE05672B92F74F3A8E /* RedLUTDownloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB04C097A96A69686057CDC6 /* RedLUTDownloadPolicy.swift */; };
 		CTRN00000000000000000002 /* CameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTRN00000000000000000001 /* CameraTransport.swift */; };
 		DELTA00000000000000000001 /* MediaClipDiscoveryDelta.swift in Sources */ = {isa = PBXBuildFile; fileRef = DELTA00000000000000000002 /* MediaClipDiscoveryDelta.swift */; };
+		DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DIAG00000000000000000001 /* AppDiagnostics.swift */; };
 		ED942B35B16175F88FEAC439 /* PTPIPReadBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73A63103171670B54E666A01 /* PTPIPReadBuffer.swift */; };
 		F83294C886529F69D6290D21 /* ReconnectBackoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B678A3A4294796B364EAB6 /* ReconnectBackoff.swift */; };
 		FC0D15A11A2B3C4D5E6F7001 /* MonitorDisplayToneMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC0D15A11A2B3C4D5E6F7002 /* MonitorDisplayToneMap.swift */; };
 		FE72B160881FCAA3A5BAE57C /* FrameioAuthCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58822FE5CB612396F3D33712 /* FrameioAuthCoordinator.swift */; };
 		FEEDC0DEC0FFEE00BAADF002 /* ThermalLoadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDC0DEC0FFEE00BAADF001 /* ThermalLoadPolicy.swift */; };
+		FTUE00000000000000000002 /* LiveViewOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTUE00000000000000000001 /* LiveViewOnboarding.swift */; };
 		ISO00000000000000000002 /* ISOPickerPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = ISO00000000000000000003 /* ISOPickerPolicy.swift */; };
 		LVSP00000000000000000002 /* LiveViewSignposts.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVSP00000000000000000001 /* LiveViewSignposts.swift */; };
 		MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */; };
@@ -118,8 +118,10 @@
 		R3D00000000000000000004 /* R3DHeaderParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3D00000000000000000005 /* R3DHeaderParser.swift */; };
 		R3D00000000000000000006 /* MediaClipFilename.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3D00000000000000000007 /* MediaClipFilename.swift */; };
 		R3D00000000000000000008 /* MediaResolutionBucket.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3D00000000000000000009 /* MediaResolutionBucket.swift */; };
+		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
 		USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBC00000000000000000001 /* PTPUSBContainer.swift */; };
 		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
+		WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */; };
 		WTCH00000000000000000002 /* MonitorStateValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000001 /* MonitorStateValues.swift */; };
 		WTCH00000000000000000004 /* WatchRelayProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000003 /* WatchRelayProtocol.swift */; };
 		WTCH00000000000000000006 /* WatchRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000005 /* WatchRelay.swift */; };
@@ -188,9 +190,6 @@
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
-		DIAG00000000000000000001 /* AppDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiagnostics.swift; sourceTree = "<group>"; };
-		FTUE00000000000000000001 /* LiveViewOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveViewOnboarding.swift; sourceTree = "<group>"; };
 		381B085F758DD57850E6CFAE /* FrameioModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModels.swift; path = ../Sources/OpenZCineCore/Frameio/FrameioModels.swift; sourceTree = SOURCE_ROOT; };
 		3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPopup.swift; sourceTree = "<group>"; };
 		43398C0B64AE0344D7602746 /* MetalLiveView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalLiveView.swift; sourceTree = "<group>"; };
@@ -204,6 +203,7 @@
 		644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaLibrary.swift; sourceTree = "<group>"; };
 		73A63103171670B54E666A01 /* PTPIPReadBuffer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PTPIPReadBuffer.swift; path = ../Sources/OpenZCineCore/PTPIPReadBuffer.swift; sourceTree = SOURCE_ROOT; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		75AC8027661C6865EFA2A916 /* NikonZRRawCropPresentation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NikonZRRawCropPresentation.swift; path = ../Sources/OpenZCineCore/NikonZRRawCropPresentation.swift; sourceTree = SOURCE_ROOT; };
 		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		829F835A9A819D7AC6992CDE /* MediaLUTExport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaLUTExport.swift; sourceTree = "<group>"; };
 		852060CB19F3A779DA73A8F3 /* LiveFrameRenderer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveFrameRenderer.swift; sourceTree = "<group>"; };
@@ -253,7 +253,6 @@
 		C0DE0000000000000000003D /* LiveViewWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveViewWatchdog.swift; path = ../Sources/OpenZCineCore/LiveViewWatchdog.swift; sourceTree = SOURCE_ROOT; };
 		C0DE0000000000000000003F /* RecordDurationEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecordDurationEstimator.swift; path = ../Sources/OpenZCineCore/RecordDurationEstimator.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000041 /* CameraLinkHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraLinkHealth.swift; path = ../Sources/OpenZCineCore/CameraLinkHealth.swift; sourceTree = SOURCE_ROOT; };
-		C0DE000000000000000000CB /* LinkSignalBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LinkSignalBars.swift; path = ../Sources/OpenZCineCore/LinkSignalBars.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000043 /* PTPEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPEvent.swift; path = ../Sources/OpenZCineCore/PTPEvent.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000045 /* CameraWarningStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraWarningStatus.swift; path = ../Sources/OpenZCineCore/CameraWarningStatus.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000051 /* ConnectionProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProgressSheet.swift; sourceTree = "<group>"; };
@@ -272,6 +271,7 @@
 		C0DE000000000000000000C5 /* MonitorUnified.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorUnified.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C7 /* DemoHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoHarness.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothShutterMonitor.swift; sourceTree = "<group>"; };
+		C0DE000000000000000000CB /* LinkSignalBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LinkSignalBars.swift; path = ../Sources/OpenZCineCore/LinkSignalBars.swift; sourceTree = SOURCE_ROOT; };
 		C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaBrowser.swift; sourceTree = "<group>"; };
 		CF7929C792624D92E4643373 /* FocusAssist.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FocusAssist.swift; path = ../Sources/OpenZCineCore/FocusAssist.swift; sourceTree = SOURCE_ROOT; };
 		CTRN00000000000000000001 /* CameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraTransport.swift; path = ../Sources/OpenZCineCore/CameraTransport.swift; sourceTree = SOURCE_ROOT; };
@@ -279,10 +279,12 @@
 		D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AudioLevelMeter.swift; path = ../Sources/OpenZCineCore/AudioLevelMeter.swift; sourceTree = SOURCE_ROOT; };
 		DB04C097A96A69686057CDC6 /* RedLUTDownloadPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RedLUTDownloadPolicy.swift; path = ../Sources/OpenZCineCore/RedLUTDownloadPolicy.swift; sourceTree = SOURCE_ROOT; };
 		DELTA00000000000000000002 /* MediaClipDiscoveryDelta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MediaClipDiscoveryDelta.swift; path = ../Sources/OpenZCineCore/MediaClipDiscoveryDelta.swift; sourceTree = SOURCE_ROOT; };
+		DIAG00000000000000000001 /* AppDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiagnostics.swift; sourceTree = "<group>"; };
 		E7F2A1B03D4C5E6F7890ABCD /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		FBD5D243C94FA3B8F8BEE3C5 /* TrafficLightsMeter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TrafficLightsMeter.swift; path = ../Sources/OpenZCineCore/TrafficLightsMeter.swift; sourceTree = SOURCE_ROOT; };
 		FC0D15A11A2B3C4D5E6F7002 /* MonitorDisplayToneMap.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorDisplayToneMap.swift; path = ../Sources/OpenZCineCore/MonitorDisplayToneMap.swift; sourceTree = SOURCE_ROOT; };
 		FEEDC0DEC0FFEE00BAADF001 /* ThermalLoadPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ThermalLoadPolicy.swift; path = ../Sources/OpenZCineCore/ThermalLoadPolicy.swift; sourceTree = SOURCE_ROOT; };
+		FTUE00000000000000000001 /* LiveViewOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveViewOnboarding.swift; sourceTree = "<group>"; };
 		ISO00000000000000000003 /* ISOPickerPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ISOPickerPolicy.swift; path = ../Sources/OpenZCineCore/ISOPickerPolicy.swift; sourceTree = SOURCE_ROOT; };
 		LVSP00000000000000000001 /* LiveViewSignposts.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveViewSignposts.swift; sourceTree = "<group>"; };
 		MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalFeedFrameBaker.swift; sourceTree = "<group>"; };
@@ -291,8 +293,10 @@
 		R3D00000000000000000005 /* R3DHeaderParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = R3DHeaderParser.swift; path = ../Sources/OpenZCineCore/R3DHeaderParser.swift; sourceTree = SOURCE_ROOT; };
 		R3D00000000000000000007 /* MediaClipFilename.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MediaClipFilename.swift; path = ../Sources/OpenZCineCore/MediaClipFilename.swift; sourceTree = SOURCE_ROOT; };
 		R3D00000000000000000009 /* MediaResolutionBucket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MediaResolutionBucket.swift; path = ../Sources/OpenZCineCore/MediaResolutionBucket.swift; sourceTree = SOURCE_ROOT; };
+		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
 		USBC00000000000000000001 /* PTPUSBContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPUSBContainer.swift; path = ../Sources/OpenZCineCore/PTPUSBContainer.swift; sourceTree = SOURCE_ROOT; };
 		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
+		WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WhiteBalanceKelvinPolicy.swift; path = ../Sources/OpenZCineCore/WhiteBalanceKelvinPolicy.swift; sourceTree = SOURCE_ROOT; };
 		WTCH00000000000000000001 /* MonitorStateValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorStateValues.swift; path = ../Sources/OpenZCineCore/MonitorStateValues.swift; sourceTree = SOURCE_ROOT; };
 		WTCH00000000000000000003 /* WatchRelayProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchRelayProtocol.swift; path = ../Sources/OpenZCineCore/WatchRelayProtocol.swift; sourceTree = SOURCE_ROOT; };
 		WTCH00000000000000000005 /* WatchRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRelay.swift; sourceTree = "<group>"; };
@@ -436,6 +440,7 @@
 				C0DE00000000000000000015 /* PTPDeviceInfo.swift */,
 				C0DE0000000000000000001B /* CameraDiscovery.swift */,
 				ISO00000000000000000003 /* ISOPickerPolicy.swift */,
+				WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */,
 				R3D00000000000000000007 /* MediaClipFilename.swift */,
 				DELTA00000000000000000002 /* MediaClipDiscoveryDelta.swift */,
 				R3D00000000000000000009 /* MediaResolutionBucket.swift */,
@@ -475,6 +480,7 @@
 				DB04C097A96A69686057CDC6 /* RedLUTDownloadPolicy.swift */,
 				WTCH00000000000000000001 /* MonitorStateValues.swift */,
 				WTCH00000000000000000003 /* WatchRelayProtocol.swift */,
+				75AC8027661C6865EFA2A916 /* NikonZRRawCropPresentation.swift */,
 			);
 			name = OpenZCineCore;
 			sourceTree = "<group>";
@@ -687,6 +693,7 @@
 				C0DE000000000000000000A2 /* MonitorPortraitLayout.swift in Sources */,
 				C0DE000000000000000000C2 /* MonitorZoneLayout.swift in Sources */,
 				ISO00000000000000000002 /* ISOPickerPolicy.swift in Sources */,
+				WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */,
 				R3D00000000000000000006 /* MediaClipFilename.swift in Sources */,
 				DELTA00000000000000000001 /* MediaClipDiscoveryDelta.swift in Sources */,
 				R3D00000000000000000008 /* MediaResolutionBucket.swift in Sources */,
@@ -749,6 +756,7 @@
 				WTCH00000000000000000002 /* MonitorStateValues.swift in Sources */,
 				WTCH00000000000000000004 /* WatchRelayProtocol.swift in Sources */,
 				WTCH00000000000000000006 /* WatchRelay.swift in Sources */,
+				423CA695D3E84B5249A7F032 /* NikonZRRawCropPresentation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

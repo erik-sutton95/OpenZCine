@@ -171,12 +171,13 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   physical fallback check covers the latter. Debug-frame metadata is visibly and semantically
   marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
   camera pass.
-- **Liquid-glass chrome:** monitor chrome glass is a custom GPU treatment (`GlassChrome.kt`) —
-  one shared blurred backdrop texture per feed frame, sampled by every pill (AGSL edge refraction
-  on API 33+, plain pre-blurred fill on 31–32, the hand-rolled flat fill below). A frame-budget
-  counter auto-degrades one tier under sustained overruns. Debug override:
-  `adb shell am start -n com.opencapture.openzcine/.MainActivity --es zc.glass.tier blur`
-  (`full`/`blur`/`flat`; lowers only).
+- **Liquid-glass chrome:** on API 33+ (**FULL**), monitor chrome uses
+  [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)
+  (`io.github.kyant0:backdrop`) 1:1 — `rememberLayerBackdrop` on the live feed,
+  `drawBackdrop { vibrancy(); blur(); lens() }` on chrome. On older APIs chrome is
+  **FLAT**: a more opaque solid fill (same policy as pre–iOS 26). Auto frame-budget
+  demote is off by default (live-view pacing was collapsing FULL on mid-range
+  phones). Debug: `--es zc.glass.tier flat` (`full`/`flat`; lowers only).
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
   monitor-owned clean-frame sampler at 30 Hz (24 Hz above three active scopes), with the same
   thermal slowdown tiers as iOS. The shared core owns all axis/curve and Traffic
@@ -200,6 +201,12 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   adb shell am start -n com.opencapture.openzcine/.MainActivity --ez zc.demo.feed true \\
     --es zc.scopes wave,parade,lights
   ```
+
+  Demo live view prefers a local sample clip when present: drop an `.mp4` under
+  gitignored repo-root `samples/` (e.g. `samples/A002_C057_0704BT.MP4`); debug
+  builds stage it into assets automatically. Override with
+  `--es zc.demo.video /path/on/device.mp4`. Without a sample, the synthetic
+  colour-bar generator is used.
 
 - **Feed effects (view assists):** `FeedEffectsRenderer` bakes LUT preview, false colour,
   focus peaking, and zebras into the live feed in one AGSL pass. All colour math is resolved by

@@ -16,6 +16,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CommandMonitorTest {
@@ -24,6 +25,41 @@ class CommandMonitorTest {
         assertEquals(24f, commandTileValueSize("5600K"))
         assertEquals(20f, commandTileValueSize("R3D NE HQ"))
         assertEquals(16f, commandTileValueSize("6000x3336 · 25p"))
+        assertEquals(16f, commandTileValueSize("[DX] 4K · 100p"))
+    }
+
+    @Test
+    fun `dashboard preserves raw frame size image area labels`() {
+        val presentation =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        resolutionFrameRate = "[DX] 4K · 100p",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                resolutionFrameRates =
+                                    listOf(
+                                        "[FX] 6K · 25p",
+                                        "[FX] 4K · 50p",
+                                        "[DX] 4K · 100p",
+                                    ),
+                            ),
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "NIKON ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+
+        val resolution =
+            presentation.tiles.first { it.kind == CommandTileKind.RESOLUTION_FRAMERATE }
+        assertEquals("[DX] 4K · 100p", resolution.value)
+        assertEquals(
+            listOf("[FX] 6K · 25p", "[FX] 4K · 50p", "[DX] 4K · 100p"),
+            assertNotNull(resolution.request).options,
+        )
     }
 
     @Test
@@ -99,7 +135,8 @@ class CommandMonitorTest {
         val isoSheet = commandControlOptions(iso, pendingControl = null)
         assertTrue(isoSheet.first { it.label == "800" }.selected)
         assertTrue(isoSheet.all { it.enabled })
-        assertFalse(commandControlOptions(iso, CameraControl.ISO).any { it.enabled })
+        // In-flight apply no longer greys the drum — settles coalesce instead.
+        assertTrue(commandControlOptions(iso, CameraControl.ISO).all { it.enabled })
         assertFalse(commandControlOptions(iso, pendingControl = null, controlsEnabled = false).any {
             it.enabled
         })
@@ -208,7 +245,16 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
-        assertTrue(presentation.tiles.all { it.value == "—" && it.request == null })
+        // Without camera-advertised enums, resolution/codec must not offer static
+        // fallback ladders (those always fail apply). All tiles stay write-blocked.
+        assertTrue(presentation.tiles.all { it.request == null })
+        val resolution =
+            presentation.tiles.first { it.kind == CommandTileKind.RESOLUTION_FRAMERATE }
+        assertEquals("—", resolution.value)
+        assertNotNull(resolution.unavailableReason)
+        val codec = presentation.tiles.first { it.kind == CommandTileKind.CODEC }
+        assertEquals("—", codec.value)
+        assertNotNull(codec.unavailableReason)
         assertTrue(
             presentation.sideSections
                 .flatMap(CommandSideSectionPresentation::cells)
@@ -257,6 +303,8 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
+        // Unknown TV-lock still exposes a write domain so capture-bar Angle/Speed
+        // can encode via the shared core (iOS does not wait forever on lock state).
         val unknownLock =
             presentation(
                 CameraPropertySnapshot(
@@ -264,8 +312,8 @@ class CommandMonitorTest {
                     shutterAngle = "180°",
                 ),
             ).tiles.first { it.kind == CommandTileKind.SHUTTER }
-        assertEquals(null, unknownLock.request)
-        assertContains(unknownLock.unavailableReason.orEmpty(), "lock state")
+        assertNotNull(unknownLock.request)
+        assertContains(unknownLock.request!!.options, "180°")
 
         val angle =
             assertNotNull(
@@ -296,6 +344,32 @@ class CommandMonitorTest {
             )
         assertContains(speed.options, "1/50")
         assertFalse(speed.options.contains("180°"))
+    }
+
+    @Test
+    fun `resolution confirm prefers live D0A0 label over lagging fps property`() {
+        // All 6K packs share WxH; a stale frameRate of 24 must not make 24p look
+        // already-selected while the body is still on 25p.
+        val snapshot =
+            CameraPropertySnapshot(
+                resolution = "6048x3402",
+                frameRate = 24,
+                resolutionFrameRate = "[FX] 6K · 25p",
+            )
+        assertTrue(
+            cameraPropertyConfirmsSelection(
+                snapshot,
+                CameraControl.RESOLUTION_FRAMERATE,
+                "[FX] 6K · 25p",
+            ),
+        )
+        assertFalse(
+            cameraPropertyConfirmsSelection(
+                snapshot,
+                CameraControl.RESOLUTION_FRAMERATE,
+                "[FX] 6K · 24p",
+            ),
+        )
     }
 
     @Test
@@ -409,25 +483,37 @@ class CommandMonitorTest {
                 tileOrder = CommandTileKind.entries.toList(),
             )
 
+        // iOS CommandSideColumn: Image / Focus / Audio / Monitor (no Exposure).
         assertEquals(
-            listOf("Image", "Exposure", "Focus", "Audio"),
+            listOf("Image", "Focus", "Audio", "Monitor"),
             presentation.sideSections.map { it.title },
         )
-        assertEquals(4, presentation.sideSections.first { it.title == "Image" }.cells.size)
+        val image = presentation.sideSections.first { it.title == "Image" }.cells
+        assertEquals(2, image.size)
+        assertEquals("Tone", image[0].title)
+        assertEquals("Picture Profile", image[1].title)
+        assertTrue(image[1].muted)
         val focus = presentation.sideSections.first { it.title == "Focus" }.cells
         assertEquals(CameraControl.FOCUS_MODE, assertNotNull(focus[0].request).control)
         assertEquals(CameraControl.FOCUS_AREA, assertNotNull(focus[1].request).control)
         assertEquals(CameraControl.FOCUS_SUBJECT, assertNotNull(focus[2].request).control)
         assertContains(assertNotNull(focus[2].request).options, "Airplane")
 
+        // iOS Audio order: Sens, 32-bit Float, Input, Wind, Atten
         val audio = presentation.sideSections.first { it.title == "Audio" }.cells
         assertEquals(CameraControl.AUDIO_SENSITIVITY, assertNotNull(audio[0].request).control)
-        assertEquals(CameraControl.AUDIO_INPUT, assertNotNull(audio[1].request).control)
-        assertEquals(CameraControl.WIND_FILTER, assertNotNull(audio[2].request).control)
-        assertEquals(CameraControl.ATTENUATOR, assertNotNull(audio[3].request).control)
-        assertEquals(CameraControl.AUDIO_32_BIT_FLOAT, assertNotNull(audio[4].request).control)
+        assertEquals(CameraControl.AUDIO_32_BIT_FLOAT, assertNotNull(audio[1].request).control)
+        assertEquals(CameraControl.AUDIO_INPUT, assertNotNull(audio[2].request).control)
+        assertEquals(CameraControl.WIND_FILTER, assertNotNull(audio[3].request).control)
+        assertEquals(CameraControl.ATTENUATOR, assertNotNull(audio[4].request).control)
         assertContains(assertNotNull(audio[0].request).options, "20")
-        assertContains(assertNotNull(audio[1].request).options, "Microphone")
+        assertContains(assertNotNull(audio[2].request).options, "Microphone")
+        assertEquals(
+            "Grid",
+            presentation.sideSections.first { it.title == "Monitor" }.cells.single().title,
+        )
+        // Capture-bar helpers stay available off the side column.
+        assertEquals(4, presentation.captureExposureCells.size)
     }
 
     @Test
@@ -479,10 +565,11 @@ class CommandMonitorTest {
                 presentation.sideSections.first { it.title == "Focus" }.cells.first().request,
             ).options,
         )
+        // Audio order is Sens, 32-bit, Input — Input is index 2.
         assertEquals(
             listOf("Line"),
             assertNotNull(
-                presentation.sideSections.first { it.title == "Audio" }.cells[1].request,
+                presentation.sideSections.first { it.title == "Audio" }.cells[2].request,
             ).options,
         )
     }
@@ -502,40 +589,82 @@ class CommandMonitorTest {
 
         val iris = presentation.tiles.first { it.kind == CommandTileKind.IRIS }
         assertEquals("f/2.8", iris.value)
-        assertEquals(null, iris.request)
-        assertContains(iris.unavailableReason.orEmpty(), "mounted lens")
+        // iOS/shared-core ladder keeps IRIS writable when the body has not
+        // advertised an f-number enum yet (was permanently grayed out before).
+        val request = assertNotNull(iris.request)
+        assertContains(request.options, "f/2.8")
+        assertNull(iris.unavailableReason)
     }
 
     @Test
-    fun `electronic VR consumes only the Swift authorized capability`() {
-        fun electronicVr(options: List<String>): CommandTilePresentation {
-            val presentation =
-                commandDashboardPresentation(
-                    snapshot =
-                        CameraPropertySnapshot(
-                            codec = "N-RAW",
-                            electronicVr = "OFF",
-                            controlCapabilities =
-                                CameraControlCapabilities(electronicVr = options),
-                        ),
-                    refreshStatus = CameraPropertyRefreshStatus.Ready,
-                    sessionState =
-                        CameraSessionState.Connected(
-                            CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
-                        ),
-                    tileOrder = CommandTileKind.entries.toList(),
-                )
-            return presentation.sideSections.first { it.title == "Image" }.cells.first {
-                it.title == "e-VR"
-            }
-        }
+    fun `electronic VR is only on the primary VR tile not the side column`() {
+        // iOS removed Assist/DISP/Guides and side-column VR/e-VR — VR lives on the
+        // primary grid as "VR / e-VR". Side Image is Tone + Picture Profile only.
+        val presentation =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        codec = "N-RAW",
+                        electronicVr = "OFF",
+                        vibrationReduction = "ON",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                vibrationReduction = listOf("OFF", "ON"),
+                                electronicVr = listOf("OFF", "ON"),
+                            ),
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = CommandTileKind.entries.toList(),
+            )
+        assertEquals(
+            listOf("Tone", "Picture Profile"),
+            presentation.sideSections.first { it.title == "Image" }.cells.map { it.title },
+        )
+        val vr = presentation.tiles.first { it.kind == CommandTileKind.STABILIZATION }
+        assertEquals("ON / OFF", vr.value)
+        assertNotNull(vr.request)
+        assertEquals(CameraControl.VIBRATION_REDUCTION, vr.request!!.control)
+    }
 
-        val unavailable = electronicVr(emptyList())
-        assertEquals(null, unavailable.request)
-        assertContains(unavailable.unavailableReason.orEmpty(), "active codec")
-        val authorized = assertNotNull(electronicVr(listOf("OFF", "ON")).request)
-        assertEquals(CameraControl.ELECTRONIC_VR, authorized.control)
-        assertEquals(listOf("OFF", "ON"), authorized.options)
+    @Test
+    fun `side section rows match iOS CmdRow packing`() {
+        val audio =
+            CommandSideSectionPresentation(
+                kind = CommandSideSectionKind.AUDIO,
+                title = "Audio",
+                cells =
+                    listOf(
+                        CommandTilePresentation(title = "Sens", value = "Auto"),
+                        CommandTilePresentation(title = "32-bit Float", value = "ON"),
+                        CommandTilePresentation(title = "Input", value = "MIC"),
+                        CommandTilePresentation(title = "Wind", value = "OFF"),
+                        CommandTilePresentation(title = "Atten", value = "OFF"),
+                    ),
+            )
+        val rows = commandSideSectionRows(audio)
+        assertEquals(3, rows.size)
+        assertEquals(listOf("Sens", "32-bit Float"), rows[0].map { it.title })
+        assertEquals(listOf("Input", "Wind"), rows[1].map { it.title })
+        assertEquals(listOf("Atten"), rows[2].map { it.title })
+
+        val focus =
+            CommandSideSectionPresentation(
+                kind = CommandSideSectionKind.FOCUS,
+                title = "Focus",
+                cells =
+                    listOf(
+                        CommandTilePresentation(title = "Mode", value = "AF-C"),
+                        CommandTilePresentation(title = "Area", value = "Wide-L"),
+                        CommandTilePresentation(title = "Subject", value = "People"),
+                    ),
+            )
+        val focusRows = commandSideSectionRows(focus)
+        assertEquals(listOf("Mode", "Area"), focusRows[0].map { it.title })
+        assertEquals(listOf("Subject"), focusRows[1].map { it.title })
     }
 
     @Test

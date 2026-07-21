@@ -62,24 +62,35 @@ class BrandResourcesTest {
     }
 
     @Test
-    fun splashContainsTheCanonicalLogoWithoutRedrawingIt() {
+    fun splashUsesSolidSystemHoldAndFullBleedComposeLogo() {
         val canonicalLogo =
             repositoryRoot.resolve("ios/Runner/Assets.xcassets/AppLogo.imageset/AppLogo.png")
         assertEquals(CANONICAL_APP_LOGO_SHA256, canonicalLogo.sha256())
         assertSize(canonicalLogo, width = 512, height = 512)
 
-        val splash =
+        // Compose splash marks: edge-to-edge AppLogo so RoundedCornerShape
+        // actually rounds the logo (not the transparent padding of the old
+        // system splash icon).
+        val composeLogo =
             repositoryRoot.resolve(
-                "Apps/Android/app/src/main/res/drawable-xxxhdpi/openzcine_splash_icon.png",
+                "Apps/Android/app/src/main/res/drawable-xxxhdpi/openzcine_app_logo.png",
             )
-        assertSize(splash, width = 1_152, height = 1_152)
-        assertCenteredPixelsMatch(sourcePath = canonicalLogo, canvasPath = splash)
+        assertContentEquals(
+            Files.readAllBytes(canonicalLogo),
+            Files.readAllBytes(composeLogo),
+            "Compose splash logo must remain the byte-exact canonical AppLogo",
+        )
 
+        // System SplashScreen is solid-only (transparent icon) — no second logo.
         val theme =
             repositoryRoot.resolve("Apps/Android/app/src/main/res/values/themes.xml").readText()
         assertTrue(theme.contains("parent=\"Theme.SplashScreen\""))
-        assertTrue(theme.contains("@drawable/openzcine_splash_icon"))
+        assertTrue(theme.contains("@drawable/openzcine_splash_empty"))
         assertTrue(theme.contains("postSplashScreenTheme"))
+        assertTrue(
+            !theme.contains("@drawable/openzcine_splash_icon"),
+            "System splash must not flash the padded square logo",
+        )
     }
 
     @Test

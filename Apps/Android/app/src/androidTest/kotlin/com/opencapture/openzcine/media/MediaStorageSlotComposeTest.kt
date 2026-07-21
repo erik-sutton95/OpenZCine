@@ -86,16 +86,19 @@ class MediaStorageSlotComposeTest {
             val deviceDensity = LocalDensity.current.density
             CompositionLocalProvider(LocalDensity provides Density(deviceDensity, fontScale = 2f)) {
                 OpenZCineTheme {
-                    Box(Modifier.width(164.dp).height(180.dp)) {
+                    Box(Modifier.width(172.dp).height(180.dp)) {
                         MediaLibraryRail(
-                            source = MediaLibrarySource.CAMERA,
                             category = MediaLibraryCategory.ALL,
                             storageSlots = compactSlots,
                             selectedStorageId = null,
-                            onSourceChange = {},
                             onCategoryChange = {},
                             onStorageSelect = {},
-                            modifier = Modifier.width(164.dp),
+                            showsGridControls = false,
+                            layout = MediaLibraryLayout.GRID,
+                            thumbnailSize = MediaThumbnailSize.MEDIUM,
+                            onLayoutChange = {},
+                            onThumbnailSizeChange = {},
+                            modifier = Modifier.width(172.dp),
                         )
                     }
                 }
