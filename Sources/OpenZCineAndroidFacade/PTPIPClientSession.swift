@@ -3222,10 +3222,18 @@ public final class PTPIPClientSession: @unchecked Sendable {
             } catch is PTPLiveViewObjectError {
                 // A single unparsable frame is stream jitter, not a stream
                 // death — skip it, like the iOS watchdog's bad-frame budget.
-                // ponytail: no stall watchdog yet; restart machinery arrives
-                // with the Android reconnect slice.
+            } catch let error as PTPIPClientSessionError {
+                // Nikon returns DeviceBusy around movie-rec start/stop and during
+                // body-side encoder handoff. Treating that as stream death called
+                // EndLiveView, and StartLiveView often fails for the rest of the
+                // take — operator-visible as a frozen feed until recording stops.
+                if case .operationRejected(_, .deviceBusy) = error {
+                    // Fall through to schedule sleep and retry the next poll.
+                } else {
+                    break  // Hard rejection / closed session: the stream is over.
+                }
             } catch {
-                break  // Transport error / rejection: the stream is over.
+                break  // Transport error: the stream is over.
             }
             // Absolute schedule: poll k is due at start + k × interval. When a
             // fetch overruns, re-anchor to now instead of accumulating debt —

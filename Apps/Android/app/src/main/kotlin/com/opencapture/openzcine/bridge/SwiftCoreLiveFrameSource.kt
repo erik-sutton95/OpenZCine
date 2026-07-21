@@ -203,6 +203,23 @@ class SwiftCoreLiveFrameSource(
     internal val previewState: StateFlow<SwiftLiveViewPreviewState>
         get() = _previewState
 
+    /**
+     * True while a native GetLiveViewImageEx pump is starting or running.
+     * Used to avoid EndLiveView mid-take (recording restarts freeze the ZR feed).
+     */
+    internal val isNativePumpRunning: Boolean
+        get() =
+            synchronized(previewRequestLock) {
+                when (nativePumpState) {
+                    is NativePumpState.Starting,
+                    is NativePumpState.Running,
+                    -> true
+                    is NativePumpState.Idle,
+                    is NativePumpState.Stopping,
+                    -> false
+                }
+            }
+
     private val upstream: Flow<StreamFrame> =
         callbackFlow {
                 // No native library (APK built without `just android-core`):

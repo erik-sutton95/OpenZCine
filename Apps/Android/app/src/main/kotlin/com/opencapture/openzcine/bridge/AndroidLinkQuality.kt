@@ -83,6 +83,11 @@ internal object ProductionSwiftLiveViewPolicyBridge : SwiftLiveViewPolicyBridge 
  * A changed request stops only the live-view pump; the source's existing retry
  * path applies the new request before it starts again. No camera recording
  * property is exposed through this controller.
+ *
+ * **While recording, never stop a healthy pump** solely to apply a new size /
+ * compression / cadence. `EndLiveView` mid-take freezes the ZR monitor until
+ * the take ends (StartLiveView is often rejected while MovieRec is active).
+ * Deferred requests apply on the next non-recording [apply].
  */
 @Stable
 internal class AndroidLiveViewController(
@@ -95,10 +100,23 @@ internal class AndroidLiveViewController(
 
     suspend fun apply(input: SwiftLiveViewPolicyInput) {
         val resolved = policy.resolve(input) ?: return
-        if (request != resolved || source.previewState.value is SwiftLiveViewPreviewState.Rejected) {
-            source.updatePreviewRequest(resolved)
-            request = resolved
+        val rejected = source.previewState.value is SwiftLiveViewPreviewState.Rejected
+        val changed = request != resolved
+        if (!changed && !rejected) return
+
+        // Keep the stream alive for the whole take. Recording flips
+        // LiveViewLoadPolicy's size cap (Quality 3→2) which used to force a
+        // full pump restart and freeze the feed until EndMovieRec.
+        if (
+            input.isRecording &&
+                source.isNativePumpRunning &&
+                !rejected
+        ) {
+            return
         }
+
+        source.updatePreviewRequest(resolved)
+        request = resolved
     }
 }
 
