@@ -1,14 +1,13 @@
 What's changed
 
-- Focus peaking is thinner and stricter: edges read as a hairline, not a soft glow, so it stays useful on set under normal lighting.
-- Timecode in the camera header stays constant from the live-view feed instead of free-running while you work.
-- Connecting to the camera over USB-C is still fast and reliable, even with a full memory card. After plugging in, the camera row shows Preparing with a live percentage until Ready.
-- Disconnecting inside the app and reconnecting over USB-C no longer re-reads the card, so reconnects are immediate.
-- Wi-Fi setup recognizes Nikon Z camera network names across models. If scanning cannot validate the details, you can enter the camera's exact SSID and key manually.
+- Live view keeps updating while you record (from the app or the camera body) and after you stop — the feed should not freeze for the whole take.
+- Downloading RED IPP2 look tables is more reliable: the archive imports cleanly, slight float rounding from RED no longer rejects every LUT, and Close leaves the download screen immediately.
+- After a download that left the camera network for internet, the monitor shows clear reconnect progress instead of a bare “No camera” while the app searches and rejoins.
+- Joining the camera’s Wi‑Fi network is faster and more reliable after pairing Confirm, including when the system network picker needs a short search.
 
 Please test
 
-- Open live view, turn peaking on (try Low / Med / High). Confirm edges are thin and clean on high-contrast subjects, and soft out-of-focus areas do not light up as soup.
-- Confirm the timecode readout in the monitor header holds steady while live view is running.
-- Plug the camera into the iPhone with USB-C, wait for Ready, tap Connect, then disconnect and reconnect from inside the app without unplugging.
-- Open the camera's Connection wizard and scan its Wi-Fi details, or use Enter manually with the exact SSID and key from the camera.
+- Start and stop recording from the app and from the camera body. Confirm live view keeps moving through the take and recovers cleanly when you stop.
+- From the LUT picker, run RED download: accept terms, download, confirm LUTs appear under RED, then Close and reconnect to the camera if you hopped off its Wi‑Fi.
+- Pair or reconnect over the camera’s Wi‑Fi after Confirm; the app should reach live view without hanging on Connecting.
+- Drag analysis scopes in landscape and confirm they move freely except at the side control rails.
