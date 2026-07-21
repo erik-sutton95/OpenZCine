@@ -816,30 +816,30 @@ internal fun File.looksLikeZipArchive(): Boolean {
 private const val RED_LOADING_JS =
     """
     (function () {
-      if (window.__zcLoad) return;
-      window.__zcLoad = true;
-      var css = 'html,body{background:#12100d!important;}'
-        + '#__zcLoading{position:fixed;top:0;right:0;bottom:0;left:0;background:#12100d;'
-        + 'z-index:2147483647;display:flex;align-items:center;justify-content:center;flex-direction:column;}'
-        + '#__zcLoading .s{width:34px;height:34px;border:3px solid rgba(255,255,255,0.25);'
-        + 'border-top-color:#fff;border-radius:50%;animation:zcspin 0.8s linear infinite;}'
-        + '#__zcLoading .t{color:#f2efe5;font:600 15px -apple-system,system-ui,sans-serif;margin-top:14px;}'
-        + '@keyframes zcspin{to{transform:rotate(360deg);}}';
-      var s = document.createElement('style');
-      s.textContent = css;
-      (document.head || document.documentElement).appendChild(s);
-      window.__zcCover = function (text) {
-        var d = document.getElementById('__zcLoading');
-        if (!d) {
-          d = document.createElement('div');
-          d.id = '__zcLoading';
-          (document.body || document.documentElement).appendChild(d);
-        }
-        d.innerHTML = '<div class="s"></div><div class="t">' + text + '</div>';
-      };
-      function add() { window.__zcCover('Loading RED\u2019s terms\u2026'); }
-      add();
-      document.addEventListener('DOMContentLoaded', add);
+        if (window.__zcLoad) return;
+        window.__zcLoad = true;
+        var css = 'html,body{background:#12100d!important;}'
+            + '#__zcLoading{position:fixed;top:0;right:0;bottom:0;left:0;background:#12100d;'
+            + 'z-index:2147483647;display:flex;align-items:center;justify-content:center;flex-direction:column;}'
+            + '#__zcLoading .s{width:34px;height:34px;border:3px solid rgba(255,255,255,0.25);'
+            + 'border-top-color:#fff;border-radius:50%;animation:zcspin 0.8s linear infinite;}'
+            + '#__zcLoading .t{color:#f2efe5;font:600 15px -apple-system,system-ui,sans-serif;margin-top:14px;}'
+            + '@keyframes zcspin{to{transform:rotate(360deg);}}';
+        var s = document.createElement('style');
+        s.textContent = css;
+        (document.head || document.documentElement).appendChild(s);
+        window.__zcCover = function (text) {
+            var d = document.getElementById('__zcLoading');
+            if (!d) {
+                d = document.createElement('div');
+                d.id = '__zcLoading';
+                (document.body || document.documentElement).appendChild(d);
+            }
+            d.innerHTML = '<div class="s"></div><div class="t">' + text + '</div>';
+        };
+        function add() { window.__zcCover('Loading RED\u2019s terms\u2026'); }
+        add();
+        document.addEventListener('DOMContentLoaded', add);
     })();
     """
 
@@ -847,63 +847,63 @@ private const val RED_LOADING_JS =
 private const val RED_HELPER_JS =
     """
     (function () {
-      if (window.__zcTc) return;
-      window.__zcTc = true;
-      var zcNativeOpen = window.open;
-      window.open = function () {
-        if (window.__zcCover) { window.__zcCover('Downloading from RED\u2026'); }
-        return zcNativeOpen ? zcNativeOpen.apply(this, arguments) : null;
-      };
-      var style = document.createElement('style');
-      style.textContent =
-        '#terms-and-condition-modal.show{position:fixed!important;top:0!important;right:0!important;bottom:0!important;left:0!important;margin:0!important;padding:0!important;overflow:hidden!important;display:flex!important;}' +
-        '#terms-and-condition-modal .modal-dialog{margin:0!important;width:100%!important;max-width:100%!important;height:100%!important;min-height:100%!important;display:flex!important;align-items:stretch!important;}' +
-        '#terms-and-condition-modal .modal-content{flex:1 1 auto!important;width:100%!important;height:100%!important;display:flex!important;flex-direction:column!important;border:0!important;border-radius:0!important;}' +
-        '#terms-and-condition-modal .modal-header,#terms-and-condition-modal .modal-footer{flex:0 0 auto!important;}' +
-        '#terms-and-condition-modal .modal-body{flex:1 1 auto!important;min-height:0!important;overflow-y:auto!important;-webkit-overflow-scrolling:touch!important;padding-bottom:22px!important;}' +
-        '#terms-and-condition-modal .modal-header .close,#terms-and-condition-modal .close,#terms-and-condition-modal .btn-close,#terms-and-condition-modal [data-dismiss="modal"],#terms-and-condition-modal [data-bs-dismiss="modal"]{display:none!important;}';
-      if (document.head) document.head.appendChild(style);
-      if (window.jQuery) {
-        window.jQuery(document).on('hide.bs.modal', '#terms-and-condition-modal', function (e) { e.preventDefault(); });
-      }
-      var selectors = [
-        'a.modal-download-button[data-name="IPP2 Output Presets"]',
-        'a.modal-download-button[data-target="#terms-and-condition-modal"]',
-        'a.modal-download-button'
-      ];
-      function reveal() { var d = document.getElementById('__zcLoading'); if (d && d.parentNode) d.parentNode.removeChild(d); }
-      function cookieBtn() {
-        var els = document.querySelectorAll('button, a, [role="button"]');
-        for (var i = 0; i < els.length; i++) {
-          var t = (els[i].textContent || '').trim().toLowerCase();
-          if (t === 'reject all' || t === 'reject') return els[i];
+        if (window.__zcTc) return;
+        window.__zcTc = true;
+        var zcNativeOpen = window.open;
+        window.open = function () {
+            if (window.__zcCover) { window.__zcCover('Downloading from RED\u2026'); }
+            return zcNativeOpen ? zcNativeOpen.apply(this, arguments) : null;
+        };
+        var style = document.createElement('style');
+        style.textContent =
+            '#terms-and-condition-modal.show{position:fixed!important;top:0!important;right:0!important;bottom:0!important;left:0!important;margin:0!important;padding:0!important;overflow:hidden!important;display:flex!important;}' +
+            '#terms-and-condition-modal .modal-dialog{margin:0!important;width:100%!important;max-width:100%!important;height:100%!important;min-height:100%!important;display:flex!important;align-items:stretch!important;}' +
+            '#terms-and-condition-modal .modal-content{flex:1 1 auto!important;width:100%!important;height:100%!important;display:flex!important;flex-direction:column!important;border:0!important;border-radius:0!important;}' +
+            '#terms-and-condition-modal .modal-header,#terms-and-condition-modal .modal-footer{flex:0 0 auto!important;}' +
+            '#terms-and-condition-modal .modal-body{flex:1 1 auto!important;min-height:0!important;overflow-y:auto!important;-webkit-overflow-scrolling:touch!important;padding-bottom:22px!important;}' +
+            '#terms-and-condition-modal .modal-header .close,#terms-and-condition-modal .close,#terms-and-condition-modal .btn-close,#terms-and-condition-modal [data-dismiss="modal"],#terms-and-condition-modal [data-bs-dismiss="modal"]{display:none!important;}';
+        if (document.head) document.head.appendChild(style);
+        if (window.jQuery) {
+            window.jQuery(document).on('hide.bs.modal', '#terms-and-condition-modal', function (e) { e.preventDefault(); });
         }
-        return null;
-      }
-      var tries = 0;
-      var timer = setInterval(function () {
-        tries++;
-        var cb = cookieBtn();
-        if (cb) { cb.click(); }
-        var modal = document.querySelector('#terms-and-condition-modal');
-        var open = modal && getComputedStyle(modal).display !== 'none';
-        if (open) {
-          var wrapper = modal.querySelector('.terms-and-condition-wrapper');
-          var loaded = wrapper && wrapper.textContent.trim().length > 40;
-          if (loaded && !cookieBtn()) {
-            clearInterval(timer);
-            setTimeout(reveal, 500);
-            return;
-          }
-          if (tries > 50) { clearInterval(timer); reveal(); return; }
-          return;
+        var selectors = [
+            'a.modal-download-button[data-name="IPP2 Output Presets"]',
+            'a.modal-download-button[data-target="#terms-and-condition-modal"]',
+            'a.modal-download-button'
+        ];
+        function reveal() { var d = document.getElementById('__zcLoading'); if (d && d.parentNode) d.parentNode.removeChild(d); }
+        function cookieBtn() {
+            var els = document.querySelectorAll('button, a, [role="button"]');
+            for (var i = 0; i < els.length; i++) {
+                var t = (els[i].textContent || '').trim().toLowerCase();
+                if (t === 'reject all' || t === 'reject') return els[i];
+            }
+            return null;
         }
-        for (var i = 0; i < selectors.length; i++) {
-          var el = document.querySelector(selectors[i]);
-          if (el) { el.click(); break; }
-        }
-        if (tries > 60) { clearInterval(timer); reveal(); }
-      }, 300);
+        var tries = 0;
+        var timer = setInterval(function () {
+            tries++;
+            var cb = cookieBtn();
+            if (cb) { cb.click(); }
+            var modal = document.querySelector('#terms-and-condition-modal');
+            var open = modal && getComputedStyle(modal).display !== 'none';
+            if (open) {
+                var wrapper = modal.querySelector('.terms-and-condition-wrapper');
+                var loaded = wrapper && wrapper.textContent.trim().length > 40;
+                if (loaded && !cookieBtn()) {
+                    clearInterval(timer);
+                    setTimeout(reveal, 500);
+                    return;
+                }
+                if (tries > 50) { clearInterval(timer); reveal(); return; }
+                return;
+            }
+            for (var i = 0; i < selectors.length; i++) {
+                var el = document.querySelector(selectors[i]);
+                if (el) { el.click(); break; }
+            }
+            if (tries > 60) { clearInterval(timer); reveal(); }
+        }, 300);
     })();
     """
 

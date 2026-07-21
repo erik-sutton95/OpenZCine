@@ -99,7 +99,7 @@ internal object RedZipCubeExtractor {
             if (path.contains("__MACOSX/", ignoreCase = true)) continue
             if (method != METHOD_STORE && method != METHOD_DEFLATE) continue
             if (compressedSize == ZIP64_SENTINEL || uncompressedSize == ZIP64_SENTINEL) {
-                // ZIP64 cubes are not expected in RED packs; skip rather than mis-read.
+                // ZIP64 cubes are not expected in RED packs; skip rather than misread.
                 continue
             }
             if (uncompressedSize > maxBytes.toLong()) continue
@@ -325,7 +325,7 @@ internal object RedZipCubeExtractor {
             val bytes = out.toByteArray()
             if (bytes.isEmpty()) throw IOException("Empty deflated entry.")
             if (expectedUncompressed >= 0L && bytes.size.toLong() != expectedUncompressed) {
-                // Accept if we stayed under the cap — some writers mis-state sizes.
+                // Accept if we stayed under the cap — some writers misstate sizes.
                 if (bytes.size > maxBytes) throw IOException("Cube entry too large.")
             }
             bytes
