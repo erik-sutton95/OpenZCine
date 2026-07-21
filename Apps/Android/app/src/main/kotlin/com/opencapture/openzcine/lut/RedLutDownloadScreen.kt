@@ -49,7 +49,6 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioHopAvailability
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import java.io.File
-import java.util.zip.ZipInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -189,19 +188,17 @@ internal fun RedLutDownloadScreen(
                     onFileReady = { file ->
                         phase = RedDownloadPhase.Importing
                         scope.launch {
-                            val count =
+                            val result =
                                 withContext(Dispatchers.IO) {
                                     importRedZipOrCube(context, lutLibrary, file)
                                 }
                             runCatching { file.delete() }
                             phase =
-                                if (count > 0) {
-                                    onImported(count)
-                                    RedDownloadPhase.Success(count)
+                                if (result.importedCount > 0) {
+                                    onImported(result.importedCount)
+                                    RedDownloadPhase.Success(result.importedCount)
                                 } else {
-                                    RedDownloadPhase.Failed(
-                                        "We downloaded RED's file but couldn't read any LUTs from it.",
-                                    )
+                                    RedDownloadPhase.Failed(result.failureMessage)
                                 }
                         }
                     },
@@ -521,6 +518,8 @@ private fun RedDownloadWebView(
                 settings.domStorageEnabled = true
                 settings.javaScriptCanOpenWindowsAutomatically = true
                 settings.setSupportMultipleWindows(true)
+                // RED may set session cookies then redirect the zip to S3.
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 webChromeClient =
                     object : WebChromeClient() {
                         override fun onCreateWindow(
@@ -537,22 +536,32 @@ private fun RedDownloadWebView(
                                     settings.javaScriptEnabled = true
                                     webViewClient =
                                         object : WebViewClient() {
-                                            override fun shouldOverrideUrlLoading(
-                                                v: WebView?,
-                                                request: WebResourceRequest?,
-                                            ): Boolean {
-                                                val target = request?.url?.toString()
-                                                if (!target.isNullOrBlank()) {
+                                            private fun capture(url: String?) {
+                                                val target = url?.takeIf {
+                                                    it.isNotBlank() && !it.startsWith("about:")
+                                                } ?: return
+                                                if (isAllowedRedDownloadUrl(target)) {
                                                     startAuthorizedFetch(
                                                         target,
                                                         settings.userAgentString,
                                                     )
-                                                } else {
-                                                    onFailed(
-                                                        "Couldn't read RED's download link. Please try again.",
-                                                    )
                                                 }
+                                            }
+
+                                            override fun shouldOverrideUrlLoading(
+                                                v: WebView?,
+                                                request: WebResourceRequest?,
+                                            ): Boolean {
+                                                capture(request?.url?.toString())
                                                 return true
+                                            }
+
+                                            override fun onPageStarted(
+                                                v: WebView?,
+                                                url: String?,
+                                                favicon: android.graphics.Bitmap?,
+                                            ) {
+                                                capture(url)
                                             }
                                         }
                                 }
@@ -654,22 +663,24 @@ internal fun fetchRedZip(
     userAgent: String?,
     onProgress: (Float) -> Unit,
 ): File? {
+    val agent =
+        userAgent?.takeIf { it.isNotBlank() }
+            ?: "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"
     val connection =
         (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
             instanceFollowRedirects = true
             connectTimeout = 30_000
             readTimeout = 120_000
             requestMethod = "GET"
-            setRequestProperty(
-                "User-Agent",
-                userAgent?.takeIf { it.isNotBlank() }
-                    ?: "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36",
-            )
-            val cookies = CookieManager.getInstance().getCookie(url)
+            setRequestProperty("User-Agent", agent)
+            // Prefer the request-host jar, then RED's storefront (session often lives there
+            // before the S3 redirect).
+            val cookies = cookiesForRedDownload(url)
             if (!cookies.isNullOrBlank()) {
                 setRequestProperty("Cookie", cookies)
             }
             setRequestProperty("Accept", "*/*")
+            setRequestProperty("Referer", RED_IPP2_PRESETS_URL)
         }
     try {
         connection.connect()
@@ -696,9 +707,53 @@ internal fun fetchRedZip(
             }
         }
         onProgress(1f)
-        return if (destination.length() > 0L) destination else null
+        if (destination.length() <= 0L) return null
+        if (!destination.looksLikeZipArchive()) {
+            val head =
+                destination.inputStream().use { stream ->
+                    val peek = ByteArray(64)
+                    val n = stream.read(peek)
+                    if (n <= 0) "" else String(peek, 0, n, Charsets.ISO_8859_1)
+                }
+            destination.delete()
+            if (head.trimStart().startsWith("<") || head.contains("html", ignoreCase = true)) {
+                throw IllegalStateException(
+                    "RED returned a web page instead of the LUT archive. Accept the terms again and retry.",
+                )
+            }
+            throw IllegalStateException(
+                "RED's download was not a zip archive. Please try again.",
+            )
+        }
+        return destination
     } finally {
         connection.disconnect()
+    }
+}
+
+/** WebView cookie jar for the download URL and the RED storefront origin. */
+internal fun cookiesForRedDownload(url: String): String? {
+    val jar = CookieManager.getInstance()
+    val direct = jar.getCookie(url)?.takeIf { it.isNotBlank() }
+    if (direct != null) return direct
+    return jar.getCookie("https://www.reddigitalcinema.com")?.takeIf { it.isNotBlank() }
+        ?: jar.getCookie("https://reddigitalcinema.com")?.takeIf { it.isNotBlank() }
+        ?: jar.getCookie("https://www.red.com")?.takeIf { it.isNotBlank() }
+}
+
+/** True when [File] starts with the local-file ZIP signature `PK\\x03\\x04` / `PK\\x05\\x06`. */
+internal fun File.looksLikeZipArchive(): Boolean {
+    if (!isFile || length() < 4L) return false
+    return inputStream().use { stream ->
+        val sig = ByteArray(4)
+        if (stream.read(sig) < 4) return@use false
+        sig[0] == 'P'.code.toByte() &&
+            sig[1] == 'K'.code.toByte() &&
+            (
+                (sig[2] == 3.toByte() && sig[3] == 4.toByte()) ||
+                    (sig[2] == 5.toByte() && sig[3] == 6.toByte()) ||
+                    (sig[2] == 7.toByte() && sig[3] == 8.toByte())
+            )
     }
 }
 
@@ -797,40 +852,117 @@ private const val RED_HELPER_JS =
     })();
     """
 
+/** Outcome of importing a RED download (zip or lone cube). */
+internal data class RedLutImportResult(
+    val importedCount: Int,
+    val foundCubeEntries: Int = importedCount,
+    val rejectedCubeEntries: Int = 0,
+    val detail: String? = null,
+) {
+    val failureMessage: String
+        get() =
+            when {
+                !detail.isNullOrBlank() -> detail
+                foundCubeEntries == 0 ->
+                    "We downloaded RED's file but it didn't contain any .cube LUTs."
+                rejectedCubeEntries > 0 && importedCount == 0 ->
+                    "We found $foundCubeEntries LUT(s) in RED's archive, but none could be validated. Try again, or reinstall if the shared engine is unavailable."
+                else ->
+                    "We downloaded RED's file but couldn't read any LUTs from it."
+            }
+}
+
 /**
  * Imports a RED zip (or a lone .cube) into the RED stored-LUT category.
- * Returns how many cubes were accepted.
+ *
+ * Mirrors iOS `LUTFileStore.importZip`: walk every `.cube` entry (nested folders
+ * OK, skip `__MACOSX`), keep original basenames for display, and accept up to
+ * 512 files / 16 MB each (shared parser limit). Uses [java.util.zip.ZipFile]
+ * instead of a stream reader so deflate/store and central-directory layouts
+ * from RED's pack open reliably.
  */
 internal suspend fun importRedZipOrCube(
     context: Context,
     library: AndroidLutLibrary,
     file: File,
-): Int =
+): RedLutImportResult =
     withContext(Dispatchers.IO) {
         if (file.name.endsWith(".cube", ignoreCase = true)) {
-            return@withContext if (library.importRedCubeFile(file) != null) 1 else 0
+            val ok = library.importRedCubeFile(file) != null
+            return@withContext RedLutImportResult(
+                importedCount = if (ok) 1 else 0,
+                foundCubeEntries = 1,
+                rejectedCubeEntries = if (ok) 0 else 1,
+            )
+        }
+        if (!file.looksLikeZipArchive()) {
+            return@withContext RedLutImportResult(
+                importedCount = 0,
+                detail = "RED's download was not a readable zip archive. Please try again.",
+            )
         }
         var imported = 0
-        runCatching {
-            ZipInputStream(file.inputStream().buffered()).use { zip ->
-                var entry = zip.nextEntry
-                var count = 0
-                while (entry != null && count < 64) {
-                    if (!entry.isDirectory && entry.name.endsWith(".cube", ignoreCase = true)) {
-                        val bytes = zip.readBytes()
-                        if (bytes.size in 1..(8 * 1024 * 1024)) {
-                            val temp =
-                                File.createTempFile("red-lut-", ".cube", context.cacheDir)
-                            temp.writeBytes(bytes)
-                            if (library.importRedCubeFile(temp) != null) imported += 1
-                            temp.delete()
-                        }
-                        count += 1
+        var found = 0
+        var rejected = 0
+        try {
+            java.util.zip.ZipFile(file).use { zip ->
+                val entries = zip.entries().asSequence().toList()
+                for (entry in entries) {
+                    if (found >= MAX_RED_ZIP_CUBE_FILES) break
+                    if (entry.isDirectory) continue
+                    val path = entry.name.replace('\\', '/')
+                    if (path.contains("__MACOSX/", ignoreCase = true)) continue
+                    if (path.substringAfterLast('/').startsWith("._")) continue
+                    if (!path.endsWith(".cube", ignoreCase = true)) continue
+                    found += 1
+                    if (entry.size > MAX_RED_CUBE_BYTES || entry.size < 1L) {
+                        rejected += 1
+                        continue
                     }
-                    zip.closeEntry()
-                    entry = zip.nextEntry
+                    val baseName = path.substringAfterLast('/').ifBlank { "red-lut.cube" }
+                    val bytes =
+                        try {
+                            zip.getInputStream(entry).use { it.readBytes() }
+                        } catch (_: Exception) {
+                            rejected += 1
+                            continue
+                        }
+                    if (bytes.isEmpty() || bytes.size > MAX_RED_CUBE_BYTES) {
+                        rejected += 1
+                        continue
+                    }
+                    val temp = File(context.cacheDir, "red-import-$baseName")
+                    try {
+                        temp.writeBytes(bytes)
+                        // Preserve the RED file name (not a random temp stem) for display.
+                        if (library.importRedCubeFile(temp) != null) {
+                            imported += 1
+                        } else {
+                            rejected += 1
+                        }
+                    } finally {
+                        temp.delete()
+                    }
                 }
             }
+        } catch (error: Exception) {
+            return@withContext RedLutImportResult(
+                importedCount = 0,
+                foundCubeEntries = found,
+                rejectedCubeEntries = rejected,
+                detail =
+                    "Couldn't open RED's archive (${error.message ?: "unknown error"}). Please try again.",
+            )
         }
-        imported
+        RedLutImportResult(
+            importedCount = imported,
+            foundCubeEntries = found,
+            rejectedCubeEntries = rejected,
+        )
     }
+
+/** Per-cube size cap — matches the shared Android/Swift 16 MB LUT source limit. */
+private const val MAX_RED_CUBE_BYTES: Int = 16 * 1024 * 1024
+
+/** iOS importZip allows up to 512 cubes in a RED pack. */
+private const val MAX_RED_ZIP_CUBE_FILES: Int = 512
