@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- isWifiEnabled before join so we fail fast when the radio is off. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- startScan before WifiNetworkSpecifier so the system panel can find the AP. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- NSD/Wi-Fi camera discovery: NEARBY_WIFI_DEVICES on 13+ (never used
         for location — the app only finds its own camera), location below. -->
     <uses-permission

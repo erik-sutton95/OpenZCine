@@ -417,10 +417,18 @@ public fun SavedCamerasExperience(
                                     return@launch
                                 }
                         phase = SavedCameraPhase.Joining(record.displayTitle)
-                        if (!environment.joinCameraAp(ssid, key)) {
+                        var joined = false
+                        var joinAttempt = 0
+                        while (!joined && joinAttempt < CAMERA_AP_JOIN_ATTEMPTS) {
+                            if (joinAttempt > 0) delay(CAMERA_AP_JOIN_RETRY_DELAY_MILLIS)
+                            joinAttempt += 1
+                            phase = SavedCameraPhase.Joining(record.displayTitle)
+                            joined = environment.joinCameraAp(ssid, key)
+                        }
+                        if (!joined) {
                             phase =
                                 SavedCameraPhase.Error(
-                                    "Couldn't join $ssid. Turn on Wi‑Fi, keep the camera's network screen on, then try again.",
+                                    "Couldn't join $ssid. Keep the camera's network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-pair with a fresh SSID/key scan.",
                                 )
                             return@launch
                         }

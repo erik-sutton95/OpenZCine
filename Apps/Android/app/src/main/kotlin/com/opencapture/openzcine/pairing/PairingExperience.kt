@@ -184,7 +184,9 @@ public fun realPairingEnvironment(
         phaseLogger(phase, detail)
     }
     return PairingEnvironment(
-        joinCameraAp = { ssid, passphrase -> joiner.join(ssid, passphrase) },
+        // Prefer joinWithFallback: exact SSID first, then NIKON_ZR_ prefix if the
+        // system panel never matches a slightly misread OCR SSID.
+        joinCameraAp = { ssid, passphrase -> joiner.joinWithFallback(ssid, passphrase) },
         releaseCameraAp = joiner::release,
         hotspotCameras = discovery.cameras(),
         createSession = { host ->
@@ -478,6 +480,14 @@ internal const val FIRST_PAIR_BOUND_RETRY_INTERVAL_MILLIS: Long = 400L
 internal const val FIRST_PAIR_HOTSPOT_SETTLE_MILLIS: Long = 2_000L
 /** Specifier timeout for post-confirm rejoin attempts (full 45s only for first join). */
 internal const val FIRST_PAIR_REJOIN_TIMEOUT_MILLIS: Int = 10_000
+
+/**
+ * First-pair / manual join: up to 3 specifier attempts (iOS NEHotspot does the
+ * same). Association flake right after the camera raises its AP is routine.
+ */
+internal const val CAMERA_AP_JOIN_ATTEMPTS: Int = 3
+
+internal const val CAMERA_AP_JOIN_RETRY_DELAY_MILLIS: Long = 2_000L
 
 /**
  * Pause after a successful camera-AP join before the first PTP-IP Init.
@@ -921,7 +931,20 @@ public fun PairingExperience(
         phase = PairingPhase.Joining
         work.value =
             scope.launch {
-                val joined = environment.joinCameraAp(ssid, passphrase)
+                // iOS retries NEHotspot up to 3× — first-attempt association flake
+                // right after the camera raises its AP is routine. Each attempt
+                // re-seeds Wi‑Fi scan so the system "Searching for devices…" panel
+                // can actually see the AP.
+                var joined = false
+                var attempt = 0
+                while (!joined && attempt < CAMERA_AP_JOIN_ATTEMPTS) {
+                    if (attempt > 0) {
+                        delay(CAMERA_AP_JOIN_RETRY_DELAY_MILLIS)
+                        phase = PairingPhase.Joining
+                    }
+                    attempt += 1
+                    joined = environment.joinCameraAp(ssid, passphrase)
+                }
                 if (joined) {
                     // The encrypted store is the only place a confirmed key
                     // lives; the popup's plaintext staging dies with the phase.

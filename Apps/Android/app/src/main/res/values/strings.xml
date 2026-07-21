@@ -115,7 +115,7 @@
     <string name="pairing_error_usb_identity">This camera did not expose a stable USB identity. Reconnect it or use Wi‑Fi pairing.</string>
     <string name="pairing_error_usb_session">Couldn\'t start the USB-C camera session. Reconnect the cable and try again.</string>
     <string name="pairing_error_usb_unreachable">Couldn\'t reach the USB-C camera. Check the cable and camera connection, then try again.</string>
-    <string name="pairing_error_wifi_join">Couldn\'t reach the camera Wi‑Fi network. Make sure the camera is on and nearby, then try again.</string>
+    <string name="pairing_error_wifi_join">Couldn\'t reach the camera Wi‑Fi network. Keep the camera\'s network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-scan the SSID/key or enter them manually.</string>
     <string name="pairing_status_joining">Joining</string>
     <string name="pairing_status_connecting">Connecting</string>
     <string name="pairing_status_pairing">Pairing</string>
@@ -144,7 +144,7 @@
     <string name="conn_ready_detail">Join %1$s\'s Wi‑Fi network to continue.</string>
     <string name="conn_scanned_caption">Scanned from camera screen — check it matches.</string>
     <string name="conn_connecting_title">Connecting…</string>
-    <string name="conn_joining_detail">Joining the camera Wi‑Fi… Keep the camera\'s network screen on. Android may ask to switch networks the first time.</string>
+    <string name="conn_joining_detail">Joining the camera Wi‑Fi… Keep the camera\'s network screen on. Android may show \"Searching for devices…\" — choose the camera network if asked.</string>
     <string name="conn_searching_title">Searching…</string>
     <string name="conn_searching_detail">Looking for %1$s on your network.</string>
     <string name="conn_handshaking_detail">Establishing a secure link with %1$s.</string>
