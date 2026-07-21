@@ -413,7 +413,7 @@ class SwiftCoreCameraSession internal constructor(
     val liveFrames: LiveFrameSource =
         SwiftCoreLiveFrameSource(
             onRecordingState = ::applyCameraRecordingState,
-            onCommandRoundTrip = ::updateRoundTripMeasurement,
+            onCommandRoundTrip = { updateRoundTripMeasurement() },
             onStreamExhausted = ::markLiveViewStreamExhausted,
             onFailurePhase = { phase -> phaseLogger(phase, "") },
         )
@@ -561,7 +561,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.setRecording(recording)
                     }
-                updateRoundTripMeasurement()
+                updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfRecordingCommandFailed()
                 if (
                     cameraRecordingEventVersion == eventVersionAtCommandStart &&
@@ -616,7 +616,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.applyControl(control, label)
                     }
-                updateRoundTripMeasurement()
+                updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfControlCommandFailed()
             } catch (error: CameraControlException) {
                 throw error
@@ -647,7 +647,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.changeAfArea(point)
                     }
-                updateRoundTripMeasurement()
+                updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfFocusCommandFailed()
                 true
             } catch (error: CameraFocusException) {
@@ -674,7 +674,7 @@ class SwiftCoreCameraSession internal constructor(
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.resetFocusPoint()
                     }
-                updateRoundTripMeasurement()
+                updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfFocusCommandFailed()
             } catch (error: CameraFocusException) {
                 throw error
@@ -1115,17 +1115,24 @@ class SwiftCoreCameraSession internal constructor(
         }
     }
 
-    private fun updateRoundTripMeasurement() {
+    /**
+     * Publishes the latest native command RTT into [latestCommandRoundTripMilliseconds].
+     *
+     * Live-view calls this every frame, so the default path is rate-limited to
+     * avoid JNI + StateFlow churn. Explicit control / recording / focus commands
+     * pass [force] so the operator-facing sample is never dropped behind a recent
+     * frame sample (or the post-connect seed).
+     */
+    private fun updateRoundTripMeasurement(force: Boolean = false) {
         if (_state.value !is CameraSessionState.Connected) {
             _latestCommandRoundTripMilliseconds.value = null
             lastRoundTripPublishNanos = 0L
             return
         }
-        // Live-view invokes this every frame; rate-limit the JNI + StateFlow churn.
-        // Explicit control/recording commands still get a fresh sample within ~250 ms.
         val now = System.nanoTime()
         if (
-            lastRoundTripPublishNanos != 0L &&
+            !force &&
+                lastRoundTripPublishNanos != 0L &&
                 now - lastRoundTripPublishNanos < ROUND_TRIP_PUBLISH_INTERVAL_NANOS
         ) {
             return
