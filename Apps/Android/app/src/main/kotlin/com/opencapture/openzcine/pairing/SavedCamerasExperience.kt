@@ -50,6 +50,7 @@ import com.opencapture.openzcine.R
 import com.opencapture.openzcine.core.CameraConnectionPhase
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
@@ -174,6 +175,14 @@ public fun SavedCamerasExperience(
             source.cameras.collect { usbCameras = it }
         }
     }
+    val readyApSsid = (phase as? SavedCameraPhase.ReadyToJoin)?.ssid
+    LaunchedEffect(readyApSsid) {
+        val ssid = readyApSsid ?: return@LaunchedEffect
+        while (true) {
+            environment.primeCameraApScan(ssid)
+            delay(2_000)
+        }
+    }
     DisposableEffect(environment) {
         onDispose {
             work.value?.cancel()
@@ -182,7 +191,9 @@ public fun SavedCamerasExperience(
     }
 
     fun resolvedHost(record: SavedCameraRecord): String {
-        if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) return record.host
+        if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
+            return CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST
+        }
         if (record.transport == SavedCameraTransport.USB_C) return record.host
         return discoveredCameras.firstOrNull { camera ->
             camera.host == record.host ||
@@ -208,6 +219,25 @@ public fun SavedCamerasExperience(
             }
         }
 
+    /** Same session shape as a normal My-cameras reconnect (restore-then-pair). */
+    fun createPostConfirmReconnectSession(record: SavedCameraRecord): CameraSession? =
+        when (record.transport) {
+            SavedCameraTransport.CAMERA_ACCESS_POINT,
+            SavedCameraTransport.PHONE_HOTSPOT,
+            -> environment.createSession(resolvedHost(record))
+            SavedCameraTransport.USB_C -> {
+                val source = environment.usbCameraSource ?: return null
+                val camera =
+                    usbCameras.firstOrNull {
+                        it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                    } ?: return null
+                when (val opened = source.open(camera)) {
+                    is UsbPtpOpenResult.Opened -> environment.createUsbSession(opened)
+                    is UsbPtpOpenResult.Rejected -> null
+                }
+            }
+        }
+
     suspend fun reconnectAfterNikonPairing(
         record: SavedCameraRecord,
         confirmPin: String? = null,
@@ -215,34 +245,83 @@ public fun SavedCamerasExperience(
         val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
         phase = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, confirmPin)
         if (isCameraAp) {
-            environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS)
+            awaitCameraApReadyAfterConfirm(
+                awaitReassociation = environment.awaitCameraApRestart,
+                isProcessBound = environment.isCameraApProcessBound,
+            )
         } else {
             delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
         }
-        // Actively re-join the rebooting camera AP each pass (iOS
-        // attemptPairedReconnectRejoin) — Android's WifiNetworkSpecifier does
-        // not auto-rejoin a rebooted AP if the binding dropped, so a passive
-        // wait can strand the operator without the rejoin loop.
         val rejoinSsid = record.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
         val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
 
-        return withTimeoutOrNull<PairedCamera>(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
-            var reconnected: PairedCamera? = null
-            while (reconnected == null) {
-                phase = SavedCameraPhase.Reconnecting(record.displayTitle)
-                if (rejoinSsid != null && !environment.joinCameraAp(rejoinSsid, rejoinKey)) {
+        if (!isCameraAp) {
+            return withTimeoutOrNull(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
+                while (true) {
+                    phase = SavedCameraPhase.Reconnecting(record.displayTitle)
+                    val session = createPostConfirmReconnectSession(record)
+                    if (session != null) {
+                        var handedOffSession = false
+                        try {
+                            session.connect()
+                            val connected = session.state.value as? CameraSessionState.Connected
+                            if (
+                                connected != null &&
+                                    session.connectionProgress.value.phase !=
+                                        CameraConnectionPhase.CONFIRM_ON_CAMERA
+                            ) {
+                                handedOffSession = true
+                                return@withTimeoutOrNull PairedCamera(
+                                    session = session,
+                                    savedCamera =
+                                        record.copy(
+                                            host = resolvedHost(record),
+                                            cameraName = connected.identity.name,
+                                            lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                        ),
+                                )
+                            }
+                        } finally {
+                            if (!handedOffSession) {
+                                withContext(NonCancellable) { session.disconnect() }
+                            }
+                        }
+                    }
                     delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
-                    continue
                 }
-                val session = createStrictSavedProfileSession(record)
-                if (session != null) {
+                @Suppress("UNREACHABLE_CODE")
+                null
+            }
+        }
+
+        var paired: PairedCamera? = null
+        val ok =
+            reconnectCameraApAfterConfirm(
+                rejoinSsid = rejoinSsid,
+                rejoinKey = rejoinKey,
+                isProcessBound = environment.isCameraApProcessBound,
+                alwaysForceJoinFirst = true,
+                ensureJoined = environment.ensureCameraApJoined,
+                forceJoin = { ssid, key, timeout ->
+                    environment.releaseCameraAp()
+                    environment.ensureCameraApJoined(ssid, key, timeout)
+                },
+                connectSavedProfile = {
+                    val session =
+                        createPostConfirmReconnectSession(record)
+                            ?: return@reconnectCameraApAfterConfirm false
                     var handedOffSession = false
                     try {
                         session.connect()
                         val connected = session.state.value as? CameraSessionState.Connected
-                        if (connected != null) {
+                        val phaseNow = session.connectionProgress.value.phase
+                        if (
+                            connected != null &&
+                                phaseNow != CameraConnectionPhase.CONFIRM_ON_CAMERA &&
+                                phaseNow != CameraConnectionPhase.PAIRING
+                        ) {
                             handedOffSession = true
-                            reconnected =
+                            paired =
                                 PairedCamera(
                                     session = session,
                                     savedCamera =
@@ -252,19 +331,21 @@ public fun SavedCamerasExperience(
                                             lastSeenAtEpochMillis = System.currentTimeMillis(),
                                         ),
                                 )
+                            true
+                        } else {
+                            false
                         }
                     } finally {
                         if (!handedOffSession) {
                             withContext(NonCancellable) { session.disconnect() }
                         }
                     }
-                }
-                if (reconnected == null) {
-                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
-                }
-            }
-            checkNotNull(reconnected)
-        }
+                },
+                onPhaseReconnecting = {
+                    phase = SavedCameraPhase.Reconnecting(record.displayTitle)
+                },
+            )
+        return if (ok) paired else null
     }
 
     fun beginReconnectWork(
@@ -344,10 +425,12 @@ public fun SavedCamerasExperience(
                                     return@launch
                                 }
                         phase = SavedCameraPhase.Joining(record.displayTitle)
-                        if (!environment.joinCameraAp(ssid, key)) {
+                        // Pre-scan + fail-fast retries live inside joinWithFallback.
+                        val joined = environment.joinCameraAp(ssid, key)
+                        if (!joined) {
                             phase =
                                 SavedCameraPhase.Error(
-                                    "Couldn't join $ssid. Turn on Wi‑Fi, keep the camera's network screen on, then try again.",
+                                    "Couldn't join $ssid. Keep the camera's network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-pair with a fresh SSID/key scan.",
                                 )
                             return@launch
                         }
@@ -535,6 +618,7 @@ public fun SavedCamerasExperience(
                 return
             }
             phase = SavedCameraPhase.ReadyToJoin(record = record, ssid = ssid, key = key)
+            environment.primeCameraApScan(ssid)
             return
         }
         beginReconnectWork(record, cameraApSsid = null, cameraApKey = null)

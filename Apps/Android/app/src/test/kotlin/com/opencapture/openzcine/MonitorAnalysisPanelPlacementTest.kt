@@ -29,12 +29,14 @@ class MonitorAnalysisPanelPlacementTest {
             )
 
         assertEquals(LANDSCAPE_VIEWPORT, layout.viewport)
-        assertEquals(ZoneFrame(64f, 62f, 704f, 251f), layout.safeBounds)
+        // Side rails only — full height, left of record/media/settings, right of lock/battery.
+        assertEquals(ZoneFrame(64f, 0f, 704f, 393f), layout.safeBounds)
         assertTrue(layout.safeBounds.x > zones.lock.x + zones.lock.width)
         assertTrue(layout.safeBounds.x > requireNotNull(zones.batteryCluster).x + zones.batteryCluster.width)
         assertTrue(layout.safeBounds.x + layout.safeBounds.width < zones.record.x)
-        assertTrue(layout.safeBounds.y + layout.safeBounds.height < requireNotNull(zones.captureStrip).y)
-        assertTrue(layout.safeBounds.y + layout.safeBounds.height < requireNotNull(zones.assistStrip).y)
+        // Top status / bottom strips are intentionally *not* carved (iOS free-roam parity).
+        assertEquals(LANDSCAPE_VIEWPORT.y, layout.safeBounds.y)
+        assertEquals(LANDSCAPE_VIEWPORT.height, layout.safeBounds.height)
     }
 
     @Test
@@ -75,8 +77,8 @@ class MonitorAnalysisPanelPlacementTest {
                 ),
             )
 
-        assertEquals(ZoneFrame(0f, 62f, 774f, 251f), hiddenLayout.safeBounds)
-        assertEquals(ZoneFrame(0f, 62f, 768f, 251f), hiddenRecordingLayout.safeBounds)
+        assertEquals(ZoneFrame(0f, 0f, 774f, 393f), hiddenLayout.safeBounds)
+        assertEquals(ZoneFrame(0f, 0f, 768f, 393f), hiddenRecordingLayout.safeBounds)
         assertEquals(zones.settings.x - 8f, hiddenLayout.safeBounds.x + hiddenLayout.safeBounds.width)
         assertEquals(
             zones.record.x - 8f,
@@ -213,7 +215,9 @@ class MonitorAnalysisPanelPlacementTest {
             ).withScopeGripClearance()
 
         assertEquals(
-            ZoneFrame(476f, 194f, 250f, 77f),
+            // Taller free-roam safeBounds (no top/bottom chrome carve) still
+            // use control-safe default anchors, then clamp once for the grip.
+            ZoneFrame(476f, 234f, 250f, 77f),
             controlSafeScopeDefaultFrame(
                 ScopeKind.HISTOGRAM,
                 zones.feed,

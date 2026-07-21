@@ -89,8 +89,14 @@ public enum LUTLibraryWire {
         return cube
     }
 
-    /// Android imports fail closed on duplicate declarations and unsafe numeric samples. Keeping
-    /// this preflight in the facade preserves the established shared parser behavior used by iOS.
+    /// Android imports fail closed on duplicate declarations and non-finite samples.
+    ///
+    /// Sample range is intentionally **not** a hard `[0, 1]` gate: official RED IPP2
+    /// Output Presets (size‑33 cubes) export many lattice points as `1.000001` from float
+    /// precision. The shared `CubeLUT` parser accepts those values, and `FeedEffectsWire`
+    /// already clamps when packing RGBA8. A hard 0–1 reject made every RED download fail
+    /// validation while iOS importZip succeeded. We still reject NaN/Inf and values far
+    /// outside a displayable domain so hostile tables cannot pass the preflight.
     private static func isStrictAndroidImport(_ text: String) -> Bool {
         var foundSize = false
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -114,11 +120,16 @@ public enum LUTLibraryWire {
                 let blue = Float(fields[2])
             else { continue }
             guard red.isFinite, green.isFinite, blue.isFinite,
-                (0...1).contains(red), (0...1).contains(green), (0...1).contains(blue)
+                Self.displayableSampleRange.contains(red),
+                Self.displayableSampleRange.contains(green),
+                Self.displayableSampleRange.contains(blue)
             else { return false }
         }
         return true
     }
+
+    /// Accepts RED float-export overshoot (`1.000001`) while rejecting clearly broken tables.
+    private static let displayableSampleRange: ClosedRange<Float> = -0.05...1.05
 
     /// Android generates this name after sanitising the picked display label. Keep this mirror at
     /// the trust boundary as well: no `..`, slash, Unicode lookalike, or path-like value can ever

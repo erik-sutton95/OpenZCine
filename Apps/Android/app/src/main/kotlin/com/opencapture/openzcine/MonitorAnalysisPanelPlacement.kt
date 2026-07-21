@@ -228,9 +228,12 @@ internal data class NormalizedPanelCenter(
  * Resolves the live floating-panel canvas from the shared monitor zone map.
  *
  * Portrait fit returns `null`: its recency-selected scopes stay in the shared stacked zone and no
- * false-colour key is mounted. Landscape uses the physical viewport but removes the mapped top,
- * bottom, and side chrome bands. Portrait fill uses the mapped feed as its exact viewport, then
- * clears the top bar, capture strip, system rail, and the existing expanded assist-rail footprint.
+ * false-colour key is mounted. Landscape uses nearly the full physical viewport — only the side
+ * button rails (lock/battery left; record/media/settings/DISP right) stay out of the drag clamp,
+ * matching the iOS “almost anywhere” free roam while keeping those rails hittable. Top status and
+ * bottom assist/capture strips are **not** subtracted from drag bounds (defaults still clear them).
+ * Portrait fill uses the mapped feed as its exact viewport, then clears the top bar, capture strip,
+ * system rail, and the existing expanded assist-rail footprint.
  */
 internal fun monitorAnalysisPanelLayout(
     zones: MonitorZones,
@@ -247,11 +250,11 @@ internal fun monitorAnalysisPanelLayout(
     var right = viewport.x + viewport.width
     var bottom = viewport.y + viewport.height
 
-    if (statusBarVisible) {
-        top = max(top, zones.infoBar.y + zones.infoBar.height + PANEL_CONTROL_CLEARANCE_DP)
-    }
-
     if (isPortraitFill) {
+        // Portrait fill keeps tighter chrome carving — rails sit on the feed edges.
+        if (statusBarVisible) {
+            top = max(top, zones.infoBar.y + zones.infoBar.height + PANEL_CONTROL_CLEARANCE_DP)
+        }
         if (chromeMounts.assistRail) {
             val rail =
                 portraitFillAssistRailFrame(
@@ -268,6 +271,8 @@ internal fun monitorAnalysisPanelLayout(
         }
         bottom = min(bottom, zones.systemCluster.y - PANEL_CONTROL_CLEARANCE_DP)
     } else {
+        // Landscape: carve only the vertical button rails. Top/bottom chrome stays drawable
+        // over panels the way iOS does (rails are painted above scopes).
         if (chromeMounts.landscapeFullSideRails) {
             left =
                 maxOf(
@@ -282,21 +287,13 @@ internal fun monitorAnalysisPanelLayout(
                     ?.let { min(right, it) }
                     ?: right
         } else {
+            // Rails hidden: still leave a recovery corridor for the still-mounted settings /
+            // record affordances so they stay reachable.
             if (chromeMounts.landscapeSettingsRecovery) {
                 right = min(right, zones.settings.x - PANEL_CONTROL_CLEARANCE_DP)
             }
             if (chromeMounts.landscapeRecordingSafety) {
                 right = min(right, zones.record.x - PANEL_CONTROL_CLEARANCE_DP)
-            }
-        }
-        if (chromeMounts.assistStrip) {
-            zones.assistStrip?.let { strip ->
-                bottom = min(bottom, strip.y - PANEL_CONTROL_CLEARANCE_DP)
-            }
-        }
-        if (chromeMounts.captureStrip) {
-            zones.captureStrip?.let { strip ->
-                bottom = min(bottom, strip.y - PANEL_CONTROL_CLEARANCE_DP)
             }
         }
     }

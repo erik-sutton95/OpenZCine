@@ -23,6 +23,7 @@ struct LUTLibraryWireTests {
                 utf8: Array(identityCube.utf8),
                 categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
                 fileName: "../outside.cube") == nil)
+        // Far-out-of-domain samples fail the Android preflight (RED float noise is ~1e-6).
         #expect(
             LUTLibraryWire.validatedImport(
                 utf8: Array("LUT_3D_SIZE 2\n1.2 0 0\n".utf8),
@@ -33,6 +34,36 @@ struct LUTLibraryWireTests {
                 utf8: Array(identityCube.utf8),
                 categoryOrdinal: 99,
                 fileName: "operator-look.cube") == nil)
+    }
+
+    @Test("RED IPP2 float-export overshoot (1.000001) still validates")
+    func redIpp2FloatOvershootValidates() throws {
+        // Official RED size-33 packs export many lattice points as 1.000001. A hard
+        // 0…1 gate rejected every cube after a successful zip extract.
+        let redLike = """
+            TITLE "RED IPP2 test"
+            LUT_3D_SIZE 2
+            0 0 0
+            1.000001 0 0
+            0 1 0
+            1 1 0
+            0 0 1
+            1 0 1
+            0 1 1
+            1.000001 1.000001 1.000001
+            """
+        let record = try #require(
+            LUTLibraryWire.validatedImport(
+                utf8: Array(redLike.utf8),
+                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.red,
+                fileName: "red-look-a1b2c3d4e5f6.cube"))
+        #expect(
+            record.components(separatedBy: LUTLibraryWire.fieldSeparator)
+                == ["1", "2", "stored:RED:red-look-a1b2c3d4e5f6.cube"])
+        let packed = try #require(LUTLibraryWire.packedImportedLUT(utf8: Array(redLike.utf8)))
+        #expect(packed.count == 2 * 2 * 2 * 4)
+        // Quantization clamps 1.000001 → 255.
+        #expect(packed[4] == 255)
     }
 
     @Test("Android validation rejects duplicate size declarations and oversized sources")

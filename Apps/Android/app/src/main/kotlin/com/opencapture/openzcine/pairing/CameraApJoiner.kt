@@ -9,7 +9,9 @@ import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Handler
 import android.os.Looper
+import android.os.PatternMatcher
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -31,10 +33,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * stays registered while the session lives — unregistering tears the
  * peer-to-peer network down — so callers must [release] on teardown.
  *
- * The system "switch networks" dialog only appears after Android finds a
- * matching AP in scan results (unlike iOS `NEHotspotConfiguration`, which
- * prompts immediately). Callers should stage a Ready-to-join confirm first
- * and keep Wi‑Fi enabled so the dialog can surface.
+ * The system "Searching for devices…" / switch-networks panel only lists the
+ * camera after it appears in Wi‑Fi scan results (unlike iOS
+ * `NEHotspotConfiguration`, which prompts immediately). We therefore kick a
+ * scan and wait briefly for the SSID before [requestNetwork].
  */
 public class CameraApJoiner(context: Context) {
     private val appContext = context.applicationContext
@@ -68,15 +70,127 @@ public class CameraApJoiner(context: Context) {
         passphrase: String?,
         timeoutMillis: Int = 45_000,
     ): Boolean {
+        val trimmedSsid = ssid.trim()
+        if (trimmedSsid.isEmpty()) return false
         release()
-        // No scan → no specifier match → no system "switch networks" dialog.
         if (wifi != null && !wifi.isWifiEnabled) {
             return false
         }
+        // Prefer the AP already in scan results before opening the system panel.
+        awaitCameraApVisibleInScan(
+            trimmedSsid,
+            maxWaitMillis = PRE_JOIN_SCAN_WAIT_MILLIS,
+            requireVisible = false,
+        )
+        return requestSpecifierNetwork(
+            ssid = trimmedSsid,
+            passphrase = passphrase,
+            timeoutMillis = timeoutMillis,
+            usePrefixPattern = false,
+        )
+    }
+
+    /**
+     * Production camera-AP join used by pairing and My cameras.
+     *
+     * Android's "Searching for devices…" panel only lists networks already in
+     * Wi‑Fi scan results. We:
+     * 1. Pre-scan until the SSID is visible (best effort)
+     * 2. Fail-fast exact-SSID specifier attempts with fresh scans between them
+     * 3. Fall back once to a `NIKON_ZR_` prefix match if OCR slightly misread
+     *    the SSID but the WPA key is correct
+     *
+     * Outer UI should call this **once** — retries live here so we don't stack
+     * 3×3 system panels.
+     */
+    public suspend fun joinWithFallback(
+        ssid: String,
+        passphrase: String?,
+        timeoutMillis: Int = 45_000,
+    ): Boolean {
+        val trimmed = ssid.trim()
+        if (trimmed.isEmpty()) return false
+        if (wifi != null && !wifi.isWifiEnabled) return false
+
+        // Progressive specifier budgets: fail fast when the panel is empty so a
+        // fresh pre-scan can run; last attempt gets the full timeout.
+        val exactTimeouts =
+            intArrayOf(
+                minOf(18_000, timeoutMillis),
+                minOf(28_000, timeoutMillis),
+                timeoutMillis.coerceAtLeast(30_000),
+            )
+        for ((index, attemptTimeout) in exactTimeouts.withIndex()) {
+            release()
+            if (wifi != null && !wifi.isWifiEnabled) return false
+            // First attempt: wait longer and prefer visibility. Later attempts
+            // re-scan briefly then open the panel again.
+            val scanWait =
+                if (index == 0) PRE_JOIN_SCAN_WAIT_MILLIS else PRE_JOIN_SCAN_RETRY_WAIT_MILLIS
+            awaitCameraApVisibleInScan(
+                trimmed,
+                maxWaitMillis = scanWait,
+                requireVisible = index == 0,
+            )
+            if (
+                requestSpecifierNetwork(
+                    ssid = trimmed,
+                    passphrase = passphrase,
+                    timeoutMillis = attemptTimeout,
+                    usePrefixPattern = false,
+                )
+            ) {
+                return true
+            }
+            if (index < exactTimeouts.lastIndex) {
+                delay(JOIN_ATTEMPT_GAP_MILLIS)
+            }
+        }
+
+        if (!looksLikeNikonAccessPointSsid(trimmed)) return false
+        val prefix = nikonAccessPointPrefix(trimmed) ?: return false
+        release()
+        if (wifi != null && !wifi.isWifiEnabled) return false
+        awaitCameraApVisibleInScan(
+            trimmed,
+            maxWaitMillis = PRE_JOIN_SCAN_RETRY_WAIT_MILLIS,
+            requireVisible = false,
+        )
+        return requestSpecifierNetwork(
+            ssid = prefix,
+            passphrase = passphrase,
+            timeoutMillis = timeoutMillis.coerceAtLeast(25_000),
+            usePrefixPattern = true,
+        )
+    }
+
+    /**
+     * Starts Wi‑Fi scans for [ssid] without joining. Call when the Ready-to-join
+     * card is shown so scan results are warm before the operator taps Connect.
+     */
+    public fun primeScan(ssid: String) {
+        if (ssid.isBlank()) return
+        if (wifi != null && !wifi.isWifiEnabled) return
+        kickWifiScan()
+    }
+
+    private suspend fun requestSpecifierNetwork(
+        ssid: String,
+        passphrase: String?,
+        timeoutMillis: Int,
+        usePrefixPattern: Boolean,
+    ): Boolean {
         val specifier =
             WifiNetworkSpecifier.Builder()
-                .setSsid(ssid)
-                .apply { if (!passphrase.isNullOrEmpty()) setWpa2Passphrase(passphrase) }
+                .apply {
+                    if (usePrefixPattern) {
+                        // PatternMatcher.PATTERN_PREFIX matches SSIDs that start with [ssid].
+                        setSsidPattern(PatternMatcher(ssid, PatternMatcher.PATTERN_PREFIX))
+                    } else {
+                        setSsid(ssid)
+                    }
+                    if (!passphrase.isNullOrEmpty()) setWpa2Passphrase(passphrase)
+                }
                 .build()
         val request =
             NetworkRequest.Builder()
@@ -132,6 +246,77 @@ public class CameraApJoiner(context: Context) {
     }
 
     /**
+     * Kicks Wi‑Fi scans and waits until [ssid] appears in scan results, or
+     * [maxWaitMillis] elapses.
+     *
+     * When [requireVisible] is true and the SSID never appears, waits the full
+     * budget anyway (still returns) — the system panel may see the AP even when
+     * our scan-results permission is limited.
+     */
+    private suspend fun awaitCameraApVisibleInScan(
+        ssid: String,
+        maxWaitMillis: Long,
+        requireVisible: Boolean,
+    ): Boolean {
+        if (wifi == null || maxWaitMillis <= 0L) return false
+        kickWifiScan()
+        if (scanResultsContainSsid(ssid)) return true
+        val deadline = System.nanoTime() + maxWaitMillis * 1_000_000L
+        var lastScanKick = System.nanoTime()
+        while (System.nanoTime() < deadline) {
+            delay(PRE_JOIN_SCAN_POLL_MILLIS)
+            if (scanResultsContainSsid(ssid)) return true
+            if (System.nanoTime() - lastScanKick >= PRE_JOIN_SCAN_RESEND_MILLIS * 1_000_000L) {
+                kickWifiScan()
+                lastScanKick = System.nanoTime()
+            }
+        }
+        // Final kick for the system panel even if we never saw the SSID.
+        if (requireVisible) kickWifiScan()
+        return scanResultsContainSsid(ssid)
+    }
+
+    private fun kickWifiScan() {
+        val manager = wifi ?: return
+        try {
+            @Suppress("DEPRECATION")
+            manager.startScan()
+        } catch (_: SecurityException) {
+            // Missing nearby/location permission — join may still work if the
+            // radio already has recent scan results.
+        } catch (_: RuntimeException) {
+            // OEM-specific rejection of startScan.
+        }
+    }
+
+    private fun scanResultsContainSsid(ssid: String): Boolean {
+        val results =
+            try {
+                wifi?.scanResults
+            } catch (_: SecurityException) {
+                null
+            } ?: return false
+        val target = ssid.trim()
+        if (target.isEmpty()) return false
+        return results.any { result ->
+            val seen = result.SSID?.trim()?.removeSurrounding("\"") ?: return@any false
+            seen.equals(target, ignoreCase = true) ||
+                (looksLikeNikonAccessPointSsid(target) &&
+                    seen.startsWith(nikonAccessPointPrefix(target) ?: return@any false, ignoreCase = true))
+        }
+    }
+
+    private companion object {
+        /** First attempt: wait long enough for Samsung scan cycles. */
+        const val PRE_JOIN_SCAN_WAIT_MILLIS: Long = 12_000L
+        /** Later attempts: shorter re-scan before reopening the system panel. */
+        const val PRE_JOIN_SCAN_RETRY_WAIT_MILLIS: Long = 5_000L
+        const val PRE_JOIN_SCAN_POLL_MILLIS: Long = 350L
+        const val PRE_JOIN_SCAN_RESEND_MILLIS: Long = 1_500L
+        const val JOIN_ATTEMPT_GAP_MILLIS: Long = 1_200L
+    }
+
+    /**
      * Waits for the currently joined camera AP to disappear and then become
      * available again. Nikon performs that restart after the operator accepts
      * an initial pairing request on the camera body. The request and callback
@@ -169,6 +354,28 @@ public class CameraApJoiner(context: Context) {
                 }
             }
         } ?: false
+    }
+
+    /**
+     * Whether the process is currently bound to an established camera-AP network
+     * from this joiner. Used after body-side Confirm to skip a wasteful
+     * `release()` + full rejoin when [awaitReassociation] already rebound us.
+     */
+    public fun isProcessBound(): Boolean =
+        synchronized(lock) { availability.hasEstablishedNetwork() }
+
+    /**
+     * Joins the camera AP only when we are not already process-bound. Prefer this
+     * after first-pair Confirm: a successful reassociation keeps the peer-to-peer
+     * request alive, and [join] would tear it down and re-scan (slow on Samsung).
+     */
+    public suspend fun ensureJoined(
+        ssid: String,
+        passphrase: String?,
+        timeoutMillis: Int = 45_000,
+    ): Boolean {
+        if (isProcessBound()) return true
+        return joinWithFallback(ssid, passphrase, timeoutMillis)
     }
 
     /**
@@ -402,4 +609,22 @@ internal class CameraApAvailabilityTracker<NetworkToken : Any> {
 
     /** Whether [onAvailable] has established a camera AP for the current request. */
     internal fun hasEstablishedNetwork(): Boolean = hasEstablishedNetwork
+}
+
+/** True for Nikon Z camera soft-AP SSIDs (`NIKON_ZR_…` and close OCR cousins). */
+internal fun looksLikeNikonAccessPointSsid(ssid: String): Boolean {
+    val upper = ssid.trim().uppercase()
+    return upper.startsWith("NIKON_ZR_") || upper.startsWith("NIKON_Z")
+}
+
+/**
+ * Prefix used for [PatternMatcher.PATTERN_PREFIX] fallback when an exact SSID
+ * join fails. Prefer the full `NIKON_ZR_` brand prefix so we never match arbitrary
+ * networks.
+ */
+internal fun nikonAccessPointPrefix(ssid: String): String? {
+    val upper = ssid.trim().uppercase()
+    if (upper.startsWith("NIKON_ZR_")) return "NIKON_ZR_"
+    if (upper.startsWith("NIKON_Z")) return "NIKON_Z"
+    return null
 }

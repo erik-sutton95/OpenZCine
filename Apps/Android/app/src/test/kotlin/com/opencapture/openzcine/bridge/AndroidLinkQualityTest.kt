@@ -85,6 +85,65 @@ class AndroidLinkQualityTest {
     }
 
     @Test
+    fun `controller never restarts a healthy pump while recording`() = runTest {
+        val standby = SwiftLiveViewRequest(3, 2, 16_666_666L)
+        val recordingCapped = SwiftLiveViewRequest(2, 2, 16_666_666L)
+        val configured = mutableListOf<SwiftLiveViewRequest>()
+        var stops = 0
+        lateinit var listener: SwiftCore.LiveFrameListener
+        val source =
+            SwiftCoreLiveFrameSource(
+                available = { true },
+                start = { listener = it },
+                stop = {
+                    stops++
+                    listener.onEnded()
+                },
+                configurePreview = {
+                    configured += it
+                    true
+                },
+                sharingScope = backgroundScope,
+                restartDelayMillis = 0L,
+            )
+        val controller =
+            AndroidLiveViewController(
+                source = source,
+                policy = SwiftLiveViewPolicyBridge { input ->
+                    if (input.isRecording) recordingCapped else standby
+                },
+            )
+        val standbyInput =
+            SwiftLiveViewPolicyInput(
+                streamPreset = 2,
+                qualityBias = 1,
+                thermalTier = 0,
+                isRecording = false,
+                cameraOverheating = false,
+            )
+
+        controller.apply(standbyInput)
+        val collector = launch { source.frames.collect() }
+        runCurrent()
+        assertEquals(listOf(standby), configured)
+        assertEquals(0, stops)
+
+        // Quality→VGA step-down would previously EndLiveView mid-take and freeze.
+        controller.apply(standbyInput.copy(isRecording = true))
+        runCurrent()
+        assertEquals(0, stops)
+        assertEquals(listOf(standby), configured)
+        assertEquals(standby, controller.request)
+
+        // After the take, the deferred policy may apply.
+        controller.apply(standbyInput)
+        runCurrent()
+        assertEquals(0, stops)
+
+        collector.cancelAndJoin()
+    }
+
+    @Test
     fun `health monitor forwards observed frames and transport failures without RTT fabrication`() {
         val inputs = mutableListOf<LinkHealthInput>()
         var now = 1_000_000_000L
