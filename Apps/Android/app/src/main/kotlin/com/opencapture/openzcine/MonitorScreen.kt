@@ -320,12 +320,12 @@ internal fun MonitorScreen(
     val wearRelay = remember(appContext) { AndroidWearPhoneRelay(appContext) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val sessionState by session.state.collectAsState()
-    val monitorAccessibilityState =
-        when (sessionState) {
-            is CameraSessionState.Connected -> stringResource(R.string.camera_connected)
-            CameraSessionState.Connecting -> stringResource(R.string.camera_connecting)
-            CameraSessionState.Disconnected -> stringResource(R.string.camera_disconnected)
+    val internetHopState = frameioController?.internetHopState
+    val cameraFeedStatus =
+        remember(sessionState, internetHopState) {
+            resolveMonitorCameraStatus(sessionState, internetHopState)
         }
+    val monitorAccessibilityState = monitorCameraStatusAccessibility(cameraFeedStatus)
     val cameraProperties by session.cameraProperties.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
@@ -1592,18 +1592,10 @@ internal fun MonitorScreen(
                         verticalPresentationScale = localFraming.verticalPresentationScale,
                     )
                 } else {
-                    Text(
-                        text =
-                            when (val current = sessionState) {
-                                is CameraSessionState.Connected -> current.identity.name
-                                CameraSessionState.Connecting ->
-                                    stringResource(R.string.camera_connecting_short)
-                                CameraSessionState.Disconnected ->
-                                    stringResource(R.string.camera_none)
-                            },
-                        style = chromeStyle(15f, FontWeight.Medium),
-                        color = LiveDesign.muted,
-                    )
+                    // Hop-aware status: after RED/Frame.io internet hop the session is
+                    // Disconnected while Wi‑Fi rejoins — never leave the operator on a bare
+                    // "No camera" while we are actively searching / rejoining.
+                    MonitorFeedCameraStatus(status = cameraFeedStatus)
                 }
                 LocalFramingAssistOverlay(
                     configuration = localFraming,
