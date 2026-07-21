@@ -152,6 +152,11 @@ public class PairingEnvironment(
      */
     public val ensureCameraApJoined: suspend (ssid: String, passphrase: String?, timeoutMillis: Int) -> Boolean =
         { ssid, passphrase, _ -> joinCameraAp(ssid, passphrase) },
+    /**
+     * Warms Wi‑Fi scan results for [ssid] before Connect (Ready-to-join card).
+     * No-op in demo harnesses.
+     */
+    public val primeCameraApScan: (ssid: String) -> Unit = {},
 )
 
 /**
@@ -184,10 +189,10 @@ public fun realPairingEnvironment(
         phaseLogger(phase, detail)
     }
     return PairingEnvironment(
-        // Prefer joinWithFallback: exact SSID first, then NIKON_ZR_ prefix if the
-        // system panel never matches a slightly misread OCR SSID.
+        // joinWithFallback owns pre-scan + fail-fast retries + NIKON_ZR_ prefix.
         joinCameraAp = { ssid, passphrase -> joiner.joinWithFallback(ssid, passphrase) },
         releaseCameraAp = joiner::release,
+        primeCameraApScan = joiner::primeScan,
         hotspotCameras = discovery.cameras(),
         createSession = { host ->
             SwiftCoreCameraSession(
@@ -931,20 +936,8 @@ public fun PairingExperience(
         phase = PairingPhase.Joining
         work.value =
             scope.launch {
-                // iOS retries NEHotspot up to 3× — first-attempt association flake
-                // right after the camera raises its AP is routine. Each attempt
-                // re-seeds Wi‑Fi scan so the system "Searching for devices…" panel
-                // can actually see the AP.
-                var joined = false
-                var attempt = 0
-                while (!joined && attempt < CAMERA_AP_JOIN_ATTEMPTS) {
-                    if (attempt > 0) {
-                        delay(CAMERA_AP_JOIN_RETRY_DELAY_MILLIS)
-                        phase = PairingPhase.Joining
-                    }
-                    attempt += 1
-                    joined = environment.joinCameraAp(ssid, passphrase)
-                }
+                // Retries + pre-scan live inside joinWithFallback — one call only.
+                val joined = environment.joinCameraAp(ssid, passphrase)
                 if (joined) {
                     // The encrypted store is the only place a confirmed key
                     // lives; the popup's plaintext staging dies with the phase.
@@ -1229,9 +1222,20 @@ public fun PairingExperience(
                             candidate.key,
                             keyFromScan = true,
                         )
+                    // Warm scan results before Connect so the system panel is not empty.
+                    environment.primeCameraApScan(candidate.ssid)
                 },
                 onDismiss = { cameraWifiScannerPresented = false },
             )
+        }
+        // Keep scanning while the Ready-to-join card is up.
+        val readySsid = (phase as? PairingPhase.ReadyToJoin)?.ssid
+        LaunchedEffect(readySsid) {
+            val ssid = readySsid ?: return@LaunchedEffect
+            while (true) {
+                environment.primeCameraApScan(ssid)
+                delay(2_000)
+            }
         }
     }
 }

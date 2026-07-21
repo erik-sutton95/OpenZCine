@@ -73,13 +73,15 @@ public class CameraApJoiner(context: Context) {
         val trimmedSsid = ssid.trim()
         if (trimmedSsid.isEmpty()) return false
         release()
-        // No scan → no specifier match → no system "switch networks" dialog.
         if (wifi != null && !wifi.isWifiEnabled) {
             return false
         }
-        // Seed scan results so the system panel can find the AP instead of
-        // spinning on "Searching for devices…" until timeout.
-        awaitCameraApVisibleInScan(trimmedSsid, maxWaitMillis = PRE_JOIN_SCAN_WAIT_MILLIS)
+        // Prefer the AP already in scan results before opening the system panel.
+        awaitCameraApVisibleInScan(
+            trimmedSsid,
+            maxWaitMillis = PRE_JOIN_SCAN_WAIT_MILLIS,
+            requireVisible = false,
+        )
         return requestSpecifierNetwork(
             ssid = trimmedSsid,
             passphrase = passphrase,
@@ -89,30 +91,87 @@ public class CameraApJoiner(context: Context) {
     }
 
     /**
-     * Like [join], but if an exact-SSID request fails, retries once with a
-     * prefix pattern for known Nikon AP shapes (`NIKON_ZR_…`). Helps when OCR
-     * slightly misread trailing characters but the key is correct.
+     * Production camera-AP join used by pairing and My cameras.
+     *
+     * Android's "Searching for devices…" panel only lists networks already in
+     * Wi‑Fi scan results. We:
+     * 1. Pre-scan until the SSID is visible (best effort)
+     * 2. Fail-fast exact-SSID specifier attempts with fresh scans between them
+     * 3. Fall back once to a `NIKON_ZR_` prefix match if OCR slightly misread
+     *    the SSID but the WPA key is correct
+     *
+     * Outer UI should call this **once** — retries live here so we don't stack
+     * 3×3 system panels.
      */
     public suspend fun joinWithFallback(
         ssid: String,
         passphrase: String?,
         timeoutMillis: Int = 45_000,
     ): Boolean {
-        if (join(ssid, passphrase, timeoutMillis)) return true
         val trimmed = ssid.trim()
+        if (trimmed.isEmpty()) return false
+        if (wifi != null && !wifi.isWifiEnabled) return false
+
+        // Progressive specifier budgets: fail fast when the panel is empty so a
+        // fresh pre-scan can run; last attempt gets the full timeout.
+        val exactTimeouts =
+            intArrayOf(
+                minOf(18_000, timeoutMillis),
+                minOf(28_000, timeoutMillis),
+                timeoutMillis.coerceAtLeast(30_000),
+            )
+        for ((index, attemptTimeout) in exactTimeouts.withIndex()) {
+            release()
+            if (wifi != null && !wifi.isWifiEnabled) return false
+            // First attempt: wait longer and prefer visibility. Later attempts
+            // re-scan briefly then open the panel again.
+            val scanWait =
+                if (index == 0) PRE_JOIN_SCAN_WAIT_MILLIS else PRE_JOIN_SCAN_RETRY_WAIT_MILLIS
+            awaitCameraApVisibleInScan(
+                trimmed,
+                maxWaitMillis = scanWait,
+                requireVisible = index == 0,
+            )
+            if (
+                requestSpecifierNetwork(
+                    ssid = trimmed,
+                    passphrase = passphrase,
+                    timeoutMillis = attemptTimeout,
+                    usePrefixPattern = false,
+                )
+            ) {
+                return true
+            }
+            if (index < exactTimeouts.lastIndex) {
+                delay(JOIN_ATTEMPT_GAP_MILLIS)
+            }
+        }
+
         if (!looksLikeNikonAccessPointSsid(trimmed)) return false
-        // Prefix fallback only for the NIKON_ZR_ family so we never broaden to
-        // arbitrary networks.
         val prefix = nikonAccessPointPrefix(trimmed) ?: return false
         release()
         if (wifi != null && !wifi.isWifiEnabled) return false
-        awaitCameraApVisibleInScan(trimmed, maxWaitMillis = PRE_JOIN_SCAN_WAIT_MILLIS / 2)
+        awaitCameraApVisibleInScan(
+            trimmed,
+            maxWaitMillis = PRE_JOIN_SCAN_RETRY_WAIT_MILLIS,
+            requireVisible = false,
+        )
         return requestSpecifierNetwork(
             ssid = prefix,
             passphrase = passphrase,
-            timeoutMillis = timeoutMillis.coerceAtLeast(20_000),
+            timeoutMillis = timeoutMillis.coerceAtLeast(25_000),
             usePrefixPattern = true,
         )
+    }
+
+    /**
+     * Starts Wi‑Fi scans for [ssid] without joining. Call when the Ready-to-join
+     * card is shown so scan results are warm before the operator taps Connect.
+     */
+    public fun primeScan(ssid: String) {
+        if (ssid.isBlank()) return
+        if (wifi != null && !wifi.isWifiEnabled) return
+        kickWifiScan()
     }
 
     private suspend fun requestSpecifierNetwork(
@@ -188,22 +247,33 @@ public class CameraApJoiner(context: Context) {
 
     /**
      * Kicks Wi‑Fi scans and waits until [ssid] appears in scan results, or
-     * [maxWaitMillis] elapses. Always returns — join still proceeds so the
-     * system panel can keep searching if the AP is slow to advertise.
+     * [maxWaitMillis] elapses.
+     *
+     * When [requireVisible] is true and the SSID never appears, waits the full
+     * budget anyway (still returns) — the system panel may see the AP even when
+     * our scan-results permission is limited.
      */
-    private suspend fun awaitCameraApVisibleInScan(ssid: String, maxWaitMillis: Long) {
-        if (wifi == null || maxWaitMillis <= 0L) return
+    private suspend fun awaitCameraApVisibleInScan(
+        ssid: String,
+        maxWaitMillis: Long,
+        requireVisible: Boolean,
+    ): Boolean {
+        if (wifi == null || maxWaitMillis <= 0L) return false
         kickWifiScan()
+        if (scanResultsContainSsid(ssid)) return true
         val deadline = System.nanoTime() + maxWaitMillis * 1_000_000L
         var lastScanKick = System.nanoTime()
         while (System.nanoTime() < deadline) {
-            if (scanResultsContainSsid(ssid)) return
             delay(PRE_JOIN_SCAN_POLL_MILLIS)
+            if (scanResultsContainSsid(ssid)) return true
             if (System.nanoTime() - lastScanKick >= PRE_JOIN_SCAN_RESEND_MILLIS * 1_000_000L) {
                 kickWifiScan()
                 lastScanKick = System.nanoTime()
             }
         }
+        // Final kick for the system panel even if we never saw the SSID.
+        if (requireVisible) kickWifiScan()
+        return scanResultsContainSsid(ssid)
     }
 
     private fun kickWifiScan() {
@@ -237,9 +307,13 @@ public class CameraApJoiner(context: Context) {
     }
 
     private companion object {
-        const val PRE_JOIN_SCAN_WAIT_MILLIS: Long = 6_000L
-        const val PRE_JOIN_SCAN_POLL_MILLIS: Long = 400L
-        const val PRE_JOIN_SCAN_RESEND_MILLIS: Long = 2_000L
+        /** First attempt: wait long enough for Samsung scan cycles. */
+        const val PRE_JOIN_SCAN_WAIT_MILLIS: Long = 12_000L
+        /** Later attempts: shorter re-scan before reopening the system panel. */
+        const val PRE_JOIN_SCAN_RETRY_WAIT_MILLIS: Long = 5_000L
+        const val PRE_JOIN_SCAN_POLL_MILLIS: Long = 350L
+        const val PRE_JOIN_SCAN_RESEND_MILLIS: Long = 1_500L
+        const val JOIN_ATTEMPT_GAP_MILLIS: Long = 1_200L
     }
 
     /**

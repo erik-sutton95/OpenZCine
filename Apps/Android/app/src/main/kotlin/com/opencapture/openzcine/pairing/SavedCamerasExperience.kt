@@ -175,6 +175,14 @@ public fun SavedCamerasExperience(
             source.cameras.collect { usbCameras = it }
         }
     }
+    val readyApSsid = (phase as? SavedCameraPhase.ReadyToJoin)?.ssid
+    LaunchedEffect(readyApSsid) {
+        val ssid = readyApSsid ?: return@LaunchedEffect
+        while (true) {
+            environment.primeCameraApScan(ssid)
+            delay(2_000)
+        }
+    }
     DisposableEffect(environment) {
         onDispose {
             work.value?.cancel()
@@ -417,14 +425,8 @@ public fun SavedCamerasExperience(
                                     return@launch
                                 }
                         phase = SavedCameraPhase.Joining(record.displayTitle)
-                        var joined = false
-                        var joinAttempt = 0
-                        while (!joined && joinAttempt < CAMERA_AP_JOIN_ATTEMPTS) {
-                            if (joinAttempt > 0) delay(CAMERA_AP_JOIN_RETRY_DELAY_MILLIS)
-                            joinAttempt += 1
-                            phase = SavedCameraPhase.Joining(record.displayTitle)
-                            joined = environment.joinCameraAp(ssid, key)
-                        }
+                        // Pre-scan + fail-fast retries live inside joinWithFallback.
+                        val joined = environment.joinCameraAp(ssid, key)
                         if (!joined) {
                             phase =
                                 SavedCameraPhase.Error(
@@ -616,6 +618,7 @@ public fun SavedCamerasExperience(
                 return
             }
             phase = SavedCameraPhase.ReadyToJoin(record = record, ssid = ssid, key = key)
+            environment.primeCameraApScan(ssid)
             return
         }
         beginReconnectWork(record, cameraApSsid = null, cameraApKey = null)
