@@ -297,7 +297,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) for richer
   optional details. Both create labelled public GitHub issues. The anonymous path has optional,
   user-selected screenshots re-rendered without embedded file metadata and a closed,
-  privacy-filtered app-activity snapshot; it never uploads raw diagnostics, arbitrary logs, device
+  privacy-filtered app-activity snapshot. Closed error/warning codes expand server-side into fixed
+  operational traces so failure order is visible without uploading raw stacks, exception text,
+  paths, addresses, or timestamps. It never uploads raw diagnostics, arbitrary logs, device
   names, camera/device identifiers, network identifiers, or original image bytes. Visible screenshot
   content remains the reporter's responsibility to review. Feature requests remain account-backed
   GitHub Discussions.
@@ -332,6 +334,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   links to it directly. Android stays presented as clearly unavailable until it ships.
 - **Landing-page camera compatibility** (in progress): identify the Nikon ZR, Z9, and Z5II as
   working, and the Z6, Z6II, Z6III, Zf, Z8, Z7, and Z7II as untested.
+- **Model-agnostic Nikon Z camera-AP onboarding** (OPE-105, in progress): recognize conservative
+  Nikon Z SSID shapes without rebuilding unknown model names, share that classifier across scanning
+  and reconnect policy, and provide exact manual SSID/key entry when OCR or a future body format
+  cannot be validated automatically. Synthetic fixtures only; real tester credentials remain local.
 
 ## Milestone Success Criteria
 

@@ -282,7 +282,11 @@ class MainActivity : ComponentActivity() {
                             ?: realPairingEnvironment(
                                 applicationContext,
                                 hasLegacySavedCameraProfiles = hasSavedCameraProfilesAtLaunch,
-                            )
+                            ) { phase, _ ->
+                                AndroidDiagnosticEvent.fromFailurePhase(phase)?.let {
+                                    diagnostics.record(it)
+                                }
+                            }
                     }
                 // USB attach/detach must stay observed while a handed-off
                 // session is on the monitor; close the Android receiver only

@@ -103,7 +103,7 @@ internal class AndroidAppDiagnostics private constructor(
     }
 
     /**
-     * The opt-in anonymous-report activity log, reduced to closed event names.
+     * The opt-in anonymous-report activity log, reduced to closed event and incident codes.
      *
      * This is intentionally not [createReport]: it has no timestamps, Android
      * exit summaries, device details, or free-form local diagnostics content.

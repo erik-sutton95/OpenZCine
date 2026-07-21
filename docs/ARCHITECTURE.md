@@ -225,8 +225,10 @@ Problem** offers two public GitHub-issue paths: an anonymous in-app form and the
 form sends the report text the operator supplies plus a small, closed set of app/platform fields.
 It never ships a GitHub credential, installation identifier, raw diagnostics, arbitrary logs,
 camera identity, or network identifier. Operators can explicitly opt into a closed
-privacy-filtered activity-event snapshot or user-selected screenshots. The apps re-render selected
-screenshots with generic filenames and no embedded file metadata; a server-side canonicalizer
+privacy-filtered activity snapshot containing lifecycle events and allowlisted error/warning codes,
+or user-selected screenshots. The relay expands incident codes into fixed operational traces; it
+never receives raw runtime stacks, exception messages, paths, addresses, or timestamps. The apps
+re-render selected screenshots with generic filenames and no embedded file metadata; a server-side canonicalizer
 enforces that boundary again. Screenshot pixels may still contain sensitive information, so the UI
 requires a public-sharing warning and review. The signed-in route hands richer optional details and
 attachments directly to GitHub. Local diagnostics remain a separate user-reviewed share flow.

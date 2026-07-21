@@ -12,12 +12,57 @@ private let usbLogger = Logger(
 /// so plugging a camera in surfaces it on the next pass (effectively instantly).
 // SAFETY: `@unchecked Sendable` — `devices` and `authorizationStatus` are guarded by `lock`
 // (`NSLock`); ICDeviceBrowser delegate callbacks and readers never touch them off it.
+/// Delegate for the attach-time pre-warm window, before a transport adopts the device: absorbs the
+/// required callbacks and vetoes ICC's proactive per-item thumbnail/metadata fetches (the default
+/// with no veto is to request both for EVERY item during cataloging — the bulk of a full card's
+/// connect delay). The transport repeats the vetoes once it takes the delegate over.
+private final class USBPrewarmDelegate: NSObject, ICCameraDeviceDelegate, @unchecked Sendable {
+    func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) {
+        USBCameraDeviceBrowser.shared.prewarmOpenCompleted(for: device, error: error)
+    }
+    func device(_ device: ICDevice, didCloseSessionWithError error: (any Error)?) {}
+    func didRemove(_ device: ICDevice) {}
+    func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {}
+    func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {}
+    func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {}
+    func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
+    func cameraDevice(
+        _ camera: ICCameraDevice,
+        didReceiveThumbnail thumbnail: CGImage?,
+        for item: ICCameraItem,
+        error: (any Error)?
+    ) {}
+    func cameraDevice(
+        _ camera: ICCameraDevice,
+        didReceiveMetadata metadata: [AnyHashable: Any]?,
+        for item: ICCameraItem,
+        error: (any Error)?
+    ) {}
+    func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
+    func cameraDevice(_ camera: ICCameraDevice, didCompleteDeleteFilesWithError error: (any Error)?)
+    {}
+    func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {}
+    func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {}
+    func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {}
+    func cameraDevice(_ camera: ICCameraDevice, shouldGetThumbnailOf item: ICCameraItem) -> Bool {
+        false
+    }
+    func cameraDevice(_ camera: ICCameraDevice, shouldGetMetadataOf item: ICCameraItem) -> Bool {
+        false
+    }
+}
+
 final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked Sendable {
     static let shared = USBCameraDeviceBrowser()
 
     private let browser = ICDeviceBrowser()
+    private let prewarmDelegate = USBPrewarmDelegate()
     private let lock = NSLock()
     private var devices: [ICCameraDevice] = []
+    /// Host keys whose attach-time `requestOpenSession` has not completed yet. The transport must
+    /// not issue a second open while one is in flight — ICC swallows the duplicate and the reply
+    /// for the first goes to the pre-warm delegate, so a connect started in that window would hang.
+    private var prewarmOpensInFlight: Set<String> = []
     private var isStarted = false
     private var authorizationStatus: ICAuthorizationStatus = .notDetermined
 
@@ -102,6 +147,16 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
             devices.append(camera)
         }
         lock.unlock()
+        // Pre-warm: open the ICC session at attach time. ICC refuses passthrough commands until its
+        // whole-card content enumeration finishes (minutes on a full card, verified on the ZR), so
+        // start that clock at plug-in rather than when the operator taps Connect. The pre-warm
+        // delegate vetoes per-item thumbnail/metadata fetches from the first item; the transport
+        // takes the delegate (and the open session) over at connect time.
+        if !camera.hasOpenSession {
+            lock.withLock { _ = prewarmOpensInFlight.insert(Self.hostKey(for: camera)) }
+            camera.delegate = prewarmDelegate
+            camera.requestOpenSession()
+        }
         usbLogger.info(
             "USB camera attached: \(device.name ?? "unnamed", privacy: .private(mask: .hash))")
     }
@@ -109,9 +164,41 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
     func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
         lock.lock()
         devices.removeAll { $0 === device }
+        prewarmOpensInFlight.remove(Self.hostKey(for: device))
         lock.unlock()
         usbLogger.info(
             "USB camera detached: \(device.name ?? "unnamed", privacy: .private(mask: .hash))")
+    }
+
+    /// Pre-warm open finished (delegate callback relay). Clears the in-flight marker so a connect
+    /// can proceed; the error, if any, is only logged — the connect path does its own fresh open.
+    fileprivate func prewarmOpenCompleted(for device: ICDevice, error: (any Error)?) {
+        lock.withLock { _ = prewarmOpensInFlight.remove(Self.hostKey(for: device)) }
+        if let error {
+            usbLogger.info(
+                "USB pre-warm open failed: \(error.localizedDescription, privacy: .private(mask: .hash))"
+            )
+        }
+    }
+
+    /// Whether the attach-time session open for this device is still in flight.
+    func isPrewarmOpenInFlight(for device: ICDevice) -> Bool {
+        lock.withLock { prewarmOpensInFlight.contains(Self.hostKey(for: device)) }
+    }
+
+    /// Reclaims delegate duties for a device whose transport is done with it, leaving the ICC
+    /// session open — the warm catalog makes the next connect adopt instantly instead of paying
+    /// the enumeration sweep again. The session ends with the cable, not the app-level connect.
+    fileprivate func parkSession(for device: ICDevice) {
+        device.delegate = prewarmDelegate
+    }
+
+    /// Card-scan readiness for a USB camera row. `ready` (the session-open ack) is the moment a
+    /// connect stops having to wait — measured on the ZR, the whole per-plug cost sits in front of
+    /// it; `percent` is ICC's own catalog progress for the countdown.
+    func cardScanProgress(forHostKey hostKey: String) -> (ready: Bool, percent: Int)? {
+        guard let device = device(forHostKey: hostKey) else { return nil }
+        return (device.hasOpenSession, device.contentCatalogPercentCompleted)
     }
 }
 
@@ -147,6 +234,10 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     private var openContinuation: CheckedContinuation<Void, Error>?
     private var didOpenSession = false
     private var didBecomeReady = false
+    // Recycle state (see open(recycleFirst:)): a deliberate session close that must not be
+    // mistaken for a teardown by the didCloseSession delegate callback.
+    private var recycleCloseContinuation: CheckedContinuation<Void, Never>?
+    private var recycleCloseInFlight = false
     // Events are pushed by delegate callbacks and pulled by the session's drain loop (a single
     // consumer), buffered so a sparse reader never loses a record start/stop notification.
     private var eventStreamIterator: AsyncStream<PTPEvent>.AsyncIterator
@@ -156,8 +247,32 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     /// deliberately NOT waiting for the content-catalog "ready" signal, which for the ZR is the slow
     /// part of USB connect. ImageCaptureCore still enumerates the catalog in the background; the app
     /// ignores it.
-    func open(timeout: Duration = .seconds(30)) async throws {
+    func open(timeout: Duration = .seconds(30), recycleFirst: Bool = false) async throws {
         device.delegate = self
+        // If the attach-time pre-warm's open is still in flight, wait it out instead of issuing a
+        // duplicate requestOpenSession — ICC swallows the duplicate, so a connect started in that
+        // window used to hang for the full timeout.
+        let waitStart = ContinuousClock.now
+        while !device.hasOpenSession,
+            USBCameraDeviceBrowser.shared.isPrewarmOpenInFlight(for: device),
+            ContinuousClock.now - waitStart < timeout
+        {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        if recycleFirst, device.hasOpenSession {
+            // Retry path: the adopted session just failed its first command — it went stale while
+            // parked (camera sleep, ICC housekeeping). Close it for real, await the ack (bounded),
+            // and fall through to a fresh open. Costs a new card scan; correctness over speed here.
+            await recycleStaleSession()
+        }
+        // Adopt an already-open session (attach-time pre-warm, or a previous connect that parked
+        // it warm). The passthrough gate, if ICC's catalog pass is still running, is waited out by
+        // the first transaction's long USB deadline — a close→reopen "abort" was tried here and
+        // did NOT skip the gate on the ZR; it only risks restarting a mostly-done pass.
+        if device.hasOpenSession {
+            lock.withLock { didOpenSession = true }
+            return
+        }
         let timeoutTask = Task { [weak self] in
             try? await Task.sleep(for: timeout)
             guard !Task.isCancelled else { return }
@@ -249,8 +364,37 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
         guard !alreadyClosed else { return }
         eventContinuation.finish()
         resumeOpen(throwing: NativeCameraSessionError.connectionClosed)
-        device.requestCloseSession()
-        device.delegate = nil
+        // Keep the ICC session warm instead of closing it: requestCloseSession discards the
+        // finished card catalog, so the next connect would pay the whole enumeration sweep again.
+        // Park the delegate back on the browser; the session dies with the cable (didRemove), not
+        // with an app-level disconnect. [verify-on-HW: ZR reconnect-after-disconnect over USB-C]
+        USBCameraDeviceBrowser.shared.parkSession(for: device)
+    }
+
+    /// Closes a stale adopted session and waits (bounded) for ICC's ack so a fresh open can
+    /// follow — the recovery half of the stale-session retry.
+    private func recycleStaleSession() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.withLock {
+                recycleCloseContinuation = continuation
+                recycleCloseInFlight = true
+            }
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.resumeRecycleClose()
+            }
+            device.requestCloseSession()
+        }
+    }
+
+    private func resumeRecycleClose() {
+        let continuation = lock.withLock {
+            () -> CheckedContinuation<Void, Never>? in
+            let stored = recycleCloseContinuation
+            recycleCloseContinuation = nil
+            return stored
+        }
+        continuation?.resume()
     }
 
     /// Identifies which completion blob is the response container and decodes the pair.
@@ -307,6 +451,9 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     // MARK: - ICDeviceDelegate
 
     func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) {
+        // A pre-warm open completing after this transport took the delegate over lands here, not
+        // on the pre-warm delegate — clear the browser's in-flight marker either way.
+        USBCameraDeviceBrowser.shared.prewarmOpenCompleted(for: device, error: nil)
         if let error {
             usbLogger.error(
                 "USB session open failed: \(error.localizedDescription, privacy: .private(mask: .hash))"
@@ -330,6 +477,18 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     }
 
     func device(_ device: ICDevice, didCloseSessionWithError error: (any Error)?) {
+        // A close we asked for (stale-session recycle) resumes the waiting open; only an
+        // unsolicited close is a teardown.
+        let wasRecycle = lock.withLock {
+            () -> Bool in
+            let was = recycleCloseInFlight
+            recycleCloseInFlight = false
+            return was
+        }
+        if wasRecycle {
+            resumeRecycleClose()
+            return
+        }
         close()
     }
 
@@ -360,6 +519,19 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {}
 
     func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
+
+    // Veto ICC's proactive per-item fetches: without these, cataloging issues a thumbnail AND a
+    // metadata request to the camera for EVERY item on the card — thousands of round-trips this
+    // app never reads (its media listing is its own PTP GetObjectHandles). The catalog sweep
+    // itself can't be suppressed, but starving it of per-item traffic is the difference between
+    // minutes and seconds on a full card. [verify-on-HW: ZR, full CFexpress]
+    func cameraDevice(_ camera: ICCameraDevice, shouldGetThumbnailOf item: ICCameraItem) -> Bool {
+        false
+    }
+
+    func cameraDevice(_ camera: ICCameraDevice, shouldGetMetadataOf item: ICCameraItem) -> Bool {
+        false
+    }
 
     func cameraDevice(
         _ camera: ICCameraDevice,

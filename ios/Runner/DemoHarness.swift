@@ -36,6 +36,8 @@ enum DemoHarness {
     /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
     /// rasterizer — the baseline for pixel-diff look-regression checks.
     static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")
+    /// `ZC_DEMO_WIFI_SCANNER=scan|manual` opens the Wi-Fi credential scanner for screenshots.
+    static let cameraWiFiScannerMode = value("ZC_DEMO_WIFI_SCANNER")
 
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
@@ -404,6 +406,11 @@ enum DemoHarness {
                     model.connectionMessage =
                         "Couldn't reach the camera Wi‑Fi network. Make sure the camera is on and nearby, then try again."
                 }
+            }
+            if cameraWiFiScannerMode != nil {
+                // Demo/screenshot affordance: the real scanner is normally entered from the
+                // camera-connection flow and needs a physical camera screen to exercise.
+                model.isCameraWiFiScannerPresented = true
             }
         }
     }

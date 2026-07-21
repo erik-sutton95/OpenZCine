@@ -76,6 +76,25 @@ struct ExternalBetaDiagnosticsTests {
         )
     }
 
+    @Test("Event-channel diagnostics ignore expected cancellation and stale sessions")
+    func eventChannelDiagnosticPolicy() {
+        #expect(
+            EventChannelDiagnosticPolicy.shouldRecordUnexpectedEnd(
+                isCancelled: false,
+                ownsSession: true
+            ))
+        #expect(
+            !EventChannelDiagnosticPolicy.shouldRecordUnexpectedEnd(
+                isCancelled: true,
+                ownsSession: true
+            ))
+        #expect(
+            !EventChannelDiagnosticPolicy.shouldRecordUnexpectedEnd(
+                isCancelled: false,
+                ownsSession: false
+            ))
+    }
+
     @Test("Internet route progress survives Settings and ignores stale completion")
     @MainActor
     func internetRouteProgress() {
@@ -220,11 +239,18 @@ struct AnonymousBugReportTests {
                 timestamp: Date(timeIntervalSince1970: 1_700_000_003),
                 event: AppDiagnosticEvent.liveViewStarted.rawValue
             ),
+            DiagnosticBreadcrumb(
+                timestamp: Date(timeIntervalSince1970: 1_700_000_004),
+                event: AppDiagnosticEvent.connectionFailed.rawValue
+            ),
         ]
 
         let snapshot = DiagnosticEventStore.anonymousActivityLog(events: events)
 
-        #expect(snapshot == ["connection.connected", "live-view.started"])
+        #expect(
+            snapshot == [
+                "connection.connected", "live-view.started", "error.connection.failed",
+            ])
         #expect(!snapshot.joined(separator: " ").contains("Bob"))
         #expect(snapshot.allSatisfy { AppDiagnosticEvent(rawValue: $0) != nil })
     }

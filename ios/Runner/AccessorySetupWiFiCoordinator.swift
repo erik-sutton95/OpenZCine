@@ -6,8 +6,8 @@ import os
 
 /// Wi‑Fi camera pairing via Apple's AccessorySetupKit (iOS 18+).
 ///
-/// Presents the system accessory picker (product image + device name) for Nikon ZR hotspots
-/// matching `NIKON_ZR_`, then joins with `joinAccessoryHotspot` / `joinAccessoryHotspotWithoutSecurity`.
+/// Presents the system accessory picker (product image + device name) for Nikon Z hotspots, then
+/// joins with `joinAccessoryHotspot` / `joinAccessoryHotspotWithoutSecurity`.
 /// See WWDC24 session 10203 and ``ASAccessorySession``.
 @available(iOS 18.0, *)
 @MainActor
@@ -102,7 +102,7 @@ final class AccessorySetupWiFiCoordinator {
         }
         let descriptor = ASDiscoveryDescriptor()
         descriptor.ssid = ssid
-        return try await presentPicker(descriptor: descriptor, displayName: "Nikon ZR")
+        return try await presentPicker(descriptor: descriptor, displayName: "Nikon camera")
     }
 
     private func resolveAccessory(ssidPrefix: String) async throws -> ASAccessory {
@@ -112,7 +112,7 @@ final class AccessorySetupWiFiCoordinator {
         }
         let descriptor = ASDiscoveryDescriptor()
         descriptor.ssidPrefix = ssidPrefix
-        return try await presentPicker(descriptor: descriptor, displayName: "Nikon ZR")
+        return try await presentPicker(descriptor: descriptor, displayName: "Nikon camera")
     }
 
     private func authorizedAccessory(matchingSSID ssid: String) -> ASAccessory? {

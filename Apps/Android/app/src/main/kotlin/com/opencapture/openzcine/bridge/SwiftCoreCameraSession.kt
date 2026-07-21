@@ -415,6 +415,7 @@ class SwiftCoreCameraSession internal constructor(
             onRecordingState = ::applyCameraRecordingState,
             onCommandRoundTrip = ::updateRoundTripMeasurement,
             onStreamExhausted = ::markLiveViewStreamExhausted,
+            onFailurePhase = { phase -> phaseLogger(phase, "") },
         )
 
     /**

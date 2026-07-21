@@ -93,6 +93,13 @@ struct ConnectionProgressSheet: View {
 
     private var detail: String {
         if phase == .failed { return failureDetail }
+        // Live establishment step (safe to read, unlike `connectionMessage` — only the connect
+        // machinery writes it): real progress ("Reading the camera's card… 40%") beats a static
+        // phase title while a step is grinding.
+        let stage = model.connectionStageDetail
+        if !stage.isEmpty, phase != .connected, phase != .readyToJoin {
+            return stage
+        }
         return ConnectionProgressCopy.statusDetail(
             phase: phase,
             deviceName: deviceName,
@@ -140,8 +147,8 @@ struct ConnectionProgressSheet: View {
     @ViewBuilder
     private var joinActions: some View {
         VStack(spacing: 12) {
-            if model.cameraWiFiJoinNeedsPassword, !model.cameraWiFiJoinKeyFromScan {
-                // First-time connect: scanning the camera's SSID + key is the sole path.
+            if model.cameraWiFiJoinNeedsPassword, !model.cameraWiFiJoinHasPasswordDraft {
+                // First-time connect: scan the camera screen, with manual entry available there.
                 Button {
                     model.presentCameraWiFiScanner()
                 } label: {
@@ -160,7 +167,6 @@ struct ConnectionProgressSheet: View {
             } else {
                 if model.cameraWiFiJoinKeyFromScan {
                     // Scanned key: shown read-only so a stray tap can't clear or mangle it.
-                    // If the OCR misread, Cancel and rescan — there's no manual edit path.
                     Text(model.cameraWiFiJoinPasswordDraft)
                         .font(.body.monospaced())
                         .foregroundStyle(.primary)
@@ -174,6 +180,11 @@ struct ConnectionProgressSheet: View {
                     Text("Scanned from camera screen — check it matches.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if model.cameraWiFiJoinHasPasswordDraft {
+                    Text("Wi-Fi details entered manually — connect when they match the camera.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
                 connectButton
             }

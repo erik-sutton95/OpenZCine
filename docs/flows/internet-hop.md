@@ -63,8 +63,8 @@ flowchart TD
   `connectedSSID` (`NEHotspotNetwork.fetchCurrent`, debounced 2 s). Core
   `RedLUTDownloadPolicy.availability(hasInternetPath:isOnCameraAccessPoint:)` resolves three
   states: camera AP checked first (satisfied path but no WAN), then generic no-path, else
-  available. Camera-AP detection uses `CameraWiFiJoinPolicy.isOnCameraAccessPoint` on SSID
-  (`NIKON_ZR_` prefix).
+  available. Camera-AP detection uses `CameraWiFiJoinPolicy.isOnCameraAccessPoint` with the shared,
+  conservative Nikon Z SSID classifier rather than a model-specific prefix.
 - **Code:** `RedLUTDownloadPolicy.swift`, `InternetReachability.swift`,
   `CameraWiFiSSID.swift` (`CameraWiFiJoinPolicy`), `RedLUTDownloadPolicyTests.swift`.
 - 📝 Notes:

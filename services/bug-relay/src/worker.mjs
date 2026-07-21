@@ -60,6 +60,47 @@ const ACTIVITY_EVENTS = new Set([
   "guide.completed",
   "guide.skipped",
   "diagnostics.exported",
+  "error.connection.failed",
+  "error.connection.event-channel-ended",
+  "error.live-view.failed",
+  "warning.live-view.stalled",
+]);
+const ACTIVITY_INCIDENTS = new Map([
+  [
+    "error.connection.failed",
+    {
+      severity: "ERROR",
+      trace: ["connection.attempt", "transport-or-handshake", "connection.failure"],
+    },
+  ],
+  [
+    "error.connection.event-channel-ended",
+    {
+      severity: "ERROR",
+      trace: ["connection.connected", "camera.event-channel", "channel.ended"],
+    },
+  ],
+  [
+    "live-view.failed",
+    {
+      severity: "ERROR",
+      trace: ["connection.connected", "live-view.start", "first-frame.unavailable"],
+    },
+  ],
+  [
+    "error.live-view.failed",
+    {
+      severity: "ERROR",
+      trace: ["connection.connected", "live-view.start", "first-frame.unavailable"],
+    },
+  ],
+  [
+    "warning.live-view.stalled",
+    {
+      severity: "WARNING",
+      trace: ["live-view.streaming", "frame-delivery.stalled", "live-view.restart"],
+    },
+  ],
 ]);
 const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
 const PNG_IHDR = Uint8Array.of(0x49, 0x48, 0x44, 0x52);
@@ -544,9 +585,9 @@ function renderNormalizedIssue(safeReport, { screenshotURLs = [] } = {}) {
       "",
       "## Privacy-filtered app activity log",
       "",
-      "This list contains only closed app event names; it has no timestamps or free-form log text.",
+      "This list contains closed app event names plus privacy-safe error/warning codes. Incident traces are fixed operational stages, not raw stack traces or free-form log text; there are no timestamps.",
       "",
-      fencedText(safeReport.activityLog.join("\n")),
+      fencedText(renderActivityLog(safeReport.activityLog)),
     );
   }
 
@@ -561,6 +602,17 @@ function renderNormalizedIssue(safeReport, { screenshotURLs = [] } = {}) {
     title,
     body: sections.join("\n"),
   };
+}
+
+function renderActivityLog(events) {
+  return events
+    .map((event) => {
+      const incident = ACTIVITY_INCIDENTS.get(event);
+      if (!incident) return event;
+      const trace = incident.trace.map((frame) => `    at ${frame}`).join("\n");
+      return `[${incident.severity}] ${event}\n  operational trace:\n${trace}`;
+    })
+    .join("\n");
 }
 
 /**

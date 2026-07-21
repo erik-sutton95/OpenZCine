@@ -150,10 +150,15 @@ public class PairingEnvironment(
  * that already has Android camera records from the former shared initiator
  * GUID. It lets that one install retain those camera-side profiles; new
  * installs always receive a fresh private identity.
+ *
+ * [phaseLogger] receives progress and failure phases. Callers must discard or
+ * privately handle the detail value rather than placing it in an anonymous
+ * report. Safe phases are also written to logcat.
  */
 public fun realPairingEnvironment(
     context: Context,
     hasLegacySavedCameraProfiles: Boolean = false,
+    phaseLogger: (String, String) -> Unit = { _, _ -> },
 ): PairingEnvironment {
     val joiner = CameraApJoiner(context)
     val discovery =
@@ -163,6 +168,10 @@ public fun realPairingEnvironment(
         PtpIpInitiatorIdentity(context).guid(
             preferLegacyStaticIdentity = hasLegacySavedCameraProfiles,
         )
+    val combinedPhaseLogger: (String, String) -> Unit = { phase, detail ->
+        logCameraSessionPhase(phase, detail)
+        phaseLogger(phase, detail)
+    }
     return PairingEnvironment(
         joinCameraAp = { ssid, passphrase -> joiner.join(ssid, passphrase) },
         releaseCameraAp = joiner::release,
@@ -172,7 +181,7 @@ public fun realPairingEnvironment(
                 host = host,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
                 initiatorGuid = initiatorGuid,
-                phaseLogger = ::logCameraSessionPhase,
+                phaseLogger = combinedPhaseLogger,
             )
         },
         createSavedProfileSession = { host ->
@@ -180,7 +189,7 @@ public fun realPairingEnvironment(
                 host = host,
                 connectionStrategy = PtpIpConnectionStrategy.SAVED_PROFILE,
                 initiatorGuid = initiatorGuid,
-                phaseLogger = ::logCameraSessionPhase,
+                phaseLogger = combinedPhaseLogger,
             )
         },
         createFirstTimePairingSession = { host ->
@@ -188,7 +197,7 @@ public fun realPairingEnvironment(
                 host = host,
                 connectionStrategy = PtpIpConnectionStrategy.FIRST_TIME_PAIRING,
                 initiatorGuid = initiatorGuid,
-                phaseLogger = ::logCameraSessionPhase,
+                phaseLogger = combinedPhaseLogger,
             )
         },
         usbCameraSource = usbCameraSource,
@@ -198,7 +207,7 @@ public fun realPairingEnvironment(
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
-                phaseLogger = ::logCameraSessionPhase,
+                phaseLogger = combinedPhaseLogger,
             )
         },
         createSavedProfileUsbSession = { opened ->
@@ -207,7 +216,7 @@ public fun realPairingEnvironment(
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
                 connectionStrategy = PtpIpConnectionStrategy.SAVED_PROFILE,
-                phaseLogger = ::logCameraSessionPhase,
+                phaseLogger = combinedPhaseLogger,
             )
         },
         createFirstTimePairingUsbSession = { opened ->
@@ -216,7 +225,7 @@ public fun realPairingEnvironment(
                 cameraNameHint = opened.displayName,
                 usbTransport = opened.transport,
                 connectionStrategy = PtpIpConnectionStrategy.RESTORE_PROFILE_THEN_PAIRING,
-                phaseLogger = ::logCameraSessionPhase,
+                phaseLogger = combinedPhaseLogger,
             )
         },
         credentials = CameraWifiCredentialStore(context),

@@ -4,21 +4,42 @@ import VisionKit
 /// Apple-native modal that reads the camera's on-screen Connection wizard (SSID + Key) with the
 /// phone's rear camera and hands validated credentials back to the connect popup. VisionKit does
 /// the OCR; ``CameraWiFiScreenParser`` validates and self-corrects. A live viewfinder window is
-/// embedded in the card so the operator can frame the camera's wizard screen. Scanning is the sole
-/// path — Cancel is the only secondary action.
+/// embedded in the card so the operator can frame the camera's wizard screen. Manual entry remains
+/// available when glare, localization, or a future camera SSID format prevents automatic capture.
 struct CameraWiFiScannerScreen: View {
     let onCapture: (CameraWiFiScreenParser.Credentials) -> Void
+    let onManualEntry: (CameraWiFiScreenParser.Credentials) -> Void
     let onCancel: () -> Void
+
+    @State private var showsManualEntry: Bool
+    @State private var manualSSID = ""
+    @State private var manualKey = ""
+    @State private var manualSubmissionAttempted = false
+    @State private var scanIssue: CameraWiFiScreenParser.Result?
 
     private let cardCornerRadius: CGFloat = 24
     private let cardMaxWidth: CGFloat = 360
 
+    init(
+        onCapture: @escaping (CameraWiFiScreenParser.Credentials) -> Void,
+        onManualEntry: @escaping (CameraWiFiScreenParser.Credentials) -> Void,
+        onCancel: @escaping () -> Void,
+        startsInManualEntry: Bool = false
+    ) {
+        self.onCapture = onCapture
+        self.onManualEntry = onManualEntry
+        self.onCancel = onCancel
+        _showsManualEntry = State(initialValue: startsInManualEntry)
+    }
+
     var body: some View {
         GeometryReader { proxy in
             // The viewfinder is the flexible element in the vertical stack. Cap its height so the
-            // whole card (title + instruction + viewfinder + Cancel) fits within the short,
-            // landscape-locked (~402pt tall) canvas with comfortable margins and no clipping.
-            let viewfinderMaxHeight = max(132, min(240, proxy.size.height - 232))
+            // whole card (title + instruction + viewfinder + actions) fits within the short,
+            // ~402pt landscape canvas with comfortable margins and no clipping. Recognition help
+            // borrows height from the viewfinder rather than growing the card past an edge.
+            let fixedHeight: CGFloat = scanIssueMessage == nil ? 232 : 280
+            let viewfinderMaxHeight = max(112, min(240, proxy.size.height - fixedHeight))
 
             ZStack {
                 // Transparent full-screen tap target for dismiss. The *visible* blur backdrop is
@@ -44,9 +65,20 @@ struct CameraWiFiScannerScreen: View {
     private func card(viewfinderMaxHeight: CGFloat) -> some View {
         VStack(spacing: 16) {
             header
-            viewfinder
-                .frame(maxHeight: viewfinderMaxHeight)
-            cancelButton
+            if showsManualEntry {
+                manualEntryForm
+            } else {
+                viewfinder
+                    .frame(maxHeight: viewfinderMaxHeight)
+                if let scanIssueMessage {
+                    Text(scanIssueMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                scanActions
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity)
@@ -62,27 +94,35 @@ struct CameraWiFiScannerScreen: View {
 
     private var header: some View {
         VStack(spacing: 8) {
-            Text("Scan Wi‑Fi Details")
+            Text(showsManualEntry ? "Enter Wi‑Fi Details" : "Scan Wi‑Fi Details")
                 .font(.title3.weight(.bold))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
 
-            Text(
-                "Point your phone at the camera's Connection wizard screen showing the SSID and key."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
+            Text(headerDetail)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var headerDetail: String {
+        if showsManualEntry {
+            return "Copy the SSID and key exactly as they appear on the camera screen."
+        }
+        return "Point your phone at the camera's Connection wizard screen showing the SSID and key."
     }
 
     /// Rounded viewfinder window holding the live scan feed (or a placeholder when unsupported).
     private var viewfinder: some View {
         ZStack {
             if DataScannerViewController.isSupported {
-                CameraWiFiScannerRepresentable(onCapture: onCapture)
+                CameraWiFiScannerRepresentable(
+                    onCapture: onCapture,
+                    onIssue: { scanIssue = $0 }
+                )
             } else {
                 unsupportedPlaceholder
             }
@@ -94,6 +134,17 @@ struct CameraWiFiScannerScreen: View {
             RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
                 .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
         )
+    }
+
+    private var scanIssueMessage: String? {
+        switch scanIssue {
+        case .needsKey:
+            "SSID found. Keep the key in frame, or enter both details manually."
+        case .unsupportedSSID:
+            "Camera text found, but this SSID format wasn't recognized. Enter it manually."
+        case .credentials, .noCredentials, nil:
+            nil
+        }
     }
 
     private var unsupportedPlaceholder: some View {
@@ -112,15 +163,75 @@ struct CameraWiFiScannerScreen: View {
         }
     }
 
-    private var cancelButton: some View {
-        Button(role: .cancel, action: onCancel) {
-            Text("Cancel")
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity)
+    private var scanActions: some View {
+        HStack(spacing: 12) {
+            Button("Enter manually") {
+                showsManualEntry = true
+            }
+            .accessibilityHint("Opens fields for the camera network name and key")
+
+            Button("Cancel", role: .cancel, action: onCancel)
+                .accessibilityHint("Closes the scanner without joining")
         }
+        .font(.body.weight(.semibold))
         .buttonStyle(.bordered)
         .controlSize(.large)
-        .accessibilityHint("Closes the scanner without joining")
+        .frame(maxWidth: .infinity)
+    }
+
+    private var manualEntryForm: some View {
+        VStack(spacing: 12) {
+            TextField("Camera Wi-Fi SSID", text: $manualSSID)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .textContentType(.none)
+                .accessibilityLabel("Camera Wi-Fi SSID")
+
+            SecureField("Camera Wi-Fi key", text: $manualKey)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textContentType(.password)
+                .privacySensitive()
+                .accessibilityLabel("Camera Wi-Fi key")
+
+            if manualSubmissionAttempted, manualCredentials == nil {
+                Text("Enter the complete SSID and an 8–63 character Wi-Fi key.")
+                    .font(.caption)
+                    .foregroundStyle(Color(.systemRed))
+                    .multilineTextAlignment(.center)
+            }
+
+            Button("Use These Details") {
+                submitManualCredentials()
+            }
+            .font(.body.weight(.semibold))
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+
+            HStack(spacing: 12) {
+                Button("Back to scan") {
+                    manualSubmissionAttempted = false
+                    showsManualEntry = false
+                }
+                Button("Cancel", role: .cancel, action: onCancel)
+            }
+            .font(.body.weight(.semibold))
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+        }
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private var manualCredentials: CameraWiFiScreenParser.Credentials? {
+        CameraWiFiScreenParser.manualCredentials(ssid: manualSSID, key: manualKey)
+    }
+
+    private func submitManualCredentials() {
+        manualSubmissionAttempted = true
+        guard let manualCredentials else { return }
+        onManualEntry(manualCredentials)
     }
 }
 
@@ -128,6 +239,7 @@ struct CameraWiFiScannerScreen: View {
 /// valid Nikon SSID + key.
 private struct CameraWiFiScannerRepresentable: UIViewControllerRepresentable {
     let onCapture: (CameraWiFiScreenParser.Credentials) -> Void
+    let onIssue: (CameraWiFiScreenParser.Result) -> Void
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
         let scanner = DataScannerViewController(
@@ -148,15 +260,21 @@ private struct CameraWiFiScannerRepresentable: UIViewControllerRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onCapture: onCapture)
+        Coordinator(onCapture: onCapture, onIssue: onIssue)
     }
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         private let onCapture: (CameraWiFiScreenParser.Credentials) -> Void
+        private let onIssue: (CameraWiFiScreenParser.Result) -> Void
         private var didCapture = false
+        private var lastIssue: CameraWiFiScreenParser.Result?
 
-        init(onCapture: @escaping (CameraWiFiScreenParser.Credentials) -> Void) {
+        init(
+            onCapture: @escaping (CameraWiFiScreenParser.Credentials) -> Void,
+            onIssue: @escaping (CameraWiFiScreenParser.Result) -> Void
+        ) {
             self.onCapture = onCapture
+            self.onIssue = onIssue
         }
 
         func dataScanner(
@@ -184,10 +302,19 @@ private struct CameraWiFiScannerRepresentable: UIViewControllerRepresentable {
                 if case .text(let text) = item { return text.transcript }
                 return nil
             }
-            guard let credentials = CameraWiFiScreenParser.parse(lines: lines) else { return }
-            didCapture = true
-            scanner.stopScanning()
-            onCapture(credentials)
+            let result = CameraWiFiScreenParser.result(lines: lines)
+            switch result {
+            case .credentials(let credentials):
+                didCapture = true
+                scanner.stopScanning()
+                onCapture(credentials)
+            case .needsKey, .unsupportedSSID:
+                guard lastIssue != result else { return }
+                lastIssue = result
+                onIssue(result)
+            case .noCredentials:
+                break
+            }
         }
     }
 }

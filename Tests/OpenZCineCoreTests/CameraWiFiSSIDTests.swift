@@ -13,6 +13,19 @@ import Testing
     #expect(CameraWiFiSSID.deriveSSID(fromCameraName: "PTP-IP Camera") == nil)
 }
 
+@Test func cameraWiFiSSIDRecognizesModelSpecificNikonZAccessPointShapes() {
+    #expect(CameraWiFiSSID.isNikonZAccessPoint("NIKON_ZR_01234"))
+    #expect(CameraWiFiSSID.isNikonZAccessPoint("NIKONZ_8_X12345"))
+    #expect(CameraWiFiSSID.isNikonZAccessPoint("nikon-z-9-98765"))
+}
+
+@Test func cameraWiFiSSIDRejectsUnrelatedOrMalformedNetworkNames() {
+    #expect(!CameraWiFiSSID.isNikonZAccessPoint("HomeNetwork"))
+    #expect(!CameraWiFiSSID.isNikonZAccessPoint("NIKON_CAMERA_12345"))
+    #expect(!CameraWiFiSSID.isNikonZAccessPoint("NIKONZ@8@12345"))
+    #expect(!CameraWiFiSSID.isNikonZAccessPoint("NIKONZ_CAMERA"))
+}
+
 @Test func cameraWiFiSSIDPrefersStoredSSIDOnSavedRecord() {
     let saved = PTPIPSavedCameraRecord(
         host: "192.168.1.1",
@@ -117,6 +130,12 @@ import Testing
         )
     )
     #expect(
+        CameraWiFiJoinPolicy.isOnCameraAccessPoint(
+            localAddresses: ["192.168.1.42"],
+            connectedSSID: "NIKONZ_8_X12345"
+        )
+    )
+    #expect(
         !CameraWiFiJoinPolicy.isOnCameraAccessPoint(
             localAddresses: ["192.168.1.42"],
             connectedSSID: "HomeNetwork"
@@ -181,7 +200,7 @@ import Testing
         savedCameras: [],
         connectedSSID: "HomeNetwork"
     )
-    #expect(target == .ssidPrefix("NIKON_ZR_"))
+    #expect(target == .ssidPrefix("NIKON"))
 }
 
 @Test func proactiveJoinTargetUsesPrefixWithNoSavedCameras() {
@@ -189,7 +208,7 @@ import Testing
         localAddresses: ["10.0.0.12"],
         savedCameras: []
     )
-    #expect(target == .ssidPrefix("NIKON_ZR_"))
+    #expect(target == .ssidPrefix("NIKON"))
 }
 
 @Test func proactiveJoinSessionPolicyRespectsPersistedUserDenied() {
@@ -230,13 +249,14 @@ import Testing
 }
 
 @Test func joinTargetCredentialLookupFallsBackToPrefix() {
-    let target = CameraWiFiJoinPolicy.JoinTarget(ssidPrefix: CameraWiFiSSID.nikonAccessPointPrefix)
+    let target = CameraWiFiJoinPolicy.JoinTarget(
+        ssidPrefix: CameraWiFiSSID.nikonAccessPointBrandPrefix)
     let lookup = CameraWiFiJoinPolicy.credentialLookupSSID(
         for: target,
         resolvedSSID: nil
     )
     #expect(lookup.ssid == nil)
-    #expect(lookup.prefix == CameraWiFiSSID.nikonAccessPointPrefix)
+    #expect(lookup.prefix == CameraWiFiSSID.nikonAccessPointBrandPrefix)
 }
 
 @Test func connectionProgressJoiningWiFiCopy() {

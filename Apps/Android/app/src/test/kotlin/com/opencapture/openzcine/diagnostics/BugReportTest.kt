@@ -88,8 +88,9 @@ class BugReportTest {
     }
 
     @Test
-    fun `v2 activity log contains only closed event names and no device text`() {
-        val activityLog = listOf("app.launched", "live-view.started")
+    fun `v2 activity log contains only closed event and incident codes with no device text`() {
+        val activityLog =
+            listOf("app.launched", "live-view.started", "error.connection.failed")
         val payload =
             BugReportAttachmentPayload.from(
                 draft =
@@ -113,7 +114,7 @@ class BugReportTest {
                 "\"appVersion\":\"0.1.117\",\"buildNumber\":\"117\"," +
                 "\"osVersion\":\"Android 16 (API 36)\",\"deviceClass\":\"phone\"," +
                 "\"connection\":\"usb\"},\"activityLog\":[\"app.launched\"," +
-                "\"live-view.started\"]}",
+                "\"live-view.started\",\"error.connection.failed\"]}",
             payload.toJson(),
         )
         assertFalse(payload.toJson().contains("Bob's iPhone"))
