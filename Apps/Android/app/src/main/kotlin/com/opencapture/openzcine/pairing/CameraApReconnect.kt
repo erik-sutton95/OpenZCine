@@ -16,11 +16,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * Post-Confirm camera-AP readiness helpers.
  *
- * Samsung (and some other OEMs) can delay or skip NetworkCallback loss/return for
- * peer-to-peer WifiNetworkSpecifier networks after the body restarts its AP.
- * Waiting only on reassociation can pin the UI on "Confirm on camera" for the full
- * timeout, then fail saved-profile connect against a stale bind. Probing the fixed
- * PTP-IP host in parallel exits as soon as the body answers again.
+ * After the operator taps Confirm on the body, Nikon reboots the camera AP.
+ * The working "My cameras" path always does a **full** Wi‑Fi rejoin then
+ * restore-profile-then-pair. Post-first-pair reconnect must do the same —
+ * trusting a pre-reboot process bind is what left the UI on Connecting until
+ * timeout on Samsung flagships.
  */
 
 /** How often to poke the camera's PTP-IP port while waiting for body Confirm. */
@@ -48,14 +48,11 @@ internal fun probePtpIpReachable(
     }
 
 /**
- * Suspend until the camera AP is ready for a saved-profile reconnect after body Confirm.
+ * Suspend until the camera AP looks ready after body Confirm (best-effort).
  *
- * Races:
- * 1. [awaitReassociation] — OEM callback when the AP drops and returns
- * 2. Continuous TCP probes to the fixed camera-AP host — wins when PTP answers even if
- *    callbacks never fire (common on Samsung)
- *
- * Returns `true` when either path succeeds before [timeoutMillis].
+ * Races reassociation callbacks with TCP probes. Returns when either succeeds
+ * or [timeoutMillis] elapses — callers should still force a clean rejoin
+ * afterward (My-cameras parity).
  */
 internal suspend fun awaitCameraApReadyAfterConfirm(
     awaitReassociation: suspend (timeoutMillis: Long) -> Boolean,
@@ -71,9 +68,10 @@ internal suspend fun awaitCameraApReadyAfterConfirm(
             }
         val probe =
             async(Dispatchers.IO) {
-                if (isProcessBound() && probePtpIpReachable(host)) return@async true
+                // Only treat a probe as success when we still own a process bind,
+                // otherwise a phantom route can exit the wait early.
                 while (isActive && System.nanoTime() < deadline) {
-                    if (probePtpIpReachable(host)) return@async true
+                    if (isProcessBound() && probePtpIpReachable(host)) return@async true
                     delay(CAMERA_AP_PTP_PROBE_INTERVAL_MILLIS)
                 }
                 false
@@ -83,12 +81,9 @@ internal suspend fun awaitCameraApReadyAfterConfirm(
                 reassociation.onAwait { ok ->
                     if (ok) {
                         probe.cancel()
-                        // AP is back. A short port wait improves the first Init hit rate;
-                        // the reconnect loop still retries if PTP is not ready yet.
-                        awaitPtpPortBriefly(host, maxWaitMillis = 1_200L)
+                        awaitPtpPortBriefly(host, maxWaitMillis = 2_000L)
                         true
                     } else {
-                        // Still race the probe for remaining budget — reassociation alone failed.
                         probe.await()
                     }
                 }
@@ -122,11 +117,12 @@ private suspend fun awaitPtpPortBriefly(host: String, maxWaitMillis: Long = 2_50
 }
 
 /**
- * Runs the post-Confirm reconnect loop: ensure Wi‑Fi, wait for PTP port, then saved-profile
- * connect until success or [timeoutMillis].
- *
- * [joinCameraAp] always performs a full join (release + request). Call it when unbound or after
- * repeated Init failures on a stale bind. Prefer [ensureJoined] only when [isProcessBound] is false.
+ * Post-Confirm reconnect loop — My-cameras shape:
+ * 1. Force-join the camera AP (release + specifier) at least once
+ * 2. Settle
+ * 3. Wait for PTP port
+ * 4. Restore-profile-then-pair connect with short retries
+ * 5. Force rejoin again after repeated Init failures
  */
 internal suspend fun reconnectCameraApAfterConfirm(
     rejoinSsid: String?,
@@ -136,47 +132,65 @@ internal suspend fun reconnectCameraApAfterConfirm(
     forceJoin: suspend (ssid: String, passphrase: String?, timeoutMillis: Int) -> Boolean,
     connectSavedProfile: suspend () -> Boolean,
     onPhaseReconnecting: () -> Unit,
+    alwaysForceJoinFirst: Boolean = true,
     timeoutMillis: Long = FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS,
 ): Boolean =
     withTimeoutOrNull(timeoutMillis) {
-        var bound = isProcessBound()
         var consecutiveInitFailures = 0
+        var didInitialForceJoin = false
         while (true) {
             onPhaseReconnecting()
             if (rejoinSsid != null) {
-                val force = consecutiveInitFailures >= 3
-                val needJoin = !bound || force
-                if (needJoin) {
+                val force =
+                    alwaysForceJoinFirst && !didInitialForceJoin ||
+                        consecutiveInitFailures >= 2 ||
+                        !isProcessBound()
+                if (force) {
                     val joined =
-                        if (force) {
-                            forceJoin(rejoinSsid, rejoinKey, FIRST_PAIR_REJOIN_TIMEOUT_MILLIS * 2)
-                        } else {
-                            ensureJoined(rejoinSsid, rejoinKey, FIRST_PAIR_REJOIN_TIMEOUT_MILLIS)
-                        }
+                        forceJoin(
+                            rejoinSsid,
+                            rejoinKey,
+                            if (didInitialForceJoin) {
+                                FIRST_PAIR_REJOIN_TIMEOUT_MILLIS * 2
+                            } else {
+                                // First rejoin after AP reboot — give Samsung time to show
+                                // the (often silent) re-association.
+                                20_000
+                            },
+                        )
+                    didInitialForceJoin = true
                     if (!joined) {
                         consecutiveInitFailures = 0
                         delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
-                        bound = isProcessBound()
                         continue
                     }
-                    bound = true
                     consecutiveInitFailures = 0
+                    // Same settle as the working My-cameras camera-AP path.
+                    delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
+                } else if (!isProcessBound()) {
+                    if (!ensureJoined(rejoinSsid, rejoinKey, FIRST_PAIR_REJOIN_TIMEOUT_MILLIS)) {
+                        delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                        continue
+                    }
                     delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                 }
             }
-            // Prefer waiting for the port before a full 10s Init attempt.
+            // Prefer waiting for the port before a full Init attempt.
             if (!withContext(Dispatchers.IO) { probePtpIpReachable() }) {
                 delay(CAMERA_AP_PTP_PROBE_INTERVAL_MILLIS)
-                bound = isProcessBound()
-                if (!bound) consecutiveInitFailures = 0
+                consecutiveInitFailures =
+                    if (isProcessBound()) consecutiveInitFailures else 0
+                // If we never joined, force-join on next loop.
+                if (!isProcessBound() && rejoinSsid != null) {
+                    didInitialForceJoin = false
+                }
                 continue
             }
             val ok = connectSavedProfile()
             if (ok) return@withTimeoutOrNull true
             consecutiveInitFailures += 1
-            bound = isProcessBound()
             delay(
-                if (bound && consecutiveInitFailures < 3) {
+                if (isProcessBound() && consecutiveInitFailures < 2) {
                     FIRST_PAIR_BOUND_RETRY_INTERVAL_MILLIS
                 } else {
                     FIRST_PAIR_RECONNECT_INTERVAL_MILLIS

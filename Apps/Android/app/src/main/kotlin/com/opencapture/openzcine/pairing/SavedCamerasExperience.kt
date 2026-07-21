@@ -211,6 +211,25 @@ public fun SavedCamerasExperience(
             }
         }
 
+    /** Same session shape as a normal My-cameras reconnect (restore-then-pair). */
+    fun createPostConfirmReconnectSession(record: SavedCameraRecord): CameraSession? =
+        when (record.transport) {
+            SavedCameraTransport.CAMERA_ACCESS_POINT,
+            SavedCameraTransport.PHONE_HOTSPOT,
+            -> environment.createSession(resolvedHost(record))
+            SavedCameraTransport.USB_C -> {
+                val source = environment.usbCameraSource ?: return null
+                val camera =
+                    usbCameras.firstOrNull {
+                        it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
+                    } ?: return null
+                when (val opened = source.open(camera)) {
+                    is UsbPtpOpenResult.Opened -> environment.createUsbSession(opened)
+                    is UsbPtpOpenResult.Rejected -> null
+                }
+            }
+        }
+
     suspend fun reconnectAfterNikonPairing(
         record: SavedCameraRecord,
         confirmPin: String? = null,
@@ -232,13 +251,17 @@ public fun SavedCamerasExperience(
             return withTimeoutOrNull(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
                 while (true) {
                     phase = SavedCameraPhase.Reconnecting(record.displayTitle)
-                    val session = createStrictSavedProfileSession(record)
+                    val session = createPostConfirmReconnectSession(record)
                     if (session != null) {
                         var handedOffSession = false
                         try {
                             session.connect()
                             val connected = session.state.value as? CameraSessionState.Connected
-                            if (connected != null) {
+                            if (
+                                connected != null &&
+                                    session.connectionProgress.value.phase !=
+                                        CameraConnectionPhase.CONFIRM_ON_CAMERA
+                            ) {
                                 handedOffSession = true
                                 return@withTimeoutOrNull PairedCamera(
                                     session = session,
@@ -269,6 +292,7 @@ public fun SavedCamerasExperience(
                 rejoinSsid = rejoinSsid,
                 rejoinKey = rejoinKey,
                 isProcessBound = environment.isCameraApProcessBound,
+                alwaysForceJoinFirst = true,
                 ensureJoined = environment.ensureCameraApJoined,
                 forceJoin = { ssid, key, timeout ->
                     environment.releaseCameraAp()
@@ -276,13 +300,18 @@ public fun SavedCamerasExperience(
                 },
                 connectSavedProfile = {
                     val session =
-                        createStrictSavedProfileSession(record)
+                        createPostConfirmReconnectSession(record)
                             ?: return@reconnectCameraApAfterConfirm false
                     var handedOffSession = false
                     try {
                         session.connect()
                         val connected = session.state.value as? CameraSessionState.Connected
-                        if (connected != null) {
+                        val phaseNow = session.connectionProgress.value.phase
+                        if (
+                            connected != null &&
+                                phaseNow != CameraConnectionPhase.CONFIRM_ON_CAMERA &&
+                                phaseNow != CameraConnectionPhase.PAIRING
+                        ) {
                             handedOffSession = true
                             paired =
                                 PairedCamera(

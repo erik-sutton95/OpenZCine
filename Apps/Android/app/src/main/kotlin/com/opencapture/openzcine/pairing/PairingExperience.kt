@@ -463,8 +463,11 @@ private fun pairingPhaseFor(progress: CameraConnectionProgress): PairingPhase? =
  * probe). Keep modest — TCP probe exits early once the body answers.
  */
 internal const val FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS: Long = 25_000L
-/** Wall clock for saved-profile reconnect after first-pair Confirm. */
-internal const val FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS: Long = 40_000L
+/**
+ * Wall clock for post-Confirm reconnect (includes a full 20s Wi‑Fi rejoin budget
+ * plus several Init retries — My-cameras shape).
+ */
+internal const val FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS: Long = 60_000L
 /** Gap between failed join/connect passes when the AP is not yet bound. */
 internal const val FIRST_PAIR_RECONNECT_INTERVAL_MILLIS: Long = 500L
 /**
@@ -556,11 +559,18 @@ public fun PairingExperience(
             SavedCameraTransport.USB_C -> record.host
         }
 
-    fun createSavedProfileReconnectSession(record: SavedCameraRecord): CameraSession? =
+    /**
+     * Post-confirm reconnect must mirror the My-cameras path that already works:
+     * [createSession] (restore-profile-then-pairing), **not** strict SAVED_PROFILE.
+     * Right after body Confirm the camera often still rejects pure saved-profile
+     * app-control for a few seconds; restore-then-pair recovers without a second
+     * Confirm when the profile is already trusted.
+     */
+    fun createPostConfirmReconnectSession(record: SavedCameraRecord): CameraSession? =
         when (record.transport) {
             SavedCameraTransport.CAMERA_ACCESS_POINT,
             SavedCameraTransport.PHONE_HOTSPOT,
-            -> environment.createSavedProfileSession(reconnectHost(record))
+            -> environment.createSession(reconnectHost(record))
             SavedCameraTransport.USB_C -> {
                 val source = environment.usbCameraSource ?: return null
                 val camera =
@@ -568,7 +578,7 @@ public fun PairingExperience(
                         it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host
                     } ?: return null
                 when (val opened = source.open(camera)) {
-                    is UsbPtpOpenResult.Opened -> environment.createSavedProfileUsbSession(opened)
+                    is UsbPtpOpenResult.Opened -> environment.createUsbSession(opened)
                     is UsbPtpOpenResult.Rejected -> null
                 }
             }
@@ -580,9 +590,10 @@ public fun PairingExperience(
     ): PairedCamera? {
         val isCameraAp = savedCamera.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
         // Stay on "Tap Confirm on the camera" while the body restarts its AP.
-        // Exit early when either reassociation or a PTP-IP probe succeeds.
         phase = PairingPhase.ConfirmOnCamera(confirmPin)
         if (isCameraAp) {
+            // Wait for AP return (callback and/or PTP port). Success is optional —
+            // we always rejoin next, matching My cameras.
             awaitCameraApReadyAfterConfirm(
                 awaitReassociation = environment.awaitCameraApRestart,
                 isProcessBound = environment.isCameraApProcessBound,
@@ -597,13 +608,19 @@ public fun PairingExperience(
             return withTimeoutOrNull(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
                 while (true) {
                     phase = PairingPhase.Reconnecting
-                    val session = createSavedProfileReconnectSession(savedCamera)
+                    val session = createPostConfirmReconnectSession(savedCamera)
                     if (session != null) {
                         var handedOff = false
                         try {
                             session.connect()
                             val connected = session.state.value as? CameraSessionState.Connected
-                            if (connected != null) {
+                            // A fresh pairing challenge here would require another body Confirm;
+                            // treat only a clean connected state as success.
+                            if (
+                                connected != null &&
+                                    session.connectionProgress.value.phase !=
+                                        CameraConnectionPhase.CONFIRM_ON_CAMERA
+                            ) {
                                 handedOff = true
                                 return@withTimeoutOrNull PairedCamera(
                                     session = session,
@@ -634,37 +651,57 @@ public fun PairingExperience(
                 rejoinSsid = rejoinSsid,
                 rejoinKey = rejoinKey,
                 isProcessBound = environment.isCameraApProcessBound,
+                // Always start with a full rejoin after body Confirm — the AP rebooted.
+                // Trusting a pre-reboot process bind is what left Connecting hung on Samsung.
+                alwaysForceJoinFirst = true,
                 ensureJoined = environment.ensureCameraApJoined,
                 forceJoin = { ssid, key, timeout ->
-                    // Tear down a stale peer-to-peer bind, then re-request with a budget.
                     environment.releaseCameraAp()
                     environment.ensureCameraApJoined(ssid, key, timeout)
                 },
                 connectSavedProfile = {
-                    val session = createSavedProfileReconnectSession(savedCamera) ?: return@reconnectCameraApAfterConfirm false
+                    val session =
+                        createPostConfirmReconnectSession(savedCamera)
+                            ?: return@reconnectCameraApAfterConfirm false
                     var handedOff = false
-                    try {
-                        session.connect()
-                        val connected = session.state.value as? CameraSessionState.Connected
-                        if (connected != null) {
-                            handedOff = true
-                            paired =
-                                PairedCamera(
-                                    session = session,
-                                    savedCamera =
-                                        savedCamera.copy(
-                                            host = reconnectHost(savedCamera),
-                                            cameraName = connected.identity.name,
-                                            lastSeenAtEpochMillis = System.currentTimeMillis(),
-                                        ),
-                                )
-                            true
-                        } else {
-                            false
-                        }
-                    } finally {
-                        if (!handedOff) {
-                            withContext(NonCancellable) { session.disconnect() }
+                    var sawBodyConfirm = false
+                    kotlinx.coroutines.coroutineScope {
+                        val progressWatcher =
+                            launch(start = CoroutineStart.UNDISPATCHED) {
+                                session.connectionProgress.collect { progress ->
+                                    if (
+                                        progress.phase == CameraConnectionPhase.CONFIRM_ON_CAMERA ||
+                                            progress.phase == CameraConnectionPhase.PAIRING
+                                    ) {
+                                        sawBodyConfirm = true
+                                    }
+                                }
+                            }
+                        try {
+                            session.connect()
+                            val connected = session.state.value as? CameraSessionState.Connected
+                            // Restore-then-pair must not fall through into another body Confirm.
+                            if (connected != null && !sawBodyConfirm) {
+                                handedOff = true
+                                paired =
+                                    PairedCamera(
+                                        session = session,
+                                        savedCamera =
+                                            savedCamera.copy(
+                                                host = reconnectHost(savedCamera),
+                                                cameraName = connected.identity.name,
+                                                lastSeenAtEpochMillis = System.currentTimeMillis(),
+                                            ),
+                                    )
+                                true
+                            } else {
+                                false
+                            }
+                        } finally {
+                            progressWatcher.cancel()
+                            if (!handedOff) {
+                                withContext(NonCancellable) { session.disconnect() }
+                            }
                         }
                     }
                 },

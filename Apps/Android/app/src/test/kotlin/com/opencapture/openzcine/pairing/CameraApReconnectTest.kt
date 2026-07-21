@@ -62,8 +62,30 @@ class CameraApReconnectTest {
                     forceJoin = { _, _, _ -> true },
                     connectSavedProfile = { true },
                     onPhaseReconnecting = {},
+                    alwaysForceJoinFirst = true,
                     timeoutMillis = 400,
                 )
             assertFalse(ok)
+        }
+
+    @Test
+    fun `reconnect force-joins first when alwaysForceJoinFirst is set`() =
+        runBlocking {
+            var forceJoins = 0
+            reconnectCameraApAfterConfirm(
+                rejoinSsid = "NIKON_ZR_TEST",
+                rejoinKey = "key",
+                isProcessBound = { forceJoins > 0 },
+                ensureJoined = { _, _, _ -> false },
+                forceJoin = { _, _, _ ->
+                    forceJoins += 1
+                    true
+                },
+                connectSavedProfile = { false },
+                onPhaseReconnecting = {},
+                alwaysForceJoinFirst = true,
+                timeoutMillis = 800,
+            )
+            assertTrue(forceJoins >= 1)
         }
 }
