@@ -197,11 +197,11 @@ void main() {
             && vTexSamplingCoord.y < 1.0 - inset.y
         ) {
             float g = edgeMagnitude(vTexSamplingCoord);
-            float thr = clamp(uPeakingThreshold * 30.0, 0.045, 0.14);
+            float threshold = clamp(uPeakingThreshold * 30.0, 0.045, 0.14);
             // Very narrow AA — almost a hard edge (ramp kept live for the linker).
-            float aa = thr * (0.06 + 0.04 * clamp(160.0 / max(uPeakingRamp, 1.0), 0.5, 1.5));
-            float core = smoothstep(thr, thr + aa, g);
-            float under = smoothstep(thr - aa * 0.35, thr, g) * (1.0 - core);
+            float aa = threshold * (0.06 + 0.04 * clamp(160.0 / max(uPeakingRamp, 1.0), 0.5, 1.5));
+            float core = smoothstep(threshold, threshold + aa, g);
+            float under = smoothstep(threshold - aa * 0.35, threshold, g) * (1.0 - core);
             color = mix(color, vec3(0.04, 0.04, 0.05), under * 0.28);
             color = mix(color, uPeakingColor, core);
         }

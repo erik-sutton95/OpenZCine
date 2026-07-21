@@ -1,14 +1,14 @@
 What's changed
 
-- Connecting to the camera over USB-C is now fast and reliable, even with a full memory card.
-- After plugging in, the camera row shows the card being prepared with a live percentage, and the Connect button switches from Preparing to ready the moment connecting will be instant. The connection card explains progress and shows readable errors with technical details underneath.
+- Focus peaking is thinner and stricter: edges read as a hairline, not a soft glow, so it stays useful on set under normal lighting.
+- Timecode in the camera header stays constant from the live-view feed instead of free-running while you work.
+- Connecting to the camera over USB-C is still fast and reliable, even with a full memory card. After plugging in, the camera row shows Preparing with a live percentage until Ready.
 - Disconnecting inside the app and reconnecting over USB-C no longer re-reads the card, so reconnects are immediate.
-- Plugging in a USB-C camera only adds it to the camera list; connecting is always your tap.
-- Wi-Fi setup now recognizes Nikon Z camera network names across models and localized camera menus. If scanning cannot validate the details, you can enter the camera's exact SSID and key manually.
+- Wi-Fi setup recognizes Nikon Z camera network names across models. If scanning cannot validate the details, you can enter the camera's exact SSID and key manually.
 
 Please test
 
-- Plug the camera into the iPhone with USB-C, confirm it appears in the list without connecting on its own, wait for the row to show Ready, then tap Connect and confirm it connects almost instantly.
-- Tap Connect right after plugging in and confirm the progress card counts up while reading the camera's card instead of sitting on a plain spinner.
-- Disconnect from inside the app and reconnect over USB-C; confirm it connects immediately without re-reading the card. Then unplug and replug the cable and confirm the row walks through Preparing back to Ready.
-- Open the camera's Connection wizard and scan its Wi-Fi details. Confirm the app advances when both fields are visible. Also try Enter manually, copy the exact SSID and key from the camera, and confirm the same connection card appears before joining.
+- Open live view, turn peaking on (try Low / Med / High). Confirm edges are thin and clean on high-contrast subjects, and soft out-of-focus areas do not light up as soup.
+- Confirm the timecode readout in the monitor header holds steady while live view is running.
+- Plug the camera into the iPhone with USB-C, wait for Ready, tap Connect, then disconnect and reconnect from inside the app without unplugging.
+- Open the camera's Connection wizard and scan its Wi-Fi details, or use Enter manually with the exact SSID and key from the camera.

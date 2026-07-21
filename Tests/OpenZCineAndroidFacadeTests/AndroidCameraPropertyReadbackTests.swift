@@ -45,8 +45,9 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(bootstrap.controls.baseISO == ["Low", "High"])
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
 
-        // One complete low-rate pass fills the fields intentionally omitted
-        // from the bounded bootstrap (lens, focus, audio, VR, and grid).
+        // Bootstrap already issued the full live-monitor set back-to-back. One
+        // additional steady-state pass exercises `.next` round-robin (and any
+        // idle-only extras such as storage / descriptor cadence).
         let androidPollOrder = PTPIPClientSession.androidMonitorPollOrder(isRecording: false)
         for _ in androidPollOrder {
             _ = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
@@ -71,31 +72,20 @@ struct AndroidCameraPropertyReadbackTests {
 
         let propertyReads =
             server.receivedRequests().filter { $0.operation == .getDevicePropValueEx }
-        let expectedBootstrap = [
-            PTPPropertyCode.movieISOSensitivity,
-            .movieBaseISO,
-            .movieShutterMode,
-            .movieShutterAngle,
-            .movieShutterSpeed,
-            .movieFNumber,
-            .movieWhiteBalance,
-            .movieWBColorTemp,
-            .movieRecordScreenSize,
-            .movieFileType,
-            .batteryLevel,
-            .warningStatus,
-        ].map(\.rawValue)
+        let expectedBootstrap = androidPollOrder.map(\.rawValue)
         let bootstrapReads = Array(
             propertyReads.prefix(expectedBootstrap.count).compactMap(\.parameters.first))
         #expect(bootstrapReads == expectedBootstrap)
-        #expect(
-            propertyReads.dropFirst(expectedBootstrap.count).first?.parameters.first
-                == PTPPropertyCode.movieWbTuneColorTemp.rawValue)
-        let roundRobinReads = Array(
-            propertyReads.dropFirst(expectedBootstrap.count + 1)
-                .prefix(androidPollOrder.count)
-                .compactMap(\.parameters.first))
-        #expect(roundRobinReads == androidPollOrder.map(\.rawValue))
+        // After the full burst, bootstrap still refreshes WB tint via a value
+        // read (descriptor path). Steady-state `.next` then resumes at index 0;
+        // idle extras (periodic D0A0 / storage) may interleave, so only require
+        // that every poll-order property appears again after the bootstrap.
+        let afterBootstrap = propertyReads.dropFirst(expectedBootstrap.count)
+            .compactMap(\.parameters.first)
+        #expect(afterBootstrap.contains(PTPPropertyCode.movieWbTuneColorTemp.rawValue))
+        for code in expectedBootstrap {
+            #expect(afterBootstrap.contains(code))
+        }
 
         let wire = AndroidCameraPropertyReadbackWire.encode(complete)
         let fields = wireFields(wire)

@@ -175,7 +175,7 @@ internal fun monitorTopPillPickers(
     ): Pair<MonitorPickerKind, MonitorPickerPresentation>? {
         val tile = primary[tileKind]
         // Only open when the tile has a camera-backed request with real options.
-        // Static fallback ladders are not writeable and must not seed the drum.
+        // Static fallback ladders are not writable and must not seed the drum.
         val cameraRequest = tile?.request?.takeIf { it.options.isNotEmpty() } ?: return null
         val options = cameraRequest.options
         val display = tile.value?.takeIf { it != "—" }

@@ -1111,7 +1111,7 @@ struct PTPIPClientSessionTests {
         let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
         #expect(bootstrap.result == .unsupported)
         // ZR falls back to lab-proven MovFileType raws when the descriptor is rejected so CODEC
-        // stays writeable; e-VR stays empty because the active codec is raw (or unknown).
+        // stays writable; e-VR stays empty because the active codec is raw (or unknown).
         #expect(bootstrap.controls.codecs.contains("R3D NE"))
         #expect(bootstrap.controls.electronicVR.isEmpty)
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
@@ -1182,7 +1182,7 @@ struct PTPIPClientSessionTests {
     }
 
     @Test func invalidScreenSizeDescriptorDoesNotWipeTheControlCatalog() throws {
-        // A single unparseable D0A0 used to be classified as transportFailed and aborted every
+        // A single unparsable D0A0 used to be classified as transportFailed and aborted every
         // subsequent descriptor, leaving the whole Android control surface empty.
         var options = FakeZRServer.Options()
         options.descriptorIdentityOverrides = [

@@ -520,10 +520,10 @@ private val EFFECTS_AGSL =
                 && src.x < sourceSize.x - PEAKING_EDGE_INSET
                 && src.y < sourceSize.y - PEAKING_EDGE_INSET) {
                 float g = edgeMagnitude(src);
-                float thr = clamp(peakingThreshold * 30.0, 0.045, 0.14);
-                float aa = thr * (0.06 + 0.04 * clamp(160.0 / max(peakingRamp, 1.0), 0.5, 1.5));
-                float core = smoothstep(thr, thr + aa, g);
-                float under = smoothstep(thr - aa * 0.35, thr, g) * (1.0 - core);
+                float threshold = clamp(peakingThreshold * 30.0, 0.045, 0.14);
+                float aa = threshold * (0.06 + 0.04 * clamp(160.0 / max(peakingRamp, 1.0), 0.5, 1.5));
+                float core = smoothstep(threshold, threshold + aa, g);
+                float under = smoothstep(threshold - aa * 0.35, threshold, g) * (1.0 - core);
                 color = mix(color, float3(0.04, 0.04, 0.05), under * 0.28);
                 color = mix(color, peakingColor, core);
             }

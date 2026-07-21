@@ -176,7 +176,7 @@ struct StartupHeader: View {
                 "Looking", "Pairing", "Reconnecting", "Starting", "Reading", "Discovering",
                 "Preparing",
             ]
-                .contains(statusTitle)
+            .contains(statusTitle)
         {
             return StartupColors.accent
         }

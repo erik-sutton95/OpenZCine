@@ -159,8 +159,8 @@ enum ImageEffectsCompositor {
         over base: CIImage, source: CIImage, settings: PeakingSettings, extent: CGRect
     ) -> CIImage {
         // Match Android: threshold×0.06 × 30, clamped — stricter Med for set use.
-        let thr = min(0.14, max(0.045, settings.threshold * 0.06 * 30.0))
-        let aa = thr * 0.10  // narrow AA — thin strokes
+        let threshold = min(0.14, max(0.045, settings.threshold * 0.06 * 30.0))
+        let aa = threshold * 0.10  // narrow AA — thin strokes
         // Minimal denoise: CIEdges alone is noisy; ~0.2 keeps ridges thin.
         let noiseFloorRadius = 0.2
         let edgeInset: CGFloat = 6
@@ -209,7 +209,7 @@ enum ImageEffectsCompositor {
 
         // Narrow AA band only — thin strokes, not soft highlighter.
         let gain = 1.0 / max(aa, 0.008)
-        let bias = -thr * gain
+        let bias = -threshold * gain
         let coreMask =
             edges
             .applyingFilter(
@@ -224,7 +224,7 @@ enum ImageEffectsCompositor {
             )
             .applyingFilter("CIColorClamp")
         let underGain = gain * 1.2
-        let underBias = -(thr - aa * 0.5) * underGain
+        let underBias = -(threshold - aa * 0.5) * underGain
         let underMask =
             edges
             .applyingFilter(
