@@ -3102,9 +3102,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Live view
 
-    /// Default poll cadence when no recording frame rate has been configured
-    /// (~30 fps). Prefer matching the camera-advertised movie rate via
-    /// ``configureLiveView(imageSize:compression:frameIntervalNanoseconds:)``.
+    /// Default poll cadence: fixed 60 Hz target (same as
+    /// ``AndroidLiveViewPolicyWire/targetFrameRate``).
     public static let liveViewFrameIntervalNanoseconds: UInt64 =
         AndroidLiveViewPolicyWire.standardFrameIntervalNanoseconds
 
@@ -3112,7 +3111,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
     public static let minimumLiveViewFrameIntervalNanoseconds: UInt64 =
         AndroidLiveViewPolicyWire.minimumFrameIntervalNanoseconds
 
-    /// Slowest accepted preview pull under thermal shedding (~10 fps).
+    /// Slowest accepted configure interval (validation only; policy always
+    /// targets 60 Hz).
     public static let maximumLiveViewFrameIntervalNanoseconds: UInt64 =
         AndroidLiveViewPolicyWire.maximumFrameIntervalNanoseconds
 

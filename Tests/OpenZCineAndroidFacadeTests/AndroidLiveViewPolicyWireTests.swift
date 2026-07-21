@@ -27,16 +27,13 @@ struct AndroidLiveViewPolicyWireTests {
                 isRecording: true,
                 cameraOverheating: false))
         // Recording caps quality at VGA; the JPEG-bias selector is still
-        // preview-only and the serious tier only slows preview pulls.
+        // preview-only. Cadence stays locked at 60 Hz under thermal.
         #expect(recordingUnderSeriousHeat.imageSize == 2)
         #expect(recordingUnderSeriousHeat.compression == 3)
-        // Fixed 60 Hz × serious 1.5 thermal multiplier.
-        #expect(
-            recordingUnderSeriousHeat.frameIntervalNanoseconds
-                == UInt64((Double(1_000_000_000 / 60) * 1.5).rounded()))
+        #expect(recordingUnderSeriousHeat.frameIntervalNanoseconds == 1_000_000_000 / 60)
     }
 
-    @Test("Recording frame rate is ignored; cadence stays locked at 60 Hz before thermal")
+    @Test("Recording frame rate is ignored; cadence stays locked at 60 Hz")
     func ignoresRecordingFrameRate() throws {
         let at25 = try #require(
             AndroidLiveViewPolicyWire.resolve(
@@ -69,10 +66,8 @@ struct AndroidLiveViewPolicyWireTests {
                 cameraOverheating: true))
         #expect(hot.imageSize == 1)
         #expect(hot.compression == 2)
-        // Fixed 60 Hz × critical 2.0 thermal multiplier.
-        #expect(
-            hot.frameIntervalNanoseconds
-                == UInt64((Double(1_000_000_000 / 60) * 2.0).rounded()))
+        // Overheat drops preview size; cadence stays at the fixed 60 Hz target.
+        #expect(hot.frameIntervalNanoseconds == 1_000_000_000 / 60)
         #expect(
             AndroidLiveViewPolicyWire.resolve(
                 streamPresetRaw: 9,

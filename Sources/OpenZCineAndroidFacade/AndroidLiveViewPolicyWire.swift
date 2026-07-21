@@ -26,20 +26,20 @@ public struct AndroidLiveViewRequest: Equatable, Sendable {
 /// Compose. The result controls only a disposable preview stream; it never
 /// changes the camera's recording configuration.
 ///
-/// Preview pull cadence is fixed at a **60 Hz ceiling**. Thermal shedding may
-/// lengthen the interval; it never speeds past 60 fps.
+/// Preview pull cadence is **always** ``targetFrameRate`` (60 Hz). Thermal
+/// shedding may still drop preview JPEG size; it never slows the pull target.
 public enum AndroidLiveViewPolicyWire {
-    /// Fixed monitor pull rate (max / default).
+    /// Fixed monitor pull rate (always).
     public static let targetFrameRate = 60
 
-    /// Fastest preview pull (~60 fps).
+    /// Preview pull interval for ``targetFrameRate`` (~16.7 ms at 60 Hz).
     public static let minimumFrameIntervalNanoseconds: UInt64 =
         1_000_000_000 / UInt64(targetFrameRate)
 
-    /// Slowest preview pull under thermal shedding (~10 fps).
+    /// Slowest accepted configure interval (validation only; policy never emits this).
     public static let maximumFrameIntervalNanoseconds: UInt64 = 100_000_000
 
-    /// Nominal 60 Hz interval (no thermal shedding).
+    /// Always equal to the 60 Hz target interval.
     public static let standardFrameIntervalNanoseconds: UInt64 =
         minimumFrameIntervalNanoseconds
 
@@ -47,7 +47,7 @@ public enum AndroidLiveViewPolicyWire {
     ///
     /// - Parameter recordingFrameRate: Ignored. Kept on the wire so older JNI
     ///   callers that still pass a body frame rate stay binary-compatible; the
-    ///   monitor always targets ``targetFrameRate`` (60 Hz) before thermal.
+    ///   monitor always targets ``targetFrameRate`` (60 Hz).
     public static func resolve(
         streamPresetRaw: Int,
         qualityBiasRaw: Int,
@@ -71,18 +71,18 @@ public enum AndroidLiveViewPolicyWire {
         return AndroidLiveViewRequest(
             imageSize: imageSize,
             compression: compression(for: qualityBias),
-            frameIntervalNanoseconds: frameIntervalNanoseconds(thermalTier: thermalTier))
+            frameIntervalNanoseconds: frameIntervalNanoseconds())
     }
 
-    /// Preview pull interval at the fixed 60 Hz ceiling, after thermal shedding.
+    /// Always the fixed 60 Hz pull interval.
+    ///
+    /// - Parameter thermalTier: Ignored. Kept so existing call sites compile;
+    ///   thermal load sheds JPEG size, not cadence.
     public static func frameIntervalNanoseconds(
         thermalTier: ThermalTier = .nominal
     ) -> UInt64 {
-        let baseNanos = Double(standardFrameIntervalNanoseconds)
-        let scaled = UInt64((baseNanos * thermalTier.cadenceMultiplier).rounded())
-        return min(
-            max(scaled, minimumFrameIntervalNanoseconds),
-            maximumFrameIntervalNanoseconds)
+        _ = thermalTier
+        return standardFrameIntervalNanoseconds
     }
 
     /// Encodes the safe request as `size<TAB>compression<TAB>intervalNanos` for JNI.

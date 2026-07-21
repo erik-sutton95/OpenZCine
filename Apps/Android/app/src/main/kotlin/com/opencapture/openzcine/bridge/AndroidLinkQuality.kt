@@ -31,11 +31,11 @@ public data class SwiftLiveViewRequest(
 
     internal companion object {
         const val NANOS_PER_SECOND = 1_000_000_000L
-        /** Fixed 60 Hz monitor pull ceiling. */
+        /** Fixed 60 Hz monitor pull target (always). */
         const val MIN_FRAME_INTERVAL_NANOS = NANOS_PER_SECOND / 60L
-        /** ~10 fps floor under thermal shedding. */
+        /** Validation floor only; policy never emits slower than 60 Hz. */
         const val MAX_FRAME_INTERVAL_NANOS = 100_000_000L
-        /** Nominal cadence: fixed 60 Hz before thermal shedding. */
+        /** Always 60 Hz. */
         const val STANDARD_FRAME_INTERVAL_NANOS = MIN_FRAME_INTERVAL_NANOS
         val DEFAULT = SwiftLiveViewRequest(2, 2, STANDARD_FRAME_INTERVAL_NANOS)
     }
@@ -49,7 +49,7 @@ internal data class SwiftLiveViewPolicyInput(
     val isRecording: Boolean,
     val cameraOverheating: Boolean,
     /**
-     * Unused — monitor cadence is fixed at 60 Hz. Kept so call sites that
+     * Unused — monitor cadence is always 60 Hz. Kept so call sites that
      * still pass a body frame rate compile cleanly.
      */
     val recordingFrameRate: Int? = null,
