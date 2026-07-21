@@ -877,9 +877,12 @@ internal data class RedLutImportResult(
  *
  * Mirrors iOS `LUTFileStore.importZip`: walk every `.cube` entry (nested folders
  * OK, skip `__MACOSX`), keep original basenames for display, and accept up to
- * 512 files / 16 MB each (shared parser limit). Uses [java.util.zip.ZipFile]
- * instead of a stream reader so deflate/store and central-directory layouts
- * from RED's pack open reliably.
+ * 512 files / 16 MB each (shared parser limit).
+ *
+ * Uses [java.util.zip.ZipInputStream] rather than [java.util.zip.ZipFile]:
+ * Android's ZipFile rejects RED IPP2 packs that list a root entry named `/`
+ * ("invalid zip entry path: /"). Streaming local-file headers still yields the
+ * nested `.cube` payloads.
  */
 internal suspend fun importRedZipOrCube(
     context: Context,
@@ -901,65 +904,108 @@ internal suspend fun importRedZipOrCube(
                 detail = "RED's download was not a readable zip archive. Please try again.",
             )
         }
-        var imported = 0
-        var found = 0
-        var rejected = 0
-        try {
-            java.util.zip.ZipFile(file).use { zip ->
-                val entries = zip.entries().asSequence().toList()
-                for (entry in entries) {
-                    if (found >= MAX_RED_ZIP_CUBE_FILES) break
-                    if (entry.isDirectory) continue
-                    val path = entry.name.replace('\\', '/')
-                    if (path.contains("__MACOSX/", ignoreCase = true)) continue
-                    if (path.substringAfterLast('/').startsWith("._")) continue
-                    if (!path.endsWith(".cube", ignoreCase = true)) continue
-                    found += 1
-                    if (entry.size > MAX_RED_CUBE_BYTES || entry.size < 1L) {
-                        rejected += 1
-                        continue
-                    }
-                    val baseName = path.substringAfterLast('/').ifBlank { "red-lut.cube" }
-                    val bytes =
-                        try {
-                            zip.getInputStream(entry).use { it.readBytes() }
-                        } catch (_: Exception) {
-                            rejected += 1
-                            continue
-                        }
-                    if (bytes.isEmpty() || bytes.size > MAX_RED_CUBE_BYTES) {
-                        rejected += 1
-                        continue
-                    }
-                    val temp = File(context.cacheDir, "red-import-$baseName")
-                    try {
-                        temp.writeBytes(bytes)
-                        // Preserve the RED file name (not a random temp stem) for display.
-                        if (library.importRedCubeFile(temp) != null) {
-                            imported += 1
-                        } else {
-                            rejected += 1
-                        }
-                    } finally {
-                        temp.delete()
-                    }
-                }
+        val cubes =
+            try {
+                extractCubeEntriesFromZip(file)
+            } catch (error: Exception) {
+                return@withContext RedLutImportResult(
+                    importedCount = 0,
+                    detail =
+                        "Couldn't open RED's archive (${error.message ?: "unknown error"}). Please try again.",
+                )
             }
-        } catch (error: Exception) {
+        if (cubes.isEmpty()) {
             return@withContext RedLutImportResult(
                 importedCount = 0,
-                foundCubeEntries = found,
-                rejectedCubeEntries = rejected,
-                detail =
-                    "Couldn't open RED's archive (${error.message ?: "unknown error"}). Please try again.",
+                foundCubeEntries = 0,
+                detail = "We downloaded RED's file but it didn't contain any .cube LUTs.",
             )
+        }
+        var imported = 0
+        var rejected = 0
+        for (cube in cubes) {
+            val temp = File(context.cacheDir, "red-import-${cube.fileName}")
+            try {
+                temp.writeBytes(cube.bytes)
+                if (library.importRedCubeFile(temp) != null) {
+                    imported += 1
+                } else {
+                    rejected += 1
+                }
+            } finally {
+                temp.delete()
+            }
         }
         RedLutImportResult(
             importedCount = imported,
-            foundCubeEntries = found,
+            foundCubeEntries = cubes.size,
             rejectedCubeEntries = rejected,
         )
     }
+
+/** One `.cube` payload pulled from a RED zip, with a safe display basename. */
+internal data class RedZipCubeEntry(val fileName: String, val bytes: ByteArray)
+
+/**
+ * Streams cube entries out of a RED zip, skipping junk and unsafe paths.
+ *
+ * Entry names may include a leading `/` (RED packs) or nested folders; only the
+ * final path segment is kept for the on-disk display name.
+ */
+internal fun extractCubeEntriesFromZip(file: File): List<RedZipCubeEntry> {
+    val out = ArrayList<RedZipCubeEntry>(64)
+    java.util.zip.ZipInputStream(file.inputStream().buffered()).use { zip ->
+        while (true) {
+            val entry = zip.nextEntry ?: break
+            try {
+                if (out.size >= MAX_RED_ZIP_CUBE_FILES) break
+                if (entry.isDirectory) continue
+                val path = normalizeZipEntryPath(entry.name) ?: continue
+                if (!path.endsWith(".cube", ignoreCase = true)) continue
+                val baseName = path.substringAfterLast('/').ifBlank { continue }
+                if (baseName.startsWith("._")) continue
+                if (path.contains("__MACOSX/", ignoreCase = true)) continue
+                val bytes = readZipEntryBounded(zip, MAX_RED_CUBE_BYTES) ?: continue
+                if (bytes.isEmpty()) continue
+                out += RedZipCubeEntry(fileName = baseName, bytes = bytes)
+            } finally {
+                runCatching { zip.closeEntry() }
+            }
+        }
+    }
+    return out
+}
+
+/**
+ * Normalizes a zip entry name for cube matching. Returns null for paths we must
+ * not treat as LUT files (empty, root-only `/`, traversal, etc.).
+ */
+internal fun normalizeZipEntryPath(raw: String): String? {
+    var path = raw.replace('\\', '/')
+    // Android ZipFile rejects a bare "/" entry; stream readers still surface it.
+    while (path.startsWith("/")) path = path.removePrefix("/")
+    if (path.isBlank() || path == "." || path == "..") return null
+    if (path.split('/').any { it == ".." }) return null
+    return path
+}
+
+/** Reads one zip entry up to [maxBytes]; null when empty or over the cap. */
+private fun readZipEntryBounded(
+    zip: java.util.zip.ZipInputStream,
+    maxBytes: Int,
+): ByteArray? {
+    val buffer = java.io.ByteArrayOutputStream()
+    val chunk = ByteArray(64 * 1024)
+    var total = 0
+    while (true) {
+        val read = zip.read(chunk)
+        if (read < 0) break
+        total += read
+        if (total > maxBytes) return null
+        buffer.write(chunk, 0, read)
+    }
+    return buffer.toByteArray()
+}
 
 /** Per-cube size cap — matches the shared Android/Swift 16 MB LUT source limit. */
 private const val MAX_RED_CUBE_BYTES: Int = 16 * 1024 * 1024

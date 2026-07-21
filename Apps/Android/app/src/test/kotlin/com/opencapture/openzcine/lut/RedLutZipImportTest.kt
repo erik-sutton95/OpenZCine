@@ -29,7 +29,7 @@ class RedLutZipImportTest {
     }
 
     @Test
-    fun `zip with nested cubes is openable by ZipFile`() {
+    fun `extractCubeEntriesFromZip finds nested cubes and skips mac junk`() {
         val zip = temp.newFile("nested.zip")
         ZipOutputStream(zip.outputStream()).use { out ->
             out.putNextEntry(ZipEntry("pack/REC709/A.cube"))
@@ -43,17 +43,33 @@ class RedLutZipImportTest {
             out.closeEntry()
         }
         assertTrue(zip.looksLikeZipArchive())
-        java.util.zip.ZipFile(zip).use { archive ->
-            val cubes =
-                archive.entries().asSequence()
-                    .filter { !it.isDirectory }
-                    .map { it.name.replace('\\', '/') }
-                    .filter { it.endsWith(".cube", ignoreCase = true) }
-                    .filter { !it.contains("__MACOSX/") }
-                    .filter { !it.substringAfterLast('/').startsWith("._") }
-                    .toList()
-            assertTrue(cubes == listOf("pack/REC709/A.cube"))
+        val cubes = extractCubeEntriesFromZip(zip)
+        assertTrue(cubes.size == 1)
+        assertTrue(cubes.single().fileName == "A.cube")
+        assertTrue(cubes.single().bytes.isNotEmpty())
+    }
+
+    @Test
+    fun `normalizeZipEntryPath strips absolute roots and rejects traversal`() {
+        assertTrue(normalizeZipEntryPath("/REC709/Look.cube") == "REC709/Look.cube")
+        assertTrue(normalizeZipEntryPath("/") == null)
+        assertTrue(normalizeZipEntryPath("../evil.cube") == null)
+        assertTrue(normalizeZipEntryPath("ok/Look.cube") == "ok/Look.cube")
+    }
+
+    @Test
+    fun `extractCubeEntriesFromZip accepts absolute-looking cube paths`() {
+        // RED packs have been observed with leading-slash entry names that make
+        // Android ZipFile throw "invalid zip entry path: /".
+        val zip = temp.newFile("abs.zip")
+        ZipOutputStream(zip.outputStream()).use { out ->
+            out.putNextEntry(ZipEntry("/REC709/Abs.cube"))
+            out.write(MINIMAL_CUBE.toByteArray())
+            out.closeEntry()
         }
+        val cubes = extractCubeEntriesFromZip(zip)
+        assertTrue(cubes.size == 1)
+        assertTrue(cubes.single().fileName == "Abs.cube")
     }
 
     companion object {
