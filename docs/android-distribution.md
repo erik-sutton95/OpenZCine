@@ -3,19 +3,20 @@
 Signed phone and Wear OS Android App Bundles are built and uploaded to their Google Play
 **internal testing** tracks by [`play-internal.yml`](../.github/workflows/play-internal.yml).
 Releases are deliberate: the workflow runs on manual dispatch or an `android-v*` tag, never on
-plain merges.
+plain merges. The repository variable `PLAY_UPLOAD_ENABLED` is an emergency/bootstrap switch; it
+must be exactly `true` or the upload job is skipped.
 
 ## Flow
 
 ```text
 feature PR → CI (Gradle build + tests + lint) → merge to main
-→ tag android-v* (or Actions → Play Internal → Run workflow)
+→ tag android-v<openzcine.versionName> (or run Play Internal from main)
 → signed phone + Wear .aab files → Play phone + Wear internal tracks
 ```
 
 The track goes live only after the [one-time Play console setup](#one-time-play-console-setup)
-below, including Google's rule that the **first** `.aab` reaches the track through a manual console
-upload.
+below. Keep `PLAY_UPLOAD_ENABLED=false` until the app, upload key, service account, and first manual
+phone/Wear releases all exist.
 
 ## Version numbers
 
@@ -40,7 +41,9 @@ stream ever falls below the highest phone version code already in the Play conso
 Erik's checklist, in order:
 
 1. **Create the app** — [Play Console](https://play.google.com/console) → **Create app**, package
-   name `com.opencapture.openzcine` (must match `applicationId`; it is permanent).
+   name `com.opencapture.openzcine` (must match `applicationId`; it is permanent). Complete any
+   dashboard setup tasks that block testing releases, including app access, ads, content rating,
+   target audience, Data safety, and the privacy-policy/store-listing fields Play requests.
 2. **Generate the upload keystore** — locally, `just android-keystore`. It writes
    `.local/android/upload-keystore.jks` (gitignored) and prints the follow-up steps. Back up the
    file and password; enroll in **Play App Signing** (the default) so this is only the *upload*
@@ -48,18 +51,21 @@ Erik's checklist, in order:
 3. **Service account for the API** — in [Google Cloud Console](https://console.cloud.google.com):
    create (or pick) a project, enable the **Google Play Android Developer API**, create a service
    account, and download its **JSON key**. Then in Play Console → **Users and permissions** →
-   invite the service account's email and grant it release permissions (release-manager level:
-   "Release apps to testing tracks" and app access for OpenZCine).
+   invite the service account's email and grant app-scoped access to OpenZCine plus **Release apps
+   to testing tracks**. Do not grant account-wide administration.
 4. **Enable Wear OS** — in Play Console, opt the app into the Wear OS form factor. The phone and
    watch use the same package and upload/app-signing identity, but remain separate artifacts with
    unique version codes.
-5. **First uploads are manual** — Google requires the first bundle on a track to be uploaded
-   through the console. Build locally ([Local signed build](#local-signed-build)), then create the
-   phone internal release with `app-release.aab` and the Wear OS internal release with
-   `wear-release.aab`. Add the same internal-tester email list to both tracks.
-6. **Create the GitHub environment** — repo **Settings → Environments → New environment** named
-   `play` (mirrors the `testflight` environment), with the secrets below. Optionally restrict it
-   to `main` and tags, or require approval.
+5. **First uploads are manual** — build locally ([Local signed build](#local-signed-build)), then
+   create the first phone internal release with `app-release.aab` and the first Wear OS internal
+   release with `wear-release.aab`. This registers both artifact streams before the Publishing API
+   takes over. Add the same internal-tester email list to both tracks and verify both opt-in links.
+6. **Populate the GitHub environment** — the repo already has a `play` environment restricted to
+   `main` and `android-v*` tags. Add the five secrets below. Add required reviewers in the GitHub
+   UI if uploads should require a human approval after the job starts.
+7. **Activate automation last** — verify the manual phone and Wear releases install, then change
+   the repository variable `PLAY_UPLOAD_ENABLED` from `false` to `true`. Run **Play Internal** from
+   `main` once; leave tag-driven releases for reviewed version bumps.
 
 ## GitHub `play` environment secrets
 
@@ -74,16 +80,22 @@ Erik's checklist, in order:
 No keystore, password, or service-account JSON is ever committed — `.gitignore` blocks `*.jks`,
 `*.keystore`, and `.local/`, and `just check` runs gitleaks over history.
 
+`PLAY_SERVICE_ACCOUNT_JSON` is the only long-lived cloud credential. Prefer a dedicated service
+account and rotate its key if it is exposed. Migrating this workflow to Google Workload Identity
+Federation is the follow-up path when the Play publisher tooling and GitHub identity are provisioned.
+
 ## Running the workflow
 
-- **Tag release** — `git tag android-v0.1.0 && git push origin android-v0.1.0` (any `android-v*`
-  tag).
-- **Manual** — **Actions → Play Internal → Run workflow**.
+- **Tag release** — if `openzcine.versionName=0.1.0`, use
+  `git tag android-v0.1.0 && git push origin android-v0.1.0`. The workflow rejects a tag whose
+  version differs from `Apps/Android/gradle.properties` or whose commit is not on `main`.
+- **Manual** — **Actions → Play Internal → Run workflow**, selecting `main`.
 
 Either way the workflow runs Gradle tests + lint, computes both unique version codes, decodes the
 keystore secret to a runner temp file, builds both `bundleRelease` outputs signed via the same
-`ANDROID_KEYSTORE_*` environment variables, verifies the package/signing/capability pair, and
-uploads to the phone `internal` and Wear `wear:qa` tracks with
+`ANDROID_KEYSTORE_*` environment variables, verifies both AAB signatures against the configured
+upload-key alias, and uploads the bundles, R8 mapping files, and reviewed notes from
+`Apps/Android/distribution/whatsnew/` to the phone `internal` and Wear `wear:qa` tracks with
 [r0adkll/upload-google-play](https://github.com/r0adkll/upload-google-play) (pinned by digest;
 Google publishes no official Play-upload action, and this is the best-maintained community one).
 
@@ -98,6 +110,10 @@ export ANDROID_KEY_PASSWORD='...'
 cd Apps/Android && ./gradlew :app:bundleRelease :wear:bundleRelease :wear:verifyWearReleaseArtifact
 # → app/build/outputs/bundle/release/app-release.aab
 # → wear/build/outputs/bundle/release/wear-release.aab
+cd ../..
+scripts/verify-android-bundle-signing.sh \
+  Apps/Android/app/build/outputs/bundle/release/app-release.aab \
+  Apps/Android/wear/build/outputs/bundle/release/wear-release.aab
 ```
 
 With the `ANDROID_KEYSTORE_*` variables unset, both `bundleRelease` tasks still succeed and
@@ -110,8 +126,9 @@ unsigned or both carry the same signing certificate. The debug path (`just andro
 
 | Symptom | Likely cause |
 | --- | --- |
-| Workflow skipped | Fork — it only runs on `erik-sutton95/openzcine` |
-| `ANDROID_KEYSTORE_BASE64 is not set` | `play` environment or its secrets missing |
+| Workflow skipped | Fork, or repository variable `PLAY_UPLOAD_ENABLED` is not `true` |
+| Release-ref guard fails | Manual run did not select `main`, or tag/version/main ancestry do not match |
+| Missing `play` environment secrets | One or more of the five required values above is absent |
 | Upload fails with 403 / "not found" | Service account lacks release permission, or the app was never created in the console |
 | "Package not found" on first CI upload | The mandatory manual first uploads (step 5) haven't happened yet |
 | "Version code already used" | Raise `ANDROID_VERSION_CODE_OFFSET`, or explicitly set a collision-free `-PwearVersionCode` for a recovery build |

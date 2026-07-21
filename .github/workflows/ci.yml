@@ -38,6 +38,9 @@ jobs:
           ./scripts/ios-release-notes-check.sh
           ./scripts/ios-release-notes-test.sh
 
+      - name: Google Play notes
+        run: ./scripts/android-play-release-notes-check.sh
+
       - name: Require reviewed notes for TestFlight-triggering pull requests
         if: ${{ github.event_name == 'pull_request' }}
         env:
@@ -47,6 +50,19 @@ jobs:
           if grep -Eq '^(Sources/|Tests/|ios/|Package\.swift$|scripts/|justfile$)' <<< "$changed_files"; then
             if ! grep -Fxq 'ios/TestFlight/WhatToTest.en-US.txt' <<< "$changed_files"; then
               echo "Update ios/TestFlight/WhatToTest.en-US.txt with plain-language changes and test steps." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Require reviewed notes for Play-triggering pull requests
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|Sources/CJNI/|scripts/android-|scripts/verify-android-|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
+            if ! grep -Fxq 'Apps/Android/distribution/whatsnew/whatsnew-en-US' <<< "$changed_files"; then
+              echo "Update Apps/Android/distribution/whatsnew/whatsnew-en-US with plain-language changes for Play testers." >&2
               exit 1
             fi
           fi
@@ -123,7 +139,10 @@ jobs:
               - 'Package.swift'
               - 'Package.resolved'
               - 'scripts/android-*.sh'
+              - 'scripts/verify-android-*.sh'
               - 'justfile'
+              # Changing the Play build or upload path must re-run the Android job.
+              - '.github/workflows/play-internal.yml'
             bug_relay:
               - 'services/bug-relay/**'
               - 'justfile'

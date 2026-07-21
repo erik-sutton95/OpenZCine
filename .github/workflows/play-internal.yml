@@ -27,13 +27,22 @@ env:
 jobs:
   play-internal:
     name: Build & upload
-    if: github.repository == 'erik-sutton95/openzcine'
+    if: >-
+      ${{ github.repository == 'erik-sutton95/openzcine' &&
+          vars.PLAY_UPLOAD_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     environment: play
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate release ref and version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: ./scripts/android-play-release-guard.sh
 
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
@@ -67,15 +76,44 @@ jobs:
         run: |
           echo "version_code=$(( ANDROID_VERSION_CODE_OFFSET + GITHUB_RUN_NUMBER ))" >> "$GITHUB_OUTPUT"
 
-      - name: Decode upload keystore
+      - name: Validate release credentials
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not set — add it to the 'play' environment (docs/android-distribution.md)."
+          missing=()
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD PLAY_SERVICE_ACCOUNT_JSON; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing 'play' environment secrets: ${missing[*]} (docs/android-distribution.md)."
             exit 1
           fi
+          if ! jq -e '
+            .type == "service_account" and
+            (.client_email | type == "string" and length > 0) and
+            (.private_key | type == "string" and length > 0)
+          ' >/dev/null <<< "$PLAY_SERVICE_ACCOUNT_JSON"; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON is not a valid service-account JSON key."
+            exit 1
+          fi
+
+      - name: Decode and inspect upload keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+          keytool -list \
+            -keystore "$RUNNER_TEMP/upload-keystore.jks" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" >/dev/null
 
       - name: Build and verify signed release packages
         working-directory: Apps/Android
@@ -88,6 +126,16 @@ jobs:
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
         run: ./gradlew :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact "-PversionCode=$VERSION_CODE"
 
+      - name: Verify bundle signatures
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          ./scripts/verify-android-bundle-signing.sh \
+            Apps/Android/app/build/outputs/bundle/release/app-release.aab \
+            Apps/Android/wear/build/outputs/bundle/release/wear-release.aab
+
       # r0adkll/upload-google-play over alternatives: Google publishes no official
       # GitHub Action for Play uploads (its official paths are Gradle Play Publisher
       # or the raw Publishing API), and this action is the de-facto standard — most
@@ -99,8 +147,10 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.opencapture.openzcine
           releaseFiles: Apps/Android/app/build/outputs/bundle/release/app-release.aab
-          track: internal
+          tracks: internal
           status: completed
+          whatsNewDirectory: Apps/Android/distribution/whatsnew
+          mappingFile: Apps/Android/app/build/outputs/mapping/release/mapping.txt
 
       - name: Upload to Wear OS internal track
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
@@ -108,8 +158,10 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.opencapture.openzcine
           releaseFiles: Apps/Android/wear/build/outputs/bundle/release/wear-release.aab
-          track: wear:qa
+          tracks: wear:qa
           status: completed
+          whatsNewDirectory: Apps/Android/distribution/whatsnew
+          mappingFile: Apps/Android/wear/build/outputs/mapping/release/mapping.txt
 
       - name: Summary
         run: |
