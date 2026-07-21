@@ -172,6 +172,28 @@ public class CameraApJoiner(context: Context) {
     }
 
     /**
+     * Whether the process is currently bound to an established camera-AP network
+     * from this joiner. Used after body-side Confirm to skip a wasteful
+     * `release()` + full rejoin when [awaitReassociation] already rebound us.
+     */
+    public fun isProcessBound(): Boolean =
+        synchronized(lock) { availability.hasEstablishedNetwork() }
+
+    /**
+     * Joins the camera AP only when we are not already process-bound. Prefer this
+     * after first-pair Confirm: a successful reassociation keeps the peer-to-peer
+     * request alive, and [join] would tear it down and re-scan (slow on Samsung).
+     */
+    public suspend fun ensureJoined(
+        ssid: String,
+        passphrase: String?,
+        timeoutMillis: Int = 45_000,
+    ): Boolean {
+        if (isProcessBound()) return true
+        return join(ssid, passphrase, timeoutMillis)
+    }
+
+    /**
      * Drops the camera network: unbinds the process and unregisters the
      * callback (which releases the peer-to-peer network). Safe to call twice.
      */

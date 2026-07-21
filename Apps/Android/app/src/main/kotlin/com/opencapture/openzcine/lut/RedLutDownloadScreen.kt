@@ -1,14 +1,11 @@
 package com.opencapture.openzcine.lut
 
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
-import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -460,6 +457,13 @@ private fun RedStatusPage(
     }
 }
 
+/**
+ * iOS-parity RED page: injects the same loading cover + T&C helper so the
+ * operator only sees RED’s full-screen terms modal (accept + download at the
+ * bottom). Intercepts `window.open` / attachment navigations and fetches the
+ * zip in-process with page cookies — system [DownloadManager] is not used
+ * (it misses RED’s popup path and often drops auth on S3).
+ */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun RedDownloadWebView(
@@ -469,69 +473,146 @@ private fun RedDownloadWebView(
     onFailed: (String) -> Unit,
 ) {
     val context = LocalContext.current
+    val fetchLock = remember { Any() }
+    var fetchStarted by remember { mutableStateOf(false) }
+
+    fun startAuthorizedFetch(url: String, userAgent: String?) {
+        synchronized(fetchLock) {
+            if (fetchStarted) return
+            if (!isAllowedRedDownloadUrl(url)) {
+                onFailed("RED's download came from an unexpected site and was blocked.")
+                return
+            }
+            fetchStarted = true
+        }
+        onDownloadStarted()
+        Thread {
+                try {
+                    val file =
+                        fetchRedZip(
+                            context = context,
+                            url = url,
+                            userAgent = userAgent,
+                            onProgress = onProgress,
+                        )
+                    if (file != null) {
+                        onFileReady(file)
+                    } else {
+                        onFailed("RED's download produced no file. Please try again.")
+                    }
+                } catch (error: Exception) {
+                    onFailed(error.message ?: "Download failed.")
+                }
+            }
+            .start()
+    }
+
     AndroidView(
         factory = { ctx ->
+            CookieManager.getInstance().setAcceptCookie(true)
             WebView(ctx).apply {
                 layoutParams =
                     ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     )
+                setBackgroundColor(android.graphics.Color.parseColor("#12100d"))
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
-                webChromeClient = WebChromeClient()
+                settings.javaScriptCanOpenWindowsAutomatically = true
+                settings.setSupportMultipleWindows(true)
+                webChromeClient =
+                    object : WebChromeClient() {
+                        override fun onCreateWindow(
+                            view: WebView?,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: android.os.Message?,
+                        ): Boolean {
+                            // RED’s accept button uses window.open(zipUrl). Capture the URL
+                            // via a transient WebView and never display a popup store page.
+                            val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                            val popup =
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    webViewClient =
+                                        object : WebViewClient() {
+                                            override fun shouldOverrideUrlLoading(
+                                                v: WebView?,
+                                                request: WebResourceRequest?,
+                                            ): Boolean {
+                                                val target = request?.url?.toString()
+                                                if (!target.isNullOrBlank()) {
+                                                    startAuthorizedFetch(
+                                                        target,
+                                                        settings.userAgentString,
+                                                    )
+                                                } else {
+                                                    onFailed(
+                                                        "Couldn't read RED's download link. Please try again.",
+                                                    )
+                                                }
+                                                return true
+                                            }
+                                        }
+                                }
+                            transport.webView = popup
+                            resultMsg.sendToTarget()
+                            return true
+                        }
+                    }
                 webViewClient =
                     object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            view?.evaluateJavascript(RED_LOADING_JS, null)
+                        }
+
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            view?.evaluateJavascript(RED_LOADING_JS, null)
+                            view?.evaluateJavascript(RED_HELPER_JS, null)
+                        }
+
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?,
-                        ): Boolean = false
-                    }
-                setDownloadListener(
-                    DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                        onDownloadStarted()
-                        try {
-                            val request =
-                                DownloadManager.Request(Uri.parse(url)).apply {
-                                    setMimeType(mimeType)
-                                    addRequestHeader("User-Agent", userAgent)
-                                    val cookies = CookieManager.getInstance().getCookie(url)
-                                    if (!cookies.isNullOrBlank()) {
-                                        addRequestHeader("Cookie", cookies)
+                        ): Boolean {
+                            val target = request?.url ?: return false
+                            val disposition =
+                                request.requestHeaders?.entries
+                                    ?.firstOrNull {
+                                        it.key.equals("Content-Disposition", ignoreCase = true)
                                     }
-                                    setNotificationVisibility(
-                                        DownloadManager.Request.VISIBILITY_VISIBLE,
-                                    )
-                                    val name =
-                                        URLUtil.guessFileName(url, contentDisposition, mimeType)
-                                    setDestinationInExternalFilesDir(
-                                        ctx,
-                                        Environment.DIRECTORY_DOWNLOADS,
-                                        name,
-                                    )
-                                    setTitle(name)
-                                }
-                            val manager =
-                                ctx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                            val id = manager.enqueue(request)
-                            // Poll download completion on a background path.
-                            Thread {
-                                    try {
-                                        val file =
-                                            awaitDownload(ctx, manager, id, onProgress)
-                                                ?: run {
-                                                    onFailed("The download did not complete.")
-                                                    return@Thread
-                                                }
-                                        onFileReady(file)
-                                    } catch (error: Exception) {
-                                        onFailed(error.message ?: "Download failed.")
-                                    }
-                                }
-                                .start()
-                        } catch (error: Exception) {
-                            onFailed(error.message ?: "Could not start the download.")
+                                    ?.value
+                                    ?.lowercase()
+                            val looksLikeFile =
+                                target.lastPathSegment?.endsWith(".zip", ignoreCase = true) == true ||
+                                    disposition?.contains("attachment") == true
+                            if (looksLikeFile && isAllowedRedDownloadUrl(target.toString())) {
+                                startAuthorizedFetch(
+                                    target.toString(),
+                                    settings.userAgentString,
+                                )
+                                return true
+                            }
+                            return false
                         }
+
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            error: android.webkit.WebResourceError?,
+                        ) {
+                            if (request?.isForMainFrame != true || fetchStarted) return
+                            onFailed(
+                                error?.description?.toString()
+                                    ?: "RED's page didn't load. Check your internet connection and try again.",
+                            )
+                        }
+                    }
+                // Fallback if RED ever uses a direct download navigation instead of window.open.
+                setDownloadListener(
+                    DownloadListener { url, userAgent, _, _, _ ->
+                        startAuthorizedFetch(url, userAgent)
                     },
                 )
                 loadUrl(RED_IPP2_PRESETS_URL)
@@ -542,40 +623,179 @@ private fun RedDownloadWebView(
     )
 }
 
-private fun awaitDownload(
+/** Same host allowlist as iOS RedWebView.Coordinator.isAllowedDownloadURL. */
+internal fun isAllowedRedDownloadUrl(url: String): Boolean {
+    val uri =
+        try {
+            java.net.URI(url)
+        } catch (_: Exception) {
+            return false
+        }
+    val scheme = uri.scheme?.lowercase() ?: return false
+    if (scheme != "http" && scheme != "https") return false
+    val host = uri.host?.lowercase() ?: return false
+    if (host == "reddigitalcinema.com" || host.endsWith(".reddigitalcinema.com")) return true
+    if (host == "red.com" || host.endsWith(".red.com")) return true
+    val path = uri.path.orEmpty().lowercase()
+    if (host == "s3.amazonaws.com" && path.startsWith("/red-4/")) {
+        return true
+    }
+    if (host == "red-4.s3.amazonaws.com") return true
+    return false
+}
+
+/**
+ * Cookie-bound HTTPS fetch of RED’s zip into app cache. Mirrors iOS
+ * `URLSession` download with cached page cookies + UA.
+ */
+internal fun fetchRedZip(
     context: Context,
-    manager: DownloadManager,
-    id: Long,
+    url: String,
+    userAgent: String?,
     onProgress: (Float) -> Unit,
 ): File? {
-    val query = DownloadManager.Query().setFilterById(id)
-    while (true) {
-        manager.query(query).use { cursor ->
-            if (!cursor.moveToFirst()) return null
-            val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-            val total =
-                cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-            val soFar =
-                cursor.getLong(
-                    cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
-                )
-            if (total > 0) onProgress(soFar.toFloat() / total.toFloat())
-            when (status) {
-                DownloadManager.STATUS_SUCCESSFUL -> {
-                    val uriString =
-                        cursor.getString(
-                            cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI),
-                        ) ?: return null
-                    val uri = Uri.parse(uriString)
-                    val path = uri.path ?: return null
-                    return File(path)
+    val connection =
+        (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+            instanceFollowRedirects = true
+            connectTimeout = 30_000
+            readTimeout = 120_000
+            requestMethod = "GET"
+            setRequestProperty(
+                "User-Agent",
+                userAgent?.takeIf { it.isNotBlank() }
+                    ?: "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36",
+            )
+            val cookies = CookieManager.getInstance().getCookie(url)
+            if (!cookies.isNullOrBlank()) {
+                setRequestProperty("Cookie", cookies)
+            }
+            setRequestProperty("Accept", "*/*")
+        }
+    try {
+        connection.connect()
+        val code = connection.responseCode
+        if (code !in 200..299) {
+            throw IllegalStateException("RED returned HTTP $code. Please try again.")
+        }
+        val total = connection.contentLengthLong.takeIf { it > 0 } ?: -1L
+        val destination = File(context.cacheDir, "red-ipp2-presets.zip")
+        if (destination.exists()) destination.delete()
+        connection.inputStream.use { input ->
+            destination.outputStream().use { output ->
+                val buffer = ByteArray(64 * 1024)
+                var written = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    output.write(buffer, 0, read)
+                    written += read
+                    if (total > 0) {
+                        onProgress((written.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                    }
                 }
-                DownloadManager.STATUS_FAILED -> return null
-                else -> Thread.sleep(250)
             }
         }
+        onProgress(1f)
+        return if (destination.length() > 0L) destination else null
+    } finally {
+        connection.disconnect()
     }
 }
+
+/** Port of iOS RedWebView.loadingJS — full-screen cover until the T&C modal is ready. */
+private const val RED_LOADING_JS =
+    """
+    (function () {
+      if (window.__zcLoad) return;
+      window.__zcLoad = true;
+      var css = 'html,body{background:#12100d!important;}'
+        + '#__zcLoading{position:fixed;top:0;right:0;bottom:0;left:0;background:#12100d;'
+        + 'z-index:2147483647;display:flex;align-items:center;justify-content:center;flex-direction:column;}'
+        + '#__zcLoading .s{width:34px;height:34px;border:3px solid rgba(255,255,255,0.25);'
+        + 'border-top-color:#fff;border-radius:50%;animation:zcspin 0.8s linear infinite;}'
+        + '#__zcLoading .t{color:#f2efe5;font:600 15px -apple-system,system-ui,sans-serif;margin-top:14px;}'
+        + '@keyframes zcspin{to{transform:rotate(360deg);}}';
+      var s = document.createElement('style');
+      s.textContent = css;
+      (document.head || document.documentElement).appendChild(s);
+      window.__zcCover = function (text) {
+        var d = document.getElementById('__zcLoading');
+        if (!d) {
+          d = document.createElement('div');
+          d.id = '__zcLoading';
+          (document.body || document.documentElement).appendChild(d);
+        }
+        d.innerHTML = '<div class="s"></div><div class="t">' + text + '</div>';
+      };
+      function add() { window.__zcCover('Loading RED\u2019s terms\u2026'); }
+      add();
+      document.addEventListener('DOMContentLoaded', add);
+    })();
+    """
+
+/** Port of iOS RedWebView.helperJS — TaC-only modal, cookie reject, auto-open terms. */
+private const val RED_HELPER_JS =
+    """
+    (function () {
+      if (window.__zcTc) return;
+      window.__zcTc = true;
+      var zcNativeOpen = window.open;
+      window.open = function () {
+        if (window.__zcCover) { window.__zcCover('Downloading from RED\u2026'); }
+        return zcNativeOpen ? zcNativeOpen.apply(this, arguments) : null;
+      };
+      var style = document.createElement('style');
+      style.textContent =
+        '#terms-and-condition-modal.show{position:fixed!important;top:0!important;right:0!important;bottom:0!important;left:0!important;margin:0!important;padding:0!important;overflow:hidden!important;display:flex!important;}' +
+        '#terms-and-condition-modal .modal-dialog{margin:0!important;width:100%!important;max-width:100%!important;height:100%!important;min-height:100%!important;display:flex!important;align-items:stretch!important;}' +
+        '#terms-and-condition-modal .modal-content{flex:1 1 auto!important;width:100%!important;height:100%!important;display:flex!important;flex-direction:column!important;border:0!important;border-radius:0!important;}' +
+        '#terms-and-condition-modal .modal-header,#terms-and-condition-modal .modal-footer{flex:0 0 auto!important;}' +
+        '#terms-and-condition-modal .modal-body{flex:1 1 auto!important;min-height:0!important;overflow-y:auto!important;-webkit-overflow-scrolling:touch!important;padding-bottom:22px!important;}' +
+        '#terms-and-condition-modal .modal-header .close,#terms-and-condition-modal .close,#terms-and-condition-modal .btn-close,#terms-and-condition-modal [data-dismiss="modal"],#terms-and-condition-modal [data-bs-dismiss="modal"]{display:none!important;}';
+      if (document.head) document.head.appendChild(style);
+      if (window.jQuery) {
+        window.jQuery(document).on('hide.bs.modal', '#terms-and-condition-modal', function (e) { e.preventDefault(); });
+      }
+      var selectors = [
+        'a.modal-download-button[data-name="IPP2 Output Presets"]',
+        'a.modal-download-button[data-target="#terms-and-condition-modal"]',
+        'a.modal-download-button'
+      ];
+      function reveal() { var d = document.getElementById('__zcLoading'); if (d && d.parentNode) d.parentNode.removeChild(d); }
+      function cookieBtn() {
+        var els = document.querySelectorAll('button, a, [role="button"]');
+        for (var i = 0; i < els.length; i++) {
+          var t = (els[i].textContent || '').trim().toLowerCase();
+          if (t === 'reject all' || t === 'reject') return els[i];
+        }
+        return null;
+      }
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries++;
+        var cb = cookieBtn();
+        if (cb) { cb.click(); }
+        var modal = document.querySelector('#terms-and-condition-modal');
+        var open = modal && getComputedStyle(modal).display !== 'none';
+        if (open) {
+          var wrapper = modal.querySelector('.terms-and-condition-wrapper');
+          var loaded = wrapper && wrapper.textContent.trim().length > 40;
+          if (loaded && !cookieBtn()) {
+            clearInterval(timer);
+            setTimeout(reveal, 500);
+            return;
+          }
+          if (tries > 50) { clearInterval(timer); reveal(); return; }
+          return;
+        }
+        for (var i = 0; i < selectors.length; i++) {
+          var el = document.querySelector(selectors[i]);
+          if (el) { el.click(); break; }
+        }
+        if (tries > 60) { clearInterval(timer); reveal(); }
+      }, 300);
+    })();
+    """
 
 /**
  * Imports a RED zip (or a lone .cube) into the RED stored-LUT category.

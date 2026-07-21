@@ -214,25 +214,35 @@ public fun SavedCamerasExperience(
     ): PairedCamera? {
         val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
         phase = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, confirmPin)
+        var alreadyBound = false
         if (isCameraAp) {
-            environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS)
+            alreadyBound =
+                environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS) ||
+                    environment.isCameraApProcessBound()
         } else {
             delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
         }
-        // Actively re-join the rebooting camera AP each pass (iOS
-        // attemptPairedReconnectRejoin) — Android's WifiNetworkSpecifier does
-        // not auto-rejoin a rebooted AP if the binding dropped, so a passive
-        // wait can strand the operator without the rejoin loop.
         val rejoinSsid = record.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
         val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
 
         return withTimeoutOrNull<PairedCamera>(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
             var reconnected: PairedCamera? = null
+            var bound = alreadyBound || environment.isCameraApProcessBound()
             while (reconnected == null) {
                 phase = SavedCameraPhase.Reconnecting(record.displayTitle)
-                if (rejoinSsid != null && !environment.joinCameraAp(rejoinSsid, rejoinKey)) {
-                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
-                    continue
+                if (rejoinSsid != null && !bound) {
+                    if (
+                        !environment.ensureCameraApJoined(
+                            rejoinSsid,
+                            rejoinKey,
+                            FIRST_PAIR_REJOIN_TIMEOUT_MILLIS,
+                        )
+                    ) {
+                        delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                        continue
+                    }
+                    bound = true
+                    delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                 }
                 val session = createStrictSavedProfileSession(record)
                 if (session != null) {
@@ -260,7 +270,14 @@ public fun SavedCamerasExperience(
                     }
                 }
                 if (reconnected == null) {
-                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                    bound = environment.isCameraApProcessBound()
+                    delay(
+                        if (bound) {
+                            FIRST_PAIR_BOUND_RETRY_INTERVAL_MILLIS
+                        } else {
+                            FIRST_PAIR_RECONNECT_INTERVAL_MILLIS
+                        },
+                    )
                 }
             }
             checkNotNull(reconnected)

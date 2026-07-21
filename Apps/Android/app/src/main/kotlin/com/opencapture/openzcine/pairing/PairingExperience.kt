@@ -141,6 +141,17 @@ public class PairingEnvironment(
      * discovered profile endpoint.
      */
     public val awaitCameraApRestart: suspend (timeoutMillis: Long) -> Boolean = { true },
+    /**
+     * True while the process is still bound to the camera AP (after a successful
+     * reassociation). Defaults to false so demo harnesses never skip a join.
+     */
+    public val isCameraApProcessBound: () -> Boolean = { false },
+    /**
+     * Joins the camera AP unless already process-bound. Production uses
+     * [CameraApJoiner.ensureJoined]; demos may just call [joinCameraAp].
+     */
+    public val ensureCameraApJoined: suspend (ssid: String, passphrase: String?, timeoutMillis: Int) -> Boolean =
+        { ssid, passphrase, _ -> joinCameraAp(ssid, passphrase) },
 )
 
 /**
@@ -230,6 +241,10 @@ public fun realPairingEnvironment(
         },
         credentials = CameraWifiCredentialStore(context),
         awaitCameraApRestart = joiner::awaitReassociation,
+        isCameraApProcessBound = joiner::isProcessBound,
+        ensureCameraApJoined = { ssid, passphrase, timeoutMillis ->
+            joiner.ensureJoined(ssid, passphrase, timeoutMillis)
+        },
     )
 }
 
@@ -443,10 +458,20 @@ private fun pairingPhaseFor(progress: CameraConnectionProgress): PairingPhase? =
         else -> null
     }
 
-internal const val FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS: Long = 60_000L
-internal const val FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS: Long = 60_000L
-internal const val FIRST_PAIR_RECONNECT_INTERVAL_MILLIS: Long = 2_000L
+/** Max wait for body Confirm AP loss→return before active rejoin (was 60s). */
+internal const val FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS: Long = 30_000L
+/** Wall clock for saved-profile reconnect after first-pair Confirm. */
+internal const val FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS: Long = 45_000L
+/** Gap between failed join/connect passes when the AP is not yet bound. */
+internal const val FIRST_PAIR_RECONNECT_INTERVAL_MILLIS: Long = 800L
+/**
+ * Gap when already process-bound to the camera AP — Init can fail while the
+ * body finishes rebooting; keep short so we recover as soon as PTP answers.
+ */
+internal const val FIRST_PAIR_BOUND_RETRY_INTERVAL_MILLIS: Long = 600L
 internal const val FIRST_PAIR_HOTSPOT_SETTLE_MILLIS: Long = 2_000L
+/** Specifier timeout for post-confirm rejoin attempts (full 45s only for first join). */
+internal const val FIRST_PAIR_REJOIN_TIMEOUT_MILLIS: Int = 12_000
 
 /**
  * Pause after a successful camera-AP join before the first PTP-IP Init.
@@ -553,33 +578,42 @@ public fun PairingExperience(
         // do not flip to Reconnecting until the network is back (or the wait
         // times out and we start active rejoin attempts).
         phase = PairingPhase.ConfirmOnCamera(confirmPin)
+        var alreadyBound = false
         if (isCameraAp) {
             // Prefer reassociation of the still-bound join (loss → return when
-            // the operator taps Confirm). Fall through to active rejoin loops
-            // if the wait times out or the binding was already released.
-            environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS)
+            // the operator taps Confirm). A successful reassociation already
+            // rebinds the process — do NOT release+rejoin (that re-scans and
+            // can take tens of seconds on Samsung flagships).
+            alreadyBound =
+                environment.awaitCameraApRestart(FIRST_PAIR_CAMERA_AP_RESTART_TIMEOUT_MILLIS) ||
+                    environment.isCameraApProcessBound()
         } else {
             // Hotspot/USB: short settle after body-side confirmation.
             delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
         }
-        // iOS keeps re-applying the camera AP configuration while the just-paired
-        // camera reboots its Wi-Fi (attemptPairedReconnectRejoin), then reconnects
-        // off the saved profile the moment it returns — staying armed until a
-        // connect succeeds. Android's WifiNetworkSpecifier does NOT auto-rejoin a
-        // rebooted AP if the binding was dropped, so each pass re-issues the
-        // join before attempting the saved-profile connect. Re-joining a
-        // session-approved SSID is silent on API 31+.
         val rejoinSsid = savedCamera.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
         val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
 
         return withTimeoutOrNull<PairedCamera>(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
             var reconnected: PairedCamera? = null
+            var bound = alreadyBound || environment.isCameraApProcessBound()
             while (reconnected == null) {
                 phase = PairingPhase.Reconnecting
-                if (rejoinSsid != null && !environment.joinCameraAp(rejoinSsid, rejoinKey)) {
-                    // The rebooted AP hasn't returned yet; wait and re-apply.
-                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
-                    continue
+                if (rejoinSsid != null && !bound) {
+                    // Only re-issue the specifier when we truly lost the AP.
+                    if (
+                        !environment.ensureCameraApJoined(
+                            rejoinSsid,
+                            rejoinKey,
+                            FIRST_PAIR_REJOIN_TIMEOUT_MILLIS,
+                        )
+                    ) {
+                        delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                        continue
+                    }
+                    bound = true
+                    // Fresh association: give the body a beat before Init.
+                    delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                 }
                 val session = createSavedProfileReconnectSession(savedCamera)
                 if (session != null) {
@@ -606,7 +640,16 @@ public fun PairingExperience(
                     }
                 }
                 if (reconnected == null) {
-                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
+                    // Stay bound and retry Init quickly — the AP is up, the body
+                    // is still finishing reboot. Re-check bind in case OEM dropped us.
+                    bound = environment.isCameraApProcessBound()
+                    delay(
+                        if (bound) {
+                            FIRST_PAIR_BOUND_RETRY_INTERVAL_MILLIS
+                        } else {
+                            FIRST_PAIR_RECONNECT_INTERVAL_MILLIS
+                        },
+                    )
                 }
             }
             checkNotNull(reconnected)
