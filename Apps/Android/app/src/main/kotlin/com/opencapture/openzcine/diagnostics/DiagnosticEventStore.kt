@@ -10,7 +10,15 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     APP_BACKGROUND("app.background"),
     CONNECTION_DISCONNECTED("connection.disconnected"),
     CONNECTION_CONNECTING("connection.connecting"),
+    CONNECTION_HANDSHAKING("connection.handshaking"),
+    CONNECTION_PAIRING("connection.pairing"),
+    CONNECTION_CONFIRM_ON_CAMERA("connection.confirm-on-camera"),
+    CONNECTION_JOINING_WIFI("connection.joining-wifi"),
+    CONNECTION_RECONNECTING("connection.reconnecting"),
     CONNECTION_CONNECTED("connection.connected"),
+    CONNECTION_PATH_CAMERA_AP("connection.path.camera-ap"),
+    CONNECTION_PATH_PHONE_HOTSPOT("connection.path.phone-hotspot"),
+    CONNECTION_PATH_USB("connection.path.usb"),
     MONITOR_PRESENTED("monitor.presented"),
     MONITOR_DISMISSED("monitor.dismissed"),
     LIVE_VIEW_STARTED("live-view.started"),
@@ -18,7 +26,14 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     GUIDE_COMPLETED("live-guide.completed"),
     GUIDE_SKIPPED("live-guide.skipped"),
     DIAGNOSTICS_EXPORTED("diagnostics.exported"),
+    /** Generic connect failure when a more specific closed code is unavailable. */
     CONNECTION_FAILED("error.connection.failed"),
+    CONNECTION_WIFI_JOIN_FAILED("error.connection.wifi-join.failed"),
+    CONNECTION_USB_FAILED("error.connection.usb.failed"),
+    CONNECTION_USB_PERMISSION("error.connection.usb.permission"),
+    CONNECTION_PTP_FAILED("error.connection.ptp.failed"),
+    CONNECTION_PAIRING_FAILED("error.connection.pairing.failed"),
+    CONNECTION_RECONNECT_FAILED("error.connection.reconnect.failed"),
     CONNECTION_EVENT_CHANNEL_ENDED("error.connection.event-channel-ended"),
     LIVE_VIEW_FAILED("error.live-view.failed"),
     LIVE_VIEW_STALLED("warning.live-view.stalled"),
@@ -28,15 +43,40 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
         fun fromWireValue(value: String): AndroidDiagnosticEvent? =
             entries.firstOrNull { it.wireValue == value }
 
-        /** Maps only closed failure phases; the accompanying free-form detail is discarded. */
-        fun fromFailurePhase(phase: String): AndroidDiagnosticEvent? =
+        /**
+         * Maps only closed session/wizard phase tokens. Free-form detail is never accepted —
+         * callers must discard operator- or camera-facing strings before invoking this.
+         */
+        fun fromPhase(phase: String): AndroidDiagnosticEvent? =
             when (phase) {
+                "handshaking" -> CONNECTION_HANDSHAKING
+                "pairing" -> CONNECTION_PAIRING
+                "confirmOnCamera" -> CONNECTION_CONFIRM_ON_CAMERA
+                "joiningWifi" -> CONNECTION_JOINING_WIFI
+                "reconnecting" -> CONNECTION_RECONNECTING
+                "connected" -> CONNECTION_CONNECTED
+                "connecting" -> CONNECTION_CONNECTING
+                "disconnected" -> CONNECTION_DISCONNECTED
+                "path.cameraAp" -> CONNECTION_PATH_CAMERA_AP
+                "path.phoneHotspot" -> CONNECTION_PATH_PHONE_HOTSPOT
+                "path.usb" -> CONNECTION_PATH_USB
                 "failed" -> CONNECTION_FAILED
-                "eventChannelEnded" -> CONNECTION_EVENT_CHANNEL_ENDED
+                "failed.wifiJoin" -> CONNECTION_WIFI_JOIN_FAILED
+                "failed.usb" -> CONNECTION_USB_FAILED
+                "failed.usbPermission" -> CONNECTION_USB_PERMISSION
+                "failed.ptp" -> CONNECTION_PTP_FAILED
+                "failed.pairing" -> CONNECTION_PAIRING_FAILED
+                "failed.reconnect" -> CONNECTION_RECONNECT_FAILED
+                "eventChannelEnded",
+                "eventChannelCleanupFailed",
+                -> CONNECTION_EVENT_CHANNEL_ENDED
                 "liveViewFailed" -> LIVE_VIEW_FAILED
                 "liveViewStalled" -> LIVE_VIEW_STALLED
                 else -> null
             }
+
+        /** @deprecated Prefer [fromPhase]; kept for call-site clarity on failure-only paths. */
+        fun fromFailurePhase(phase: String): AndroidDiagnosticEvent? = fromPhase(phase)
     }
 }
 
