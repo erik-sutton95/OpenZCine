@@ -29,6 +29,8 @@ public enum PTPCameraControl: Equatable, Sendable {
 extension PTPPropertyCode {
     /// One-at-a-time property polling order used between live-view frame requests.
     public static let liveMonitorPollOrder: [PTPPropertyCode] = [
+        // Photo vs video lever / remote selector — drives photography chrome.
+        .liveViewSelector,
         // Effective/working ISO (incl. Auto ISO). Prefer over dual-base D09E for display.
         .isoControlSensitivity,
         .movieISOSensitivity,
@@ -773,6 +775,102 @@ public enum PTPCameraPropertyDecoders {
         raw == 0 ? "OFF" : "ON"
     }
 
+    /// Still compression setting (0x5004) — coarse labels; body enum may be richer. [VERIFY-ON-HW]
+    public static func compressionSetting(_ raw: UInt8) -> String {
+        switch raw {
+        case 0: "JPEG Basic"
+        case 1: "JPEG Normal"
+        case 2: "JPEG Fine"
+        case 3: "TIFF"
+        case 4: "RAW"
+        case 5: "RAW+JPEG"
+        default: hex(UInt32(raw))
+        }
+    }
+
+    /// Exposure metering (0x500B). Prefer stills path; movie has a separate prop.
+    public static func exposureMetering(_ raw: UInt16) -> String {
+        switch raw {
+        case 0x0001: "Average"
+        case 0x0002: "Center"
+        case 0x0003: "Matrix"
+        case 0x0004: "Spot"
+        case 0x8001: "Highlight"
+        default: hex(UInt32(raw))
+        }
+    }
+
+    /// Flash mode (0x500C). [VERIFY-ON-HW]
+    public static func flashMode(_ raw: UInt16) -> String {
+        switch raw {
+        case 0x0001: "Auto"
+        case 0x0002: "Off"
+        case 0x0003: "Fill"
+        case 0x0004: "Red-eye"
+        case 0x8001: "Slow"
+        case 0x8002: "Rear"
+        default: hex(UInt32(raw))
+        }
+    }
+
+    /// Still focus mode (0xD061 / 0x500A-family values).
+    public static func stillFocusMode(_ raw: UInt16) -> String {
+        switch raw {
+        case 0x0001: "MF"
+        case 0x8010: "AF-S"
+        case 0x8011: "AF-C"
+        case 0x8012: "AF-A"
+        case 0x8013: "AF-F"
+        default: hex(UInt32(raw))
+        }
+    }
+
+    /// Still AF-area mode (0xD05D). [VERIFY-ON-HW]
+    public static func stillFocusArea(_ raw: UInt16) -> String {
+        movieFocusArea(raw)
+    }
+
+    /// Exposure bias as ±EV from INT16 thousandths-of-EV when that packing is used.
+    /// Falls back to raw hex if outside a sane EV range. [VERIFY-ON-HW]
+    public static func exposureBias(_ raw: Int16) -> String {
+        let ev = Double(raw) / 1000.0
+        if abs(ev) > 5 {
+            return hex(UInt32(UInt16(bitPattern: raw)))
+        }
+        if ev == 0 { return "±0.0" }
+        return String(format: "%+.1f", ev)
+    }
+
+    /// Best-effort decode of a PTP string property (ImageSize and similar).
+    public static func stringFromPTPStringData(_ data: Data) -> String? {
+        guard data.count >= 1 else { return nil }
+        let bytes = Array(data)
+        let charCount = Int(bytes[0])
+        guard charCount > 0, data.count >= 1 + charCount * 2 else {
+            // Some bodies return short ASCII; accept raw UTF-8 without length prefix.
+            return String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .controlCharacters)
+                .nilIfEmpty
+        }
+        var scalars: [UInt16] = []
+        scalars.reserveCapacity(max(0, charCount - 1))
+        var offset = 1
+        for _ in 0..<charCount {
+            guard offset + 1 < bytes.count else { break }
+            let unit = ByteCoding.readUInt16LE(bytes, at: offset)
+            offset += 2
+            if unit == 0 { break }
+            scalars.append(unit)
+        }
+        return String(utf16CodeUnits: scalars, count: scalars.count).nilIfEmpty
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+extension PTPCameraPropertyDecoders {
     /// Inverse of `onOffLabel`, for encoding a picker selection.
     public static func onOffCode(for label: String) -> UInt8? {
         switch label.uppercased() {
@@ -1029,7 +1127,14 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         audio32BitFloat: String? = nil,
         vibrationReduction: String? = nil,
         electronicVR: String? = nil,
-        gridDisplay: String? = nil
+        gridDisplay: String? = nil,
+        captureSelector: CameraCaptureSelector? = nil,
+        stillCaptureMode: String? = nil,
+        imageSize: String? = nil,
+        compression: String? = nil,
+        meteringMode: String? = nil,
+        flashMode: String? = nil,
+        exposureBias: String? = nil
     ) {
         self.iso = iso
         self.baseISO = baseISO
@@ -1066,6 +1171,13 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.vibrationReduction = vibrationReduction
         self.electronicVR = electronicVR
         self.gridDisplay = gridDisplay
+        self.captureSelector = captureSelector
+        self.stillCaptureMode = stillCaptureMode
+        self.imageSize = imageSize
+        self.compression = compression
+        self.meteringMode = meteringMode
+        self.flashMode = flashMode
+        self.exposureBias = exposureBias
     }
 
     // Exposure.
@@ -1127,6 +1239,17 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public let vibrationReduction: String?  // movie VR (lens/in-body)
     public let electronicVR: String?
     public let gridDisplay: String?  // GridDisplay 0xD16C, for the command Monitor tile
+
+    // Stills / photo-mode readouts (polled when `LiveViewSelector` is photo).
+    /// Photo vs video mode from `LiveViewSelector` (0xD1A6).
+    public let captureSelector: CameraCaptureSelector?
+    /// Release/drive mode label from `StillCaptureMode` (0x5013).
+    public let stillCaptureMode: String?
+    public let imageSize: String?
+    public let compression: String?
+    public let meteringMode: String?
+    public let flashMode: String?
+    public let exposureBias: String?
 
     /// Command-monitor stabilisation summary (movie VR + electronic VR).
     public var stabilizationSummary: String? {
@@ -1259,6 +1382,61 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                 vibrationReduction: PTPCameraPropertyDecoders.movieVibrationReduction(bytes[0]))
         case .electronicVR where bytes.count >= 1:
             return replacing(electronicVR: PTPCameraPropertyDecoders.onOffLabel(bytes[0]))
+        case .liveViewSelector where bytes.count >= 1:
+            return replacing(captureSelector: CameraCaptureSelector.decode(raw: bytes[0]))
+        case .stillCaptureMode where bytes.count >= 2:
+            let raw = ByteCoding.readUInt16LE(bytes, at: 0)
+            return replacing(stillCaptureMode: StillDriveMode.decode(raw: raw)?.label ?? "0x\(String(raw, radix: 16))")
+        case .imageSize where bytes.count >= 1:
+            return replacing(imageSize: PTPCameraPropertyDecoders.stringFromPTPStringData(data) ?? "—")
+        case .compressionSetting where bytes.count >= 1:
+            return replacing(compression: PTPCameraPropertyDecoders.compressionSetting(bytes[0]))
+        case .exposureMeteringMode where bytes.count >= 2:
+            return replacing(
+                meteringMode: PTPCameraPropertyDecoders.exposureMetering(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .flashMode where bytes.count >= 2:
+            return replacing(
+                flashMode: PTPCameraPropertyDecoders.flashMode(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .exposureTime where bytes.count >= 4:
+            return replacing(
+                shutterSpeed: PTPCameraPropertyDecoders.shutterSpeed(
+                    ByteCoding.readUInt32LE(bytes, at: 0)))
+        case .stillShutterSpeed where bytes.count >= 4:
+            return replacing(
+                shutterSpeed: PTPCameraPropertyDecoders.shutterSpeed(
+                    ByteCoding.readUInt32LE(bytes, at: 0)))
+        case .fNumber where bytes.count >= 2:
+            return replacing(
+                fNumber: PTPCameraPropertyDecoders.irisFNumber(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .exposureIndex where bytes.count >= 2:
+            return replacing(iso: UInt32(ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .exposureBiasCompensation where bytes.count >= 2:
+            return replacing(
+                exposureBias: PTPCameraPropertyDecoders.exposureBias(
+                    Int16(bitPattern: ByteCoding.readUInt16LE(bytes, at: 0))))
+        case .stillISOAutoControl where bytes.count >= 1:
+            return replacing(isoAuto: bytes[0] != 0)
+        case .stillFocusMode where bytes.count >= 2:
+            return replacing(
+                focusMode: PTPCameraPropertyDecoders.stillFocusMode(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .stillFocusMode where bytes.count >= 1:
+            return replacing(focusMode: PTPCameraPropertyDecoders.stillFocusMode(UInt16(bytes[0])))
+        case .stillFocusMeteringMode where bytes.count >= 2:
+            return replacing(
+                focusArea: PTPCameraPropertyDecoders.stillFocusArea(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .whiteBalance where bytes.count >= 2:
+            return replacing(
+                wbMode: PTPCameraPropertyDecoders.whiteBalanceMode(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .focusMode where bytes.count >= 2:
+            return replacing(
+                focusMode: PTPCameraPropertyDecoders.stillFocusMode(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
         default:
             return self
         }
@@ -1299,7 +1477,14 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         audio32BitFloat: String? = nil,
         vibrationReduction: String? = nil,
         electronicVR: String? = nil,
-        gridDisplay: String? = nil
+        gridDisplay: String? = nil,
+        captureSelector: CameraCaptureSelector? = nil,
+        stillCaptureMode: String? = nil,
+        imageSize: String? = nil,
+        compression: String? = nil,
+        meteringMode: String? = nil,
+        flashMode: String? = nil,
+        exposureBias: String? = nil
     ) -> PTPCameraPropertySnapshot {
         PTPCameraPropertySnapshot(
             iso: iso ?? self.iso,
@@ -1336,7 +1521,14 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             audio32BitFloat: audio32BitFloat ?? self.audio32BitFloat,
             vibrationReduction: vibrationReduction ?? self.vibrationReduction,
             electronicVR: electronicVR ?? self.electronicVR,
-            gridDisplay: gridDisplay ?? self.gridDisplay
+            gridDisplay: gridDisplay ?? self.gridDisplay,
+            captureSelector: captureSelector ?? self.captureSelector,
+            stillCaptureMode: stillCaptureMode ?? self.stillCaptureMode,
+            imageSize: imageSize ?? self.imageSize,
+            compression: compression ?? self.compression,
+            meteringMode: meteringMode ?? self.meteringMode,
+            flashMode: flashMode ?? self.flashMode,
+            exposureBias: exposureBias ?? self.exposureBias
         )
     }
 }

@@ -31,6 +31,8 @@ public enum PTPOperationCode: UInt16, Sendable {
     case getObjectInfo = 0x1008  // p1 objectHandle; data-in (ObjectInfo dataset)
     case getThumb = 0x100A  // p1 objectHandle; data-in (embedded JPEG thumbnail)
     case getPartialObject = 0x101B  // p1 objectHandle, p2 offset, p3 maxBytes; data-in
+    case getDevicePropDesc = 0x1014
+    case getDevicePropValue = 0x1015
     // Returns the *valid* (card-present) StorageIDs. Standard GetStorageIDs reports placeholder
     // per-slot IDs even with a card inserted, and GetStorageInfo rejects those.
     case getVendorStorageIDs = 0x9209
@@ -58,6 +60,24 @@ public enum PTPOperationCode: UInt16, Sendable {
     case setDevicePropValueEx = 0x943C
     case setDevicePropValue = 0x1016
 
+    // Still capture (card / SDRAM / media destination). Cross-body Z-series.
+    /// PIMA still capture to card (`PTP_OC_InitiateCapture`).
+    case initiateCapture = 0x100E
+    /// Vendor still capture with destination parameter (`PTP_OC_NIKON_InitiateCaptureRecInMedia`).
+    case initiateCaptureRecInMedia = 0x9207
+    /// Vendor still capture buffered in camera SDRAM for host pull.
+    case initiateCaptureRecInSdram = 0x90C0
+    /// AF then capture into SDRAM.
+    case afAndCaptureRecInSdram = 0x90CB
+    /// Ends bulb / open capture started via media capture path.
+    case terminateCapture = 0x920C
+    /// Interval / focus-shift / open capture start. [VERIFY-ON-HW]
+    case initiateOpenCaptureV = 0x9445
+    /// Interval / focus-shift / open capture stop. [VERIFY-ON-HW]
+    case terminateOpenCaptureV = 0x9446
+    /// Open-capture status dataset. [VERIFY-ON-HW]
+    case getOpenCaptureInfo = 0x9447
+
     // Live view, record, AF.
     case startLiveView = 0x9201
     case endLiveView = 0x9202
@@ -65,9 +85,13 @@ public enum PTPOperationCode: UInt16, Sendable {
     case endMovieRec = 0x920B  // no parameters, no data phase
     case getLiveViewImageEx = 0x9428
     case changeAfArea = 0x9205  // p1 x, p2 y — moves the live-view AF area
+    case afDrive = 0x90C1
     case afDriveCancel = 0x9206
+    case mfDrive = 0x9204
     case endTracking = 0x9425  // [ZR-only · verify-on-HW]
+    case changeAELock = 0x9426
     case deviceReady = 0x90C8
+    case getEvent = 0x90C7
     case getEventEx = 0x941C
 }
 
@@ -147,6 +171,30 @@ public enum PTPPropertyCode: UInt32, Sendable {
     case electronicVR = 0xD314
     case electronicFrontCurtainShutter = 0xD20D  // stills-only; not polled
     case movieVibrationReduction = 0xD1F9
+
+    // Still / photo-mode controls (cross-body Z-series). Polled when
+    // `LiveViewSelector` reports photo mode; movie-path props stay preferred in video.
+    /// Photo vs video live-view selector (`PTP_DPC_NIKON_LiveViewSelector`). UINT8: 0 photo, 1 video.
+    case liveViewSelector = 0xD1A6
+    case imageSize = 0x5003
+    case compressionSetting = 0x5004
+    case whiteBalance = 0x5005
+    case fNumber = 0x5007
+    case focusMode = 0x500A
+    case exposureMeteringMode = 0x500B
+    case flashMode = 0x500C
+    case exposureTime = 0x500D
+    case exposureIndex = 0x500F
+    case exposureBiasCompensation = 0x5010
+    /// Release / drive mode (`PTP_DPC_StillCaptureMode`).
+    case stillCaptureMode = 0x5013
+    case burstNumber = 0x5018
+    case stillFocusMode = 0xD061
+    case stillFocusMeteringMode = 0xD05D
+    case stillISOAutoControl = 0xD054
+    case stillShutterSpeed = 0xD100
+    case recordingMedia = 0xD10B
+    case rawCompressionType = 0xD016
 }
 
 /// PTP response codes used by the app.
