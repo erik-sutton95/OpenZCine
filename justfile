@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check testflight-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation swift-lint swift-test
+check: hygiene site-check testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -29,6 +29,10 @@ site-check:
 testflight-notes-check:
     ./scripts/ios-release-notes-check.sh
     ./scripts/ios-release-notes-test.sh
+
+# Validate the reviewed Google Play tester-facing release notes.
+play-notes-check:
+    ./scripts/android-play-release-notes-check.sh
 
 # Spell-check the repository.
 typos:
