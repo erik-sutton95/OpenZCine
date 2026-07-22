@@ -65,6 +65,71 @@ intentional whole-scene replacement because it resets the live layout.
   non-redistributable assets. Follow `docs/commit-hygiene.md` before every commit.
 - **Work on a branch and open a PR.** Do not commit directly to `main`.
 - **Conventional Commits** for every commit (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `build:`, `test:`).
+- **Ship both shells.** Product-facing features, behaviour fixes, and operator-visible policy
+  changes must land for **iOS and Android together** (see [Dual-platform parity](#dual-platform-parity-ios--android)).
+  Do not leave one app desynced unless the change is explicitly single-platform infrastructure.
+
+## Dual-platform parity (iOS + Android)
+
+OpenZCine is one product with two native shells over one portable Swift core. Treat every
+feature, fix, and policy change as **cross-platform by default** so the apps do not drift.
+
+### Default expectation
+
+- **One behaviour, both shells.** If the operator can hit the flow on either phone, implement and
+  verify it on **both** iOS (`ios/Runner`) and Android (`Apps/Android`) in the same deliverable /
+  PR unless the brief explicitly scopes a single platform (and then note the follow-up).
+- **Core first.** Put protocol, validation, poll order, load policy, selection math, and
+  operator-facing *rules* in `Sources/OpenZCineCore` (or a tiny shared wire in
+  `Sources/OpenZCineAndroidFacade` only when the rule is already Swift-owned for Android). Shells
+  render, adapt OS APIs, and call in — they do not reimplement camera or colour logic in Kotlin
+  or duplicate it only in SwiftUI.
+- **Same acceptance criteria.** Write UAT that does not say “Android only” or “iOS only” unless
+  the capability is truly OS-unique (e.g. a single-platform packaging/CI fix).
+
+### Workflow for features and fixes
+
+1. **Spec** the operator-visible behaviour once (shared acceptance list).
+2. **Implement + unit-test** portable logic in the core (or shared Swift wire).
+3. **Wire the iOS shell** (`ios/Runner` / watch as needed).
+4. **Wire the Android shell** (thin facade/JNI if needed, then Compose). Prefer extending an
+   existing core/facade API over a Kotlin-only algorithm.
+5. **Verify both** with the matching gates and, for UI, the screenshot deploy rule on each
+   platform you touched.
+6. **PR / Kaneo:** name both platforms in the test plan; do not mark the task done with only one
+   shell updated when the product surface exists on both.
+
+### Verification gates (both sides of a dual change)
+
+| Surface | Gate |
+| ------- | ---- |
+| Shared Swift / iOS shell / facade | `just native-check` |
+| Android app / adapters | `just android-check` |
+| Repo-wide / docs / CI meta | `just check` |
+
+For a dual-platform feature or behaviour fix, expect **`just native-check` and
+`just android-check`** (and `just check` when repo meta applies) before claiming complete. CI’s
+Native Swift/iOS and Android jobs both need to stay green.
+
+### Allowed single-platform exceptions
+
+Do **not** force a second-shell change when the work is truly isolated, for example:
+
+- Pure packaging, signing, store listing, or CI for one platform
+- OS-only APIs with no product twin (e.g. a one-off platform permission string)
+- Bugfixes that cannot reproduce on the other shell after checking shared code paths
+
+When you take an exception: **state it in the PR**, and if product parity is still owed, create or
+link a Kaneo follow-up rather than silently shipping a permanent desync.
+
+### Anti-patterns (avoid desync)
+
+- Fixing a behaviour only in Compose or only in SwiftUI while the same flow exists on the other
+  shell
+- Inventing protocol, LUT, recording, or network policy in Kotlin
+- “Android-only” product features without an iOS path (or the reverse) when both apps expose the
+  surface
+- Claiming done after verifying a single platform when acceptance applies to both
 
 ## Verification
 
@@ -79,6 +144,14 @@ For production Swift/iOS or Swift Android-facade changes, also run:
 ```sh
 just native-check
 ```
+
+For Android app/adapter changes, also run:
+
+```sh
+just android-check
+```
+
+For dual-platform product work, run **both** `just native-check` and `just android-check`.
 
 ## Project management (Kaneo)
 
@@ -128,7 +201,9 @@ just android-release-check # Verify the signed phone/Wear release pair and runti
 ```
 
 **Before claiming any change is complete**, run `just native-check` for Swift/iOS or facade work,
-`just android-check` for Android work, and `just check` for repo-wide changes.
+`just android-check` for Android work, and `just check` for repo-wide changes. Product features and
+behaviour fixes that span both apps need **both** platform gates (see
+[Dual-platform parity](#dual-platform-parity-ios--android)).
 
 Interactive Xcode/simulator helpers (builds, launching the simulator, screenshots, device logs)
 are fine for iteration on the `ios/Runner` shell, but they never replace `just` — CI and official
@@ -263,20 +338,25 @@ This keeps the main feature-branch checkout free for parallel work, folded in on
 ## DO NOT
 
 Repo-hygiene rules (never touch `vendor/`/`ref/`, never commit secrets/PII, never commit to `main`,
-Conventional Commits) are in [Hard rules](#hard-rules). In addition:
+Conventional Commits, dual-platform shipping) are in [Hard rules](#hard-rules). In addition:
 
 - **No force-unwrapping** without a `// SAFETY:` comment explaining why the unwrap is guaranteed.
 - **Do not use deprecated APIs** in new code: `NavigationView`, `ObservableObject`, `@Published`,
   and Combine-based data flow are off-limits for new SwiftUI code.
 - **Do not bypass `just`** for official verification — never invoke `xcodebuild` or `swift test`
   directly in place of the canonical `just native-check` / `just check`.
+- **Do not ship one shell’s product behaviour without the other** when both apps expose the same
+  surface — see [Dual-platform parity](#dual-platform-parity-ios--android).
 
 ## Completion metrics
 
 A task is complete when all of the following are true:
 
 - Acceptance criteria from the task brief are checked off.
-- `just native-check` passes (or `just check` for non-Swift changes).
+- **Both shells** implement the product behaviour when the surface exists on iOS and Android
+  (or an explicit single-platform exception is documented in the PR / Kaneo task).
+- `just native-check` and/or `just android-check` pass for the platforms touched; dual-platform
+  product work runs **both**. Use `just check` for repo-wide / non-app changes.
 - New or modified behaviour is covered by passing tests.
 - Public APIs carry doc comments.
 - Relevant docs under `docs/` are updated if behaviour changed.
