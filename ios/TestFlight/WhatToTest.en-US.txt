@@ -1,13 +1,13 @@
 What's changed
 
-- First-run pairing and the failed-connect card now offer Share diagnostics so you can send a local report if connection never completes.
+- Shared diagnostics now record closed connection phases and failure kinds (USB, Wi‑Fi join, PTP) without Wi‑Fi names or camera identities.
+- First-run pairing and the failed-connect card still offer Share diagnostics for a local report.
 - Playback and live desqueeze scale the picture itself (not only guides), with a 1.6× chip and a custom 1.00–2.00× control in fine 0.01 steps.
-- On non-R3D formats (N-RAW, ProRes, H.264/H.265), ISO Auto On/Off controls movie ISO auto — not the P/A/S/M exposure dial. While Auto is on, the tile shows the live working ISO (e.g. A51200) and the value drum is locked.
-- Manual ISO / Auto Off is available only in exposure mode M on those formats. R3D NE still uses Low/High base circuits and stays manual in every exposure mode (including A).
+- On non-R3D formats, ISO Auto On/Off and live Auto ISO work as before; R3D NE stays manual base ISO.
 
 Please test
 
-- On first-run pairing, confirm Share diagnostics appears and opens a local report share sheet; try USB-C connect without an immediate crash.
-- Force a failed connect if you can; confirm Share diagnostics appears on the failure card.
-- Enable Desqueeze on playback and live; try 1.6× and the custom slider; confirm the image (not only overlays) changes.
-- On ProRes or H.265 in M: open ISO, switch Auto On/Off, confirm the tile tracks live Auto ISO, then set a manual ISO with no false error toast.
+- Attempt a failed USB or Wi‑Fi connect, then Share diagnostics and confirm the report lists codes such as connection.path.usb and error.connection.usb.failed (no SSIDs or serials).
+- Successful connect should show connection.handshaking / connection.connected style events without free-form errors.
+- Enable Desqueeze on playback and live; try 1.6× and the custom slider.
+- On ProRes or H.265 in M: ISO Auto On/Off and manual ISO still behave correctly.

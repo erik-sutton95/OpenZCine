@@ -127,6 +127,26 @@ class DiagnosticEventStoreTest {
             AndroidDiagnosticEvent.fromFailurePhase("failed"),
         )
         assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_USB_FAILED,
+            AndroidDiagnosticEvent.fromPhase("failed.usb"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_PTP_FAILED,
+            AndroidDiagnosticEvent.fromPhase("failed.ptp"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_WIFI_JOIN_FAILED,
+            AndroidDiagnosticEvent.fromPhase("failed.wifiJoin"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_HANDSHAKING,
+            AndroidDiagnosticEvent.fromPhase("handshaking"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_PATH_USB,
+            AndroidDiagnosticEvent.fromPhase("path.usb"),
+        )
+        assertEquals(
             AndroidDiagnosticEvent.CONNECTION_EVENT_CHANNEL_ENDED,
             AndroidDiagnosticEvent.fromFailurePhase("eventChannelEnded"),
         )
@@ -135,6 +155,7 @@ class DiagnosticEventStoreTest {
             AndroidDiagnosticEvent.fromFailurePhase("liveViewStalled"),
         )
         assertEquals(null, AndroidDiagnosticEvent.fromFailurePhase("Bob's iPhone"))
+        assertEquals(null, AndroidDiagnosticEvent.fromPhase("ssid=SECRET"))
     }
 
     @Test

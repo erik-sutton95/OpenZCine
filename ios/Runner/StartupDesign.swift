@@ -1722,6 +1722,7 @@ struct StartupFirstPairWizardView: View {
         let cards = ForEach(NativeAppModel.FirstPairTransportMethod.allCases) { method in
             StartupWizardTransportCard(method: method) {
                 model.firstPairTransportMethod = method
+                AppDiagnostics.shared.record(method.diagnosticEvent)
                 model.advanceFirstPairWizard()
             }
             .frame(maxWidth: .infinity)

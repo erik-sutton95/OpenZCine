@@ -288,7 +288,8 @@ class MainActivity : ComponentActivity() {
                                 applicationContext,
                                 hasLegacySavedCameraProfiles = hasSavedCameraProfilesAtLaunch,
                             ) { phase, _ ->
-                                AndroidDiagnosticEvent.fromFailurePhase(phase)?.let {
+                                // Closed phase tokens only; free-form detail is discarded here.
+                                AndroidDiagnosticEvent.fromPhase(phase)?.let {
                                     diagnostics.record(it)
                                 }
                             }
@@ -484,6 +485,11 @@ class MainActivity : ComponentActivity() {
                                                     Toast.LENGTH_SHORT,
                                                 )
                                                 .show()
+                                        }
+                                    },
+                                    onDiagnosticPhase = { phase ->
+                                        AndroidDiagnosticEvent.fromPhase(phase)?.let {
+                                            diagnostics.record(it)
                                         }
                                     },
                                 )
