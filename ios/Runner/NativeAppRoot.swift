@@ -5570,8 +5570,9 @@ final class NativeAppModel {
             if let iso = cameraPropertySnapshot.iso, iso > 0 {
                 return String(iso)
             }
-            let live = cameraValue(for: picker)
-            if live.allSatisfy(\.isNumber) { return live }
+            let live = cameraValue(for: picker).trimmingCharacters(in: .whitespaces)
+            let numeric = live.hasPrefix("A") ? String(live.dropFirst()) : live
+            if numeric.allSatisfy(\.isNumber), !numeric.isEmpty { return numeric }
             return ISOPickerPolicy.unifiedOptions.first ?? "800"
         }
         if picker == .iso, !showsDualBaseISOPicker {

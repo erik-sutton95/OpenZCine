@@ -878,8 +878,17 @@ struct PickerPanel: View {
         picker == .iso && model.isISORecordingLocked
     }
 
+    /// Auto ISO On: value drum is camera-owned; mode tabs stay usable to switch to Auto Off.
+    private var isISOAutoValueLocked: Bool {
+        picker == .iso && model.showsAutoISOPicker && model.isAutoISOActive
+    }
+
     private var isPickerInteractionLocked: Bool {
         isShutterControlLocked || isISORecordingLocked
+    }
+
+    private var isDrumInteractionLocked: Bool {
+        isPickerInteractionLocked || isISOAutoValueLocked
     }
 
     private var activePickerModes: [PickerMode] {
@@ -921,6 +930,9 @@ struct PickerPanel: View {
                 if isISORecordingLocked {
                     isoRecordingLockBanner
                 }
+                if isISOAutoValueLocked {
+                    isoAutoLockBanner
+                }
                 if isTintMode {
                     // The WB Tint tab swaps the drum for the fine-tune pad.
                     WhiteBalanceTintPad()
@@ -930,15 +942,15 @@ struct PickerPanel: View {
                         options: currentOptions,
                         selection: $selection,
                         markedValues: markedValues,
-                        isInteractive: !isPickerInteractionLocked,
+                        isInteractive: !isDrumInteractionLocked,
                         // −10 / +10 permanently flank the selected Kelvin value.
                         sideAdjust: isKelvinMode
                             ? DrumSideAdjust(
-                                minusEnabled: !isPickerInteractionLocked
+                                minusEnabled: !isDrumInteractionLocked
                                     && WhiteBalanceKelvinPolicy.canFineAdjust(
                                         from: selection,
                                         delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
-                                plusEnabled: !isPickerInteractionLocked
+                                plusEnabled: !isDrumInteractionLocked
                                     && WhiteBalanceKelvinPolicy.canFineAdjust(
                                         from: selection,
                                         delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
@@ -1019,7 +1031,7 @@ struct PickerPanel: View {
         }
         // Confirm-on-snap: apply each newly-centred value to the active mode's target.
         .onChange(of: selection) { _, newValue in
-            guard !isPickerInteractionLocked else { return }
+            guard !isDrumInteractionLocked else { return }
             guard !newValue.isEmpty, newValue != lastApplied else { return }
             lastApplied = newValue
             model.applyPicker(picker, mode: selectedMode, value: newValue)
@@ -1165,10 +1177,32 @@ struct PickerPanel: View {
                     }
                 }
                 .buttonStyle(.zcTapTarget)
+                // Full locks (shutter / R3D record) freeze tabs; Auto ISO only freezes the drum.
                 .opacity(isPickerInteractionLocked ? 0.55 : 1)
                 .allowsHitTesting(!isPickerInteractionLocked)
             }
         }
+    }
+
+    private var isoAutoLockBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 11, weight: .semibold))
+            Text(
+                "Auto ISO is on — the camera sets sensitivity. "
+                    + "Switch to Auto Off to choose a value."
+            )
+            .font(.system(size: 11.5, weight: .medium))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(LiveDesign.accent.opacity(0.9))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.accentDim,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
+        )
     }
 
     private var currentValue: String {

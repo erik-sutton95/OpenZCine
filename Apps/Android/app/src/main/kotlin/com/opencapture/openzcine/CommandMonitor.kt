@@ -555,7 +555,9 @@ internal fun commandDashboardPresentation(
                         }
                     val displayValue =
                         when {
-                            IsoPickerPolicy.isAutoISOActive(snapshot.isoAuto) -> "Auto"
+                            // Show the body's working ISO while Auto is on (drum is locked).
+                            IsoPickerPolicy.isAutoISOActive(snapshot.isoAuto) ->
+                                isoValue?.let { "A$it" } ?: "Auto"
                             else -> isoValue
                         }
                     editable(

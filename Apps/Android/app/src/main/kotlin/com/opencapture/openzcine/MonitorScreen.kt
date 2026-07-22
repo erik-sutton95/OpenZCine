@@ -673,7 +673,15 @@ internal fun MonitorScreen(
                                 desiredLabel,
                             )
                         // Only surface failures. iOS does not flash "set to …" on every snap.
-                        if (!confirmed && desiredControlWrites[control] == null) {
+                        // ISO is already byte-confirmed on MovieExposureIndex / MovieISOSensitivity
+                        // inside the shared core; a lagging dual-property refresh must not flash
+                        // a false "did not confirm" after a successful body write.
+                        val softConfirmSkips =
+                            control == CameraControl.ISO || control == CameraControl.ISO_AUTO
+                        if (!confirmed &&
+                            !softConfirmSkips &&
+                            desiredControlWrites[control] == null
+                        ) {
                             commandControlFeedback =
                                 CommandControlFeedback(
                                     appContext.getString(

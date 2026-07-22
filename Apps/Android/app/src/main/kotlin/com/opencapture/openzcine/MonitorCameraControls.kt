@@ -139,6 +139,12 @@ internal data class MonitorPickerPresentation(
      */
     val interactionLocked: Boolean = false,
     val lockBanner: String? = null,
+    /**
+     * Dim/disable only the value drum (Auto ISO On). Mode tabs stay interactive so the
+     * operator can switch to Auto Off / Manual.
+     */
+    val drumInteractionLocked: Boolean = false,
+    val drumLockBanner: String? = null,
 )
 
 /** One readout in the live monitor's capture strip. */
@@ -776,8 +782,12 @@ internal fun isoPickerPresentation(
     isoAuto: Boolean?,
     strings: PhoneStringResolver,
 ): MonitorPickerPresentation? {
-    // Prefer live ISO; when Auto is driving ISO the body may report "—"/Auto — still open the drum.
-    val live = isoTile?.value?.takeIf { it != "—" && !it.equals("Auto", ignoreCase = true) }
+    // Prefer live ISO. Auto-mode tiles may read "A3200" / "Auto" — strip the Auto prefix for the drum.
+    val live =
+        isoTile?.value
+            ?.takeIf { it != "—" }
+            ?.removePrefix("A")
+            ?.takeIf { !it.equals("Auto", ignoreCase = true) }
     val canWrite = isoTile?.request != null || IsoPickerPolicy.showsAutoISOControl(codec)
     if (!canWrite && isoTile?.unavailableReason == null && live == null &&
         !IsoPickerPolicy.showsAutoISOControl(codec)
@@ -826,12 +836,21 @@ internal fun isoPickerPresentation(
                     markedValues = IsoPickerPolicy.markedValues(codec, 0),
                 )
             }
+        val autoOn = IsoPickerPolicy.isAutoISOActive(isoAuto)
         return MonitorPickerPresentation(
             kind = MonitorPickerKind.ISO,
             title = title,
             subtitle = subtitle,
             modes = modes,
             initialModeIndex = IsoPickerPolicy.autoISOModeIndex(isoAuto),
+            // Drum is camera-owned while Auto ISO is on; Auto On/Off tabs stay usable.
+            drumInteractionLocked = autoOn,
+            drumLockBanner =
+                if (autoOn) {
+                    strings.resolve(R.string.iso_auto_drum_locked)
+                } else {
+                    null
+                },
         )
     }
 
@@ -1385,7 +1404,10 @@ private fun PickerPanelBody(
             mode.label.equals("Kelvin", ignoreCase = true)
     // Keep the drum scrollable while a write is in flight (iOS). Pending applies
     // coalesce in MonitorScreen; freezing the wheel dropped rapid settles.
-    val drumInteractive = controlsEnabled && !picker.interactionLocked
+    // Full interaction lock (shutter control lock / R3D recording) freezes mode tabs too.
+    // Auto ISO only freezes the value drum so Auto Off remains reachable.
+    val modeInteractive = controlsEnabled && !picker.interactionLocked
+    val drumInteractive = modeInteractive && !picker.drumInteractionLocked
     // Ignore drum-settles briefly after a ±10 nudge so scroll snap cannot
     // overwrite the fine-tuned value with a neighbouring dial step.
     var suppressDrumSettleUntil by remember(picker.kind) { mutableStateOf(0L) }
@@ -1481,7 +1503,7 @@ private fun PickerPanelBody(
                 maxLines = 2,
             )
         }
-        picker.lockBanner?.let { banner ->
+        (picker.drumLockBanner ?: picker.lockBanner)?.let { banner ->
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1646,7 +1668,6 @@ private fun PickerPanelBody(
         if (picker.modes.size > 1) {
             // Fixed-height mode bar (never in the weight slot) — preserves full
             // KELVIN/PRESET/TINT hit targets when the Tint pad is tall.
-            val modeInteractive = drumInteractive
             Row(
                 Modifier.fillMaxWidth().wrapContentHeight(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),

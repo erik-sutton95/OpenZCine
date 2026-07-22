@@ -336,6 +336,7 @@
     <!-- DISP command dashboard. -->
     <string name="command_iso_recording_wait">ISO is unavailable during recording until codec readback completes.</string>
     <string name="command_iso_recording_locked">ISO is locked while recording in R3D NE.</string>
+    <string name="iso_auto_drum_locked">Auto ISO is on — the camera sets sensitivity. Switch to Auto Off to choose a value.</string>
     <string name="command_iso_wait_codec">Waiting for the camera codec before offering ISO values.</string>
     <string name="command_iso_wait_base">Waiting for the active base-ISO circuit.</string>
     <string name="command_iso_no_values">This camera did not provide ISO values for the active circuit.</string>

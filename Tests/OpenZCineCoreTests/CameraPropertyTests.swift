@@ -147,7 +147,7 @@ import Testing
 
     let display = CameraDisplayState.preview.applyingCameraProperties(
         PTPCameraPropertySnapshot(iso: 800, isoAuto: true))
-    #expect(display.values.first(where: { $0.label == "ISO" })?.value == "Auto")
+    #expect(display.values.first(where: { $0.label == "ISO" })?.value == "A800")
 }
 
 @Test func snapshotDecodesZRSoundProperties() {

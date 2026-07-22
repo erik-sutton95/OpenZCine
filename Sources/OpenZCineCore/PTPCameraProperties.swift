@@ -1375,8 +1375,10 @@ extension CameraDisplayState {
         switch label {
         case "ISO":
             // Movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto.
+            // When auto is on, still surface the body's working ISO so the drum/tile can
+            // show the live value while interaction is locked.
             if properties.isoAuto == true {
-                "Auto"
+                properties.iso.map { "A\($0)" } ?? "Auto"
             } else {
                 properties.iso.map(String.init) ?? existing
             }
