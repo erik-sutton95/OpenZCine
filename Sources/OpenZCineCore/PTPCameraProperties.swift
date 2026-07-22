@@ -120,13 +120,9 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
     {
         switch control {
         case .iso:
-            guard let iso = UInt32(label.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                return nil
-            }
-            return PTPCameraPropertyWrite(
-                property: .movieISOSensitivity,
-                data: Data(ByteCoding.uint32LE(iso))
-            )
+            // Without codec context, prefer `MovieExposureIndex` (0xD1AA) — the documented movie
+            // ISO write. Dual-base R3D NE uses `MovieISOSensitivity` via the snapshot overload.
+            return isoWrite(label: label, dualBase: false)
         case .isoAuto:
             // `MovISOAutoControl` 0xD0AD — UINT8 On/Off (1 = auto ISO, 0 = manual).
             guard let code = PTPCameraPropertyDecoders.onOffCode(for: label) else { return nil }
@@ -217,13 +213,21 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
         label: String,
         snapshot: PTPCameraPropertySnapshot
     ) -> PTPCameraPropertyWrite? {
-        request(control: control, label: label)
+        if control == .iso {
+            let dualBase = ISOPickerPolicy.showsDualBaseCircuits(
+                codec: snapshot.fileType ?? "")
+            return isoWrite(label: label, dualBase: dualBase)
+        }
+        return request(control: control, label: label)
     }
 
     /// All property writes a picker selection should send — usually one, but a **Kelvin** white
     /// balance needs **two**: switch into colour-temperature mode (`MovieWhiteBalance` = "Color
     /// temp") *then* set `MovieWBColorTemp`. Writing only the temperature leaves the body in its
     /// current preset mode and the Kelvin never takes effect.
+    ///
+    /// Movie ISO also expands: when ISO auto is active, turn it off first so the body accepts the
+    /// manual sensitivity write.
     public static func requests(
         control: PTPCameraControl,
         label: String,
@@ -243,7 +247,34 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
                 ]
             }
         }
+        if control == .iso {
+            var writes: [PTPCameraPropertyWrite] = []
+            if snapshot.isoAuto == true {
+                writes.append(movieISOAuto(enabled: false))
+            }
+            if let iso = isoWrite(
+                label: label,
+                dualBase: ISOPickerPolicy.showsDualBaseCircuits(codec: snapshot.fileType ?? ""))
+            {
+                writes.append(iso)
+            }
+            return writes
+        }
         return request(control: control, label: label, snapshot: snapshot).map { [$0] } ?? []
+    }
+
+    /// Encodes a movie ISO sensitivity write.
+    ///
+    /// - Dual-base R3D NE: `MovieISOSensitivity` (0x0001_D09E) — range follows the base circuit.
+    /// - Other codecs: `MovieExposureIndex` (0xD1AA) — documented video ISO write; R3D rejects it.
+    public static func isoWrite(label: String, dualBase: Bool) -> PTPCameraPropertyWrite? {
+        guard let iso = UInt32(label.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+        return PTPCameraPropertyWrite(
+            property: dualBase ? .movieISOSensitivity : .movieExposureIndex,
+            data: Data(ByteCoding.uint32LE(iso))
+        )
     }
 
     /// A `MovScreenSize` write for an exact camera-advertised mode value (from the descriptor enum).
@@ -1116,7 +1147,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public func applying(property: PTPPropertyCode, data: Data) -> PTPCameraPropertySnapshot {
         let bytes = Array(data)
         switch property {
-        case .movieISOSensitivity where bytes.count >= 4:
+        case .movieISOSensitivity where bytes.count >= 4,
+            .movieExposureIndex where bytes.count >= 4:
+            // Both carry UINT32 working ISO; dual-base uses D09E, other codecs write D1AA.
             return replacing(iso: ByteCoding.readUInt32LE(bytes, at: 0))
         case .movieISOAutoControl where bytes.count >= 1:
             // UINT8 On/Off — 1 = auto ISO, 0 = manual (libgphoto2 Nikon OnOff convention).

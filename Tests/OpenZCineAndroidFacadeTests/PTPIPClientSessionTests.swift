@@ -1040,9 +1040,10 @@ struct PTPIPClientSessionTests {
         try session.applyAndroidControl(.vibrationReduction, label: "ON")
 
         let writes = server.receivedPropertyWrites()
+        // Without a dual-base codec in the snapshot, ISO writes MovieExposureIndex (0xD1AA).
         #expect(
             writes.contains {
-                $0.property == PTPPropertyCode.movieISOSensitivity.rawValue
+                $0.property == PTPPropertyCode.movieExposureIndex.rawValue
             })
         #expect(
             writes.contains {
@@ -1082,6 +1083,7 @@ struct PTPIPClientSessionTests {
 
     @Test func acceptedControlWriteRequiresMatchingAuthoritativeReadback() throws {
         var options = FakeZRServer.Options()
+        // Default fake codec is R3D NE (dual-base) → ISO writes MovieISOSensitivity.
         options.ignoredPropertyWrites = [PTPPropertyCode.movieISOSensitivity.rawValue]
         let server = try FakeZRServer(options: options)
         defer { server.stop() }

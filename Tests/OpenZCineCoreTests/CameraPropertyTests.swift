@@ -271,11 +271,37 @@ import Testing
 }
 
 @Test func cameraPropertyWriteRequestsEncodePickerValues() {
+    // Non dual-base path (default without snapshot): MovieExposureIndex 0xD1AA.
     #expect(
         PTPCameraPropertyWrite.request(control: .iso, label: "800")
             == PTPCameraPropertyWrite(
+                property: .movieExposureIndex,
+                data: Data([0x20, 0x03, 0x00, 0x00])
+            )
+    )
+    // Dual-base R3D NE: MovieISOSensitivity 0x0001_D09E.
+    #expect(
+        PTPCameraPropertyWrite.request(
+            control: .iso,
+            label: "800",
+            snapshot: PTPCameraPropertySnapshot(fileType: "R3D NE 12-bit R3D")
+        )
+            == PTPCameraPropertyWrite(
                 property: .movieISOSensitivity,
                 data: Data([0x20, 0x03, 0x00, 0x00])
+            )
+    )
+    // Manual ISO while auto is on: turn auto off first, then write ExposureIndex.
+    let autoOn = PTPCameraPropertySnapshot(isoAuto: true, fileType: "ProRes 422 HQ")
+    let isoWhileAuto = PTPCameraPropertyWrite.requests(
+        control: .iso, label: "1600", snapshot: autoOn)
+    #expect(isoWhileAuto.count == 2)
+    #expect(isoWhileAuto[0] == PTPCameraPropertyWrite.movieISOAuto(enabled: false))
+    #expect(
+        isoWhileAuto[1]
+            == PTPCameraPropertyWrite(
+                property: .movieExposureIndex,
+                data: Data([0x40, 0x06, 0x00, 0x00])
             )
     )
     #expect(

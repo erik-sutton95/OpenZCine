@@ -836,7 +836,7 @@ final class FakeZRServer: @unchecked Sendable {
         case .movieRecProhibitionCondition:
             // 0 = nothing prohibits recording.
             return Data(ByteCoding.uint32LE(0))
-        case .movieISOSensitivity:
+        case .movieISOSensitivity, .movieExposureIndex:
             return Data(ByteCoding.uint32LE(800))
         case .movieISOAutoControl:
             return Data([0])  // manual ISO by default

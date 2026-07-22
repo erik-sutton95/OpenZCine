@@ -7,6 +7,6 @@ What's changed
 Please test
 
 - In media playback, enable Desqueeze, try 1.6× and the custom slider, and confirm the picture (not only overlays) changes. Repeat on live view.
-- On ProRes or H.265 in Manual (or any) exposure mode: open ISO, confirm Auto On/Off controls ISO sensitivity auto (ISO tile shows Auto when on), that choosing a drum ISO value turns ISO auto off without changing P/A/S/M, and that ISO can be set manually.
+- On ProRes or H.265 in Manual (or any) exposure mode: open ISO, confirm Auto On/Off controls ISO sensitivity auto (ISO tile shows Auto when on), that choosing a drum ISO value turns ISO auto off without changing P/A/S/M, and that picking an ISO value is accepted (no "camera rejected" error).
 - Confirm exposure MODE (Auto/P/A/S/M) is unchanged when toggling ISO Auto On/Off.
 - On R3D NE, confirm Low/High base tabs still work and ISO remains locked only while recording.
