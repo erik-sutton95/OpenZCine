@@ -2077,7 +2077,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 // values in the live enum (the body often only advertises the active state).
                 let isShutterLockToggle =
                     control == .shutterLock && (label == "Locked" || label == "Unlocked")
-                if !isFineKelvin, !isShutterLockToggle {
+                // Movie ISO: the capability list is a UI ladder (dual-base circuit / unified
+                // steps). Auto can park outside it (e.g. 51200) and the body still accepts
+                // MovieExposureIndex / MovieISOSensitivity. Rejecting here flashes a false
+                // "not supported" after Auto Off (or a dual-write) already moved the body.
+                // Any numeric label the shared core can encode is allowed; the body remains
+                // the authority if a value is truly out of range.
+                let isEncodableISO =
+                    control == .iso
+                    && PTPCameraPropertyWrite.isoWrite(label: label, dualBase: false) != nil
+                if !isFineKelvin, !isShutterLockToggle, !isEncodableISO {
                     return []
                 }
             }
@@ -2402,6 +2411,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// True when a property write is confirmed by readback.
     /// - `MovScreenSize`: decoded width/height/fps (camera may rewrite low packing bits).
     /// - `MovieFocusMode`: decoded label (MF raw 3 lens-ring and 4 menu are equivalent).
+    /// - Movie ISO family: UINT32 value (payload may be padded beyond 4 bytes).
     /// - Other properties: byte-exact.
     static func propertyWriteMatchesReadback(
         write: PTPCameraPropertyWrite,
@@ -2424,6 +2434,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // Label match: MF (3/4) and AF labels compare as decoded strings.
             return PTPCameraPropertyDecoders.movieFocusMode(written)
                 == PTPCameraPropertyDecoders.movieFocusMode(live)
+        }
+        // Effective / dual-base / exposure-index ISO — compare the UINT32, not raw length.
+        if write.property == .movieExposureIndex
+            || write.property == .movieISOSensitivity
+            || write.property == .isoControlSensitivity,
+            write.data.count >= 4,
+            readback.count >= 4
+        {
+            let written = ByteCoding.readUInt32LE([UInt8](write.data), at: 0)
+            let live = ByteCoding.readUInt32LE([UInt8](readback), at: 0)
+            return written == live
         }
         return readback == write.data
     }

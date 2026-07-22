@@ -247,6 +247,8 @@ internal fun monitorCaptureSettings(
     shutterLockedOnCamera: Boolean? = null,
     /** Movie ISO auto (`MovISOAutoControl`); drives Auto On/Off tab for non-R3D NE. */
     isoAuto: Boolean? = null,
+    /** Exposure program mode (M/P/A/S/…); Auto Off / manual ISO only in M. */
+    exposureMode: String? = null,
 ): List<MonitorCaptureSettingPresentation> {
     val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
     val focus =
@@ -339,6 +341,7 @@ internal fun monitorCaptureSettings(
             codec = codec,
             baseIsoTile = exposure.getOrNull(0),
             isoAuto = isoAuto,
+            exposureMode = exposureMode,
             strings = strings,
         )
     val shutterPresentation =
@@ -773,6 +776,7 @@ internal fun shutterPickerPresentation(
  *
  * - R3D NE: Low Base / High Base tabs with full ladders + base-ISO activate.
  * - Other codecs: Auto On / Auto Off tabs + unified drum (exit auto by picking ISO).
+ * - Auto Off / manual drum only when [exposureMode] is **M**.
  * Options always come from the policy (not a partial camera enum).
  */
 internal fun isoPickerPresentation(
@@ -780,6 +784,7 @@ internal fun isoPickerPresentation(
     codec: String,
     baseIsoTile: CommandTilePresentation?,
     isoAuto: Boolean?,
+    exposureMode: String?,
     strings: PhoneStringResolver,
 ): MonitorPickerPresentation? {
     // Prefer live ISO. Auto-mode tiles may read "A3200" / "Auto" — strip the Auto prefix for the drum.
@@ -797,14 +802,27 @@ internal fun isoPickerPresentation(
     val dual = IsoPickerPolicy.showsDualBaseCircuits(codec)
     val autoControl = IsoPickerPolicy.showsAutoISOControl(codec)
     val title = strings.resolve(R.string.camera_label_iso)
-    val subtitle = IsoPickerPolicy.pickerSubtitle(codec)
-    val options = IsoPickerPolicy.unifiedOptions
-    val current = live?.takeIf { it in options } ?: options.firstOrNull() ?: return null
+    val subtitle = IsoPickerPolicy.pickerSubtitle(codec, exposureMode)
+    val ladder = IsoPickerPolicy.unifiedOptions
+    // Inject Auto-driven values outside the fixed ladder (e.g. 51200).
+    val options =
+        if (live != null && live !in ladder) {
+            IsoPickerPolicy.options(codec, 0, includingLiveISO = live)
+        } else {
+            ladder
+        }
+    val current = live?.takeIf { it in options } ?: live ?: options.firstOrNull() ?: return null
 
     if (autoControl) {
         val modes =
-            IsoPickerPolicy.pickerModes(codec).map { mode ->
+            IsoPickerPolicy.pickerModes(codec, exposureMode).map { mode ->
                 val activatesAuto = mode.activatesAutoISO == true
+                val modeOptions =
+                    IsoPickerPolicy.options(
+                        codec = codec,
+                        modeIndex = 0,
+                        includingLiveISO = live,
+                    )
                 MonitorPickerModePresentation(
                     label = mode.title,
                     detail = mode.detail,
@@ -813,7 +831,7 @@ internal fun isoPickerPresentation(
                             title = title,
                             control = CameraControl.ISO,
                             currentValue = current,
-                            options = mode.options,
+                            options = modeOptions,
                         ),
                     activateRequest =
                         CommandControlRequest(
@@ -831,23 +849,31 @@ internal fun isoPickerPresentation(
                                     IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
                                 ),
                         ),
-                    // Auto On does not write ISO; Auto Off writes the drum after manual.
-                    applyValueOnActivate = mode.activatesAutoISO != true,
+                    // Auto On: only MovISOAutoControl. Auto Off: turn auto off; do not
+                    // immediately re-write the live Auto value (it may sit outside the
+                    // manual ladder, e.g. 51200) — the operator picks a manual step next.
+                    applyValueOnActivate = false,
                     markedValues = IsoPickerPolicy.markedValues(codec, 0),
                 )
             }
-        val autoOn = IsoPickerPolicy.isAutoISOActive(isoAuto)
+        val cameraOwned =
+            IsoPickerPolicy.isISOValueCameraOwned(codec, isoAuto, exposureMode)
         return MonitorPickerPresentation(
             kind = MonitorPickerKind.ISO,
             title = title,
             subtitle = subtitle,
             modes = modes,
-            initialModeIndex = IsoPickerPolicy.autoISOModeIndex(isoAuto),
-            // Drum is camera-owned while Auto ISO is on; Auto On/Off tabs stay usable.
-            drumInteractionLocked = autoOn,
+            initialModeIndex =
+                IsoPickerPolicy.autoISOModeIndex(codec, isoAuto, exposureMode),
+            // Drum is camera-owned while Auto is on or (non-R3D) mode is not M.
+            drumInteractionLocked = cameraOwned,
             drumLockBanner =
-                if (autoOn) {
-                    strings.resolve(R.string.iso_auto_drum_locked)
+                if (cameraOwned) {
+                    if (IsoPickerPolicy.allowsManualISO(codec, exposureMode)) {
+                        strings.resolve(R.string.iso_auto_drum_locked)
+                    } else {
+                        strings.resolve(R.string.iso_manual_requires_m_mode)
+                    }
                 } else {
                     null
                 },
@@ -905,6 +931,7 @@ internal fun isoPickerPresentation(
                 markedValues = IsoPickerPolicy.markedValues(codec, index),
             )
         }
+    // R3D NE dual-base is always manual ISO (even in A/S/P) — never gate on exposure mode.
     return MonitorPickerPresentation(
         kind = MonitorPickerKind.ISO,
         title = title,

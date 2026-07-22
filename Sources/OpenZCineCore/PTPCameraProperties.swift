@@ -29,6 +29,8 @@ public enum PTPCameraControl: Equatable, Sendable {
 extension PTPPropertyCode {
     /// One-at-a-time property polling order used between live-view frame requests.
     public static let liveMonitorPollOrder: [PTPPropertyCode] = [
+        // Effective/working ISO (incl. Auto ISO). Prefer over dual-base D09E for display.
+        .isoControlSensitivity,
         .movieISOSensitivity,
         .movieISOAutoControl,
         .movieBaseISO,
@@ -1147,9 +1149,22 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public func applying(property: PTPPropertyCode, data: Data) -> PTPCameraPropertySnapshot {
         let bytes = Array(data)
         switch property {
-        case .movieISOSensitivity where bytes.count >= 4,
-            .movieExposureIndex where bytes.count >= 4:
-            // Both carry UINT32 working ISO; dual-base uses D09E, other codecs write D1AA.
+        case .isoControlSensitivity where bytes.count >= 4:
+            // `ISOControlSensitivity` 0xD0B5 — effective/working ISO the body is applying
+            // (manual or Auto). Authoritative readout for the ISO tile and Auto On display.
+            return replacing(iso: ByteCoding.readUInt32LE(bytes, at: 0))
+        case .movieISOSensitivity where bytes.count >= 4:
+            // Dual-base R3D circuit ISO (0x0001_D09E). On non-R3D codecs this often sticks
+            // at the native base (e.g. 800) and must not overwrite effective ISO from D0B5.
+            let value = ByteCoding.readUInt32LE(bytes, at: 0)
+            if ISOPickerPolicy.showsDualBaseCircuits(codec: fileType ?? "") {
+                return replacing(iso: value)
+            }
+            // Seed only until the effective property has been polled.
+            if iso == nil { return replacing(iso: value) }
+            return self
+        case .movieExposureIndex where bytes.count >= 4:
+            // Manual movie ISO write path (0xD1AA) — UINT32. Used for write confirmation.
             return replacing(iso: ByteCoding.readUInt32LE(bytes, at: 0))
         case .movieISOAutoControl where bytes.count >= 1:
             // UINT8 On/Off — 1 = auto ISO, 0 = manual (libgphoto2 Nikon OnOff convention).
@@ -1375,8 +1390,8 @@ extension CameraDisplayState {
         switch label {
         case "ISO":
             // Movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto.
-            // When auto is on, still surface the body's working ISO so the drum/tile can
-            // show the live value while interaction is locked.
+            // When auto is on, surface the body's effective ISO (ISOControlSensitivity)
+            // so the drum/tile tracks Auto changes (e.g. A51200, not a stale dual-base base).
             if properties.isoAuto == true {
                 properties.iso.map { "A\($0)" } ?? "Auto"
             } else {

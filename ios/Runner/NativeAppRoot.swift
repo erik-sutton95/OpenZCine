@@ -5475,7 +5475,10 @@ final class NativeAppModel {
             return cameraPropertySnapshot.baseISO == "High" ? 1 : 0
         }
         if showsAutoISOPicker {
-            return ISOPickerPolicy.autoISOModeIndex(isoAuto: commandISOAuto)
+            return ISOPickerPolicy.autoISOModeIndex(
+                codec: cameraState.codec,
+                isoAuto: commandISOAuto,
+                exposureMode: commandExposureMode)
         }
         return 0
     }
@@ -5493,6 +5496,21 @@ final class NativeAppModel {
     /// True when movie ISO auto is on (`MovISOAutoControl`) — not exposure program Auto.
     var isAutoISOActive: Bool {
         ISOPickerPolicy.isAutoISOActive(isoAuto: commandISOAuto)
+    }
+
+    /// True when the ISO drum is camera-owned (Auto On, or non-R3D mode is not M).
+    /// Always false for R3D NE dual-base (manual in every exposure program).
+    var isISOValueCameraOwned: Bool {
+        ISOPickerPolicy.isISOValueCameraOwned(
+            codec: cameraState.codec,
+            isoAuto: commandISOAuto,
+            exposureMode: commandExposureMode)
+    }
+
+    /// True when this codec/mode allows manual ISO writes (R3D always; others only in M).
+    var allowsManualISO: Bool {
+        ISOPickerPolicy.allowsManualISO(
+            codec: cameraState.codec, exposureMode: commandExposureMode)
     }
 
     /// Optimistic/polled movie ISO auto flag for the Auto On/Off tab and ISO tile.
@@ -5514,10 +5532,12 @@ final class NativeAppModel {
         return commandGridOrder
     }
 
-    /// Segmented mode tabs for a picker (ISO layout follows the active codec).
+    /// Segmented mode tabs for a picker (ISO layout follows the active codec + mode).
     func pickerModes(for picker: CameraPicker) -> [PickerMode] {
         guard picker == .iso else { return picker.modes }
-        return ISOPickerPolicy.pickerModes(codec: cameraState.codec).map {
+        return ISOPickerPolicy.pickerModes(
+            codec: cameraState.codec, exposureMode: commandExposureMode
+        ).map {
             PickerMode(title: $0.title, detail: $0.detail, options: $0.options, base: $0.base)
         }
     }
@@ -5525,7 +5545,9 @@ final class NativeAppModel {
     /// Picker header subtitle (ISO reflects dual-base vs unified layout).
     func pickerSubtitle(for picker: CameraPicker) -> String {
         picker == .iso
-            ? ISOPickerPolicy.pickerSubtitle(codec: cameraState.codec) : picker.subtitle
+            ? ISOPickerPolicy.pickerSubtitle(
+                codec: cameraState.codec, exposureMode: commandExposureMode)
+            : picker.subtitle
     }
 
     private func shouldSuppressShutterModePoll() -> Bool {
@@ -5566,7 +5588,7 @@ final class NativeAppModel {
     /// belongs to that mode, otherwise the mode's base.
     func pickerModeValue(_ picker: CameraPicker, mode: Int) -> String {
         if picker == .iso, showsAutoISOPicker {
-            // Drum needs a numeric step even when auto is on (tile may show Auto / A800).
+            // Drum needs a numeric step even when auto is on (tile may show Auto / A51200).
             if let iso = cameraPropertySnapshot.iso, iso > 0 {
                 return String(iso)
             }
@@ -5631,6 +5653,8 @@ final class NativeAppModel {
             return
         }
         if picker == .iso {
+            // Manual ISO only in exposure mode M (Auto Off path).
+            guard allowsManualISO else { return }
             // Leaving Auto ISO by choosing a drum value (or Auto Off tab already switched M).
             prepareManualISOIfNeeded()
             applyPickerValue(value, for: picker)
@@ -5816,6 +5840,8 @@ final class NativeAppModel {
     /// Toggles movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto/M.
     func switchAutoISO(enabled: Bool) {
         guard showsAutoISOPicker, !isISORecordingLocked else { return }
+        // Auto Off / manual only in M; ignore attempts from non-M modes.
+        if !enabled, !allowsManualISO { return }
         let write = PTPCameraPropertyWrite.movieISOAuto(enabled: enabled)
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: write.property, data: write.data)
@@ -5833,7 +5859,9 @@ final class NativeAppModel {
 
     /// Ensures ISO writes can stick: when movie ISO auto is on, switch to manual first.
     func prepareManualISOIfNeeded() {
-        guard showsAutoISOPicker, isAutoISOActive, !isISORecordingLocked else { return }
+        guard showsAutoISOPicker, isAutoISOActive, !isISORecordingLocked, allowsManualISO else {
+            return
+        }
         switchAutoISO(enabled: false)
     }
 

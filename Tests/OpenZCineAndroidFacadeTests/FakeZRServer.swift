@@ -838,6 +838,9 @@ final class FakeZRServer: @unchecked Sendable {
             return Data(ByteCoding.uint32LE(0))
         case .movieISOSensitivity, .movieExposureIndex:
             return Data(ByteCoding.uint32LE(800))
+        case .isoControlSensitivity:
+            // Effective/working ISO (0xD0B5) — may differ from dual-base D09E under Auto.
+            return Data(ByteCoding.uint32LE(800))
         case .movieISOAutoControl:
             return Data([0])  // manual ISO by default
         case .movieBaseISO:

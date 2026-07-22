@@ -404,7 +404,8 @@ import Testing
 
 @Test func cameraPropertySnapshotAppliesRawPropertyValues() {
     let snapshot = PTPCameraPropertySnapshot()
-        .applying(property: .movieISOSensitivity, data: Data([0x20, 0x03, 0x00, 0x00]))
+        // Effective ISO (0xD0B5) is the authoritative working readout.
+        .applying(property: .isoControlSensitivity, data: Data([0x20, 0x03, 0x00, 0x00]))
         .applying(property: .movieShutterAngle, data: Data([0x50, 0x46, 0x00, 0x00]))
         .applying(property: .movieFNumber, data: Data([0x18, 0x01]))
         .applying(property: .movieWBColorTemp, data: Data([0xE0, 0x15]))
@@ -422,6 +423,31 @@ import Testing
     #expect(snapshot.wbKelvin == UInt16(5_600))
     #expect(snapshot.resolution == "6048x4032")
     #expect(snapshot.fps == 25)
+}
+
+@Test func cameraPropertySnapshotPrefersEffectiveISOOverStaleDualBase() {
+    // Non-R3D: dual-base D09E often sticks at native base 800; effective D0B5 tracks Auto.
+    let staleDualBase = Data(ByteCoding.uint32LE(800))
+    let effective = Data(ByteCoding.uint32LE(51_200))
+    let snapshot = PTPCameraPropertySnapshot(fileType: "ProRes 422 HQ")
+        .applying(property: .movieISOSensitivity, data: staleDualBase)
+        .applying(property: .isoControlSensitivity, data: effective)
+        // A later dual-base poll must not clobber effective ISO on non-R3D.
+        .applying(property: .movieISOSensitivity, data: staleDualBase)
+    #expect(snapshot.iso == UInt32(51_200))
+
+    // R3D dual-base still updates from D09E.
+    let r3d = PTPCameraPropertySnapshot(fileType: "R3D NE 12-bit R3D")
+        .applying(property: .movieISOSensitivity, data: Data(ByteCoding.uint32LE(6_400)))
+    #expect(r3d.iso == UInt32(6_400))
+}
+
+@Test func liveMonitorPollOrderIncludesEffectiveISO() {
+    #expect(PTPPropertyCode.liveMonitorPollOrder.contains(.isoControlSensitivity))
+    let effectiveIdx = PTPPropertyCode.liveMonitorPollOrder.firstIndex(of: .isoControlSensitivity)
+    let dualBaseIdx = PTPPropertyCode.liveMonitorPollOrder.firstIndex(of: .movieISOSensitivity)
+    #expect(effectiveIdx != nil && dualBaseIdx != nil)
+    #expect(effectiveIdx! < dualBaseIdx!)
 }
 
 @Test func devicePropDescEnumParserReadsTrailingEnumValues() {

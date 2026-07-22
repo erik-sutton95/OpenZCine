@@ -878,9 +878,10 @@ struct PickerPanel: View {
         picker == .iso && model.isISORecordingLocked
     }
 
-    /// Auto ISO On: value drum is camera-owned; mode tabs stay usable to switch to Auto Off.
+    /// Auto ISO On or non-M (non-R3D): value drum is camera-owned.
+    /// R3D NE dual-base is always manual — never locked by exposure mode.
     private var isISOAutoValueLocked: Bool {
-        picker == .iso && model.showsAutoISOPicker && model.isAutoISOActive
+        picker == .iso && model.showsAutoISOPicker && model.isISOValueCameraOwned
     }
 
     private var isPickerInteractionLocked: Bool {
@@ -1028,6 +1029,14 @@ struct PickerPanel: View {
             let value = model.pickerModeValue(picker, mode: modeIndex)
             selection = value
             lastApplied = value
+        }
+        // Auto ISO: keep the locked drum centred on the body's effective ISO as it changes.
+        .onChange(of: model.cameraPropertySnapshot.iso) { _, iso in
+            guard picker == .iso, isISOAutoValueLocked, let iso, iso > 0 else { return }
+            let next = String(iso)
+            guard next != selection else { return }
+            selection = next
+            lastApplied = next
         }
         // Confirm-on-snap: apply each newly-centred value to the active mode's target.
         .onChange(of: selection) { _, newValue in
@@ -1188,12 +1197,9 @@ struct PickerPanel: View {
         HStack(spacing: 8) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 11, weight: .semibold))
-            Text(
-                "Auto ISO is on — the camera sets sensitivity. "
-                    + "Switch to Auto Off to choose a value."
-            )
-            .font(.system(size: 11.5, weight: .medium))
-            .fixedSize(horizontal: false, vertical: true)
+            Text(isoAutoLockBannerText)
+                .font(.system(size: 11.5, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(LiveDesign.accent.opacity(0.9))
         .padding(.horizontal, 12)
@@ -1203,6 +1209,17 @@ struct PickerPanel: View {
             LiveDesign.accentDim,
             in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
         )
+    }
+
+    private var isoAutoLockBannerText: String {
+        if model.allowsManualISO {
+            return
+                "Auto ISO is on — the camera sets sensitivity. "
+                + "Switch to Auto Off to choose a value."
+        }
+        return
+            "Manual ISO needs exposure mode M. "
+            + "The camera is setting sensitivity."
     }
 
     private var currentValue: String {
@@ -1223,8 +1240,18 @@ struct PickerPanel: View {
         if picker == .resolution, !screenModes.isEmpty { return screenModes }
         if picker == .codec, !codecModes.isEmpty { return codecModes }
         if picker == .iso {
+            // Inject live Auto ISO when it sits outside the fixed ladder (e.g. 51200).
+            let liveISO: String? = {
+                guard model.showsAutoISOPicker else { return nil }
+                if let iso = model.cameraPropertySnapshot.iso, iso > 0 {
+                    return String(iso)
+                }
+                return nil
+            }()
             return ISOPickerPolicy.options(
-                codec: model.cameraState.codec, modeIndex: selectedMode)
+                codec: model.cameraState.codec,
+                modeIndex: selectedMode,
+                includingLiveISO: liveISO)
         }
         // Kelvin dial ladder, with the live / fine-tuned value inserted when off-ladder.
         if isKelvinMode {

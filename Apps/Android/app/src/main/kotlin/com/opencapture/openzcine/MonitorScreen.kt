@@ -593,12 +593,14 @@ internal fun MonitorScreen(
             stringResolver,
             effectiveShutterLocked,
             cameraProperties.isoAuto,
+            cameraProperties.exposureMode,
         ) {
             monitorCaptureSettings(
                 commandPresentation,
                 stringResolver,
                 shutterLockedOnCamera = effectiveShutterLocked,
                 isoAuto = cameraProperties.isoAuto,
+                exposureMode = cameraProperties.exposureMode,
             )
         }
     val topPillPickers =
@@ -661,37 +663,11 @@ internal fun MonitorScreen(
                     }
                     pendingCommandControl = control
                     try {
+                        // Facade applyControl already confirms the write on the wire. Do not
+                        // soft-fail from a lagging property poll (see docs/android-control-writes.md).
                         session.applyControl(control, desiredLabel)
-                        // Property poll will also catch up; one refresh keeps tiles/bar honest
-                        // after the native confirm without freezing the drum (settles still
-                        // enqueue into desiredControlWrites while this runs).
+                        // One refresh keeps tiles/bar honest; settles still enqueue while this runs.
                         session.refreshProperties()
-                        val confirmed =
-                            cameraPropertyConfirmsSelection(
-                                session.cameraProperties.value,
-                                control,
-                                desiredLabel,
-                            )
-                        // Only surface failures. iOS does not flash "set to …" on every snap.
-                        // ISO is already byte-confirmed on MovieExposureIndex / MovieISOSensitivity
-                        // inside the shared core; a lagging dual-property refresh must not flash
-                        // a false "did not confirm" after a successful body write.
-                        val softConfirmSkips =
-                            control == CameraControl.ISO || control == CameraControl.ISO_AUTO
-                        if (!confirmed &&
-                            !softConfirmSkips &&
-                            desiredControlWrites[control] == null
-                        ) {
-                            commandControlFeedback =
-                                CommandControlFeedback(
-                                    appContext.getString(
-                                        R.string.control_confirmation_failed,
-                                        req.title,
-                                        desiredLabel,
-                                    ),
-                                    isError = true,
-                                )
-                        }
                     } catch (error: CameraControlException) {
                         if (desiredControlWrites[control] == null) {
                             commandControlFeedback =
@@ -724,6 +700,30 @@ internal fun MonitorScreen(
             if (!commandControlsEnabled) return@applyCameraControl
             // Exit movie ISO auto by choosing a drum value: write MovISOAutoControl Off first
             // so the body accepts the manual ISO write (non-R3D NE codecs).
+            // Manual ISO / Auto Off: R3D NE always; other codecs only in M.
+            val codecForISO =
+                (cameraProperties.codecSelection ?: cameraProperties.codec)
+                    ?.takeIf { it != "—" }
+                    .orEmpty()
+            if (
+                request.control == CameraControl.ISO &&
+                    !IsoPickerPolicy.allowsManualISO(
+                        codecForISO,
+                        cameraProperties.exposureMode,
+                    )
+            ) {
+                return@applyCameraControl
+            }
+            if (
+                request.control == CameraControl.ISO_AUTO &&
+                    label.equals(IsoPickerPolicy.AUTO_ISO_OFF_LABEL, ignoreCase = true) &&
+                    !IsoPickerPolicy.allowsManualISO(
+                        codecForISO,
+                        cameraProperties.exposureMode,
+                    )
+            ) {
+                return@applyCameraControl
+            }
             if (
                 request.control == CameraControl.ISO &&
                     IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto)

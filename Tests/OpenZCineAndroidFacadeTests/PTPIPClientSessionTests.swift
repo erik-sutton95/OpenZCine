@@ -601,22 +601,35 @@ struct PTPIPClientSessionTests {
                 $0.operation == .getDevicePropDescEx
                     && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
             }.count == screenSizeDescriptorReadsBeforeCodecChange + 1)
-        #expect(
-            Array(server.receivedRequests().dropFirst(requestBaseline).suffix(3))
-                == [
-                    FakeZRRequest(
-                        operation: .getDevicePropValueEx,
-                        parameters: [PTPPropertyCode.movieFileType.rawValue],
-                        dataPhase: .dataIn),
-                    FakeZRRequest(
-                        operation: .getDevicePropDescEx,
-                        parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
-                        dataPhase: .dataIn),
-                    FakeZRRequest(
-                        operation: .getDevicePropValueEx,
-                        parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
-                        dataPhase: .dataIn),
-                ])
+        // Codec change must re-read MovFileType then rebuild MovScreenSize. Extra follow-on
+        // screen-size samples (poll-index cadence) may trail the triple; match the sequence, not
+        // a hard-coded "last N" that breaks when the live poll order gains properties.
+        let afterBaseline = Array(server.receivedRequests().dropFirst(requestBaseline))
+        let expectedCodecThenScreenRebuild = [
+            FakeZRRequest(
+                operation: .getDevicePropValueEx,
+                parameters: [PTPPropertyCode.movieFileType.rawValue],
+                dataPhase: .dataIn),
+            FakeZRRequest(
+                operation: .getDevicePropDescEx,
+                parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
+                dataPhase: .dataIn),
+            FakeZRRequest(
+                operation: .getDevicePropValueEx,
+                parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
+                dataPhase: .dataIn),
+        ]
+        let hasCodecThenScreenRebuild: Bool = {
+            guard afterBaseline.count >= expectedCodecThenScreenRebuild.count else { return false }
+            let needle = expectedCodecThenScreenRebuild
+            for start in 0...(afterBaseline.count - needle.count) {
+                if Array(afterBaseline[start..<(start + needle.count)]) == needle {
+                    return true
+                }
+            }
+            return false
+        }()
+        #expect(hasCodecThenScreenRebuild)
     }
 
     @Test func rawImageAreaLabelsAreRestrictedToNikonZR() throws {
@@ -825,24 +838,39 @@ struct PTPIPClientSessionTests {
 
         let high = session.refreshAndroidPropertySnapshot(.bootstrap).controls
         #expect(high.isoValues == ISOPickerPolicy.highBaseOptions)
-        let highBaseline = server.receivedPropertyWrites().count
-        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iso", "800")) {
-            try session.applyAndroidControl(.iso, label: "800")
-        }
-        #expect(server.receivedPropertyWrites().count == highBaseline)
+        // Capability lists still track the active dual-base circuit for the UI ladder.
+        // Encoded numeric ISO is still written — the body is the range authority (and Auto
+        // can park outside the fixed ladder). Wrong-circuit labels are no longer hard-rejected
+        // as "not supported" after a successful body write.
         try session.applyAndroidControl(.iso, label: "1600")
+        try session.applyAndroidControl(.iso, label: "800")
         try session.applyAndroidControl(.baseISO, label: "Low")
 
         let low = session.refreshAndroidPropertySnapshot(
             .propertyChanged(PTPPropertyCode.movieBaseISO.rawValue)
         ).controls
         #expect(low.isoValues == ISOPickerPolicy.lowBaseOptions)
-        let lowBaseline = server.receivedPropertyWrites().count
-        #expect(throws: PTPIPClientSessionError.unsupportedAndroidControl("iso", "25600")) {
-            try session.applyAndroidControl(.iso, label: "25600")
-        }
-        #expect(server.receivedPropertyWrites().count == lowBaseline)
         try session.applyAndroidControl(.iso, label: "800")
+        try session.applyAndroidControl(.iso, label: "25600")
+    }
+
+    @Test func encodableISOOutsideCapabilityLadderIsStillWritten() throws {
+        // Auto can report 51200 while the manual UI ladder tops out at 25600. Capability
+        // membership must not flash "not supported" when the shared encoder can still write.
+        var options = FakeZRServer.Options()
+        options.movieFileTypeRaw = 0x0001_0A01  // H.265 — unified ladder
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        let before = server.receivedPropertyWrites().count
+        try session.applyAndroidControl(.iso, label: "51200")
+        #expect(server.receivedPropertyWrites().count == before + 1)
+        #expect(
+            server.receivedPropertyWrites().last?.property
+                == PTPPropertyCode.movieExposureIndex.rawValue)
     }
 
     @Test func electronicVRIsRejectedBeforeWritingForRawOrUnknownCodec() throws {

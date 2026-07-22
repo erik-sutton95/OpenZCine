@@ -54,6 +54,30 @@ public enum ISOPickerPolicy: Sendable {
         isoAuto == true
     }
 
+    /// Whether the operator may write a manual movie ISO value for this codec / mode.
+    ///
+    /// - **R3D NE** (dual-base): always manual ISO — the body forces dual-base circuits even in
+    ///   A/S/P; exposure program does not own sensitivity.
+    /// - **Other codecs**: only **M** accepts Auto Off + ISO drum writes; P/A/S/Auto keep
+    ///   sensitivity camera-owned. Fail closed when the mode is unknown.
+    public static func allowsManualISO(codec: String, exposureMode: String?) -> Bool {
+        if showsDualBaseCircuits(codec: codec) { return true }
+        return exposureMode == "M"
+    }
+
+    /// True when the ISO value drum is camera-owned (Auto On, or non-R3D mode is not M).
+    ///
+    /// Always `false` for R3D NE dual-base (manual circuits); recording lock is separate.
+    public static func isISOValueCameraOwned(
+        codec: String,
+        isoAuto: Bool?,
+        exposureMode: String?
+    ) -> Bool {
+        if showsDualBaseCircuits(codec: codec) { return false }
+        return isAutoISOActive(isoAuto: isoAuto)
+            || !allowsManualISO(codec: codec, exposureMode: exposureMode)
+    }
+
     /// Label written for Auto On (`MovISOAutoControl` UINT8 = 1).
     public static let autoISOOnLabel = "ON"
 
@@ -76,15 +100,20 @@ public enum ISOPickerPolicy: Sendable {
     }
 
     /// Subtitle shown under the ISO picker header.
-    public static func pickerSubtitle(codec: String) -> String {
+    public static func pickerSubtitle(codec: String, exposureMode: String? = nil) -> String {
         if showsDualBaseCircuits(codec: codec) { return "Sensitivity · dual base" }
-        if showsAutoISOControl(codec: codec) { return "Sensitivity · auto / manual" }
+        if showsAutoISOControl(codec: codec) {
+            if allowsManualISO(codec: codec, exposureMode: exposureMode) {
+                return "Sensitivity · auto / manual"
+            }
+            return "Sensitivity · auto (M mode for manual)"
+        }
         return "Sensitivity"
     }
 
     /// Mode tabs for the ISO picker.
-    /// R3D NE → Low/High base; other codecs → Auto On / Auto Off; never empty for ZR movie codecs.
-    public static func pickerModes(codec: String) -> [ISOPickerMode] {
+    /// R3D NE → Low/High base; other codecs → Auto On / Auto Off (Auto Off only in M mode).
+    public static func pickerModes(codec: String, exposureMode: String? = nil) -> [ISOPickerMode] {
         if showsDualBaseCircuits(codec: codec) {
             return [
                 ISOPickerMode(
@@ -102,36 +131,69 @@ public enum ISOPickerPolicy: Sendable {
             ]
         }
         if showsAutoISOControl(codec: codec) {
-            return [
+            var modes = [
                 ISOPickerMode(
                     title: "Auto On",
                     detail: "Camera controls ISO",
                     options: unifiedOptions,
                     base: lowBaseMarker,
                     activatesAutoISO: true
-                ),
-                ISOPickerMode(
-                    title: "Auto Off",
-                    detail: "Manual ISO",
-                    options: unifiedOptions,
-                    base: lowBaseMarker,
-                    activatesAutoISO: false
-                ),
+                )
             ]
+            // Manual ISO / Auto Off only when the exposure dial is M (non-R3D).
+            if allowsManualISO(codec: codec, exposureMode: exposureMode) {
+                modes.append(
+                    ISOPickerMode(
+                        title: "Auto Off",
+                        detail: "Manual ISO",
+                        options: unifiedOptions,
+                        base: lowBaseMarker,
+                        activatesAutoISO: false
+                    )
+                )
+            }
+            return modes
         }
         return []
     }
 
     /// Options for the active ISO layout and mode tab.
-    public static func options(codec: String, modeIndex: Int) -> [String] {
+    ///
+    /// When Auto is driving a value outside the fixed ladder (e.g. 51200), `includingLiveISO`
+    /// injects it so the locked drum can centre on the body's working sensitivity.
+    public static func options(
+        codec: String,
+        modeIndex: Int,
+        includingLiveISO: String? = nil
+    ) -> [String] {
         let modes = pickerModes(codec: codec)
-        guard !modes.isEmpty, modes.indices.contains(modeIndex) else { return unifiedOptions }
-        return modes[modeIndex].options
+        var base =
+            (!modes.isEmpty && modes.indices.contains(modeIndex))
+            ? modes[modeIndex].options : unifiedOptions
+        if let live = includingLiveISO?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !live.isEmpty,
+            live.allSatisfy(\.isNumber),
+            !base.contains(live)
+        {
+            let liveValue = UInt32(live) ?? 0
+            if let insertAt = base.firstIndex(where: { (UInt32($0) ?? 0) > liveValue }) {
+                base.insert(live, at: insertAt)
+            } else {
+                base.append(live)
+            }
+        }
+        return base
     }
 
-    /// Active mode tab for Auto ISO codecs: 0 = Auto On, 1 = Auto Off.
-    public static func autoISOModeIndex(isoAuto: Bool?) -> Int {
-        isAutoISOActive(isoAuto: isoAuto) ? 0 : 1
+    /// Active mode tab for Auto ISO codecs: 0 = Auto On, 1 = Auto Off (when available).
+    public static func autoISOModeIndex(
+        codec: String,
+        isoAuto: Bool?,
+        exposureMode: String? = nil
+    ) -> Int {
+        // Without Auto Off (non-M on non-R3D), stay on the only tab.
+        guard allowsManualISO(codec: codec, exposureMode: exposureMode) else { return 0 }
+        return isAutoISOActive(isoAuto: isoAuto) ? 0 : 1
     }
 }
 

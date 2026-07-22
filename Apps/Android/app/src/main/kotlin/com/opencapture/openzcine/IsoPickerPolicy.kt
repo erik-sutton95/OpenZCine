@@ -5,6 +5,7 @@ package com.opencapture.openzcine
  *
  * 1:1 with `Sources/OpenZCineCore/ISOPickerPolicy.swift`. R3D NE exposes separate
  * low/high base ISO circuits; other codecs use Auto On/Off plus a unified drum.
+ * Auto Off / manual ISO is only offered in exposure mode **M**.
  */
 internal object IsoPickerPolicy {
     /** Low-base ISO steps (200–3200). */
@@ -86,9 +87,43 @@ internal object IsoPickerPolicy {
      */
     fun isAutoISOActive(isoAuto: Boolean?): Boolean = isoAuto == true
 
-    /** Active Auto tab: 0 = Auto On, 1 = Auto Off. */
-    fun autoISOModeIndex(isoAuto: Boolean?): Int =
-        if (isAutoISOActive(isoAuto)) 0 else 1
+    /**
+     * Whether the operator may write a manual movie ISO for this codec / mode.
+     *
+     * - **R3D NE**: always manual dual-base (even in A/S/P).
+     * - **Other codecs**: only exposure mode **M** (Auto Off + drum). Fail closed when unknown.
+     */
+    fun allowsManualISO(codec: String, exposureMode: String?): Boolean =
+        if (showsDualBaseCircuits(codec)) true else exposureMode == "M"
+
+    /**
+     * True when the ISO value drum is camera-owned (Auto On, or non-R3D mode is not M).
+     * Always false for R3D NE dual-base (recording lock is separate).
+     */
+    fun isISOValueCameraOwned(
+        codec: String,
+        isoAuto: Boolean?,
+        exposureMode: String?,
+    ): Boolean =
+        if (showsDualBaseCircuits(codec)) {
+            false
+        } else {
+            isAutoISOActive(isoAuto) || !allowsManualISO(codec, exposureMode)
+        }
+
+    /** Active Auto tab: 0 = Auto On, 1 = Auto Off (when M allows manual on non-R3D). */
+    fun autoISOModeIndex(
+        codec: String,
+        isoAuto: Boolean?,
+        exposureMode: String? = null,
+    ): Int =
+        if (!allowsManualISO(codec, exposureMode)) {
+            0
+        } else if (isAutoISOActive(isoAuto)) {
+            0
+        } else {
+            1
+        }
 
     /** ISO cannot be changed while recording in R3D NE. */
     fun blocksISOChangeWhileRecording(codec: String, isRecording: Boolean): Boolean =
@@ -107,15 +142,17 @@ internal object IsoPickerPolicy {
         }
 
     /** Subtitle shown under the ISO picker header. */
-    fun pickerSubtitle(codec: String): String =
+    fun pickerSubtitle(codec: String, exposureMode: String? = null): String =
         when {
             showsDualBaseCircuits(codec) -> "Sensitivity · dual base"
-            showsAutoISOControl(codec) -> "Sensitivity · auto / manual"
+            showsAutoISOControl(codec) && allowsManualISO(codec, exposureMode) ->
+                "Sensitivity · auto / manual"
+            showsAutoISOControl(codec) -> "Sensitivity · auto (M mode for manual)"
             else -> "Sensitivity"
         }
 
-    /** Mode tabs for the ISO picker. */
-    fun pickerModes(codec: String): List<IsoPickerMode> =
+    /** Mode tabs for the ISO picker. Auto Off only when exposure mode is M (non-R3D). */
+    fun pickerModes(codec: String, exposureMode: String? = null): List<IsoPickerMode> =
         when {
             showsDualBaseCircuits(codec) ->
                 listOf(
@@ -133,33 +170,60 @@ internal object IsoPickerPolicy {
                     ),
                 )
             showsAutoISOControl(codec) ->
-                listOf(
-                    IsoPickerMode(
-                        title = "Auto On",
-                        detail = "Camera controls ISO",
-                        options = unifiedOptions,
-                        base = LOW_BASE_MARKER,
-                        activatesAutoISO = true,
-                    ),
-                    IsoPickerMode(
-                        title = "Auto Off",
-                        detail = "Manual ISO",
-                        options = unifiedOptions,
-                        base = LOW_BASE_MARKER,
-                        activatesAutoISO = false,
-                    ),
-                )
+                buildList {
+                    add(
+                        IsoPickerMode(
+                            title = "Auto On",
+                            detail = "Camera controls ISO",
+                            options = unifiedOptions,
+                            base = LOW_BASE_MARKER,
+                            activatesAutoISO = true,
+                        ),
+                    )
+                    if (allowsManualISO(codec, exposureMode)) {
+                        add(
+                            IsoPickerMode(
+                                title = "Auto Off",
+                                detail = "Manual ISO",
+                                options = unifiedOptions,
+                                base = LOW_BASE_MARKER,
+                                activatesAutoISO = false,
+                            ),
+                        )
+                    }
+                }
             else -> emptyList()
         }
 
-    /** Options for the active ISO layout and mode tab. */
-    fun options(codec: String, modeIndex: Int): List<String> {
+    /**
+     * Options for the active ISO layout and mode tab.
+     * Injects [includingLiveISO] when Auto is outside the fixed ladder (e.g. 51200).
+     */
+    fun options(
+        codec: String,
+        modeIndex: Int,
+        includingLiveISO: String? = null,
+    ): List<String> {
         val modes = pickerModes(codec)
-        return if (modes.isEmpty() || modeIndex !in modes.indices) {
-            unifiedOptions
-        } else {
-            modes[modeIndex].options
+        val base =
+            if (modes.isEmpty() || modeIndex !in modes.indices) {
+                unifiedOptions
+            } else {
+                modes[modeIndex].options
+            }
+        val live = includingLiveISO?.trim().orEmpty()
+        if (live.isEmpty() || !live.all { it.isDigit() } || live in base) {
+            return base
         }
+        val liveValue = live.toLongOrNull() ?: return base + live
+        val mutable = base.toMutableList()
+        val insertAt = mutable.indexOfFirst { (it.toLongOrNull() ?: Long.MAX_VALUE) > liveValue }
+        if (insertAt < 0) {
+            mutable.add(live)
+        } else {
+            mutable.add(insertAt, live)
+        }
+        return mutable
     }
 }
 
