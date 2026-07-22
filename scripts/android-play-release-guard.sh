@@ -17,9 +17,15 @@ case "${EVENT_NAME:-}" in
     [[ "${REF_NAME:-}" == "main" ]] || fail "manual releases must run from main, not ${REF_NAME:-an unknown ref}"
     ;;
   push)
-    expected_tag="android-v${version_name}"
-    [[ "${REF_NAME:-}" == "$expected_tag" ]] || fail "tag must be ${expected_tag}, not ${REF_NAME:-an unknown ref}"
-    git merge-base --is-ancestor HEAD origin/main || fail "release tag commit is not on main"
+    # Automated main uploads (TestFlight-style) or deliberate android-v* tags.
+    if [[ "${REF_NAME:-}" == "main" ]]; then
+      :
+    else
+      expected_tag="android-v${version_name}"
+      [[ "${REF_NAME:-}" == "$expected_tag" ]] ||
+        fail "tag must be ${expected_tag} or main, not ${REF_NAME:-an unknown ref}"
+      git merge-base --is-ancestor HEAD origin/main || fail "release tag commit is not on main"
+    fi
     ;;
   *)
     fail "unsupported event ${EVENT_NAME:-unknown}"

@@ -27,6 +27,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- Google Play **internal** uploads automate like TestFlight: merge Android-relevant paths to `main`
+  builds and uploads phone + Wear AABs when `PLAY_UPLOAD_ENABLED=true` (see
+  `docs/android-distribution.md`). Manual dispatch and `android-v*` tags remain.
 - Android control writes: facade owns encode + native confirm; shell no longer soft-fails after a
   successful apply (see `docs/android-control-writes.md`).
 - TestFlight notes are now reviewed, tester-written copy with concrete test steps. CI rejects stale

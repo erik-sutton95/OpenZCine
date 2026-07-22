@@ -1,7 +1,7 @@
 What's changed
 
 - Playback and live desqueeze scale the picture itself (not only guides), with a 1.6× chip and a custom 1.00–2.00× control in fine 0.01 steps.
-- On non-R3D formats (N-RAW, ProRes, H.264/H.265), ISO Auto On/Off controls movie ISO auto — not the P/A/S/M exposure dial. While Auto is on, the tile shows the live working ISO (for example A51200) and the value drum is locked.
+- On non-R3D formats (N-RAW, ProRes, H.264/H.265), ISO Auto On/Off controls movie ISO auto — not the P/A/S/M exposure dial. While Auto is on, the tile shows the live working ISO (e.g. A51200) and the value drum is locked.
 - Manual ISO / Auto Off is available only in exposure mode M on those formats. R3D NE still uses Low/High base circuits and stays manual in every exposure mode (including A).
 
 Please test
