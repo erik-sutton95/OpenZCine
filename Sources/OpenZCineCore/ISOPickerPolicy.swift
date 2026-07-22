@@ -42,8 +42,11 @@ public enum ISOPickerPolicy: Sendable {
     }
 
     /// Non-R3D NE codecs use Auto On/Off tabs instead of dual-base circuits.
+    /// Empty/unknown codec stays closed until the body reports a real file type.
     public static func showsAutoISOControl(codec: String) -> Bool {
-        !showsDualBaseCircuits(codec: codec)
+        let trimmed = codec.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return !showsDualBaseCircuits(codec: trimmed)
     }
 
     /// Whether movie ISO auto is active (`MovieISOAutoControl` / `MovISOAutoControl` 0xD0AD).

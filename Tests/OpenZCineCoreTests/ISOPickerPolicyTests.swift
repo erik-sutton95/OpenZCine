@@ -7,6 +7,9 @@ import Testing
     #expect(ISOPickerPolicy.isR3DNECodec("R3D NE 10-bit R3D"))
     #expect(!ISOPickerPolicy.isR3DNECodec("N-RAW"))
     #expect(!ISOPickerPolicy.isR3DNECodec("ProRes RAW HQ"))
+    #expect(!ISOPickerPolicy.showsAutoISOControl(codec: ""))
+    #expect(ISOPickerPolicy.showsAutoISOControl(codec: "N-RAW"))
+    #expect(!ISOPickerPolicy.showsAutoISOControl(codec: "R3D NE"))
 }
 
 @Test func isoPickerPolicyUsesDualBaseOnlyForR3DNE() {

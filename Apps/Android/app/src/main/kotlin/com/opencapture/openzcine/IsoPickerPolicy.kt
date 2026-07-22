@@ -78,8 +78,15 @@ internal object IsoPickerPolicy {
     /** R3D NE keeps separate LOW/HIGH base drums. */
     fun showsDualBaseCircuits(codec: String): Boolean = isR3DNECodec(codec)
 
-    /** Non-R3D NE codecs use Auto On/Off tabs. */
-    fun showsAutoISOControl(codec: String): Boolean = !showsDualBaseCircuits(codec)
+    /**
+     * Non-R3D NE codecs use Auto On/Off tabs.
+     * Empty/unknown codec stays closed until the body reports a real file type.
+     */
+    fun showsAutoISOControl(codec: String): Boolean {
+        val trimmed = codec.trim()
+        if (trimmed.isEmpty()) return false
+        return !showsDualBaseCircuits(trimmed)
+    }
 
     /**
      * Whether movie ISO auto is active (`MovISOAutoControl` 0xD0AD).

@@ -1,12 +1,12 @@
 What's changed
 
-- Playback de-squeeze now scales the video itself (not only guides), including a 1.6× chip and a custom 1.0–2.0× control in 0.01 steps on live and playback.
-- Auto ISO (non-R3D NE: N-RAW, ProRes, H.264/H.265) now toggles movie ISO auto/manual on the camera — not exposure program Auto/M. Use Auto On / Auto Off under the ISO picker, or pick an ISO value to leave ISO Auto and set a manual ISO.
-- R3D NE still uses Low / High base ISO circuits; recording lock for R3D NE is unchanged.
+- Playback and live desqueeze scale the picture itself (not only guides), with a 1.6× chip and a custom 1.00–2.00× control in fine 0.01 steps.
+- On non-R3D formats (N-RAW, ProRes, H.264/H.265), ISO Auto On/Off controls movie ISO auto — not the P/A/S/M exposure dial. While Auto is on, the tile shows the live working ISO (e.g. A51200) and the value drum is locked.
+- Manual ISO / Auto Off is available only in exposure mode M on those formats. R3D NE still uses Low/High base circuits and stays manual in every exposure mode (including A).
 
 Please test
 
-- In media playback, enable Desqueeze, try 1.6× and the custom slider, and confirm the picture (not only overlays) changes. Repeat on live view.
-- On ProRes or H.265 in Manual (or any) exposure mode: open ISO, confirm Auto On/Off controls ISO sensitivity auto (ISO tile shows Auto when on), that choosing a drum ISO value turns ISO auto off without changing P/A/S/M, and that picking an ISO value is accepted (no "camera rejected" error).
-- Confirm exposure MODE (Auto/P/A/S/M) is unchanged when toggling ISO Auto On/Off.
-- On R3D NE, confirm Low/High base tabs still work and ISO remains locked only while recording.
+- Enable Desqueeze on playback and live; try 1.6× and the custom slider; confirm the image (not only overlays) changes.
+- On ProRes or H.265 in M: open ISO, switch Auto On/Off, confirm the tile tracks live Auto ISO, then set a manual ISO with no false error toast.
+- On ProRes or H.265 in A or S: confirm Auto Off / manual ISO is not offered and the drum stays locked.
+- On R3D NE in A: confirm Low/High base still works and ISO is not blocked by an “needs M mode” message.
