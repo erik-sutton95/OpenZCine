@@ -10,8 +10,8 @@ to `site/`.
 - `screens/*.webp` are optimized landing-page mockups loaded by `site/index.html`.
 - `screens/hero-set.webp` is the AI-generated hero backdrop. The page discloses that origin next to
   the image.
-- `screens/ipad-monitor.webp` combines an OpenZCine simulator capture with an AI-generated iPad
-  hardware mockup. Its prominent faces are blurred for the public site.
+- `screens/ipad-monitor-v2.webp` combines an OpenZCine simulator capture with an AI-generated iPad
+  hardware mockup. Its prominent faces are privacy-obscured for the public site.
 - `frameio-mark.svg` identifies the optional Frame.io integration. Frame.io and its mark belong to
   Adobe and are used only for product identification.
 
