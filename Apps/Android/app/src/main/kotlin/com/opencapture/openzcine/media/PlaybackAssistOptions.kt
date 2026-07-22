@@ -394,7 +394,7 @@ private fun PlaybackAssistOptionsContent(
         AssistTool.CROSS ->
             OptionCopy("Tap the toolbar button to show or hide the centre crosshair.")
         AssistTool.LEVEL -> LevelOptions(actions, settings)
-        AssistTool.DESQ -> DesqueezeOptions(actions, settings)
+        AssistTool.DESQ -> DesqueezeOptions(settings)
         AssistTool.AUDIO ->
             OptionCopy("Meters the playing clip's audio. Available during media playback.")
     }
@@ -1246,12 +1246,8 @@ private fun LevelOptions(actions: AssistOptionsActions, settings: OperatorSettin
 }
 
 @Composable
-private fun DesqueezeOptions(actions: AssistOptionsActions, settings: OperatorSettings) {
-    CircleToggleRow(
-        "Enable",
-        actions.isOn(AssistTool.DESQ),
-        divider = false,
-    ) { actions.setVisible(AssistTool.DESQ, !actions.isOn(AssistTool.DESQ)) }
+private fun DesqueezeOptions(settings: OperatorSettings) {
+    // On/off is the assist-bar DESQ chip; this panel only configures factor/axis.
     SegmentedChoice(
         LocalDesqueezeRatio.entries.toList(),
         LocalDesqueezeRatio::label,

@@ -1950,17 +1950,7 @@ struct AssistPanel: View {
                         }
                     }
                 case .desqueeze:
-                    Button {
-                        model.assistConfiguration.desqueeze.enabled.toggle()
-                        model.setAssist(
-                            .desqueeze,
-                            visible: model.assistConfiguration.desqueeze.enabled
-                        )
-                    } label: {
-                        ToggleRow(
-                            title: "Enable", isOn: model.assistConfiguration.desqueeze.enabled)
-                    }
-                    .buttonStyle(.zcTapTarget)
+                    // On/off is the assist-bar DESQ chip; this panel only configures factor/axis.
                     SegmentedButtons(
                         items: AssistConfiguration.Desqueeze.Ratio.allCases.map(\.rawValue),
                         selected:
