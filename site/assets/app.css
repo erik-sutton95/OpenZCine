@@ -563,6 +563,55 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
 .statement__text .w--gold { color: var(--accent); }
 
 /* ================================================================ */
+/* FIELD NOTES - quiet reactions scattered through the feature tour */
+/* ================================================================ */
+.field-note { padding: clamp(12px, 2.5vw, 30px) 0; }
+.field-note .container { display: flex; }
+.field-note--left .field-note__quote {
+  margin-left: clamp(0px, 4vw, 64px);
+  margin-right: auto;
+}
+.field-note--right .field-note__quote {
+  margin-right: clamp(0px, 6vw, 96px);
+  margin-left: auto;
+}
+.field-note__quote {
+  width: min(520px, 78vw);
+  padding-left: clamp(14px, 2vw, 20px);
+  border-left: 1px solid var(--hairline-2);
+}
+.field-note blockquote {
+  color: var(--faint);
+  font: 400 clamp(14px, 1.35vw, 17px)/1.6 var(--mono);
+  letter-spacing: .01em;
+}
+.field-note figcaption {
+  margin-top: 9px;
+  color: var(--accent);
+  font: 600 10px/1.4 var(--mono);
+  letter-spacing: .13em;
+  opacity: .7;
+  text-transform: uppercase;
+}
+.field-note figcaption a {
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 4px;
+  transition: opacity .2s ease, text-decoration-color .2s ease;
+}
+.field-note figcaption a:hover,
+.field-note figcaption a:focus-visible {
+  opacity: 1;
+  text-decoration-color: currentColor;
+}
+@media (max-width: 560px) {
+  .field-note { padding: 10px 0; }
+  .field-note__quote { width: 100%; }
+  .field-note--left .field-note__quote,
+  .field-note--right .field-note__quote { margin-right: 0; margin-left: 0; }
+}
+
+/* ================================================================ */
 /* FEATURE ROWS - copy + real device render, scroll-revealed         */
 /* ================================================================ */
 .feat-row { align-items: center; }

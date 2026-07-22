@@ -334,6 +334,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   links to it directly. Android stays presented as clearly unavailable until it ships.
 - **Landing-page camera compatibility** (in progress): identify the Nikon ZR, Z9, and Z5II as
   working, and the Z6, Z6II, Z6III, Zf, Z8, Z7, and Z7II as untested.
+- **Landing-page community reactions** (OPE-111, in progress): place concise, accessible field-note
+  quotes throughout the feature tour using faithful excerpts from beta feedback and public community
+  posts, with source-level attribution and no private tester identities.
 - **Model-agnostic Nikon Z camera-AP onboarding** (OPE-105, in progress): recognize conservative
   Nikon Z SSID shapes without rebuilding unknown model names, share that classifier across scanning
   and reconnect policy, and provide exact manual SSID/key entry when OCR or a future body format
