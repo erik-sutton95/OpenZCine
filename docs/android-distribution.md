@@ -3,7 +3,7 @@
 Signed phone and Wear OS Android App Bundles are built and uploaded to their Google Play
 **internal testing** tracks by [`play-internal.yml`](../.github/workflows/play-internal.yml).
 Automation mirrors iOS TestFlight: when Android-relevant paths land on `main`, CI builds signed
-AABs and uploads them to the phone **internal** and Wear **wear:qa** tracks. Manual dispatch and
+AABs and uploads them to the phone **internal** and Wear **wear:internal** tracks. Manual dispatch and
 `android-v*` tags remain available. The repository variable `PLAY_UPLOAD_ENABLED` must be exactly
 `true` or the upload job is skipped (kill switch / bootstrap gate).
 
@@ -104,7 +104,7 @@ In every case the workflow runs Gradle tests + lint, computes both unique versio
 keystore secret to a runner temp file, builds both `bundleRelease` outputs signed via the same
 `ANDROID_KEYSTORE_*` environment variables, verifies both AAB signatures against the configured
 upload-key alias, and uploads the bundles, R8 mapping files, and reviewed notes from
-`Apps/Android/distribution/whatsnew/` to the phone `internal` and Wear `wear:qa` tracks with
+`Apps/Android/distribution/whatsnew/` to the phone `internal` and Wear `wear:internal` tracks with
 [r0adkll/upload-google-play](https://github.com/r0adkll/upload-google-play) (pinned by digest;
 Google publishes no official Play-upload action, and this is the best-maintained community one).
 
@@ -142,5 +142,5 @@ unsigned or both carry the same signing certificate. The debug path (`just andro
 | "Package not found" on first CI upload | The mandatory manual first uploads (step 5) haven't happened yet |
 | "Version code already used" | Raise `ANDROID_VERSION_CODE_OFFSET`, or explicitly set a collision-free `-PwearVersionCode` for a recovery build |
 | Phone and watch cannot discover each other | Confirm both installed APKs use package `com.opencapture.openzcine` and the same signing certificate |
-| Wear upload targets the phone track | Use the dedicated Wear internal track (`wear:qa` through the Publishing API) |
+| Wear upload targets the phone track | Use the dedicated Wear internal track (`wear:internal` through the Publishing API) |
 | Play rejects the bundle signature | Wrong keystore secrets, or Play App Signing expects a different upload key — reset the upload key via Play support |
