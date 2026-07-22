@@ -1,13 +1,13 @@
 What's changed
 
-- Shared diagnostics now record closed connection phases and failure kinds (USB, Wi‑Fi join, PTP) without Wi‑Fi names or camera identities.
+- Camera Wi‑Fi credential scan fails softly when on-device text recognition cannot start (shows a recoverable error instead of quitting).
+- Shared diagnostics record closed connection phases and failure kinds without Wi‑Fi names or camera identities.
 - First-run pairing and the failed-connect card still offer Share diagnostics for a local report.
-- Playback and live desqueeze scale the picture itself (not only guides), with a 1.6× chip and a custom 1.00–2.00× control in fine 0.01 steps.
-- On non-R3D formats, ISO Auto On/Off and live Auto ISO work as before; R3D NE stays manual base ISO.
+- Playback desqueeze and Auto ISO behavior for non-R3D / R3D NE remain as before.
 
 Please test
 
-- Attempt a failed USB or Wi‑Fi connect, then Share diagnostics and confirm the report lists codes such as connection.path.usb and error.connection.usb.failed (no SSIDs or serials).
-- Successful connect should show connection.handshaking / connection.connected style events without free-form errors.
+- Open camera-AP pairing and the SSID scan view; if recognition cannot start, confirm a recoverable error (not an app crash), then Try again or leave the flow.
+- Attempt a failed USB or Wi‑Fi connect, Share diagnostics, and confirm closed codes without SSIDs or serials.
 - Enable Desqueeze on playback and live; try 1.6× and the custom slider.
 - On ProRes or H.265 in M: ISO Auto On/Off and manual ISO still behave correctly.
