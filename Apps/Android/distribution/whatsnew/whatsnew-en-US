@@ -1,4 +1,5 @@
-- Internal beta now updates automatically when Android changes merge to main.
+- Shared diagnostics now record closed connection phases and failure kinds (USB, Wi‑Fi join, PTP).
+- First-run and failed-connect screens offer Share diagnostics for support.
+- Fix immediate crash when connecting a camera over USB-C on release builds.
 - Playback and live desqueeze scale the picture (1.6× and custom fine steps).
 - Auto ISO On/Off for non-R3D formats; live working ISO while Auto is on; manual ISO in M mode.
-- R3D NE still uses Low/High base ISO and stays manual in every exposure mode.

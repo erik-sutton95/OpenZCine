@@ -129,6 +129,9 @@
     <string name="pairing_intro_compact">Choose the connection path that fits the shoot.</string>
     <string name="pairing_intro_full">We\'ll walk you through it — your camera is connected in about a minute.</string>
     <string name="pairing_change_path_later">You can change this path later in Settings.</string>
+    <string name="pairing_share_diagnostics">Share diagnostics</string>
+    <string name="pairing_share_diagnostics_description">Share a local diagnostics report you can review and send for support</string>
+    <string name="conn_share_diagnostics">Share diagnostics</string>
     <string name="pairing_step_counter">STEP %1$d OF %2$d</string>
     <string name="pairing_connect_my_camera">Connect my camera</string>
     <string name="pairing_permission_required">Both are required to connect to your camera — grant them to continue.</string>

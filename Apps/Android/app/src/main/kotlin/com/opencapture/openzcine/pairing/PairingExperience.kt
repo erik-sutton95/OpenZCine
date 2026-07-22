@@ -54,6 +54,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -266,8 +270,25 @@ private const val CAMERA_SESSION_LOG_TAG = "SwiftCoreCameraSession"
 /** Returns only diagnostics whose phase cannot carry the camera pairing credential. */
 internal fun cameraSessionDiagnosticMessage(phase: String, detail: String): String? =
     when (phase) {
-        "failed", "eventChannelEnded", "eventChannelCleanupFailed" -> "$phase: $detail"
+        "failed",
+        "failed.usb",
+        "failed.ptp",
+        "failed.wifiJoin",
+        "failed.usbPermission",
+        "failed.pairing",
+        "failed.reconnect",
+        "eventChannelEnded",
+        "eventChannelCleanupFailed",
+        -> "$phase: $detail"
         else -> null
+    }
+
+/** Closed diagnostic phase token for the first-run transport choice. */
+internal fun diagnosticPhaseForPairingPath(path: PairingPath): String =
+    when (path) {
+        PairingPath.CAMERA_ACCESS_POINT -> "path.cameraAp"
+        PairingPath.PHONE_HOTSPOT -> "path.phoneHotspot"
+        PairingPath.USB_C -> "path.usb"
     }
 
 /**
@@ -528,6 +549,14 @@ public fun PairingExperience(
     onPairingProfilePrepared: (SavedCameraRecord) -> Unit = {},
     onOpenSettings: (() -> Unit)? = null,
     onShowSavedCameras: (() -> Unit)? = null,
+    /** Explicit local report handoff when pairing cannot complete (no automatic upload). */
+    onShareDiagnostics: (() -> Unit)? = null,
+    /**
+     * Closed connection phase tokens for the local diagnostics report
+     * (e.g. `path.usb`, `failed.wifiJoin`). Must never receive free-form
+     * operator or camera text — only stable tokens from [diagnosticPhaseForPairingPath].
+     */
+    onDiagnosticPhase: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -803,6 +832,7 @@ public fun PairingExperience(
                             handedOff.value = true
                             onPaired(reconnected)
                         } else {
+                            onDiagnosticPhase("failed.reconnect")
                             phase =
                                 PairingPhase.Error(
                                     friendlyCameraConnectionFailure(unreachableMessage),
@@ -823,6 +853,8 @@ public fun PairingExperience(
                     } else {
                         withContext(NonCancellable) { session.disconnect() }
                         val detail = session.connectionProgress.value.detail
+                        // Session-layer failures already emit closed phase tokens via
+                        // phaseLogger (failed.usb / failed.ptp). Do not double-record here.
                         phase =
                             PairingPhase.Error(
                                 friendlyCameraConnectionFailure(
@@ -838,6 +870,11 @@ public fun PairingExperience(
                     throw error
                 } catch (_: Exception) {
                     withContext(NonCancellable) { session.disconnect() }
+                    if (savedCamera.transport == SavedCameraTransport.USB_C) {
+                        onDiagnosticPhase("failed.usb")
+                    } else {
+                        onDiagnosticPhase("failed.ptp")
+                    }
                     phase =
                         PairingPhase.Error(friendlyCameraConnectionFailure(unreachableMessage))
                 } finally {
@@ -879,6 +916,7 @@ public fun PairingExperience(
     fun connectUsb(camera: UsbPtpCamera) {
         val source = environment.usbCameraSource
         if (source == null) {
+            onDiagnosticPhase("failed.usb")
             phase = PairingPhase.Error(resources.getString(R.string.pairing_error_usb_unsupported))
             return
         }
@@ -886,12 +924,17 @@ public fun PairingExperience(
         when (camera.access) {
             UsbPtpCameraAccess.NEEDS_PERMISSION,
             UsbPtpCameraAccess.DENIED,
-            -> source.requestPermission(camera)
-            UsbPtpCameraAccess.IDENTITY_UNAVAILABLE ->
+            -> {
+                onDiagnosticPhase("failed.usbPermission")
+                source.requestPermission(camera)
+            }
+            UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> {
+                onDiagnosticPhase("failed.usb")
                 phase =
                     PairingPhase.Error(
                         resources.getString(R.string.pairing_error_usb_identity),
                     )
+            }
             UsbPtpCameraAccess.READY ->
                 when (val opened = source.open(camera)) {
                     is UsbPtpOpenResult.Opened -> {
@@ -903,6 +946,7 @@ public fun PairingExperience(
                                 // interface. Do not leave it claimed when the
                                 // Swift session wrapper cannot be created.
                                 opened.transport.close()
+                                onDiagnosticPhase("failed.usb")
                                 phase =
                                     PairingPhase.Error(
                                         resources.getString(R.string.pairing_error_usb_session),
@@ -924,7 +968,10 @@ public fun PairingExperience(
                             firstTimePairing = true,
                         )
                     }
-                    is UsbPtpOpenResult.Rejected -> phase = PairingPhase.Error(opened.message)
+                    is UsbPtpOpenResult.Rejected -> {
+                        onDiagnosticPhase("failed.usb")
+                        phase = PairingPhase.Error(opened.message)
+                    }
                 }
         }
     }
@@ -934,6 +981,7 @@ public fun PairingExperience(
         joinedSsid = ssid
         connectingName = ssid
         phase = PairingPhase.Joining
+        onDiagnosticPhase("joiningWifi")
         work.value =
             scope.launch {
                 // Retries + pre-scan live inside joinWithFallback — one call only.
@@ -949,6 +997,7 @@ public fun PairingExperience(
                     // Camera-AP mode: the ZR always answers on the fixed AP host.
                     connect(CameraDiscovery.NIKON_ZR_ACCESS_POINT_HOST)
                 } else {
+                    onDiagnosticPhase("failed.wifiJoin")
                     phase =
                         PairingPhase.Error(
                             resources.getString(R.string.pairing_error_wifi_join)
@@ -1125,6 +1174,7 @@ public fun PairingExperience(
                             flow = flow,
                             condensed = condensedIntro,
                             onShowSavedCameras = onShowSavedCameras,
+                            onShareDiagnostics = onShareDiagnostics,
                             modifier = Modifier.width(introWidth).fillMaxSize(),
                         )
                         StepCard(
@@ -1137,7 +1187,10 @@ public fun PairingExperience(
                             usbCameras = usbCameras,
                             onRequestPermission = ::requestPairingPermission,
                             onRequestCameraPermission = ::requestCameraPermission,
-                            onChoose = { flow = flow.choose(it) },
+                            onChoose = { path ->
+                                onDiagnosticPhase(diagnosticPhaseForPairingPath(path))
+                                flow = flow.choose(path)
+                            },
                             onAdvance = { flow = flow.advance() },
                             onRetreat = ::retreat,
                             onConnectMyCamera = ::connectMyCamera,
@@ -1155,6 +1208,7 @@ public fun PairingExperience(
                         PortraitIntroHeader(
                             flow = flow,
                             onShowSavedCameras = onShowSavedCameras,
+                            onShareDiagnostics = onShareDiagnostics,
                         )
                         StartupWizardProgress(
                             currentStep = flow.displayStepNumber,
@@ -1170,7 +1224,10 @@ public fun PairingExperience(
                             usbCameras = usbCameras,
                             onRequestPermission = ::requestPairingPermission,
                             onRequestCameraPermission = ::requestCameraPermission,
-                            onChoose = { flow = flow.choose(it) },
+                            onChoose = { path ->
+                                onDiagnosticPhase(diagnosticPhaseForPairingPath(path))
+                                flow = flow.choose(path)
+                            },
                             onAdvance = { flow = flow.advance() },
                             onRetreat = ::retreat,
                             onConnectMyCamera = ::connectMyCamera,
@@ -1206,6 +1263,8 @@ public fun PairingExperience(
                     }
                 },
                 onDismiss = ::cancelWork,
+                onShareDiagnostics =
+                    onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },
             )
         }
         if (cameraWifiScannerPresented) {
@@ -1250,6 +1309,7 @@ public fun PairingExperience(
 private fun PortraitIntroHeader(
     flow: PairingFlowState,
     onShowSavedCameras: (() -> Unit)?,
+    onShareDiagnostics: (() -> Unit)?,
 ) {
     // Sizes mirror iOS's compactPortrait profile (StartupDesign.swift
     // `portraitIntroHeader`): 11pt eyebrow / 22pt title / 12pt body / 11pt helper.
@@ -1295,6 +1355,10 @@ private fun PortraitIntroHeader(
             fontSize = 11.sp,
             lineHeight = 15.sp,
         )
+        onShareDiagnostics?.let { share ->
+            Spacer(Modifier.height(8.dp))
+            PairingShareDiagnosticsLink(onClick = share)
+        }
     }
 }
 
@@ -1303,6 +1367,7 @@ private fun IntroCard(
     flow: PairingFlowState,
     condensed: Boolean = false,
     onShowSavedCameras: (() -> Unit)? = null,
+    onShareDiagnostics: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // Vertical budget is tight in the ~360dp-tall landscape band — sizes are
@@ -1361,7 +1426,44 @@ private fun IntroCard(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        onShareDiagnostics?.let { share ->
+            Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
+            PairingShareDiagnosticsLink(
+                onClick = share,
+                compact = condensed,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
+}
+
+/**
+ * Quiet support handoff on the first-run intro. Same local report as Settings →
+ * Share Diagnostics — operator reviews and chooses where to send it.
+ */
+@Composable
+private fun PairingShareDiagnosticsLink(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    val label = stringResource(R.string.pairing_share_diagnostics)
+    val description = stringResource(R.string.pairing_share_diagnostics_description)
+    Text(
+        text = label,
+        color = StartupColors.accent,
+        fontSize = if (compact) 11.sp else 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier =
+            modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 4.dp)
+                .clearAndSetSemantics {
+                    contentDescription = description
+                    role = Role.Button
+                },
+    )
 }
 
 // MARK: - Right column

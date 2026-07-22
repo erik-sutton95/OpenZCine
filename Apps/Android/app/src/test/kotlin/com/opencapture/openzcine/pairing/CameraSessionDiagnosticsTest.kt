@@ -20,5 +20,26 @@ class CameraSessionDiagnosticsTest {
                 "The camera closed the connection.",
             ),
         )
+        assertEquals(
+            "failed.usb: native link missing",
+            cameraSessionDiagnosticMessage("failed.usb", "native link missing"),
+        )
+        assertEquals(
+            "failed.ptp: unreachable",
+            cameraSessionDiagnosticMessage("failed.ptp", "unreachable"),
+        )
+    }
+
+    @Test
+    fun `pairing path maps to closed diagnostic phase tokens`() {
+        assertEquals("path.usb", diagnosticPhaseForPairingPath(PairingPath.USB_C))
+        assertEquals(
+            "path.cameraAp",
+            diagnosticPhaseForPairingPath(PairingPath.CAMERA_ACCESS_POINT),
+        )
+        assertEquals(
+            "path.phoneHotspot",
+            diagnosticPhaseForPairingPath(PairingPath.PHONE_HOTSPOT),
+        )
     }
 }

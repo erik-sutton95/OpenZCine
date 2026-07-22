@@ -471,7 +471,9 @@ class SwiftCoreCameraSession internal constructor(
                             _latestCommandRoundTripMilliseconds.value = null
                             _connectionProgress.value =
                                 CameraConnectionProgress(CameraConnectionPhase.FAILED, message)
-                            phaseLogger("failed", message)
+                            // Closed failure token only — free-form [message] never enters
+                            // the diagnostic event store (mapped by AndroidDiagnosticEvent.fromPhase).
+                            phaseLogger(sessionFailurePhaseToken(), message)
                         }
                     }
             }
@@ -495,10 +497,14 @@ class SwiftCoreCameraSession internal constructor(
         } catch (error: Exception) {
             val message = error.message ?: "Camera connection failed."
             _connectionProgress.value = CameraConnectionProgress(CameraConnectionPhase.FAILED, message)
-            phaseLogger("failed", message)
+            phaseLogger(sessionFailurePhaseToken(), message)
             cancelAttempt(attempt)
         }
     }
+
+    /** Closed phase token distinguishing USB PTP vs Wi‑Fi PTP-IP session failures. */
+    private fun sessionFailurePhaseToken(): String =
+        if (usbTransport != null) "failed.usb" else "failed.ptp"
 
     /**
      * Reads one camera property (see `SwiftCore.PROP_*`), decoded by the Swift

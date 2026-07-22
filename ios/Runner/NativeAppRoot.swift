@@ -357,6 +357,18 @@ final class NativeAppModel {
         }
     }
 
+    /// Closed diagnostic token for a failed connection attempt by transport.
+    private func connectionFailureDiagnostic(
+        transportKind: CameraTransportKind,
+        rejectedInitiator: Bool = false
+    ) -> AppDiagnosticEvent {
+        if rejectedInitiator { return .connectionPairingFailed }
+        switch transportKind {
+        case .usb: return .connectionUsbFailed
+        case .ptpIP: return .connectionPtpFailed
+        }
+    }
+
     enum StartupMode: Equatable {
         case savedCameras
         case discovery
@@ -375,6 +387,15 @@ final class NativeAppModel {
             case .cameraAccessPoint: "Camera's Access Point"
             case .phoneHotspot: "Phone's Hotspot"
             case .usbC: "USB-C"
+            }
+        }
+
+        /// Closed diagnostic breadcrumb when the operator picks this path.
+        var diagnosticEvent: AppDiagnosticEvent {
+            switch self {
+            case .cameraAccessPoint: .connectionPathCameraAp
+            case .phoneHotspot: .connectionPathPhoneHotspot
+            case .usbC: .connectionPathUsb
             }
         }
 
@@ -1205,7 +1226,7 @@ final class NativeAppModel {
     }
 
     private func surfaceCameraWiFiJoinFailure(_ message: String) {
-        AppDiagnostics.shared.record(.connectionFailed)
+        AppDiagnostics.shared.record(.connectionWifiJoinFailed)
         connectionProgressShowsFailure = true
         connectionPhase = .failed
         connectionMessage = message
@@ -1764,7 +1785,9 @@ final class NativeAppModel {
                 return
             } catch {
                 guard connectionGeneration == generation else { return }
-                AppDiagnostics.shared.record(.connectionFailed)
+                AppDiagnostics.shared.record(
+                    transportKind == .usb
+                        ? .connectionUsbFailed : .connectionWifiJoinFailed)
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
@@ -1774,6 +1797,7 @@ final class NativeAppModel {
                 startDiscoveryLoop(resetResults: false)
                 return
             }
+            AppDiagnostics.shared.record(.connectionHandshaking)
             let strategy = CameraStartupPolicy.connectionStrategy(
                 host: host,
                 savedCameras: savedCameras,
@@ -1912,7 +1936,12 @@ final class NativeAppModel {
                     )
                     return
                 }
-                AppDiagnostics.shared.record(.connectionFailed)
+                AppDiagnostics.shared.record(
+                    connectionFailureDiagnostic(
+                        transportKind: transportKind,
+                        rejectedInitiator: isRejectedInitiator(error)
+                    )
+                )
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
