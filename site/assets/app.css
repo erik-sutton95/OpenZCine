@@ -563,6 +563,72 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
 .statement__text .w--gold { color: var(--accent); }
 
 /* ================================================================ */
+/* VOICES - beta and community reactions in a continuous film crawl */
+/* ================================================================ */
+.voices {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(24px, 3vw, 34px) 0;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  background: rgba(4, 4, 4, .18);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+.voices__track {
+  display: flex;
+  width: max-content;
+  animation: ticker-roll 72s linear infinite;
+}
+.voices__group {
+  display: flex;
+  align-items: center;
+  list-style: none;
+}
+.voices__group li {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 0 clamp(34px, 4.5vw, 72px);
+  color: var(--muted);
+  font: 400 clamp(16px, 1.55vw, 20px)/1.35 var(--mono);
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+.voices q { quotes: "\201C" "\201D"; }
+.voices cite {
+  color: var(--accent);
+  font: 600 11px/1 var(--mono);
+  font-style: normal;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.voices cite a {
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 4px;
+  transition: text-decoration-color .2s ease;
+}
+.voices cite a:hover,
+.voices cite a:focus-visible { text-decoration-color: currentColor; }
+.voices:hover .voices__track,
+.voices:focus-within .voices__track { animation-play-state: paused; }
+@media (max-width: 560px) {
+  .voices__group li { gap: 12px; padding: 0 24px; font-size: 15px; }
+  .voices cite { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voices {
+    overflow-x: auto;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .voices__track { animation: none; }
+  .voices__group[aria-hidden="true"] { display: none; }
+}
+
+/* ================================================================ */
 /* FEATURE ROWS - copy + real device render, scroll-revealed         */
 /* ================================================================ */
 .feat-row { align-items: center; }
