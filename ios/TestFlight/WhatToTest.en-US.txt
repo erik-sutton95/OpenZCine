@@ -6,7 +6,7 @@ What's changed
 
 Please test
 
+- USB-C connect to a ZR and confirm the session reaches connected without an immediate crash, then open live view.
 - Enable Desqueeze on playback and live; try 1.6× and the custom slider; confirm the image (not only overlays) changes.
 - On ProRes or H.265 in M: open ISO, switch Auto On/Off, confirm the tile tracks live Auto ISO, then set a manual ISO with no false error toast.
-- On ProRes or H.265 in A or S: confirm Auto Off / manual ISO is not offered and the drum stays locked.
 - On R3D NE in A: confirm Low/High base still works and ISO is not blocked by a “needs M mode” message.

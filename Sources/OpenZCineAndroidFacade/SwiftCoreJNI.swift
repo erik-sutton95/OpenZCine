@@ -140,7 +140,7 @@
         let fns = table(env)
         guard let type = fns.GetObjectClass!(env, transport) else { return }
         defer { fns.DeleteLocalRef!(env, type) }
-        guard let close = fns.GetMethodID!(env, type, "close", "()V") else { return }
+        guard let close = optionalInstanceMethod(env, type, "close", "()V") else { return }
         var arguments = jvalue()
         fns.CallVoidMethodA!(env, transport, close, &arguments)
     }
@@ -739,9 +739,10 @@
         guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
         guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
         guard let cls = fns.GetObjectClass!(env, global),
-            let method = fns.GetMethodID!(
+            let method = optionalInstanceMethod(
                 env, cls, "onPhase", "(Ljava/lang/String;Ljava/lang/String;)V")
         else {
+            fns.ExceptionClear!(env)
             fns.DeleteGlobalRef!(env, global)
             return
         }
@@ -921,13 +922,17 @@
         guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
         guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
         guard let cls = fns.GetObjectClass!(env, global),
-            let onPhase = fns.GetMethodID!(
+            let onPhase = optionalInstanceMethod(
                 env, cls, "onPhase", "(Ljava/lang/String;Ljava/lang/String;)V"),
-            let onConnected = fns.GetMethodID!(
+            let onConnected = optionalInstanceMethod(
                 env, cls, "onConnected",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
-            let onFailed = fns.GetMethodID!(env, cls, "onFailed", "(Ljava/lang/String;)V")
+            let onFailed = optionalInstanceMethod(
+                env, cls, "onFailed", "(Ljava/lang/String;)V")
         else {
+            // Clear any pending NoSuchMethodError so a listener-resolution miss
+            // cannot abort the Kotlin caller of sessionConnect.
+            fns.ExceptionClear!(env)
             fns.DeleteGlobalRef!(env, global)
             return
         }
@@ -979,13 +984,17 @@
             return
         }
         guard let cls = fns.GetObjectClass!(env, global),
-            let onPhase = fns.GetMethodID!(
+            let onPhase = optionalInstanceMethod(
                 env, cls, "onPhase", "(Ljava/lang/String;Ljava/lang/String;)V"),
-            let onConnected = fns.GetMethodID!(
+            let onConnected = optionalInstanceMethod(
                 env, cls, "onConnected",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
-            let onFailed = fns.GetMethodID!(env, cls, "onFailed", "(Ljava/lang/String;)V")
+            let onFailed = optionalInstanceMethod(
+                env, cls, "onFailed", "(Ljava/lang/String;)V")
         else {
+            // Clear any pending NoSuchMethodError so a listener-resolution miss
+            // cannot abort the Kotlin caller of sessionConnectUsb.
+            fns.ExceptionClear!(env)
             fns.DeleteGlobalRef!(env, global)
             closeKotlinUSBTransport(env, transport)
             return
@@ -1003,6 +1012,9 @@
             return
         }
         guard let transportHandle = JNIUSBPTPTransportHandle(env: env, transport: transport) else {
+            // Transport GetMethodID failures clear their own pending exceptions;
+            // still clear here so a future miss cannot escape to Kotlin.
+            fns.ExceptionClear!(env)
             closeKotlinUSBTransport(env, transport)
             let message = javaString(env, "Android could not initialize the USB camera transport.")
             var arguments = [jvalue(l: message)]
@@ -1283,9 +1295,11 @@
         guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
         guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
         guard let cls = fns.GetObjectClass!(env, global),
-            let onEvent = fns.GetMethodID!(env, cls, "onEvent", "(IJ[J)V"),
-            let onEnded = fns.GetMethodID!(env, cls, "onEnded", "(Ljava/lang/String;)V")
+            let onEvent = optionalInstanceMethod(env, cls, "onEvent", "(IJ[J)V"),
+            let onEnded = optionalInstanceMethod(
+                env, cls, "onEnded", "(Ljava/lang/String;)V")
         else {
+            fns.ExceptionClear!(env)
             fns.DeleteGlobalRef!(env, global)
             return
         }
@@ -1862,13 +1876,14 @@
         guard fns.GetJavaVM!(env, &vm) == JNI_OK, let vm else { return }
         guard let listener, let global = fns.NewGlobalRef!(env, listener) else { return }
         guard let cls = fns.GetObjectClass!(env, global),
-            let onStarted = fns.GetMethodID!(env, cls, "onStarted", "(J)V"),
-            let onChunk = fns.GetMethodID!(env, cls, "onChunk", "(J[B)Z"),
-            let onCompleted = fns.GetMethodID!(env, cls, "onCompleted", "(J)V"),
-            let onStopped = fns.GetMethodID!(env, cls, "onStopped", "(J)V"),
-            let onFailed = fns.GetMethodID!(
+            let onStarted = optionalInstanceMethod(env, cls, "onStarted", "(J)V"),
+            let onChunk = optionalInstanceMethod(env, cls, "onChunk", "(J[B)Z"),
+            let onCompleted = optionalInstanceMethod(env, cls, "onCompleted", "(J)V"),
+            let onStopped = optionalInstanceMethod(env, cls, "onStopped", "(J)V"),
+            let onFailed = optionalInstanceMethod(
                 env, cls, "onFailed", "(Ljava/lang/String;)V")
         else {
+            fns.ExceptionClear!(env)
             fns.DeleteGlobalRef!(env, global)
             return
         }
