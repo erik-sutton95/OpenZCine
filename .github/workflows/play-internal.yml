@@ -63,8 +63,8 @@ jobs:
       github.repository == 'erik-sutton95/openzcine' &&
       vars.PLAY_UPLOAD_ENABLED == 'true' &&
       (needs.changes.outputs.code == 'true' ||
-       github.event_name == 'workflow_dispatch' ||
-       startsWith(github.ref, 'refs/tags/android-v'))
+        github.event_name == 'workflow_dispatch' ||
+        startsWith(github.ref, 'refs/tags/android-v'))
     runs-on: ubuntu-latest
     environment: play
     steps:
