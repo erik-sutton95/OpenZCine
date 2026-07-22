@@ -193,7 +193,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.opencapture.openzcine
           releaseFiles: Apps/Android/wear/build/outputs/bundle/release/wear-release.aab
-          tracks: wear:qa
+          tracks: wear:internal
           status: completed
           whatsNewDirectory: Apps/Android/distribution/whatsnew
           mappingFile: Apps/Android/wear/build/outputs/mapping/release/mapping.txt
