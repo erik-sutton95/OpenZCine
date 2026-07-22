@@ -2250,6 +2250,8 @@ final class NativeAppModel {
     private var pendingShutterLockState: Bool?
     /// Optimistic dual-base ISO circuit while a `movieBaseISO` write is queued or in flight.
     private var pendingBaseISOHigh: Bool?
+    /// Optimistic movie ISO auto flag while a `movieISOAutoControl` write is queued or in flight.
+    private var pendingISOAuto: Bool?
     /// AF point requested by a feed tap, in the camera's live-view coordinate space. Sent at the
     /// next live-view control safe point via `ChangeAfArea`.
     private var pendingFocusPoint: (x: UInt32, y: UInt32)?
@@ -2338,6 +2340,7 @@ final class NativeAppModel {
         pendingShutterMode = nil
         pendingShutterLockState = nil
         pendingBaseISOHigh = nil
+        pendingISOAuto = nil
         pendingFocusPoint = nil
         focusResetStep = nil
         cameraApertures = []
@@ -4309,11 +4312,14 @@ final class NativeAppModel {
         let pending = pendingCameraWrites.removeFirst()
         let isShutterModeWrite = pending.write.property == .movieShutterMode
         let isBaseISOWrite = pending.write.property == .movieBaseISO
+        let isISOAutoWrite = pending.write.property == .movieISOAutoControl
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
         do {
             try await session.writeCameraProperty(pending.write)
-            if isShutterModeWrite || isBaseISOWrite || isFocusModeWrite || isShutterLockWrite {
+            if isShutterModeWrite || isBaseISOWrite || isISOAutoWrite || isFocusModeWrite
+                || isShutterLockWrite
+            {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
                     cameraPropertySnapshot = cameraPropertySnapshot.applying(
                         property: pending.write.property, data: actual)
@@ -4337,6 +4343,9 @@ final class NativeAppModel {
                 }
                 if isBaseISOWrite {
                     pendingBaseISOHigh = nil
+                }
+                if isISOAutoWrite {
+                    pendingISOAuto = nil
                 }
                 if isShutterLockWrite {
                     pendingShutterLockState = nil
@@ -4363,6 +4372,11 @@ final class NativeAppModel {
             } else if isShutterModeWrite {
                 connectionMessage =
                     "Shutter mode set to \(pending.value.lowercased())."
+            } else if isISOAutoWrite {
+                connectionMessage =
+                    pending.value == "Auto On"
+                    ? "ISO set to Auto."
+                    : "ISO set to Manual."
             } else if isFocusModeWrite {
                 connectionMessage = focusModeWriteMessage(
                     requested: pending.value,
@@ -4379,6 +4393,9 @@ final class NativeAppModel {
             }
             if isBaseISOWrite {
                 pendingBaseISOHigh = nil
+            }
+            if isISOAutoWrite {
+                pendingISOAuto = nil
             }
             if isShutterLockWrite {
                 pendingShutterLockState = nil
@@ -5458,7 +5475,7 @@ final class NativeAppModel {
             return cameraPropertySnapshot.baseISO == "High" ? 1 : 0
         }
         if showsAutoISOPicker {
-            return ISOPickerPolicy.autoISOModeIndex(exposureMode: commandExposureMode)
+            return ISOPickerPolicy.autoISOModeIndex(isoAuto: commandISOAuto)
         }
         return 0
     }
@@ -5473,9 +5490,14 @@ final class NativeAppModel {
         ISOPickerPolicy.showsAutoISOControl(codec: cameraState.codec)
     }
 
-    /// True when the body is driving ISO (Auto/P/A/S) rather than the operator drum.
+    /// True when movie ISO auto is on (`MovISOAutoControl`) — not exposure program Auto.
     var isAutoISOActive: Bool {
-        ISOPickerPolicy.isAutoISOActive(exposureMode: commandExposureMode)
+        ISOPickerPolicy.isAutoISOActive(isoAuto: commandISOAuto)
+    }
+
+    /// Optimistic/polled movie ISO auto flag for the Auto On/Off tab and ISO tile.
+    var commandISOAuto: Bool? {
+        pendingISOAuto ?? cameraPropertySnapshot.isoAuto
     }
 
     /// ISO is locked while recording in R3D NE; other codecs allow mid-roll ISO changes.
@@ -5544,7 +5566,13 @@ final class NativeAppModel {
     /// belongs to that mode, otherwise the mode's base.
     func pickerModeValue(_ picker: CameraPicker, mode: Int) -> String {
         if picker == .iso, showsAutoISOPicker {
-            return cameraValue(for: picker)
+            // Drum needs a numeric step even when auto is on (tile may show Auto / A800).
+            if let iso = cameraPropertySnapshot.iso, iso > 0 {
+                return String(iso)
+            }
+            let live = cameraValue(for: picker)
+            if live.allSatisfy(\.isNumber) { return live }
+            return ISOPickerPolicy.unifiedOptions.first ?? "800"
         }
         if picker == .iso, !showsDualBaseISOPicker {
             return cameraValue(for: picker)
@@ -5784,16 +5812,25 @@ final class NativeAppModel {
         )
     }
 
-    /// Toggles camera-managed ISO (Auto On) vs manual ISO (Auto Off → exposure mode M).
+    /// Toggles movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto/M.
     func switchAutoISO(enabled: Bool) {
         guard showsAutoISOPicker, !isISORecordingLocked else { return }
-        let mode =
-            enabled
-            ? ISOPickerPolicy.autoISOOnExposureMode : ISOPickerPolicy.autoISOOffExposureMode
-        applyPickerValue(mode, for: .mode)
+        let write = PTPCameraPropertyWrite.movieISOAuto(enabled: enabled)
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: write.property, data: write.data)
+        pendingISOAuto = enabled
+        publishCameraDisplayState()
+        guard !isDemoSession else { return }
+        enqueueCameraWrite(
+            PendingCameraWrite(
+                picker: .iso,
+                value: enabled ? "Auto On" : "Auto Off",
+                write: write
+            )
+        )
     }
 
-    /// Ensures ISO writes can stick: when Auto ISO is active, leave Auto by switching to M first.
+    /// Ensures ISO writes can stick: when movie ISO auto is on, switch to manual first.
     func prepareManualISOIfNeeded() {
         guard showsAutoISOPicker, isAutoISOActive, !isISORecordingLocked else { return }
         switchAutoISO(enabled: false)

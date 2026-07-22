@@ -46,24 +46,19 @@ public enum ISOPickerPolicy: Sendable {
         !showsDualBaseCircuits(codec: codec)
     }
 
-    /// Exposure modes where the body typically owns ISO (auto ISO). Manual ISO is free in `M`.
-    public static func isAutoISOActive(exposureMode: String?) -> Bool {
-        guard let mode = exposureMode?.trimmingCharacters(in: .whitespacesAndNewlines), !mode.isEmpty
-        else { return false }
-        switch mode {
-        case "Auto", "P", "A", "S":
-            return true
-        default:
-            // U1–U3 and M are treated as operator-controlled ISO unless the body reports Auto.
-            return mode.localizedCaseInsensitiveContains("auto")
-        }
+    /// Whether movie ISO auto is active (`MovieISOAutoControl` / `MovISOAutoControl` 0xD0AD).
+    ///
+    /// This is independent of exposure-program Auto (P/A/S/M). Unpolled (`nil`) means manual until
+    /// the body reports otherwise so the drum is not falsely locked.
+    public static func isAutoISOActive(isoAuto: Bool?) -> Bool {
+        isoAuto == true
     }
 
-    /// Exposure-mode label that enables auto ISO (full Auto program).
-    public static let autoISOOnExposureMode = "Auto"
+    /// Label written for Auto On (`MovISOAutoControl` UINT8 = 1).
+    public static let autoISOOnLabel = "ON"
 
-    /// Exposure-mode label that releases ISO for the drum (manual movie exposure).
-    public static let autoISOOffExposureMode = "M"
+    /// Label written for Auto Off (`MovISOAutoControl` UINT8 = 0).
+    public static let autoISOOffLabel = "OFF"
 
     /// ISO cannot be changed while recording in R3D NE; other codecs allow mid-roll ISO changes.
     public static func blocksISOChangeWhileRecording(codec: String, isRecording: Bool) -> Bool {
@@ -135,8 +130,8 @@ public enum ISOPickerPolicy: Sendable {
     }
 
     /// Active mode tab for Auto ISO codecs: 0 = Auto On, 1 = Auto Off.
-    public static func autoISOModeIndex(exposureMode: String?) -> Int {
-        isAutoISOActive(exposureMode: exposureMode) ? 0 : 1
+    public static func autoISOModeIndex(isoAuto: Bool?) -> Int {
+        isAutoISOActive(isoAuto: isoAuto) ? 0 : 1
     }
 }
 

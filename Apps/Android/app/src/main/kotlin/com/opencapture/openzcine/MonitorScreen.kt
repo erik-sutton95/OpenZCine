@@ -588,11 +588,17 @@ internal fun MonitorScreen(
             )
         }
     val captureSettings =
-        remember(commandPresentation, stringResolver, effectiveShutterLocked) {
+        remember(
+            commandPresentation,
+            stringResolver,
+            effectiveShutterLocked,
+            cameraProperties.isoAuto,
+        ) {
             monitorCaptureSettings(
                 commandPresentation,
                 stringResolver,
                 shutterLockedOnCamera = effectiveShutterLocked,
+                isoAuto = cameraProperties.isoAuto,
             )
         }
     val topPillPickers =
@@ -708,29 +714,23 @@ internal fun MonitorScreen(
     val applyCameraControl: (CommandControlRequest, String) -> Unit =
         applyCameraControl@{ request, label ->
             if (!commandControlsEnabled) return@applyCameraControl
-            // Exit Auto ISO by choosing a drum value: switch exposure to M first so the
-            // body accepts movie ISO writes (non-R3D NE codecs).
+            // Exit movie ISO auto by choosing a drum value: write MovISOAutoControl Off first
+            // so the body accepts the manual ISO write (non-R3D NE codecs).
             if (
                 request.control == CameraControl.ISO &&
-                    IsoPickerPolicy.isAutoISOActive(cameraProperties.exposureMode)
+                    IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto)
             ) {
-                desiredControlWrites[CameraControl.EXPOSURE_MODE] =
+                desiredControlWrites[CameraControl.ISO_AUTO] =
                     CommandControlRequest(
-                        title = "MODE",
-                        control = CameraControl.EXPOSURE_MODE,
-                        currentValue = IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE,
+                        title = "ISO",
+                        control = CameraControl.ISO_AUTO,
+                        currentValue = IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
                         options =
                             listOf(
-                                "Auto",
-                                "P",
-                                "A",
-                                "S",
-                                "M",
-                                "U1",
-                                "U2",
-                                "U3",
+                                IsoPickerPolicy.AUTO_ISO_ON_LABEL,
+                                IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
                             ),
-                    ) to IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE
+                    ) to IsoPickerPolicy.AUTO_ISO_OFF_LABEL
             }
             desiredControlWrites[request.control] = request to label
             commandControlFeedback = null

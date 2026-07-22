@@ -1121,10 +1121,10 @@ struct PickerPanel: View {
                     if picker == .iso, model.showsDualBaseISOPicker {
                         model.switchBaseISO(highBase: index == 1)
                     }
-                    // ISO auto control (non-R3D NE): Auto On / Auto Off sets exposure mode.
+                    // ISO auto control (non-R3D NE): Auto On/Off toggles MovISOAutoControl.
                     if picker == .iso, model.showsAutoISOPicker {
                         model.switchAutoISO(enabled: index == 0)
-                        // Auto On: no ISO write. Auto Off: apply the drum value in manual mode.
+                        // Auto On: no ISO write. Auto Off: apply the drum value in manual ISO.
                         if index == 0 { return }
                     }
                     if picker == .shutter {

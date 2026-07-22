@@ -2083,7 +2083,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
         }
         switch control {
-        case .iso, .focusMode:
+        case .iso, .isoAuto, .focusMode:
             return sharedControlWrites(control, label: label)
         case .shutter:
             if let write = shutterDescriptorWrite(label: label) {
@@ -2273,6 +2273,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             usesNikonZRFallbacks: usesNikonZRFallbacks)
         return switch control {
         case .iso: capabilities.isoValues
+        case .isoAuto: ["ON", "OFF"]
         case .shutter: capabilities.shutterValues
         case .iris: capabilities.irisValues
         case .whiteBalance: capabilities.whiteBalanceValues

@@ -554,12 +554,10 @@ internal fun commandDashboardPresentation(
                             if (codec == null) emptyList() else IsoPickerPolicy.unifiedOptions
                         }
                     val displayValue =
-                        isoValue
-                            ?: if (IsoPickerPolicy.isAutoISOActive(snapshot.exposureMode)) {
-                                "Auto"
-                            } else {
-                                null
-                            }
+                        when {
+                            IsoPickerPolicy.isAutoISOActive(snapshot.isoAuto) -> "Auto"
+                            else -> isoValue
+                        }
                     editable(
                         kind = CommandTileKind.ISO,
                         title = strings.resolve(R.string.command_title_iso),
@@ -952,6 +950,11 @@ internal fun cameraPropertyConfirmsSelection(
 ): Boolean =
     when (control) {
         CameraControl.ISO -> snapshot.iso?.toString() == label
+        CameraControl.ISO_AUTO ->
+            snapshot.isoAuto?.let { auto ->
+                (if (auto) IsoPickerPolicy.AUTO_ISO_ON_LABEL else IsoPickerPolicy.AUTO_ISO_OFF_LABEL) ==
+                    label
+            } == true
         CameraControl.SHUTTER ->
             when (snapshot.shutterMode) {
                 CameraShutterMode.ANGLE -> snapshot.shutterAngle == label

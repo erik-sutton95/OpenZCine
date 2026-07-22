@@ -245,6 +245,7 @@ private val CameraControl.nativeSelector: Int
             CameraControl.CODEC -> 18
             CameraControl.VIBRATION_REDUCTION -> 19
             CameraControl.ELECTRONIC_VR -> 20
+            CameraControl.ISO_AUTO -> 21
         }
 
 /**

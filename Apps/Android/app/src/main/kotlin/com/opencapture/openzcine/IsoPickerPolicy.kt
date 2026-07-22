@@ -49,11 +49,11 @@ internal object IsoPickerPolicy {
     /** Native high-base ISO flagged in the drum. */
     const val HIGH_BASE_MARKER: String = "6400"
 
-    /** Exposure mode that enables camera-managed ISO. */
-    const val AUTO_ISO_ON_EXPOSURE_MODE: String = "Auto"
+    /** Label written for Auto On (`MovISOAutoControl` UINT8 = 1). */
+    const val AUTO_ISO_ON_LABEL: String = "ON"
 
-    /** Exposure mode that releases ISO for the drum. */
-    const val AUTO_ISO_OFF_EXPOSURE_MODE: String = "M"
+    /** Label written for Auto Off (`MovISOAutoControl` UINT8 = 0). */
+    const val AUTO_ISO_OFF_LABEL: String = "OFF"
 
     /** Single-drum ISO steps for codecs that auto-switch base circuits. */
     val unifiedOptions: List<String> =
@@ -80,19 +80,15 @@ internal object IsoPickerPolicy {
     /** Non-R3D NE codecs use Auto On/Off tabs. */
     fun showsAutoISOControl(codec: String): Boolean = !showsDualBaseCircuits(codec)
 
-    /** Exposure modes where the body typically owns ISO. */
-    fun isAutoISOActive(exposureMode: String?): Boolean {
-        val mode = exposureMode?.trim().orEmpty()
-        if (mode.isEmpty()) return false
-        return when (mode) {
-            "Auto", "P", "A", "S" -> true
-            else -> mode.contains("auto", ignoreCase = true)
-        }
-    }
+    /**
+     * Whether movie ISO auto is active (`MovISOAutoControl` 0xD0AD).
+     * Independent of exposure-program Auto (P/A/S/M). Unpolled (`null`) → manual.
+     */
+    fun isAutoISOActive(isoAuto: Boolean?): Boolean = isoAuto == true
 
     /** Active Auto tab: 0 = Auto On, 1 = Auto Off. */
-    fun autoISOModeIndex(exposureMode: String?): Int =
-        if (isAutoISOActive(exposureMode)) 0 else 1
+    fun autoISOModeIndex(isoAuto: Boolean?): Int =
+        if (isAutoISOActive(isoAuto)) 0 else 1
 
     /** ISO cannot be changed while recording in R3D NE. */
     fun blocksISOChangeWhileRecording(codec: String, isRecording: Boolean): Boolean =

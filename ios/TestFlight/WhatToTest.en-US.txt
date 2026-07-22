@@ -1,11 +1,12 @@
 What's changed
 
 - Playback de-squeeze now scales the video itself (not only guides), including a 1.6× chip and a custom 1.0–2.0× control in 0.1 steps on live and playback.
-- On non-R3D NE codecs (N-RAW, ProRes, H.264/H.265), ISO no longer stays locked under Auto: use Auto On / Auto Off under the ISO picker, or pick an ISO value to leave Auto and set manual ISO.
+- Auto ISO (non-R3D NE: N-RAW, ProRes, H.264/H.265) now toggles movie ISO auto/manual on the camera — not exposure program Auto/M. Use Auto On / Auto Off under the ISO picker, or pick an ISO value to leave ISO Auto and set a manual ISO.
 - R3D NE still uses Low / High base ISO circuits; recording lock for R3D NE is unchanged.
 
 Please test
 
 - In media playback, enable Desqueeze, try 1.6× and the custom slider, and confirm the picture (not only overlays) changes. Repeat on live view.
-- On ProRes or H.265 with Auto exposure, open ISO: confirm Auto On/Off tabs, that choosing an ISO value exits Auto, and that ISO can be changed.
+- On ProRes or H.265 in Manual (or any) exposure mode: open ISO, confirm Auto On/Off controls ISO sensitivity auto (ISO tile shows Auto when on), that choosing a drum ISO value turns ISO auto off without changing P/A/S/M, and that ISO can be set manually.
+- Confirm exposure MODE (Auto/P/A/S/M) is unchanged when toggling ISO Auto On/Off.
 - On R3D NE, confirm Low/High base tabs still work and ISO remains locked only while recording.

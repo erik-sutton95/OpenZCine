@@ -72,6 +72,7 @@ internal object CameraPropertySnapshotWire {
         return CameraPropertySnapshot(
             iso = value.optionalLong("iso"),
             baseIso = value.optionalString("baseIso"),
+            isoAuto = value.optionalBoolean("isoAuto"),
             exposureMode = value.optionalString("exposureMode"),
             shutterMode = shutterMode(value.optionalString("shutterMode")),
             shutterLocked = value.optionalBoolean("shutterLocked"),

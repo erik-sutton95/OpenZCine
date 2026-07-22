@@ -127,6 +127,29 @@ import Testing
     #expect(snapshot.electronicVR == "ON")
 }
 
+@Test func movieISOAutoControlDecodesAndEncodesIndependentlyOfExposureMode() {
+    // MovISOAutoControl 0xD0AD — not exposure program Auto.
+    let autoOn = PTPCameraPropertySnapshot()
+        .applying(property: .movieISOAutoControl, data: Data([1]))
+    #expect(autoOn.isoAuto == true)
+    let autoOff = autoOn.applying(property: .movieISOAutoControl, data: Data([0]))
+    #expect(autoOff.isoAuto == false)
+
+    #expect(
+        PTPCameraPropertyWrite.movieISOAuto(enabled: true)
+            == PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([1])))
+    #expect(
+        PTPCameraPropertyWrite.request(control: .isoAuto, label: "ON")
+            == PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([1])))
+    #expect(
+        PTPCameraPropertyWrite.request(control: .isoAuto, label: "OFF")
+            == PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([0])))
+
+    let display = CameraDisplayState.preview.applyingCameraProperties(
+        PTPCameraPropertySnapshot(iso: 800, isoAuto: true))
+    #expect(display.values.first(where: { $0.label == "ISO" })?.value == "Auto")
+}
+
 @Test func snapshotDecodesZRSoundProperties() {
     // ZR sound properties: input selection (1 Mic / 2 Line), INT8 sensitivity (0xFF Auto, 0–20),
     // 32-bit float on/off.

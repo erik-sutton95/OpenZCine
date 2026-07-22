@@ -123,6 +123,12 @@ public enum class CameraControl {
     /** Movie ISO sensitivity, such as `"800"`. */
     ISO,
 
+    /**
+     * Movie ISO auto/manual (`MovISOAutoControl`), `"ON"` or `"OFF"`.
+     * Independent of [EXPOSURE_MODE] Auto.
+     */
+    ISO_AUTO,
+
     /** Movie shutter speed or angle, such as `"1/50"` or `"180.0°"`. */
     SHUTTER,
 
@@ -279,6 +285,7 @@ public data class CameraControlCapabilities(
     public fun options(control: CameraControl): List<String> =
         when (control) {
             CameraControl.ISO -> isoValues
+            CameraControl.ISO_AUTO -> listOf("ON", "OFF")
             CameraControl.SHUTTER -> shutterValues
             CameraControl.IRIS -> irisValues
             CameraControl.WHITE_BALANCE -> whiteBalanceValues
@@ -314,6 +321,11 @@ public data class CameraPropertySnapshot(
     val iso: Long? = null,
     /** Dual-base ISO circuit label when the camera exposes one. */
     val baseIso: String? = null,
+    /**
+     * Movie ISO auto (`MovISOAutoControl` 0xD0AD). `true` = camera owns ISO.
+     * Independent of [exposureMode] Auto.
+     */
+    val isoAuto: Boolean? = null,
     /** Exposure-program label, such as `M`. */
     val exposureMode: String? = null,
     /** The camera's active shutter display convention. */

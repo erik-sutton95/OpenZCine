@@ -26,7 +26,8 @@ struct AndroidCameraControlWireTests {
         #expect(AndroidCameraControlWire.control(selector: 18) == .codec)
         #expect(AndroidCameraControlWire.control(selector: 19) == .vibrationReduction)
         #expect(AndroidCameraControlWire.control(selector: 20) == .electronicVR)
+        #expect(AndroidCameraControlWire.control(selector: 21) == .isoAuto)
         #expect(AndroidCameraControlWire.control(selector: -1) == nil)
-        #expect(AndroidCameraControlWire.control(selector: 21) == nil)
+        #expect(AndroidCameraControlWire.control(selector: 22) == nil)
     }
 }

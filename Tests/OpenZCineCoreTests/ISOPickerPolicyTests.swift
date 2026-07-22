@@ -18,14 +18,16 @@ import Testing
     #expect(ISOPickerPolicy.pickerModes(codec: "N-RAW")[1].title == "Auto Off")
 }
 
-@Test func isoPickerPolicyDetectsAutoISOExposureModes() {
-    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "Auto"))
-    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "A"))
-    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "P"))
-    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "S"))
-    #expect(!ISOPickerPolicy.isAutoISOActive(exposureMode: "M"))
-    #expect(ISOPickerPolicy.autoISOModeIndex(exposureMode: "Auto") == 0)
-    #expect(ISOPickerPolicy.autoISOModeIndex(exposureMode: "M") == 1)
+@Test func isoPickerPolicyDetectsMovieISOAutoControl() {
+    // Movie ISO auto is MovISOAutoControl (0xD0AD), not exposure program P/A/S/M/Auto.
+    #expect(ISOPickerPolicy.isAutoISOActive(isoAuto: true))
+    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: false))
+    #expect(!ISOPickerPolicy.isAutoISOActive(isoAuto: nil))
+    #expect(ISOPickerPolicy.autoISOModeIndex(isoAuto: true) == 0)
+    #expect(ISOPickerPolicy.autoISOModeIndex(isoAuto: false) == 1)
+    #expect(ISOPickerPolicy.autoISOModeIndex(isoAuto: nil) == 1)
+    #expect(ISOPickerPolicy.autoISOOnLabel == "ON")
+    #expect(ISOPickerPolicy.autoISOOffLabel == "OFF")
 }
 
 @Test func isoPickerPolicyUnifiedDrumMarksBothNativeBases() {

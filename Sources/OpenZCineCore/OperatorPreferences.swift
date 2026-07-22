@@ -770,7 +770,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-            orientation = try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .horizontal
+            orientation =
+                try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .horizontal
             if let storedFactor = try c.decodeIfPresent(Double.self, forKey: .factor) {
                 factor = Self.snap(storedFactor)
                 ratio =

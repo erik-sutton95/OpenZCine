@@ -239,6 +239,8 @@ internal fun monitorCaptureSettings(
     strings: PhoneStringResolver,
     /** Authoritative camera TV-lock when known; dims the shutter drum like iOS. */
     shutterLockedOnCamera: Boolean? = null,
+    /** Movie ISO auto (`MovISOAutoControl`); drives Auto On/Off tab for non-R3D NE. */
+    isoAuto: Boolean? = null,
 ): List<MonitorCaptureSettingPresentation> {
     val primary = dashboard.tiles.associateBy(CommandTilePresentation::kind)
     val focus =
@@ -325,15 +327,12 @@ internal fun monitorCaptureSettings(
             shutterTile?.unavailableReason != null &&
             shutterTile.value != "—" &&
             shutterTile.unavailableReason.contains("locked", ignoreCase = true)
-    val exposureMode =
-        primary[CommandTileKind.MODE]?.value?.takeIf { it != "—" }
-            ?: exposure.getOrNull(0)?.value?.takeIf { it != "—" }
     val isoPresentation =
         isoPickerPresentation(
             isoTile = isoTile,
             codec = codec,
             baseIsoTile = exposure.getOrNull(0),
-            exposureMode = exposureMode,
+            isoAuto = isoAuto,
             strings = strings,
         )
     val shutterPresentation =
@@ -774,7 +773,7 @@ internal fun isoPickerPresentation(
     isoTile: CommandTilePresentation?,
     codec: String,
     baseIsoTile: CommandTilePresentation?,
-    exposureMode: String?,
+    isoAuto: Boolean?,
     strings: PhoneStringResolver,
 ): MonitorPickerPresentation? {
     // Prefer live ISO; when Auto is driving ISO the body may report "—"/Auto — still open the drum.
@@ -808,28 +807,21 @@ internal fun isoPickerPresentation(
                         ),
                     activateRequest =
                         CommandControlRequest(
-                            title = strings.resolve(R.string.command_title_mode),
-                            control = CameraControl.EXPOSURE_MODE,
+                            title = title,
+                            control = CameraControl.ISO_AUTO,
                             currentValue =
                                 if (activatesAuto) {
-                                    IsoPickerPolicy.AUTO_ISO_ON_EXPOSURE_MODE
+                                    IsoPickerPolicy.AUTO_ISO_ON_LABEL
                                 } else {
-                                    IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE
+                                    IsoPickerPolicy.AUTO_ISO_OFF_LABEL
                                 },
                             options =
                                 listOf(
-                                    IsoPickerPolicy.AUTO_ISO_ON_EXPOSURE_MODE,
-                                    IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE,
-                                    "P",
-                                    "A",
-                                    "S",
-                                    "M",
-                                    "U1",
-                                    "U2",
-                                    "U3",
+                                    IsoPickerPolicy.AUTO_ISO_ON_LABEL,
+                                    IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
                                 ),
                         ),
-                    // Auto On does not write ISO; Auto Off writes the drum after M.
+                    // Auto On does not write ISO; Auto Off writes the drum after manual.
                     applyValueOnActivate = mode.activatesAutoISO != true,
                     markedValues = IsoPickerPolicy.markedValues(codec, 0),
                 )
@@ -839,7 +831,7 @@ internal fun isoPickerPresentation(
             title = title,
             subtitle = subtitle,
             modes = modes,
-            initialModeIndex = IsoPickerPolicy.autoISOModeIndex(exposureMode),
+            initialModeIndex = IsoPickerPolicy.autoISOModeIndex(isoAuto),
         )
     }
 
@@ -1689,7 +1681,7 @@ private fun PickerPanelBody(
                                 // circuits (WB Kelvin↔Preset, ISO bases). Skip Tint
                                 // (pad only), Focus (independent tabs), Shutter
                                 // (mode write is activateRequest only), Auto ISO On
-                                // (exposure mode only — no ISO write while camera owns ISO).
+                                // (ISO auto only — no ISO write while camera owns ISO).
                                 val isTint =
                                     candidate.request.control == CameraControl.WHITE_BALANCE_TINT
                                 val skipApply =
