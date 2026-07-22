@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+// snapTo is on Animatable
 
 /**
  * Port of Kyant catalog `DampedDragAnimation` — spring-damped press/scale/value
@@ -110,6 +111,18 @@ internal class DampedDragAnimation(
             launch {
                 valueAnimation.animateTo(target, valueAnimationSpec) { updateVelocity() }
             }
+        }
+    }
+
+    /**
+     * Immediately moves the thumb to [value] (no spring). Used while the finger is down so discrete
+     * parent steps (e.g. desqueeze 0.1×) cannot yank the pill back mid-drag.
+     */
+    fun snapValue(value: Float) {
+        val target = value.coerceIn(valueRange)
+        animationScope.launch {
+            valueAnimation.snapTo(target)
+            updateVelocity()
         }
     }
 

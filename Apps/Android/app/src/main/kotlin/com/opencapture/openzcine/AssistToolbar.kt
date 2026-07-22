@@ -649,11 +649,10 @@ fun AssistToolbar(
                                     if (capBlocked) {
                                         onScopeLimitReached()
                                     } else {
-                                        if (hapticsEnabled) {
-                                            view.performHapticFeedback(
-                                                HapticFeedbackConstants.LONG_PRESS,
-                                            )
-                                        }
+                                        view.performOperatorHaptic(
+                                            HapticFeedbackConstants.LONG_PRESS,
+                                            enabled = hapticsEnabled,
+                                        )
                                         onLongPressToolAnchored?.invoke(
                                             tool,
                                             toolbarBounds ?: anchor,
@@ -675,7 +674,7 @@ fun AssistToolbar(
                             return@AssistToolCell
                         }
                         if (hapticsEnabled) {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                         }
                     }
                 }
@@ -781,7 +780,7 @@ internal fun PortraitFillAssistRail(
                     ) {
                         { anchor ->
                             if (hapticsEnabled) {
-                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                             }
                             onLongPressToolAnchored?.invoke(tool, anchor)
                                 ?: onLongPressTool?.invoke(tool)
@@ -796,7 +795,7 @@ internal fun PortraitFillAssistRail(
                     state.toggle(tool)
                 }
                 if (hapticsEnabled) {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                 }
             }
         }

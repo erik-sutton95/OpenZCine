@@ -26,8 +26,11 @@ internal suspend fun PointerInputScope.inspectDragGestures(
     onDrag: (change: PointerInputChange, dragAmount: Offset) -> Unit,
 ) {
     awaitEachGesture {
-        val initialDown = awaitFirstDown(false, PointerEventPass.Initial)
-        val down = awaitFirstDown(false)
+        val initialDown = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val down = awaitFirstDown(requireUnconsumed = false)
+        // Claim the pointer so a parent verticalScroll cannot steal the pill drag.
+        initialDown.consume()
+        down.consume()
         val drag = initialDown
 
         onDragStart(down)
@@ -35,7 +38,11 @@ internal suspend fun PointerInputScope.inspectDragGestures(
         val upEvent =
             drag(
                 pointerId = drag.id,
-                onDrag = { onDrag(it, it.positionChange()) },
+                onDrag = { change ->
+                    val amount = change.positionChange()
+                    change.consume()
+                    onDrag(change, amount)
+                },
             )
         if (upEvent == null) {
             onDragCancel()
@@ -56,12 +63,11 @@ private suspend inline fun AwaitPointerEventScope.drag(
     var pointer = pointerId
     while (true) {
         val change = awaitDragOrUp(pointer) ?: return null
-        if (change.isConsumed) {
-            return null
-        }
         if (change.changedToUpIgnoreConsumed()) {
             return change
         }
+        // Keep dragging even if a parent briefly marked the event consumed before we claimed it;
+        // we re-consume in the onDrag callback.
         onDrag(change)
         pointer = change.id
     }

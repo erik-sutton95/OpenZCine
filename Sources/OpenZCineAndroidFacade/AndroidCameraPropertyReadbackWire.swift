@@ -200,6 +200,7 @@ public enum AndroidCameraPropertyReadbackWire {
         var fields = [(key: "result", value: readback.result.rawValue)]
         append("iso", value: properties.iso.map { String($0) }, to: &fields)
         append("baseIso", value: properties.baseISO, to: &fields)
+        append("isoAuto", value: properties.isoAuto.map { String($0) }, to: &fields)
         append("exposureMode", value: properties.exposureMode, to: &fields)
         append("shutterMode", value: properties.shutterMode?.rawValue, to: &fields)
         append("shutterLocked", value: properties.shutterLocked.map { String($0) }, to: &fields)

@@ -710,8 +710,8 @@ func rectForRatio(_ feed: CGRect, _ ratio: CGFloat) -> CGRect {
 /// The on-screen scale applied to the live image to de-squeeze anamorphic footage: shrink one axis
 /// by the squeeze factor (vertical = letterbox, horizontal = pillarbox), matching the prototype.
 func desqueezeScale(_ desqueeze: AssistConfiguration.Desqueeze) -> CGSize {
-    guard desqueeze.enabled, desqueeze.ratio.factor > 1 else { return CGSize(width: 1, height: 1) }
-    let factor = CGFloat(desqueeze.ratio.factor)
+    guard desqueeze.enabled, desqueeze.factor > 1 else { return CGSize(width: 1, height: 1) }
+    let factor = CGFloat(desqueeze.factor)
     return desqueeze.orientation == .horizontal
         ? CGSize(width: 1 / factor, height: 1)
         : CGSize(width: 1, height: 1 / factor)
@@ -720,8 +720,8 @@ func desqueezeScale(_ desqueeze: AssistConfiguration.Desqueeze) -> CGSize {
 /// The visible (de-squeezed) image rectangle inside the full feed rect — the same centred sub-rect
 /// the scale above produces, so framing overlays land on the de-squeezed image.
 func desqueezedRect(_ full: CGRect, _ desqueeze: AssistConfiguration.Desqueeze) -> CGRect {
-    guard desqueeze.enabled, desqueeze.ratio.factor > 1 else { return full }
-    let factor = CGFloat(desqueeze.ratio.factor)
+    guard desqueeze.enabled, desqueeze.factor > 1 else { return full }
+    let factor = CGFloat(desqueeze.factor)
     if desqueeze.orientation == .horizontal {
         let width = full.width / factor
         return CGRect(x: full.midX - width / 2, y: full.minY, width: width, height: full.height)

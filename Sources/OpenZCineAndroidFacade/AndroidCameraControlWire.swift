@@ -7,6 +7,7 @@ import OpenZCineCore
 /// corresponding `PTPCameraPropertyWrite`; no Nikon value crosses JNI.
 enum AndroidCameraControl: Hashable, Sendable {
     case iso
+    case isoAuto
     case shutter
     case iris
     case whiteBalance
@@ -32,7 +33,7 @@ enum AndroidCameraControl: Hashable, Sendable {
     /// Exposure mode remains the one iOS-parity control whose fixed program labels are owned by
     /// the shared decoder rather than a body descriptor.
     var requiresCapabilityValidation: Bool {
-        self != .exposureMode
+        self != .exposureMode && self != .isoAuto
     }
 
     /// When the capability domain is still empty (descriptor bootstrap pending, or
@@ -42,7 +43,7 @@ enum AndroidCameraControl: Hashable, Sendable {
     /// matching iOS, which never invents packed MovScreenSize / MovFileType values.
     var allowsEncodeWithoutCapabilityDomain: Bool {
         switch self {
-        case .iso, .shutter, .iris, .whiteBalance, .focusMode, .focusArea, .focusSubject,
+        case .iso, .isoAuto, .shutter, .iris, .whiteBalance, .focusMode, .focusArea, .focusSubject,
             .exposureMode, .audioSensitivity, .audioInput, .windFilter, .attenuator,
             .audio32BitFloat, .shutterMode, .shutterLock, .vibrationReduction, .baseISO:
             // baseISO: the capture-bar dual-base tabs always send Low/High; encode when the
@@ -58,6 +59,7 @@ enum AndroidCameraControl: Hashable, Sendable {
     var sharedControl: PTPCameraControl? {
         switch self {
         case .iso: .iso
+        case .isoAuto: .isoAuto
         case .shutter: .shutter
         case .iris: .iris
         case .whiteBalance: .whiteBalanceKelvin
@@ -83,6 +85,7 @@ enum AndroidCameraControl: Hashable, Sendable {
     init(_ control: PTPCameraControl) {
         switch control {
         case .iso: self = .iso
+        case .isoAuto: self = .isoAuto
         case .shutter: self = .shutter
         case .iris: self = .iris
         case .whiteBalanceKelvin: self = .whiteBalance
@@ -131,6 +134,7 @@ enum AndroidCameraControlWire {
         case 18: return .codec
         case 19: return .vibrationReduction
         case 20: return .electronicVR
+        case 21: return .isoAuto
         default: return nil
         }
     }

@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.openzcine.performOperatorHaptic
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -2696,12 +2698,12 @@ private fun Modifier.mediaSelectionGestures(
                                 paintSelect = paintSelect,
                             ),
                         )
-                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        view.performOperatorHaptic(HapticFeedbackConstants.CLOCK_TICK)
                     }
                     fun paintAt(local: Offset) {
                         indexAt(local)?.let(::paintTo)
                     }
-                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                     paintTo(startIndex)
 
                     val height = size.height.toFloat()

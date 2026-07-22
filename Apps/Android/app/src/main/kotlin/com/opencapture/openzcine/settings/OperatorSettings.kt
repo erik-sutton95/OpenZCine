@@ -13,6 +13,7 @@ import com.opencapture.openzcine.FeedPeakingSensitivity
 import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.R
+import kotlin.math.roundToInt
 
 /**
  * Top-level monitor layout selected by the operator's DISP button.
@@ -184,6 +185,8 @@ public enum class LocalDesqueezeRatio(
     X133("1.33x", 1.33f),
     /** 1.5× anamorphic factor. */
     X150("1.5x", 1.5f),
+    /** 1.6× anamorphic factor. */
+    X160("1.6x", 1.6f),
     /** 1.65× anamorphic factor. */
     X165("1.65x", 1.65f),
     /** 1.8× anamorphic factor. */
@@ -195,6 +198,17 @@ public enum class LocalDesqueezeRatio(
     internal companion object {
         fun fromStoredName(value: String?): LocalDesqueezeRatio? =
             entries.firstOrNull { it.name == value }
+
+        fun matching(factor: Float): LocalDesqueezeRatio? =
+            entries.firstOrNull { kotlin.math.abs(it.factor - factor) < 0.005f }
+
+        /** Custom slider step (1.00…2.00 in 0.01 increments). */
+        const val FACTOR_STEP: Float = 0.01f
+
+        fun snap(raw: Float): Float {
+            val clamped = raw.coerceIn(1f, 2f)
+            return ((clamped / FACTOR_STEP).roundToInt() * FACTOR_STEP).coerceIn(1f, 2f)
+        }
     }
 }
 
@@ -403,8 +417,10 @@ public data class LocalFramingAssistConfiguration(
     public val levelStyle: LocalLevelStyle = LocalLevelStyle.HORIZON,
     /** Whether the local de-squeeze presentation is applied. */
     public val desqueezeEnabled: Boolean,
-    /** The local anamorphic factor. */
+    /** Named chip when the factor matches a preset (UI highlight). */
     public val desqueezeRatio: LocalDesqueezeRatio,
+    /** Applied squeeze factor in 1.0…2.0 (source of truth for rendering). */
+    public val desqueezeFactor: Float = desqueezeRatio.factor,
     /** The source axis compressed by the anamorphic capture. */
     public val desqueezeOrientation: LocalDesqueezeOrientation,
 ) {
@@ -420,7 +436,7 @@ public data class LocalFramingAssistConfiguration(
     public val horizontalPresentationScale: Float
         get() =
             if (desqueezeEnabled && desqueezeOrientation == LocalDesqueezeOrientation.HORIZONTAL) {
-                1f / desqueezeRatio.factor
+                1f / desqueezeFactor.coerceAtLeast(1f)
             } else {
                 1f
             }
@@ -429,7 +445,7 @@ public data class LocalFramingAssistConfiguration(
     public val verticalPresentationScale: Float
         get() =
             if (desqueezeEnabled && desqueezeOrientation == LocalDesqueezeOrientation.VERTICAL) {
-                1f / desqueezeRatio.factor
+                1f / desqueezeFactor.coerceAtLeast(1f)
             } else {
                 1f
             }
@@ -522,6 +538,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     private val guideFamilyState = mutableStateOf(loadGuideFamily())
     private val selectedGuideRatiosState = mutableStateOf(loadSelectedGuideRatios())
     private val desqueezeRatioState = mutableStateOf(loadDesqueezeRatio())
+    private val desqueezeFactorState = mutableStateOf(loadDesqueezeFactor())
     private val desqueezeOrientationState = mutableStateOf(loadDesqueezeOrientation())
     private val levelStyleState = mutableStateOf(loadLevelStyle())
     private val scopeCrushClipCompensationState = mutableStateOf(loadScopeCrushClipCompensation())
@@ -666,12 +683,31 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         return selectedGuideRatiosState.value
     }
 
-    /** The selected local anamorphic factor; it applies only when [desqueezeEnabled] is on. */
+    /** Named de-squeeze chip; selecting a chip also snaps [desqueezeFactor]. */
     public var desqueezeRatio: LocalDesqueezeRatio
         get() = desqueezeRatioState.value
         set(new) {
             desqueezeRatioState.value = new
-            preferences.edit().putString(DESQUEEZE_RATIO_KEY, new.name).apply()
+            desqueezeFactorState.value = new.factor
+            preferences
+                .edit()
+                .putString(DESQUEEZE_RATIO_KEY, new.name)
+                .putFloat(DESQUEEZE_FACTOR_KEY, new.factor)
+                .apply()
+        }
+
+    /** Applied de-squeeze factor (1.0…2.0, 0.01 steps); source of truth for presentation scale. */
+    public var desqueezeFactor: Float
+        get() = desqueezeFactorState.value
+        set(new) {
+            val snapped = LocalDesqueezeRatio.snap(new)
+            desqueezeFactorState.value = snapped
+            LocalDesqueezeRatio.matching(snapped)?.let { desqueezeRatioState.value = it }
+            preferences
+                .edit()
+                .putFloat(DESQUEEZE_FACTOR_KEY, snapped)
+                .putString(DESQUEEZE_RATIO_KEY, desqueezeRatioState.value.name)
+                .apply()
         }
 
     /** Selected camera-level presentation; persisted immediately on change. */
@@ -877,6 +913,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 levelStyle = levelStyle,
                 desqueezeEnabled = desqueezeEnabled.value,
                 desqueezeRatio = desqueezeRatio,
+                desqueezeFactor = desqueezeFactor,
                 desqueezeOrientation = desqueezeOrientation,
             )
 
@@ -1120,10 +1157,18 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         LocalDesqueezeRatio.fromStoredName(preferences.getString(DESQUEEZE_RATIO_KEY, null))
             ?: legacyDesqueezeRatio()
 
+    private fun loadDesqueezeFactor(): Float {
+        if (preferences.contains(DESQUEEZE_FACTOR_KEY)) {
+            return LocalDesqueezeRatio.snap(preferences.getFloat(DESQUEEZE_FACTOR_KEY, 1f))
+        }
+        return loadDesqueezeRatio().factor
+    }
+
     private fun legacyDesqueezeRatio(): LocalDesqueezeRatio =
         when (preferences.getString(LEGACY_DESQUEEZE_PRESENTATION_KEY, null)) {
             "X133" -> LocalDesqueezeRatio.X133
             "X150" -> LocalDesqueezeRatio.X150
+            "X160" -> LocalDesqueezeRatio.X160
             "X165" -> LocalDesqueezeRatio.X165
             "X180" -> LocalDesqueezeRatio.X180
             "X200" -> LocalDesqueezeRatio.X200
@@ -1335,6 +1380,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val RULE_OF_THIRDS_KEY = "assist.local.ruleOfThirds"
         const val DESQUEEZE_ENABLED_KEY = "assist.local.desqueeze.enabled.v2"
         const val DESQUEEZE_RATIO_KEY = "assist.local.desqueeze.ratio.v2"
+        const val DESQUEEZE_FACTOR_KEY = "assist.local.desqueeze.factor.v1"
         const val DESQUEEZE_ORIENTATION_KEY = "assist.local.desqueeze.orientation.v2"
         const val LEGACY_FRAMING_GUIDE_KEY = "assist.local.framingGuide.v1"
         const val LEGACY_DESQUEEZE_PRESENTATION_KEY = "assist.local.desqueezePresentation.v1"

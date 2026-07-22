@@ -2250,6 +2250,8 @@ final class NativeAppModel {
     private var pendingShutterLockState: Bool?
     /// Optimistic dual-base ISO circuit while a `movieBaseISO` write is queued or in flight.
     private var pendingBaseISOHigh: Bool?
+    /// Optimistic movie ISO auto flag while a `movieISOAutoControl` write is queued or in flight.
+    private var pendingISOAuto: Bool?
     /// AF point requested by a feed tap, in the camera's live-view coordinate space. Sent at the
     /// next live-view control safe point via `ChangeAfArea`.
     private var pendingFocusPoint: (x: UInt32, y: UInt32)?
@@ -2338,6 +2340,7 @@ final class NativeAppModel {
         pendingShutterMode = nil
         pendingShutterLockState = nil
         pendingBaseISOHigh = nil
+        pendingISOAuto = nil
         pendingFocusPoint = nil
         focusResetStep = nil
         cameraApertures = []
@@ -4309,11 +4312,14 @@ final class NativeAppModel {
         let pending = pendingCameraWrites.removeFirst()
         let isShutterModeWrite = pending.write.property == .movieShutterMode
         let isBaseISOWrite = pending.write.property == .movieBaseISO
+        let isISOAutoWrite = pending.write.property == .movieISOAutoControl
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
         do {
             try await session.writeCameraProperty(pending.write)
-            if isShutterModeWrite || isBaseISOWrite || isFocusModeWrite || isShutterLockWrite {
+            if isShutterModeWrite || isBaseISOWrite || isISOAutoWrite || isFocusModeWrite
+                || isShutterLockWrite
+            {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
                     cameraPropertySnapshot = cameraPropertySnapshot.applying(
                         property: pending.write.property, data: actual)
@@ -4337,6 +4343,9 @@ final class NativeAppModel {
                 }
                 if isBaseISOWrite {
                     pendingBaseISOHigh = nil
+                }
+                if isISOAutoWrite {
+                    pendingISOAuto = nil
                 }
                 if isShutterLockWrite {
                     pendingShutterLockState = nil
@@ -4363,6 +4372,11 @@ final class NativeAppModel {
             } else if isShutterModeWrite {
                 connectionMessage =
                     "Shutter mode set to \(pending.value.lowercased())."
+            } else if isISOAutoWrite {
+                connectionMessage =
+                    pending.value == "Auto On"
+                    ? "ISO set to Auto."
+                    : "ISO set to Manual."
             } else if isFocusModeWrite {
                 connectionMessage = focusModeWriteMessage(
                     requested: pending.value,
@@ -4379,6 +4393,9 @@ final class NativeAppModel {
             }
             if isBaseISOWrite {
                 pendingBaseISOHigh = nil
+            }
+            if isISOAutoWrite {
+                pendingISOAuto = nil
             }
             if isShutterLockWrite {
                 pendingShutterLockState = nil
@@ -5451,18 +5468,54 @@ final class NativeAppModel {
         return mode == .speed ? 1 : 0
     }
 
-    /// Active ISO picker tab: 0 = low base, 1 = high base. Driven by `movieBaseISO`, not the
-    /// sensitivity value — overlapping ISO steps exist on both circuits. Unified-drum codecs
-    /// always report 0 (no LOW/HIGH tabs).
+    /// Active ISO picker tab: R3D NE → low/high base; other codecs → Auto On (0) / Auto Off (1).
     var isoPickerModeIndex: Int {
-        guard showsDualBaseISOPicker else { return 0 }
-        if let pending = pendingBaseISOHigh { return pending ? 1 : 0 }
-        return cameraPropertySnapshot.baseISO == "High" ? 1 : 0
+        if showsDualBaseISOPicker {
+            if let pending = pendingBaseISOHigh { return pending ? 1 : 0 }
+            return cameraPropertySnapshot.baseISO == "High" ? 1 : 0
+        }
+        if showsAutoISOPicker {
+            return ISOPickerPolicy.autoISOModeIndex(
+                codec: cameraState.codec,
+                isoAuto: commandISOAuto,
+                exposureMode: commandExposureMode)
+        }
+        return 0
     }
 
     /// Whether the ISO picker shows separate LOW/HIGH base circuits (R3D NE only).
     var showsDualBaseISOPicker: Bool {
         ISOPickerPolicy.showsDualBaseCircuits(codec: cameraState.codec)
+    }
+
+    /// Whether the ISO picker shows Auto On / Auto Off (non-R3D NE movie codecs).
+    var showsAutoISOPicker: Bool {
+        ISOPickerPolicy.showsAutoISOControl(codec: cameraState.codec)
+    }
+
+    /// True when movie ISO auto is on (`MovISOAutoControl`) — not exposure program Auto.
+    var isAutoISOActive: Bool {
+        ISOPickerPolicy.isAutoISOActive(isoAuto: commandISOAuto)
+    }
+
+    /// True when the ISO drum is camera-owned (Auto On, or non-R3D mode is not M).
+    /// Always false for R3D NE dual-base (manual in every exposure program).
+    var isISOValueCameraOwned: Bool {
+        ISOPickerPolicy.isISOValueCameraOwned(
+            codec: cameraState.codec,
+            isoAuto: commandISOAuto,
+            exposureMode: commandExposureMode)
+    }
+
+    /// True when this codec/mode allows manual ISO writes (R3D always; others only in M).
+    var allowsManualISO: Bool {
+        ISOPickerPolicy.allowsManualISO(
+            codec: cameraState.codec, exposureMode: commandExposureMode)
+    }
+
+    /// Optimistic/polled movie ISO auto flag for the Auto On/Off tab and ISO tile.
+    var commandISOAuto: Bool? {
+        pendingISOAuto ?? cameraPropertySnapshot.isoAuto
     }
 
     /// ISO is locked while recording in R3D NE; other codecs allow mid-roll ISO changes.
@@ -5479,10 +5532,12 @@ final class NativeAppModel {
         return commandGridOrder
     }
 
-    /// Segmented mode tabs for a picker (ISO layout follows the active codec).
+    /// Segmented mode tabs for a picker (ISO layout follows the active codec + mode).
     func pickerModes(for picker: CameraPicker) -> [PickerMode] {
         guard picker == .iso else { return picker.modes }
-        return ISOPickerPolicy.pickerModes(codec: cameraState.codec).map {
+        return ISOPickerPolicy.pickerModes(
+            codec: cameraState.codec, exposureMode: commandExposureMode
+        ).map {
             PickerMode(title: $0.title, detail: $0.detail, options: $0.options, base: $0.base)
         }
     }
@@ -5490,7 +5545,9 @@ final class NativeAppModel {
     /// Picker header subtitle (ISO reflects dual-base vs unified layout).
     func pickerSubtitle(for picker: CameraPicker) -> String {
         picker == .iso
-            ? ISOPickerPolicy.pickerSubtitle(codec: cameraState.codec) : picker.subtitle
+            ? ISOPickerPolicy.pickerSubtitle(
+                codec: cameraState.codec, exposureMode: commandExposureMode)
+            : picker.subtitle
     }
 
     private func shouldSuppressShutterModePoll() -> Bool {
@@ -5530,6 +5587,16 @@ final class NativeAppModel {
     /// their own stored value; alternative circuits (ISO/shutter/WB) use the live value when it
     /// belongs to that mode, otherwise the mode's base.
     func pickerModeValue(_ picker: CameraPicker, mode: Int) -> String {
+        if picker == .iso, showsAutoISOPicker {
+            // Drum needs a numeric step even when auto is on (tile may show Auto / A51200).
+            if let iso = cameraPropertySnapshot.iso, iso > 0 {
+                return String(iso)
+            }
+            let live = cameraValue(for: picker).trimmingCharacters(in: .whitespaces)
+            let numeric = live.hasPrefix("A") ? String(live.dropFirst()) : live
+            if numeric.allSatisfy(\.isNumber), !numeric.isEmpty { return numeric }
+            return ISOPickerPolicy.unifiedOptions.first ?? "800"
+        }
         if picker == .iso, !showsDualBaseISOPicker {
             return cameraValue(for: picker)
         }
@@ -5583,6 +5650,14 @@ final class NativeAppModel {
                 default: nil
                 }
             if let control { applyAudioControl(control, value: value) }
+            return
+        }
+        if picker == .iso {
+            // Manual ISO only in exposure mode M (Auto Off path).
+            guard allowsManualISO else { return }
+            // Leaving Auto ISO by choosing a drum value (or Auto Off tab already switched M).
+            prepareManualISOIfNeeded()
+            applyPickerValue(value, for: picker)
             return
         }
         guard picker == .focus else {
@@ -5760,6 +5835,34 @@ final class NativeAppModel {
                 write: write
             )
         )
+    }
+
+    /// Toggles movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto/M.
+    func switchAutoISO(enabled: Bool) {
+        guard showsAutoISOPicker, !isISORecordingLocked else { return }
+        // Auto Off / manual only in M; ignore attempts from non-M modes.
+        if !enabled, !allowsManualISO { return }
+        let write = PTPCameraPropertyWrite.movieISOAuto(enabled: enabled)
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: write.property, data: write.data)
+        pendingISOAuto = enabled
+        publishCameraDisplayState()
+        guard !isDemoSession else { return }
+        enqueueCameraWrite(
+            PendingCameraWrite(
+                picker: .iso,
+                value: enabled ? "Auto On" : "Auto Off",
+                write: write
+            )
+        )
+    }
+
+    /// Ensures ISO writes can stick: when movie ISO auto is on, switch to manual first.
+    func prepareManualISOIfNeeded() {
+        guard showsAutoISOPicker, isAutoISOActive, !isISORecordingLocked, allowsManualISO else {
+            return
+        }
+        switchAutoISO(enabled: false)
     }
 
     func switchShutterMode(speedMode: Bool) {

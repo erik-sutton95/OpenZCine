@@ -4,8 +4,8 @@ package com.opencapture.openzcine
  * ISO picker layout and recording-lock rules for Nikon ZR dual-base sensitivity.
  *
  * 1:1 with `Sources/OpenZCineCore/ISOPickerPolicy.swift`. R3D NE exposes separate
- * low/high base ISO circuits; other codecs keep dual-base hardware but
- * auto-switch, so the operator sees one drum with native-base markers.
+ * low/high base ISO circuits; other codecs use Auto On/Off plus a unified drum.
+ * Auto Off / manual ISO is only offered in exposure mode **M**.
  */
 internal object IsoPickerPolicy {
     /** Low-base ISO steps (200–3200). */
@@ -50,6 +50,12 @@ internal object IsoPickerPolicy {
     /** Native high-base ISO flagged in the drum. */
     const val HIGH_BASE_MARKER: String = "6400"
 
+    /** Label written for Auto On (`MovISOAutoControl` UINT8 = 1). */
+    const val AUTO_ISO_ON_LABEL: String = "ON"
+
+    /** Label written for Auto Off (`MovISOAutoControl` UINT8 = 0). */
+    const val AUTO_ISO_OFF_LABEL: String = "OFF"
+
     /** Single-drum ISO steps for codecs that auto-switch base circuits. */
     val unifiedOptions: List<String> =
         (lowBaseOptions + highBaseOptions).distinct()
@@ -60,7 +66,6 @@ internal object IsoPickerPolicy {
             codec
                 .trim()
                 .let { raw ->
-                    // Match MonitorTextFormat.codecShortLabel for R3D NE detection.
                     when {
                         raw.contains("R3D", ignoreCase = true) &&
                             raw.contains("NE", ignoreCase = true) -> "R3D NE"
@@ -70,8 +75,62 @@ internal object IsoPickerPolicy {
         return short == "R3D NE"
     }
 
-    /** R3D NE keeps separate LOW/HIGH base drums; every other codec uses a unified drum. */
+    /** R3D NE keeps separate LOW/HIGH base drums. */
     fun showsDualBaseCircuits(codec: String): Boolean = isR3DNECodec(codec)
+
+    /**
+     * Non-R3D NE codecs use Auto On/Off tabs.
+     * Empty/unknown codec stays closed until the body reports a real file type.
+     */
+    fun showsAutoISOControl(codec: String): Boolean {
+        val trimmed = codec.trim()
+        if (trimmed.isEmpty()) return false
+        return !showsDualBaseCircuits(trimmed)
+    }
+
+    /**
+     * Whether movie ISO auto is active (`MovISOAutoControl` 0xD0AD).
+     * Independent of exposure-program Auto (P/A/S/M). Unpolled (`null`) → manual.
+     */
+    fun isAutoISOActive(isoAuto: Boolean?): Boolean = isoAuto == true
+
+    /**
+     * Whether the operator may write a manual movie ISO for this codec / mode.
+     *
+     * - **R3D NE**: always manual dual-base (even in A/S/P).
+     * - **Other codecs**: only exposure mode **M** (Auto Off + drum). Fail closed when unknown.
+     */
+    fun allowsManualISO(codec: String, exposureMode: String?): Boolean =
+        if (showsDualBaseCircuits(codec)) true else exposureMode == "M"
+
+    /**
+     * True when the ISO value drum is camera-owned (Auto On, or non-R3D mode is not M).
+     * Always false for R3D NE dual-base (recording lock is separate).
+     */
+    fun isISOValueCameraOwned(
+        codec: String,
+        isoAuto: Boolean?,
+        exposureMode: String?,
+    ): Boolean =
+        if (showsDualBaseCircuits(codec)) {
+            false
+        } else {
+            isAutoISOActive(isoAuto) || !allowsManualISO(codec, exposureMode)
+        }
+
+    /** Active Auto tab: 0 = Auto On, 1 = Auto Off (when M allows manual on non-R3D). */
+    fun autoISOModeIndex(
+        codec: String,
+        isoAuto: Boolean?,
+        exposureMode: String? = null,
+    ): Int =
+        if (!allowsManualISO(codec, exposureMode)) {
+            0
+        } else if (isAutoISOActive(isoAuto)) {
+            0
+        } else {
+            1
+        }
 
     /** ISO cannot be changed while recording in R3D NE. */
     fun blocksISOChangeWhileRecording(codec: String, isRecording: Boolean): Boolean =
@@ -90,45 +149,96 @@ internal object IsoPickerPolicy {
         }
 
     /** Subtitle shown under the ISO picker header. */
-    fun pickerSubtitle(codec: String): String =
-        if (showsDualBaseCircuits(codec)) "Sensitivity · dual base" else "Sensitivity"
-
-    /** Mode tabs for the ISO picker. Empty when the unified drum is shown. */
-    fun pickerModes(codec: String): List<IsoPickerMode> =
-        if (!showsDualBaseCircuits(codec)) {
-            emptyList()
-        } else {
-            listOf(
-                IsoPickerMode(
-                    title = "Low Base",
-                    detail = "$LOW_BASE_MARKER · 200-3200",
-                    options = lowBaseOptions,
-                    base = LOW_BASE_MARKER,
-                ),
-                IsoPickerMode(
-                    title = "High Base",
-                    detail = "$HIGH_BASE_MARKER · 1600-25600",
-                    options = highBaseOptions,
-                    base = HIGH_BASE_MARKER,
-                ),
-            )
+    fun pickerSubtitle(codec: String, exposureMode: String? = null): String =
+        when {
+            showsDualBaseCircuits(codec) -> "Sensitivity · dual base"
+            showsAutoISOControl(codec) && allowsManualISO(codec, exposureMode) ->
+                "Sensitivity · auto / manual"
+            showsAutoISOControl(codec) -> "Sensitivity · auto (M mode for manual)"
+            else -> "Sensitivity"
         }
 
-    /** Options for the active ISO layout and mode tab. */
-    fun options(codec: String, modeIndex: Int): List<String> {
+    /** Mode tabs for the ISO picker. Auto Off only when exposure mode is M (non-R3D). */
+    fun pickerModes(codec: String, exposureMode: String? = null): List<IsoPickerMode> =
+        when {
+            showsDualBaseCircuits(codec) ->
+                listOf(
+                    IsoPickerMode(
+                        title = "Low Base",
+                        detail = "$LOW_BASE_MARKER · 200-3200",
+                        options = lowBaseOptions,
+                        base = LOW_BASE_MARKER,
+                    ),
+                    IsoPickerMode(
+                        title = "High Base",
+                        detail = "$HIGH_BASE_MARKER · 1600-25600",
+                        options = highBaseOptions,
+                        base = HIGH_BASE_MARKER,
+                    ),
+                )
+            showsAutoISOControl(codec) ->
+                buildList {
+                    add(
+                        IsoPickerMode(
+                            title = "Auto On",
+                            detail = "Camera controls ISO",
+                            options = unifiedOptions,
+                            base = LOW_BASE_MARKER,
+                            activatesAutoISO = true,
+                        ),
+                    )
+                    if (allowsManualISO(codec, exposureMode)) {
+                        add(
+                            IsoPickerMode(
+                                title = "Auto Off",
+                                detail = "Manual ISO",
+                                options = unifiedOptions,
+                                base = LOW_BASE_MARKER,
+                                activatesAutoISO = false,
+                            ),
+                        )
+                    }
+                }
+            else -> emptyList()
+        }
+
+    /**
+     * Options for the active ISO layout and mode tab.
+     * Injects [includingLiveISO] when Auto is outside the fixed ladder (e.g. 51200).
+     */
+    fun options(
+        codec: String,
+        modeIndex: Int,
+        includingLiveISO: String? = null,
+    ): List<String> {
         val modes = pickerModes(codec)
-        return if (modes.isEmpty() || modeIndex !in modes.indices) {
-            unifiedOptions
-        } else {
-            modes[modeIndex].options
+        val base =
+            if (modes.isEmpty() || modeIndex !in modes.indices) {
+                unifiedOptions
+            } else {
+                modes[modeIndex].options
+            }
+        val live = includingLiveISO?.trim().orEmpty()
+        if (live.isEmpty() || !live.all { it.isDigit() } || live in base) {
+            return base
         }
+        val liveValue = live.toLongOrNull() ?: return base + live
+        val mutable = base.toMutableList()
+        val insertAt = mutable.indexOfFirst { (it.toLongOrNull() ?: Long.MAX_VALUE) > liveValue }
+        if (insertAt < 0) {
+            mutable.add(live)
+        } else {
+            mutable.add(insertAt, live)
+        }
+        return mutable
     }
 }
 
-/** One segmented mode under the ISO picker (LOW/HIGH base for R3D NE). */
+/** One segmented mode under the ISO picker (LOW/HIGH base or Auto On/Off). */
 internal data class IsoPickerMode(
     val title: String,
     val detail: String?,
     val options: List<String>,
     val base: String,
+    val activatesAutoISO: Boolean? = null,
 )

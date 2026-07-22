@@ -836,8 +836,13 @@ final class FakeZRServer: @unchecked Sendable {
         case .movieRecProhibitionCondition:
             // 0 = nothing prohibits recording.
             return Data(ByteCoding.uint32LE(0))
-        case .movieISOSensitivity:
+        case .movieISOSensitivity, .movieExposureIndex:
             return Data(ByteCoding.uint32LE(800))
+        case .isoControlSensitivity:
+            // Effective/working ISO (0xD0B5) — may differ from dual-base D09E under Auto.
+            return Data(ByteCoding.uint32LE(800))
+        case .movieISOAutoControl:
+            return Data([0])  // manual ISO by default
         case .movieBaseISO:
             return Data([2])  // High
         case .exposureProgramMode:
@@ -1009,6 +1014,8 @@ final class FakeZRServer: @unchecked Sendable {
                 values: [25, 50, 100].map { ByteCoding.uint32LE(0x0001_0000 | UInt32($0)) })
         case .movieBaseISO:
             return enumDescriptor(property: property, valueByteCount: 1, values: [[1], [2]])
+        case .movieISOAutoControl:
+            return enumDescriptor(property: property, valueByteCount: 1, values: [[0], [1]])
         case .movieShutterMode:
             return enumDescriptor(property: property, valueByteCount: 1, values: [[1], [2]])
         case .movieTVLockSetting:

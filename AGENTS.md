@@ -16,6 +16,8 @@ clean, exemplary engineering standards.
 - **Jetpack Compose / Kotlin** — production Android app shell and Android platform adapters.
 - **Swift SDK for Android** — production bridge path for the shared Swift core. Keep the facade/JNI
   boundary small and verify build, packaging, and runtime behavior through the Android gates.
+  Camera-control writes: core/facade encode and confirm; Kotlin maps failures only — see
+  `docs/android-control-writes.md`.
 - **Flutter / Dart** — archived prototype reference only; not part of production tooling.
 - **just** — the single entry point for all repository tasks. Run `just` to list recipes.
 - **swift-format / swift test / xcodebuild** — production formatting, tests, and iOS build checks.
@@ -34,7 +36,8 @@ Install local tooling with `just setup` (macOS / Homebrew).
 - `ref/` — **gitignored** local reference material.
 - `docs/` — engineering references: `commit-hygiene.md` (what must never be committed),
   `nikon-mtp.md` (protocol sourcing and maintenance policy), `nikon-sdk.md` (no-vendor-SDK policy),
-  `PROJECT-MANAGEMENT.md` (Kaneo board conventions + agent sync contract).
+  `android-control-writes.md` (Android control write authority — no soft second-guess after
+  native accept), `PROJECT-MANAGEMENT.md` (Kaneo board conventions + agent sync contract).
 - `docs/design/` — design specs, implementation plans, and archived browser prototypes.
 - `docs/investigations/` — resolved or pending engineering investigations and debugging records.
 - `site/` — deploy-ready GitHub Pages landing page; no raw design sources.

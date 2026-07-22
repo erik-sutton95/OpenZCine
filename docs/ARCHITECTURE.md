@@ -84,6 +84,9 @@ All new code in the iOS shell follows these conventions:
   rendering, and platform share surfaces.
 - JVM tests cover pure state/policy. Instrumentation tests cover critical Compose and Android
   platform integration, and UI changes require portrait/landscape edge inspection.
+- **Control writes:** facade owns encode + native confirm; Kotlin must not second-guess success
+  after a successful `applyControl`. Capability lists drive UI options; hard-reject only where
+  inventing raw packs is unsafe (codec/resolution). See [android-control-writes.md](android-control-writes.md).
 
 ## iOS orientation and unified monitor
 

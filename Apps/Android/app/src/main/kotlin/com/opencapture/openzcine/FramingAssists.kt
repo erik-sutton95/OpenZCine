@@ -85,7 +85,7 @@ internal fun localFramingRenderPlan(
         localDesqueezePresentationRect(
             feed = feed,
             enabled = configuration.desqueezeEnabled,
-            ratio = configuration.desqueezeRatio,
+            factor = configuration.desqueezeFactor,
             orientation = configuration.desqueezeOrientation,
         )
     val guideFrames =
@@ -138,13 +138,14 @@ internal fun localFramingRenderPlan(
 internal fun localDesqueezePresentationRect(
     feed: FramingAssistRect,
     enabled: Boolean,
-    ratio: LocalDesqueezeRatio,
+    factor: Float,
     orientation: LocalDesqueezeOrientation,
 ): FramingAssistRect {
-    if (!enabled || ratio.factor <= 1f || feed.width <= 0f || feed.height <= 0f) return feed
+    val squeeze = factor.coerceAtLeast(1f)
+    if (!enabled || squeeze <= 1f || feed.width <= 0f || feed.height <= 0f) return feed
     return when (orientation) {
         LocalDesqueezeOrientation.HORIZONTAL -> {
-            val width = feed.width / ratio.factor
+            val width = feed.width / squeeze
             FramingAssistRect(
                 left = feed.centerX - width / 2f,
                 top = feed.top,
@@ -153,7 +154,7 @@ internal fun localDesqueezePresentationRect(
             )
         }
         LocalDesqueezeOrientation.VERTICAL -> {
-            val height = feed.height / ratio.factor
+            val height = feed.height / squeeze
             FramingAssistRect(
                 left = feed.left,
                 top = feed.centerY - height / 2f,
@@ -342,10 +343,12 @@ private fun localFramingAssistAccessibilitySummary(
                 )
             val ratio =
                 stringResource(
-                    when (configuration.desqueezeRatio) {
+                    when (LocalDesqueezeRatio.matching(configuration.desqueezeFactor)
+                        ?: configuration.desqueezeRatio) {
                         LocalDesqueezeRatio.X100 -> R.string.desqueeze_1
                         LocalDesqueezeRatio.X133 -> R.string.desqueeze_133
                         LocalDesqueezeRatio.X150 -> R.string.desqueeze_15
+                        LocalDesqueezeRatio.X160 -> R.string.desqueeze_16
                         LocalDesqueezeRatio.X165 -> R.string.desqueeze_165
                         LocalDesqueezeRatio.X180 -> R.string.desqueeze_18
                         LocalDesqueezeRatio.X200 -> R.string.desqueeze_2

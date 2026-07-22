@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -71,6 +72,8 @@ internal fun LiquidSlider(
     useLiquidGlass: Boolean = true,
 ) {
     val trackBackdrop = rememberLayerBackdrop()
+    val latestValue by rememberUpdatedState(value)
+    val latestOnValueChange by rememberUpdatedState(onValueChange)
 
     BoxWithConstraints(
         modifier.fillMaxWidth(),
@@ -81,42 +84,54 @@ internal fun LiquidSlider(
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val animationScope = rememberCoroutineScope()
         var didDrag by remember { mutableStateOf(false) }
+        // While the finger is down, ignore parent refeeds so discrete-step hosts (0…10)
+        // cannot snap the pill back to the last committed integer every frame.
+        var isDragging by remember { mutableStateOf(false) }
+        val trackWidthState = rememberUpdatedState(trackWidth)
         val dampedDragAnimation =
-            remember(animationScope) {
+            remember(animationScope, valueRange, visibilityThreshold, isLtr) {
                 DampedDragAnimation(
                     animationScope = animationScope,
-                    initialValue = value(),
+                    initialValue = latestValue(),
                     valueRange = valueRange,
                     visibilityThreshold = visibilityThreshold,
                     initialScale = 1f,
                     pressedScale = 1.5f,
-                    onDragStarted = {},
+                    onDragStarted = {
+                        isDragging = true
+                        didDrag = false
+                    },
                     onDragStopped = {
                         if (didDrag) {
-                            onValueChange(targetValue)
+                            latestOnValueChange(targetValue)
                         }
+                        isDragging = false
+                        didDrag = false
                     },
                     onDrag = { _, dragAmount ->
                         if (!didDrag) {
                             didDrag = dragAmount.x != 0f
                         }
+                        val width = trackWidthState.value.coerceAtLeast(1)
                         val delta =
                             (valueRange.endInclusive - valueRange.start) *
-                                (dragAmount.x / trackWidth.coerceAtLeast(1))
-                        onValueChange(
+                                (dragAmount.x / width)
+                        val next =
                             if (isLtr) {
                                 (targetValue + delta).coerceIn(valueRange)
                             } else {
                                 (targetValue - delta).coerceIn(valueRange)
-                            },
-                        )
+                            }
+                        // Follow the finger immediately (catalog only notifies the parent).
+                        snapValue(next)
+                        latestOnValueChange(next)
                     },
                 )
             }
-        LaunchedEffect(dampedDragAnimation) {
-            snapshotFlow { value() }
+        LaunchedEffect(dampedDragAnimation, isDragging) {
+            snapshotFlow { latestValue() }
                 .collectLatest { next ->
-                    if (dampedDragAnimation.targetValue != next) {
+                    if (!isDragging && dampedDragAnimation.targetValue != next) {
                         dampedDragAnimation.updateValue(next)
                     }
                 }
@@ -127,7 +142,7 @@ internal fun LiquidSlider(
                 Modifier
                     .clip(Capsule())
                     .background(trackColor)
-                    .pointerInput(animationScope) {
+                    .pointerInput(animationScope, valueRange, isLtr, trackWidth) {
                         detectTapGestures { position ->
                             val delta =
                                 (valueRange.endInclusive - valueRange.start) *
@@ -141,7 +156,7 @@ internal fun LiquidSlider(
                                     }
                                 ).coerceIn(valueRange)
                             dampedDragAnimation.animateToValue(targetValue)
-                            onValueChange(targetValue)
+                            latestOnValueChange(targetValue)
                         }
                     }
                     .height(6.dp)

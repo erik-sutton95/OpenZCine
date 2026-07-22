@@ -336,6 +336,8 @@
     <!-- DISP command dashboard. -->
     <string name="command_iso_recording_wait">ISO is unavailable during recording until codec readback completes.</string>
     <string name="command_iso_recording_locked">ISO is locked while recording in R3D NE.</string>
+    <string name="iso_auto_drum_locked">Auto ISO is on — the camera sets sensitivity. Switch to Auto Off to choose a value.</string>
+    <string name="iso_manual_requires_m_mode">Manual ISO needs exposure mode M. The camera is setting sensitivity.</string>
     <string name="command_iso_wait_codec">Waiting for the camera codec before offering ISO values.</string>
     <string name="command_iso_wait_base">Waiting for the active base-ISO circuit.</string>
     <string name="command_iso_no_values">This camera did not provide ISO values for the active circuit.</string>
@@ -475,7 +477,6 @@
     <string name="camera_hop_failed_title">Couldn\'t rejoin camera</string>
     <string name="camera_hop_failed_fallback">Open the camera\'s network screen and reconnect from My cameras.</string>
     <string name="control_set_success">%1$s set to %2$s.</string>
-    <string name="control_confirmation_failed">%1$s did not confirm %2$s. Check the active camera mode and try again.</string>
     <string name="control_change_rejected">The camera rejected the control change.</string>
     <string name="control_error">%1$s: %2$s</string>
     <string name="focus_change_rejected">The camera rejected the focus-point change.</string>
@@ -749,9 +750,11 @@
     <string name="desqueeze_1">1x</string>
     <string name="desqueeze_133">1.33x</string>
     <string name="desqueeze_15">1.5x</string>
+    <string name="desqueeze_16">1.6x</string>
     <string name="desqueeze_165">1.65x</string>
     <string name="desqueeze_18">1.8x</string>
     <string name="desqueeze_2">2x</string>
+    <string name="desqueeze_custom">Custom %1$.1f×</string>
     <string name="orientation_horizontal">Horizontal</string>
     <string name="orientation_vertical">Vertical</string>
     <string name="level_horizon">Horizon</string>

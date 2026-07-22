@@ -679,10 +679,12 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     }
 
     public struct Desqueeze: Codable, Equatable, Sendable {
+        /// Common anamorphic squeeze chips (including 1.6×). Custom values use [factor].
         public enum Ratio: String, CaseIterable, Codable, Equatable, Sendable {
             case x1 = "1x"
             case x133 = "1.33x"
             case x15 = "1.5x"
+            case x16 = "1.6x"
             case x165 = "1.65x"
             case x18 = "1.8x"
             case x2 = "2x"
@@ -693,10 +695,17 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
                 case .x1: 1.0
                 case .x133: 1.33
                 case .x15: 1.5
+                case .x16: 1.6
                 case .x165: 1.65
                 case .x18: 1.8
                 case .x2: 2.0
                 }
+            }
+
+            /// Nearest named chip for a snapped factor, if any chip matches within half a step.
+            public static func matching(factor: Double) -> Ratio? {
+                let snapped = Desqueeze.snap(factor)
+                return allCases.first { abs($0.factor - snapped) < 0.005 }
             }
         }
 
@@ -705,17 +714,85 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             case vertical = "Vertical"
         }
 
+        /// Inclusive operator range for custom de-squeeze.
+        public static let factorRange: ClosedRange<Double> = 1.0...2.0
+        /// Slider / step size for custom factor (0.01×).
+        public static let factorStep: Double = 0.01
+
         public init(
-            enabled: Bool = false, ratio: Ratio = .x1, orientation: Orientation = .horizontal
+            enabled: Bool = false,
+            ratio: Ratio = .x1,
+            factor: Double? = nil,
+            orientation: Orientation = .horizontal
         ) {
             self.enabled = enabled
-            self.ratio = ratio
             self.orientation = orientation
+            let resolved = Self.snap(factor ?? ratio.factor)
+            self.factor = resolved
+            self.ratio = Ratio.matching(factor: resolved) ?? ratio
         }
 
         public var enabled: Bool
+        /// Named chip when the factor matches a preset; otherwise the last selected chip (UI only).
         public var ratio: Ratio
+        /// Applied squeeze factor in [factorRange], always the source of truth for rendering.
+        public var factor: Double
         public var orientation: Orientation
+
+        /// True when [factor] is not one of the named chips (custom slider value).
+        public var isCustomFactor: Bool { Ratio.matching(factor: factor) == nil }
+
+        /// Sets the applied factor from a named chip.
+        public mutating func select(ratio: Ratio) {
+            self.ratio = ratio
+            self.factor = ratio.factor
+        }
+
+        /// Sets a custom (or snapped) factor from the 1.0…2.0 slider.
+        public mutating func select(factor raw: Double) {
+            let snapped = Self.snap(raw)
+            self.factor = snapped
+            if let match = Ratio.matching(factor: snapped) {
+                self.ratio = match
+            }
+        }
+
+        public static func snap(_ raw: Double) -> Double {
+            let clamped = min(max(raw, factorRange.lowerBound), factorRange.upperBound)
+            let steps = (clamped / factorStep).rounded()
+            return min(max(steps * factorStep, factorRange.lowerBound), factorRange.upperBound)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case enabled, ratio, factor, orientation
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+            orientation =
+                try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .horizontal
+            if let storedFactor = try c.decodeIfPresent(Double.self, forKey: .factor) {
+                factor = Self.snap(storedFactor)
+                ratio =
+                    try c.decodeIfPresent(Ratio.self, forKey: .ratio)
+                    ?? Ratio.matching(factor: factor) ?? .x1
+            } else if let storedRatio = try c.decodeIfPresent(Ratio.self, forKey: .ratio) {
+                ratio = storedRatio
+                factor = storedRatio.factor
+            } else {
+                ratio = .x1
+                factor = 1.0
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(enabled, forKey: .enabled)
+            try c.encode(ratio, forKey: .ratio)
+            try c.encode(factor, forKey: .factor)
+            try c.encode(orientation, forKey: .orientation)
+        }
     }
 
     /// How much crush/clip pile-up to tolerate at scope edges before traffic lights glow,

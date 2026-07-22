@@ -878,8 +878,18 @@ struct PickerPanel: View {
         picker == .iso && model.isISORecordingLocked
     }
 
+    /// Auto ISO On or non-M (non-R3D): value drum is camera-owned.
+    /// R3D NE dual-base is always manual — never locked by exposure mode.
+    private var isISOAutoValueLocked: Bool {
+        picker == .iso && model.showsAutoISOPicker && model.isISOValueCameraOwned
+    }
+
     private var isPickerInteractionLocked: Bool {
         isShutterControlLocked || isISORecordingLocked
+    }
+
+    private var isDrumInteractionLocked: Bool {
+        isPickerInteractionLocked || isISOAutoValueLocked
     }
 
     private var activePickerModes: [PickerMode] {
@@ -921,6 +931,9 @@ struct PickerPanel: View {
                 if isISORecordingLocked {
                     isoRecordingLockBanner
                 }
+                if isISOAutoValueLocked {
+                    isoAutoLockBanner
+                }
                 if isTintMode {
                     // The WB Tint tab swaps the drum for the fine-tune pad.
                     WhiteBalanceTintPad()
@@ -930,15 +943,15 @@ struct PickerPanel: View {
                         options: currentOptions,
                         selection: $selection,
                         markedValues: markedValues,
-                        isInteractive: !isPickerInteractionLocked,
+                        isInteractive: !isDrumInteractionLocked,
                         // −10 / +10 permanently flank the selected Kelvin value.
                         sideAdjust: isKelvinMode
                             ? DrumSideAdjust(
-                                minusEnabled: !isPickerInteractionLocked
+                                minusEnabled: !isDrumInteractionLocked
                                     && WhiteBalanceKelvinPolicy.canFineAdjust(
                                         from: selection,
                                         delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
-                                plusEnabled: !isPickerInteractionLocked
+                                plusEnabled: !isDrumInteractionLocked
                                     && WhiteBalanceKelvinPolicy.canFineAdjust(
                                         from: selection,
                                         delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
@@ -1017,9 +1030,17 @@ struct PickerPanel: View {
             selection = value
             lastApplied = value
         }
+        // Auto ISO: keep the locked drum centred on the body's effective ISO as it changes.
+        .onChange(of: model.cameraPropertySnapshot.iso) { _, iso in
+            guard picker == .iso, isISOAutoValueLocked, let iso, iso > 0 else { return }
+            let next = String(iso)
+            guard next != selection else { return }
+            selection = next
+            lastApplied = next
+        }
         // Confirm-on-snap: apply each newly-centred value to the active mode's target.
         .onChange(of: selection) { _, newValue in
-            guard !isPickerInteractionLocked else { return }
+            guard !isDrumInteractionLocked else { return }
             guard !newValue.isEmpty, newValue != lastApplied else { return }
             lastApplied = newValue
             model.applyPicker(picker, mode: selectedMode, value: newValue)
@@ -1117,10 +1138,15 @@ struct PickerPanel: View {
                     let value = model.pickerModeValue(picker, mode: index)
                     selection = value
                     lastApplied = value
-                    // ISO's circuits are the camera's dual base — switch the base on the camera
-                    // first, before the new ISO value is applied below.
+                    // ISO dual-base: switch Low/High on the body before applying the circuit value.
                     if picker == .iso, model.showsDualBaseISOPicker {
                         model.switchBaseISO(highBase: index == 1)
+                    }
+                    // ISO auto control (non-R3D NE): Auto On/Off toggles MovISOAutoControl.
+                    if picker == .iso, model.showsAutoISOPicker {
+                        model.switchAutoISO(enabled: index == 0)
+                        // Auto On: no ISO write. Auto Off: apply the drum value in manual ISO.
+                        if index == 0 { return }
                     }
                     if picker == .shutter {
                         model.switchShutterMode(speedMode: index == 1)
@@ -1160,10 +1186,40 @@ struct PickerPanel: View {
                     }
                 }
                 .buttonStyle(.zcTapTarget)
+                // Full locks (shutter / R3D record) freeze tabs; Auto ISO only freezes the drum.
                 .opacity(isPickerInteractionLocked ? 0.55 : 1)
                 .allowsHitTesting(!isPickerInteractionLocked)
             }
         }
+    }
+
+    private var isoAutoLockBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 11, weight: .semibold))
+            Text(isoAutoLockBannerText)
+                .font(.system(size: 11.5, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(LiveDesign.accent.opacity(0.9))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LiveDesign.accentDim,
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
+        )
+    }
+
+    private var isoAutoLockBannerText: String {
+        if model.allowsManualISO {
+            return
+                "Auto ISO is on — the camera sets sensitivity. "
+                + "Switch to Auto Off to choose a value."
+        }
+        return
+            "Manual ISO needs exposure mode M. "
+            + "The camera is setting sensitivity."
     }
 
     private var currentValue: String {
@@ -1184,8 +1240,18 @@ struct PickerPanel: View {
         if picker == .resolution, !screenModes.isEmpty { return screenModes }
         if picker == .codec, !codecModes.isEmpty { return codecModes }
         if picker == .iso {
+            // Inject live Auto ISO when it sits outside the fixed ladder (e.g. 51200).
+            let liveISO: String? = {
+                guard model.showsAutoISOPicker else { return nil }
+                if let iso = model.cameraPropertySnapshot.iso, iso > 0 {
+                    return String(iso)
+                }
+                return nil
+            }()
             return ISOPickerPolicy.options(
-                codec: model.cameraState.codec, modeIndex: selectedMode)
+                codec: model.cameraState.codec,
+                modeIndex: selectedMode,
+                includingLiveISO: liveISO)
         }
         // Kelvin dial ladder, with the live / fine-tuned value inserted when off-ladder.
         if isKelvinMode {
@@ -1858,6 +1924,9 @@ struct AssistPanel: View {
     let tool: MonitorAssistTool
     /// When set, the header close control calls this instead of the default panel dismiss path.
     var onClose: (() -> Void)? = nil
+    /// Local continuous factor while dragging the desqueeze custom slider (avoids thrashing
+    /// `assistConfiguration` / UserDefaults on every tick and keeps the thumb under the finger).
+    @State private var desqueezeSliderFactor: Double = 1.0
 
     var body: some View {
         GlassPanel(
@@ -1945,23 +2014,51 @@ struct AssistPanel: View {
                         }
                     }
                 case .desqueeze:
-                    Button {
-                        model.assistConfiguration.desqueeze.enabled.toggle()
-                        model.setAssist(
-                            .desqueeze,
-                            visible: model.assistConfiguration.desqueeze.enabled
-                        )
-                    } label: {
-                        ToggleRow(
-                            title: "Enable", isOn: model.assistConfiguration.desqueeze.enabled)
-                    }
-                    .buttonStyle(.zcTapTarget)
+                    // On/off is the assist-bar DESQ chip; this panel only configures factor/axis.
                     SegmentedButtons(
                         items: AssistConfiguration.Desqueeze.Ratio.allCases.map(\.rawValue),
-                        selected: model.assistConfiguration.desqueeze.ratio.rawValue
+                        selected:
+                            AssistConfiguration.Desqueeze.Ratio.matching(
+                                factor: desqueezeSliderFactor
+                            )?.rawValue ?? ""
                     ) { value in
                         if let ratio = AssistConfiguration.Desqueeze.Ratio(rawValue: value) {
-                            model.assistConfiguration.desqueeze.ratio = ratio
+                            desqueezeSliderFactor = ratio.factor
+                            model.assistConfiguration.desqueeze.select(ratio: ratio)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Custom")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(LiveDesign.muted)
+                            Spacer()
+                            Text(String(format: "%.2f×", desqueezeSliderFactor))
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(LiveDesign.text)
+                        }
+                        Slider(
+                            value: $desqueezeSliderFactor,
+                            in: AssistConfiguration.Desqueeze.factorRange,
+                            step: AssistConfiguration.Desqueeze.factorStep
+                        ) { editing in
+                            // Commit on release so the thumb tracks smoothly while dragging.
+                            if !editing {
+                                model.assistConfiguration.desqueeze.select(
+                                    factor: desqueezeSliderFactor)
+                            }
+                        }
+                        .tint(LiveDesign.accent)
+                        .onChange(of: desqueezeSliderFactor) { _, newValue in
+                            // Live preview while dragging without round-tripping every tick
+                            // through the persisted model binding.
+                            var next = model.assistConfiguration.desqueeze
+                            next.select(factor: newValue)
+                            if next.factor != model.assistConfiguration.desqueeze.factor
+                                || next.ratio != model.assistConfiguration.desqueeze.ratio
+                            {
+                                model.assistConfiguration.desqueeze = next
+                            }
                         }
                     }
                     SegmentedButtons(
@@ -1997,11 +2094,22 @@ struct AssistPanel: View {
                 }
             }
         }
-        // Swallow taps on the panel's own chrome so a mistap can't fall through to the backdrop
-        // tap-catcher and dismiss it — only a tap *outside* closes. Buttons and the drum still
-        // work: a child's own gesture takes priority over this container tap.
+        // Swallow bare taps on panel chrome so they don't fall through to the backdrop dismiss
+        // catcher. Must be simultaneous — a exclusive `onTapGesture` competes with Slider thumb
+        // drags and makes the custom desqueeze factor unusable.
         .contentShape(Rectangle())
-        .onTapGesture {}
+        .simultaneousGesture(TapGesture().onEnded {})
+        .onAppear {
+            desqueezeSliderFactor = model.assistConfiguration.desqueeze.factor
+        }
+        .onChange(of: model.assistConfiguration.desqueeze.factor) { _, newValue in
+            if abs(newValue - desqueezeSliderFactor) > 0.001 {
+                desqueezeSliderFactor = newValue
+            }
+        }
+        .onChange(of: tool) { _, _ in
+            desqueezeSliderFactor = model.assistConfiguration.desqueeze.factor
+        }
     }
 }
 

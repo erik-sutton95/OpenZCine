@@ -74,6 +74,10 @@ public class FakeCameraSession(
                 mutableProperties.update {
                     it.copy(iso = label.toLongOrNull() ?: it.iso)
                 }
+            CameraControl.ISO_AUTO ->
+                mutableProperties.update {
+                    it.copy(isoAuto = label.equals("ON", ignoreCase = true))
+                }
             CameraControl.BASE_ISO ->
                 mutableProperties.update { it.copy(baseIso = label) }
             CameraControl.SHUTTER ->

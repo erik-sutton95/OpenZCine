@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.settings
 
+import com.opencapture.openzcine.performOperatorHaptic
+
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -222,7 +224,7 @@ internal fun OperatorSettingsScreen(
         val hapticsWereEnabled = settings.hapticsEnabled.value
         toggle.toggle()
         if (hapticsWereEnabled) {
-            feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
     val toggleAssist: (AssistTool) -> Unit = { tool ->
@@ -236,12 +238,12 @@ internal fun OperatorSettingsScreen(
                 Toast.LENGTH_SHORT,
             ).show()
         } else if (hapticsEnabled) {
-            feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
     val emitHaptic: () -> Unit = {
         if (settings.hapticsEnabled.value) {
-            feedbackView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
     var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
@@ -1026,6 +1028,7 @@ private fun desqueezeRatioLabel(value: LocalDesqueezeRatio): String =
             LocalDesqueezeRatio.X100 -> R.string.desqueeze_1
             LocalDesqueezeRatio.X133 -> R.string.desqueeze_133
             LocalDesqueezeRatio.X150 -> R.string.desqueeze_15
+            LocalDesqueezeRatio.X160 -> R.string.desqueeze_16
             LocalDesqueezeRatio.X165 -> R.string.desqueeze_165
             LocalDesqueezeRatio.X180 -> R.string.desqueeze_18
             LocalDesqueezeRatio.X200 -> R.string.desqueeze_2
