@@ -1256,12 +1256,19 @@ private fun DesqueezeOptions(settings: OperatorSettings) {
         },
     ) { settings.desqueezeRatio = it }
     // Custom 1.0…2.0 factor (0.1 steps) — same range as iOS playback/live desqueeze.
-    AssistInlineRow(title = "Custom") {
+    // Full-width row (like brightness) so the pill has enough track to drag.
+    AssistRowDivider()
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 40.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OptionLabel("Custom")
         GlassPillSlider(
             value = ((settings.desqueezeFactor - 1f) * 10f).toInt().coerceIn(0, 10),
             range = 0..10,
             onChange = { step -> settings.desqueezeFactor = 1f + (step / 10f) },
-            modifier = Modifier.width(150.dp),
+            modifier = Modifier.weight(1f),
         )
         Text(
             String.format("%.1f×", settings.desqueezeFactor),

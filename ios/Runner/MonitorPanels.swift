@@ -1863,6 +1863,9 @@ struct AssistPanel: View {
     let tool: MonitorAssistTool
     /// When set, the header close control calls this instead of the default panel dismiss path.
     var onClose: (() -> Void)? = nil
+    /// Local continuous factor while dragging the desqueeze custom slider (avoids thrashing
+    /// `assistConfiguration` / UserDefaults on every tick and keeps the thumb under the finger).
+    @State private var desqueezeSliderFactor: Double = 1.0
 
     var body: some View {
         GlassPanel(
@@ -1955,10 +1958,11 @@ struct AssistPanel: View {
                         items: AssistConfiguration.Desqueeze.Ratio.allCases.map(\.rawValue),
                         selected:
                             AssistConfiguration.Desqueeze.Ratio.matching(
-                                factor: model.assistConfiguration.desqueeze.factor
+                                factor: desqueezeSliderFactor
                             )?.rawValue ?? ""
                     ) { value in
                         if let ratio = AssistConfiguration.Desqueeze.Ratio(rawValue: value) {
+                            desqueezeSliderFactor = ratio.factor
                             model.assistConfiguration.desqueeze.select(ratio: ratio)
                         }
                     }
@@ -1968,23 +1972,33 @@ struct AssistPanel: View {
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(LiveDesign.muted)
                             Spacer()
-                            Text(
-                                String(
-                                    format: "%.1f×",
-                                    model.assistConfiguration.desqueeze.factor)
-                            )
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.text)
+                            Text(String(format: "%.1f×", desqueezeSliderFactor))
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(LiveDesign.text)
                         }
                         Slider(
-                            value: Binding(
-                                get: { model.assistConfiguration.desqueeze.factor },
-                                set: { model.assistConfiguration.desqueeze.select(factor: $0) }
-                            ),
+                            value: $desqueezeSliderFactor,
                             in: AssistConfiguration.Desqueeze.factorRange,
                             step: AssistConfiguration.Desqueeze.factorStep
-                        )
+                        ) { editing in
+                            // Commit on release so the thumb tracks smoothly while dragging.
+                            if !editing {
+                                model.assistConfiguration.desqueeze.select(
+                                    factor: desqueezeSliderFactor)
+                            }
+                        }
                         .tint(LiveDesign.accent)
+                        .onChange(of: desqueezeSliderFactor) { _, newValue in
+                            // Live preview while dragging without round-tripping every tick
+                            // through the persisted model binding.
+                            var next = model.assistConfiguration.desqueeze
+                            next.select(factor: newValue)
+                            if next.factor != model.assistConfiguration.desqueeze.factor
+                                || next.ratio != model.assistConfiguration.desqueeze.ratio
+                            {
+                                model.assistConfiguration.desqueeze = next
+                            }
+                        }
                     }
                     SegmentedButtons(
                         items: AssistConfiguration.Desqueeze.Orientation.allCases.map(\.rawValue),
@@ -2019,11 +2033,22 @@ struct AssistPanel: View {
                 }
             }
         }
-        // Swallow taps on the panel's own chrome so a mistap can't fall through to the backdrop
-        // tap-catcher and dismiss it — only a tap *outside* closes. Buttons and the drum still
-        // work: a child's own gesture takes priority over this container tap.
+        // Swallow bare taps on panel chrome so they don't fall through to the backdrop dismiss
+        // catcher. Must be simultaneous — a exclusive `onTapGesture` competes with Slider thumb
+        // drags and makes the custom desqueeze factor unusable.
         .contentShape(Rectangle())
-        .onTapGesture {}
+        .simultaneousGesture(TapGesture().onEnded {})
+        .onAppear {
+            desqueezeSliderFactor = model.assistConfiguration.desqueeze.factor
+        }
+        .onChange(of: model.assistConfiguration.desqueeze.factor) { _, newValue in
+            if abs(newValue - desqueezeSliderFactor) > 0.001 {
+                desqueezeSliderFactor = newValue
+            }
+        }
+        .onChange(of: tool) { _, _ in
+            desqueezeSliderFactor = model.assistConfiguration.desqueeze.factor
+        }
     }
 }
 
