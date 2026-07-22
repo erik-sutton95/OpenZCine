@@ -1,15 +1,17 @@
 name: Play Internal
 
-# Uploads the signed phone and Wear OS bundles to their Google Play internal
-# testing tracks. Deliberate releases only: manual dispatch or an `android-v*`
-# tag, never plain merges.
-# Prerequisites (Play console app, `play` environment secrets, and the first
-# MANUAL .aab upload Google requires) are in docs/android-distribution.md.
+# Uploads signed phone + Wear OS bundles to Google Play internal testing tracks.
+# Mirrors TestFlight automation: runs on push to main when Android-relevant paths
+# change, plus manual dispatch and optional android-v* tags.
+# Gated by repository variable PLAY_UPLOAD_ENABLED (must be exactly "true").
+# Prerequisites: docs/android-distribution.md
 on:
-  workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "android-v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,11 +27,44 @@ env:
   ANDROID_VERSION_CODE_OFFSET: "100"
 
 jobs:
-  play-internal:
-    name: Build & upload
+  changes:
+    name: Detect changes
+    # Uploads stay off until the repo variable is explicitly set; the repo-name
+    # guard alone would re-arm on rename.
     if: >-
       ${{ github.repository == 'erik-sutton95/openzcine' &&
           vars.PLAY_UPLOAD_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dorny/paths-filter@fbd0ab8f3e80693af611ebaee6363fc25e6d187d # v4
+        id: filter
+        with:
+          # Product paths that affect the Android phone/Wear app. Shared Swift core
+          # is included so protocol/UI parity merges also ship to internal testers.
+          filters: |
+            code:
+              - 'Sources/**'
+              - 'Tests/**'
+              - 'Apps/Android/**'
+              - 'Package.swift'
+              - '.swift-format'
+              - 'scripts/android-*.sh'
+              - 'scripts/verify-android-*.sh'
+              - 'justfile'
+              - '.github/workflows/play-internal.yml'
+
+  play-internal:
+    name: Build & upload
+    needs: changes
+    if: >-
+      github.repository == 'erik-sutton95/openzcine' &&
+      vars.PLAY_UPLOAD_ENABLED == 'true' &&
+      (needs.changes.outputs.code == 'true' ||
+       github.event_name == 'workflow_dispatch' ||
+       startsWith(github.ref, 'refs/tags/android-v'))
     runs-on: ubuntu-latest
     environment: play
     steps:
@@ -171,4 +206,10 @@ jobs:
             echo "- **Phone version code:** ${{ steps.version.outputs.version_code }}"
             echo "- **Wear version code:** $((1000000000 + ${{ steps.version.outputs.version_code }}))"
             echo "- **Commit:** \`${{ github.sha }}\`"
+            echo ""
+            echo "<details><summary>What's new</summary>"
+            echo ""
+            cat Apps/Android/distribution/whatsnew/whatsnew-en-US
+            echo ""
+            echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"

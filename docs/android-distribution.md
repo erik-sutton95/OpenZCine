@@ -2,21 +2,25 @@
 
 Signed phone and Wear OS Android App Bundles are built and uploaded to their Google Play
 **internal testing** tracks by [`play-internal.yml`](../.github/workflows/play-internal.yml).
-Releases are deliberate: the workflow runs on manual dispatch or an `android-v*` tag, never on
-plain merges. The repository variable `PLAY_UPLOAD_ENABLED` is an emergency/bootstrap switch; it
-must be exactly `true` or the upload job is skipped.
+Automation mirrors iOS TestFlight: when Android-relevant paths land on `main`, CI builds signed
+AABs and uploads them to the phone **internal** and Wear **wear:qa** tracks. Manual dispatch and
+`android-v*` tags remain available. The repository variable `PLAY_UPLOAD_ENABLED` must be exactly
+`true` or the upload job is skipped (kill switch / bootstrap gate).
 
 ## Flow
 
 ```text
 feature PR → CI (Gradle build + tests + lint) → merge to main
-→ tag android-v<openzcine.versionName> (or run Play Internal from main)
+→ (path filter: Android / shared core / Play scripts) Play Internal workflow
 → signed phone + Wear .aab files → Play phone + Wear internal tracks
 ```
 
+Optional: tag `android-v<openzcine.versionName>` or **Actions → Play Internal → Run workflow** on
+`main` for a deliberate upload without a product path change.
+
 The track goes live only after the [one-time Play console setup](#one-time-play-console-setup)
 below. Keep `PLAY_UPLOAD_ENABLED=false` until the app, upload key, service account, and first manual
-phone/Wear releases all exist.
+phone/Wear releases all exist; then set it to `true` for automated main uploads.
 
 ## Version numbers
 
@@ -64,8 +68,9 @@ Erik's checklist, in order:
    `main` and `android-v*` tags. Add the five secrets below. Add required reviewers in the GitHub
    UI if uploads should require a human approval after the job starts.
 7. **Activate automation last** — verify the manual phone and Wear releases install, then change
-   the repository variable `PLAY_UPLOAD_ENABLED` from `false` to `true`. Run **Play Internal** from
-   `main` once; leave tag-driven releases for reviewed version bumps.
+   the repository variable `PLAY_UPLOAD_ENABLED` from `false` to `true`. Subsequent merges to
+   `main` that touch Android-relevant paths upload automatically (same idea as TestFlight). Use
+   **Play Internal** manual dispatch or an `android-v*` tag for an out-of-band upload.
 
 ## GitHub `play` environment secrets
 
@@ -86,12 +91,16 @@ Federation is the follow-up path when the Play publisher tooling and GitHub iden
 
 ## Running the workflow
 
+- **Automatic (default)** — merge to `main` with changes under `Sources/`, `Tests/`,
+  `Apps/Android/`, `Package.swift`, Android play scripts, `justfile`, or
+  `.github/workflows/play-internal.yml`. Path filter matches TestFlight’s “only when product code
+  moves” idea.
+- **Manual** — **Actions → Play Internal → Run workflow**, selecting `main`.
 - **Tag release** — if `openzcine.versionName=0.1.0`, use
   `git tag android-v0.1.0 && git push origin android-v0.1.0`. The workflow rejects a tag whose
   version differs from `Apps/Android/gradle.properties` or whose commit is not on `main`.
-- **Manual** — **Actions → Play Internal → Run workflow**, selecting `main`.
 
-Either way the workflow runs Gradle tests + lint, computes both unique version codes, decodes the
+In every case the workflow runs Gradle tests + lint, computes both unique version codes, decodes the
 keystore secret to a runner temp file, builds both `bundleRelease` outputs signed via the same
 `ANDROID_KEYSTORE_*` environment variables, verifies both AAB signatures against the configured
 upload-key alias, and uploads the bundles, R8 mapping files, and reviewed notes from
@@ -126,8 +135,8 @@ unsigned or both carry the same signing certificate. The debug path (`just andro
 
 | Symptom | Likely cause |
 | --- | --- |
-| Workflow skipped | Fork, or repository variable `PLAY_UPLOAD_ENABLED` is not `true` |
-| Release-ref guard fails | Manual run did not select `main`, or tag/version/main ancestry do not match |
+| Workflow skipped | Fork, `PLAY_UPLOAD_ENABLED` is not `true`, or path filter saw no Android-relevant files |
+| Release-ref guard fails | Manual/tag run did not use `main` / matching `android-v*` tag, or tag is not on main |
 | Missing `play` environment secrets | One or more of the five required values above is absent |
 | Upload fails with 403 / "not found" | Service account lacks release permission, or the app was never created in the console |
 | "Package not found" on first CI upload | The mandatory manual first uploads (step 5) haven't happened yet |

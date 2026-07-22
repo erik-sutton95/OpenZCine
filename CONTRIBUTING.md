@@ -41,10 +41,17 @@ committed to this repo**.
 - Open a pull request into `main`. CI must pass and the PR template must be filled in.
 - When native iOS changes merge to `main`, CI uploads a TestFlight build automatically (maintainers
   only — see [`docs/testflight-ci.md`](docs/testflight-ci.md)).
+- When Android-relevant changes merge to `main`, CI uploads signed phone + Wear bundles to Google
+  Play **internal testing** (maintainers only — see
+  [`docs/android-distribution.md`](docs/android-distribution.md)). Gated by
+  `PLAY_UPLOAD_ENABLED=true`.
 - Any PR that can trigger a TestFlight build must replace
   [`ios/TestFlight/WhatToTest.en-US.txt`](ios/TestFlight/WhatToTest.en-US.txt) with concise copy for
   non-developer camera operators. Describe visible outcomes, exclude implementation details, and
   give concrete steps under **Please test**. CI rejects stale or developer-centric notes.
+- Any PR that can trigger a Play internal upload must refresh
+  [`Apps/Android/distribution/whatsnew/whatsnew-en-US`](Apps/Android/distribution/whatsnew/whatsnew-en-US)
+  with plain-language tester notes (1–5 bullets).
 
 ## Code standards
 
