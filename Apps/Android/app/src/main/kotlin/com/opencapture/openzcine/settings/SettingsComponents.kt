@@ -26,7 +26,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -598,7 +600,18 @@ public fun GlassPillSlider(
     val localBackdrop = rememberLayerBackdrop()
     val sceneBackdrop = monitorGlass?.layerBackdrop
     val latestOnChange by rememberUpdatedState(onChange)
+    val latestValue by rememberUpdatedState(value)
     val floatRange = range.first.toFloat()..range.last.toFloat()
+    // Continuous thumb position while dragging. Discrete onChange (Int steps) alone cannot
+    // drive a smooth pill drag — intermediate floats would be rounded away and the thumb
+    // would stick (especially on short ranges like desqueeze 0…10).
+    var displayValue by remember { mutableFloatStateOf(value.toFloat()) }
+    // Accept external commits without yanking the pill back to the last Int mid-drag.
+    SideEffect {
+        if (displayValue.roundToInt().coerceIn(range) != value) {
+            displayValue = value.toFloat()
+        }
+    }
 
     Box(
         modifier
@@ -617,6 +630,7 @@ public fun GlassPillSlider(
                         (range.first + target * (range.last - range.first))
                             .roundToInt()
                             .coerceIn(range)
+                    displayValue = next.toFloat()
                     latestOnChange(next)
                     true
                 }
@@ -641,10 +655,11 @@ public fun GlassPillSlider(
             )
         }
         LiquidSlider(
-            value = { value.toFloat() },
+            value = { displayValue },
             onValueChange = { next ->
+                displayValue = next
                 val rounded = next.roundToInt().coerceIn(range)
-                if (rounded != value) latestOnChange(rounded)
+                if (rounded != latestValue) latestOnChange(rounded)
             },
             valueRange = floatRange,
             visibilityThreshold = 0.5f,

@@ -509,10 +509,73 @@ class MonitorCameraControlsTest {
                     codecSelection = "N-RAW",
                 ),
             )
+        // Without exposure mode M, only Auto On is offered (manual needs M).
         val iso = monitorCaptureSettings(dashboard, strings).first { it.kind == MonitorPickerKind.ISO }
-        assertEquals("Sensitivity", iso.picker?.subtitle)
+        assertEquals("Sensitivity · auto (M mode for manual)", iso.picker?.subtitle)
         assertEquals(1, iso.picker?.modes?.size)
+        assertEquals("Auto On", iso.picker?.modes?.single()?.label)
         assertEquals(IsoPickerPolicy.unifiedOptions, iso.picker?.modes?.single()?.request?.options)
+    }
+
+    @Test
+    fun `ISO Auto Off is available only in exposure mode M for non R3D`() {
+        val dashboard =
+            dashboard(
+                cameraSnapshot().copy(
+                    codec = "N-RAW",
+                    codecSelection = "N-RAW",
+                    exposureMode = "M",
+                    isoAuto = false,
+                ),
+            )
+        val iso =
+            monitorCaptureSettings(
+                    dashboard,
+                    strings,
+                    isoAuto = false,
+                    exposureMode = "M",
+                )
+                .first { it.kind == MonitorPickerKind.ISO }
+        assertEquals(2, iso.picker?.modes?.size)
+        assertEquals(listOf("Auto On", "Auto Off"), iso.picker?.modes?.map { it.label })
+        assertEquals(false, iso.picker?.drumInteractionLocked)
+
+        val aperture =
+            monitorCaptureSettings(
+                    dashboard,
+                    strings,
+                    isoAuto = true,
+                    exposureMode = "A",
+                )
+                .first { it.kind == MonitorPickerKind.ISO }
+        assertEquals(1, aperture.picker?.modes?.size)
+        assertEquals("Auto On", aperture.picker?.modes?.single()?.label)
+        assertEquals(true, aperture.picker?.drumInteractionLocked)
+    }
+
+    @Test
+    fun `R3D NE dual base ISO stays manual in aperture priority`() {
+        val dashboard =
+            dashboard(
+                cameraSnapshot().copy(
+                    codec = "R3D NE",
+                    codecSelection = "R3D NE",
+                    exposureMode = "A",
+                    iso = 800,
+                ),
+            )
+        val iso =
+            monitorCaptureSettings(
+                    dashboard,
+                    strings,
+                    exposureMode = "A",
+                )
+                .first { it.kind == MonitorPickerKind.ISO }
+        assertEquals("Sensitivity · dual base", iso.picker?.subtitle)
+        assertEquals(2, iso.picker?.modes?.size)
+        assertEquals(listOf("Low Base", "High Base"), iso.picker?.modes?.map { it.label })
+        assertEquals(false, iso.picker?.drumInteractionLocked)
+        assertEquals(null, iso.picker?.drumLockBanner)
     }
 
     @Test

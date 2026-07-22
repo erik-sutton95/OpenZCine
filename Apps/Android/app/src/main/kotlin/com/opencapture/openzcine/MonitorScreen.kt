@@ -588,11 +588,19 @@ internal fun MonitorScreen(
             )
         }
     val captureSettings =
-        remember(commandPresentation, stringResolver, effectiveShutterLocked) {
+        remember(
+            commandPresentation,
+            stringResolver,
+            effectiveShutterLocked,
+            cameraProperties.isoAuto,
+            cameraProperties.exposureMode,
+        ) {
             monitorCaptureSettings(
                 commandPresentation,
                 stringResolver,
                 shutterLockedOnCamera = effectiveShutterLocked,
+                isoAuto = cameraProperties.isoAuto,
+                exposureMode = cameraProperties.exposureMode,
             )
         }
     val topPillPickers =
@@ -655,29 +663,11 @@ internal fun MonitorScreen(
                     }
                     pendingCommandControl = control
                     try {
+                        // Facade applyControl already confirms the write on the wire. Do not
+                        // soft-fail from a lagging property poll (see docs/android-control-writes.md).
                         session.applyControl(control, desiredLabel)
-                        // Property poll will also catch up; one refresh keeps tiles/bar honest
-                        // after the native confirm without freezing the drum (settles still
-                        // enqueue into desiredControlWrites while this runs).
+                        // One refresh keeps tiles/bar honest; settles still enqueue while this runs.
                         session.refreshProperties()
-                        val confirmed =
-                            cameraPropertyConfirmsSelection(
-                                session.cameraProperties.value,
-                                control,
-                                desiredLabel,
-                            )
-                        // Only surface failures. iOS does not flash "set to …" on every snap.
-                        if (!confirmed && desiredControlWrites[control] == null) {
-                            commandControlFeedback =
-                                CommandControlFeedback(
-                                    appContext.getString(
-                                        R.string.control_confirmation_failed,
-                                        req.title,
-                                        desiredLabel,
-                                    ),
-                                    isError = true,
-                                )
-                        }
                     } catch (error: CameraControlException) {
                         if (desiredControlWrites[control] == null) {
                             commandControlFeedback =
@@ -708,6 +698,48 @@ internal fun MonitorScreen(
     val applyCameraControl: (CommandControlRequest, String) -> Unit =
         applyCameraControl@{ request, label ->
             if (!commandControlsEnabled) return@applyCameraControl
+            // Exit movie ISO auto by choosing a drum value: write MovISOAutoControl Off first
+            // so the body accepts the manual ISO write (non-R3D NE codecs).
+            // Manual ISO / Auto Off: R3D NE always; other codecs only in M.
+            val codecForISO =
+                (cameraProperties.codecSelection ?: cameraProperties.codec)
+                    ?.takeIf { it != "—" }
+                    .orEmpty()
+            if (
+                request.control == CameraControl.ISO &&
+                    !IsoPickerPolicy.allowsManualISO(
+                        codecForISO,
+                        cameraProperties.exposureMode,
+                    )
+            ) {
+                return@applyCameraControl
+            }
+            if (
+                request.control == CameraControl.ISO_AUTO &&
+                    label.equals(IsoPickerPolicy.AUTO_ISO_OFF_LABEL, ignoreCase = true) &&
+                    !IsoPickerPolicy.allowsManualISO(
+                        codecForISO,
+                        cameraProperties.exposureMode,
+                    )
+            ) {
+                return@applyCameraControl
+            }
+            if (
+                request.control == CameraControl.ISO &&
+                    IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto)
+            ) {
+                desiredControlWrites[CameraControl.ISO_AUTO] =
+                    CommandControlRequest(
+                        title = "ISO",
+                        control = CameraControl.ISO_AUTO,
+                        currentValue = IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
+                        options =
+                            listOf(
+                                IsoPickerPolicy.AUTO_ISO_ON_LABEL,
+                                IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
+                            ),
+                    ) to IsoPickerPolicy.AUTO_ISO_OFF_LABEL
+            }
             desiredControlWrites[request.control] = request to label
             commandControlFeedback = null
             if (activeCommandControl?.control == request.control) {
@@ -719,7 +751,7 @@ internal fun MonitorScreen(
     val shutterHapticView = LocalView.current
     val shutterLongPressToggle: () -> Unit = {
         if (operatorSettings.hapticsEnabled.value) {
-            shutterHapticView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            shutterHapticView.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
         }
         toggleShutterLockOnCamera(
             captureSettings = captureSettings,
@@ -1360,15 +1392,14 @@ internal fun MonitorScreen(
             val next = !focusPointLocked
             focusPointLocked = next
             focusLockHolding = false
-            if (operatorSettings.hapticsEnabled.value) {
-                view.performHapticFeedback(
-                    if (next) {
-                        HapticFeedbackConstants.LONG_PRESS
-                    } else {
-                        HapticFeedbackConstants.KEYBOARD_TAP
-                    },
-                )
-            }
+            view.performOperatorHaptic(
+                if (next) {
+                    HapticFeedbackConstants.LONG_PRESS
+                } else {
+                    HapticFeedbackConstants.KEYBOARD_TAP
+                },
+                enabled = operatorSettings.hapticsEnabled.value,
+            )
         }
         val handleFocusFeedAction: (FocusFeedGestureAction) -> Unit = handleFocusFeedAction@{ action ->
             when (action) {
@@ -1384,7 +1415,7 @@ internal fun MonitorScreen(
                                     CameraFocusPoint(action.coordinate.x, action.coordinate.y),
                                 )
                             if (accepted && operatorSettings.hapticsEnabled.value) {
-                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                             }
                         } catch (error: CameraFocusException) {
                             Toast.makeText(
@@ -1408,7 +1439,7 @@ internal fun MonitorScreen(
                         if (next != effectiveDisplayMode) {
                             displayMode = next
                             if (operatorSettings.hapticsEnabled.value) {
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                view.performOperatorHaptic(HapticFeedbackConstants.CLOCK_TICK)
                             }
                         }
                     }
@@ -1429,7 +1460,7 @@ internal fun MonitorScreen(
                 try {
                     session.resetFocusPoint()
                     if (operatorSettings.hapticsEnabled.value) {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                     }
                 } catch (error: CameraFocusException) {
                     Toast.makeText(
@@ -1687,7 +1718,7 @@ internal fun MonitorScreen(
                     onMoveCommandTile = moveCommandTileTo,
                     onReorderStarted = {
                         if (operatorSettings.hapticsEnabled.value) {
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                         }
                     },
                     onOpenAssistOptions = openAssistOptions,
@@ -1714,7 +1745,7 @@ internal fun MonitorScreen(
                         onMoveTile = moveCommandTileTo,
                         onReorderStarted = {
                             if (operatorSettings.hapticsEnabled.value) {
-                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                             }
                         },
                         liveFps = fpsSampler.formatted,

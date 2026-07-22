@@ -2084,6 +2084,13 @@ struct MediaPlayerView: View {
         model.preferences.playbackVisibleAssistTools.contains(.audioMeters)
     }
 
+    /// Playback de-squeeze uses the shared factor, gated by playback-visible tools.
+    private var playbackDesqueeze: AssistConfiguration.Desqueeze {
+        var config = model.assistConfiguration.desqueeze
+        config.enabled = model.preferences.playbackVisibleAssistTools.contains(.desqueeze)
+        return config
+    }
+
     private var playbackScopeDerivationConfiguration: PlaybackScopeDerivationConfiguration {
         let scopes = model.assistConfiguration.scopes
         // Playback scopes measure source/log on the same anchored axis as live view; clips don't
@@ -2107,6 +2114,8 @@ struct MediaPlayerView: View {
 
                 ZStack {
                     PlayerLayerView(player: player)
+                        // Match live view: de-squeeze the raster, then apply pinch zoom.
+                        .scaleEffect(desqueezeScale(playbackDesqueeze), anchor: .center)
                         .scaleEffect(zoomScale)
                         .offset(panOffset)
                 }

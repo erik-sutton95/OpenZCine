@@ -8,6 +8,8 @@ import Foundation
 /// safe-point write queue, surfacing a clear message on rejection. [verify-on-HW]
 public enum PTPCameraControl: Equatable, Sendable {
     case iso
+    /// Movie ISO auto/manual (`MovISOAutoControl` 0xD0AD) — not exposure program.
+    case isoAuto
     case shutter
     case iris
     case whiteBalanceKelvin
@@ -27,7 +29,10 @@ public enum PTPCameraControl: Equatable, Sendable {
 extension PTPPropertyCode {
     /// One-at-a-time property polling order used between live-view frame requests.
     public static let liveMonitorPollOrder: [PTPPropertyCode] = [
+        // Effective/working ISO (incl. Auto ISO). Prefer over dual-base D09E for display.
+        .isoControlSensitivity,
         .movieISOSensitivity,
+        .movieISOAutoControl,
         .movieBaseISO,
         .movieShutterMode,
         .movieTVLockSetting,
@@ -117,13 +122,13 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
     {
         switch control {
         case .iso:
-            guard let iso = UInt32(label.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                return nil
-            }
-            return PTPCameraPropertyWrite(
-                property: .movieISOSensitivity,
-                data: Data(ByteCoding.uint32LE(iso))
-            )
+            // Without codec context, prefer `MovieExposureIndex` (0xD1AA) — the documented movie
+            // ISO write. Dual-base R3D NE uses `MovieISOSensitivity` via the snapshot overload.
+            return isoWrite(label: label, dualBase: false)
+        case .isoAuto:
+            // `MovISOAutoControl` 0xD0AD — UINT8 On/Off (1 = auto ISO, 0 = manual).
+            guard let code = PTPCameraPropertyDecoders.onOffCode(for: label) else { return nil }
+            return PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([code]))
         case .shutter:
             return shutterWrite(label: label)
         case .iris:
@@ -210,13 +215,21 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
         label: String,
         snapshot: PTPCameraPropertySnapshot
     ) -> PTPCameraPropertyWrite? {
-        request(control: control, label: label)
+        if control == .iso {
+            let dualBase = ISOPickerPolicy.showsDualBaseCircuits(
+                codec: snapshot.fileType ?? "")
+            return isoWrite(label: label, dualBase: dualBase)
+        }
+        return request(control: control, label: label)
     }
 
     /// All property writes a picker selection should send — usually one, but a **Kelvin** white
     /// balance needs **two**: switch into colour-temperature mode (`MovieWhiteBalance` = "Color
     /// temp") *then* set `MovieWBColorTemp`. Writing only the temperature leaves the body in its
     /// current preset mode and the Kelvin never takes effect.
+    ///
+    /// Movie ISO also expands: when ISO auto is active, turn it off first so the body accepts the
+    /// manual sensitivity write.
     public static func requests(
         control: PTPCameraControl,
         label: String,
@@ -236,7 +249,34 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
                 ]
             }
         }
+        if control == .iso {
+            var writes: [PTPCameraPropertyWrite] = []
+            if snapshot.isoAuto == true {
+                writes.append(movieISOAuto(enabled: false))
+            }
+            if let iso = isoWrite(
+                label: label,
+                dualBase: ISOPickerPolicy.showsDualBaseCircuits(codec: snapshot.fileType ?? ""))
+            {
+                writes.append(iso)
+            }
+            return writes
+        }
         return request(control: control, label: label, snapshot: snapshot).map { [$0] } ?? []
+    }
+
+    /// Encodes a movie ISO sensitivity write.
+    ///
+    /// - Dual-base R3D NE: `MovieISOSensitivity` (0x0001_D09E) — range follows the base circuit.
+    /// - Other codecs: `MovieExposureIndex` (0xD1AA) — documented video ISO write; R3D rejects it.
+    public static func isoWrite(label: String, dualBase: Bool) -> PTPCameraPropertyWrite? {
+        guard let iso = UInt32(label.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+        return PTPCameraPropertyWrite(
+            property: dualBase ? .movieISOSensitivity : .movieExposureIndex,
+            data: Data(ByteCoding.uint32LE(iso))
+        )
     }
 
     /// A `MovScreenSize` write for an exact camera-advertised mode value (from the descriptor enum).
@@ -277,6 +317,14 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
     /// Electronic VR toggle (`ElectronicVR` 0xD314, UINT8 on/off). [verify-on-HW]
     public static func electronicVR(on: Bool) -> PTPCameraPropertyWrite {
         PTPCameraPropertyWrite(property: .electronicVR, data: Data([on ? 1 : 0]))
+    }
+
+    /// Movie ISO auto/manual (`MovISOAutoControl` 0xD0AD, UINT8 on/off).
+    ///
+    /// Independent of exposure-program Auto. libgphoto2 `PTP_DPC_NIKON_MovISOAutoControl`;
+    /// MAID `MovieISOControl` bool. [verify-on-HW]
+    public static func movieISOAuto(enabled: Bool) -> PTPCameraPropertyWrite {
+        PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([enabled ? 1 : 0]))
     }
 
     /// Encodes a shutter label to a write: a `"N°"` angle to `movieShutterAngle`, or an `"N/D"`
@@ -949,6 +997,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public init(
         iso: UInt32? = nil,
         baseISO: String? = nil,
+        isoAuto: Bool? = nil,
         exposureMode: String? = nil,
         shutterMode: ShutterDisplayMode? = nil,
         shutterLocked: Bool? = nil,
@@ -984,6 +1033,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     ) {
         self.iso = iso
         self.baseISO = baseISO
+        self.isoAuto = isoAuto
         self.exposureMode = exposureMode
         self.shutterMode = shutterMode
         self.shutterLocked = shutterLocked
@@ -1021,6 +1071,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     // Exposure.
     public let iso: UInt32?
     public let baseISO: String?
+    /// Movie ISO auto (`MovISOAutoControl` 0xD0AD). `true` = camera owns ISO; independent of P/A/S/M.
+    public let isoAuto: Bool?
     public let exposureMode: String?  // Auto/P/S/A/M/U1–U3, decoded from 0x500E
     public let shutterMode: ShutterDisplayMode?
     public let shutterLocked: Bool?  // movie shutter speed/angle lock (MovieTVLockSetting)
@@ -1097,8 +1149,26 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public func applying(property: PTPPropertyCode, data: Data) -> PTPCameraPropertySnapshot {
         let bytes = Array(data)
         switch property {
-        case .movieISOSensitivity where bytes.count >= 4:
+        case .isoControlSensitivity where bytes.count >= 4:
+            // `ISOControlSensitivity` 0xD0B5 — effective/working ISO the body is applying
+            // (manual or Auto). Authoritative readout for the ISO tile and Auto On display.
             return replacing(iso: ByteCoding.readUInt32LE(bytes, at: 0))
+        case .movieISOSensitivity where bytes.count >= 4:
+            // Dual-base R3D circuit ISO (0x0001_D09E). On non-R3D codecs this often sticks
+            // at the native base (e.g. 800) and must not overwrite effective ISO from D0B5.
+            let value = ByteCoding.readUInt32LE(bytes, at: 0)
+            if ISOPickerPolicy.showsDualBaseCircuits(codec: fileType ?? "") {
+                return replacing(iso: value)
+            }
+            // Seed only until the effective property has been polled.
+            if iso == nil { return replacing(iso: value) }
+            return self
+        case .movieExposureIndex where bytes.count >= 4:
+            // Manual movie ISO write path (0xD1AA) — UINT32. Used for write confirmation.
+            return replacing(iso: ByteCoding.readUInt32LE(bytes, at: 0))
+        case .movieISOAutoControl where bytes.count >= 1:
+            // UINT8 On/Off — 1 = auto ISO, 0 = manual (libgphoto2 Nikon OnOff convention).
+            return replacing(isoAuto: bytes[0] != 0)
         case .movieBaseISO where bytes.count >= 1:
             return replacing(baseISO: PTPCameraPropertyDecoders.baseISO(bytes[0]))
         case .exposureProgramMode where bytes.count >= 2:
@@ -1197,6 +1267,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     private func replacing(
         iso: UInt32? = nil,
         baseISO: String? = nil,
+        isoAuto: Bool? = nil,
         exposureMode: String? = nil,
         shutterMode: ShutterDisplayMode? = nil,
         shutterLocked: Bool? = nil,
@@ -1233,6 +1304,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         PTPCameraPropertySnapshot(
             iso: iso ?? self.iso,
             baseISO: baseISO ?? self.baseISO,
+            isoAuto: isoAuto ?? self.isoAuto,
             exposureMode: exposureMode ?? self.exposureMode,
             shutterMode: shutterMode ?? self.shutterMode,
             shutterLocked: shutterLocked ?? self.shutterLocked,
@@ -1317,7 +1389,14 @@ extension CameraDisplayState {
     ) -> String {
         switch label {
         case "ISO":
-            properties.iso.map(String.init) ?? existing
+            // Movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto.
+            // When auto is on, surface the body's effective ISO (ISOControlSensitivity)
+            // so the drum/tile tracks Auto changes (e.g. A51200, not a stale dual-base base).
+            if properties.isoAuto == true {
+                properties.iso.map { "A\($0)" } ?? "Auto"
+            } else {
+                properties.iso.map(String.init) ?? existing
+            }
         case "SHUTTER":
             switch properties.shutterMode {
             case .speed: properties.shutterSpeed ?? properties.shutterAngle ?? existing

@@ -1,6 +1,7 @@
 @file:androidx.media3.common.util.UnstableApi
 
 package com.opencapture.openzcine.media
+import com.opencapture.openzcine.performOperatorHaptic
 
 import android.net.Uri
 import android.os.Build
@@ -1004,10 +1005,11 @@ private fun ProgressivePlayer(
     }
 
     val cacheFailed = entry.state == MediaCacheState.FAILED
+    // Apply de-squeeze whenever DESQ is on — do not require other framing tools.
     val horizontalPresentationScale =
-        if (framingAssistsVisible) playbackFramingConfiguration.horizontalPresentationScale else 1f
+        playbackFramingConfiguration.horizontalPresentationScale
     val verticalPresentationScale =
-        if (framingAssistsVisible) playbackFramingConfiguration.verticalPresentationScale else 1f
+        playbackFramingConfiguration.verticalPresentationScale
     val density = LocalDensity.current.density
     val viewportWidthDp = viewport.width / density
     val viewportHeightDp = viewport.height / density
@@ -1121,7 +1123,7 @@ private fun ProgressivePlayer(
                                     PlaybackTimeline.clampPosition(player.currentPosition, duration)
                                 frameScrubHorizontal = 0f
                                 scrubPosition = frameScrubOrigin.toFloat()
-                                hapticView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                hapticView.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                             },
                             onDragEnd = ::finishFrameScrub,
                             onDragCancel = ::finishFrameScrub,

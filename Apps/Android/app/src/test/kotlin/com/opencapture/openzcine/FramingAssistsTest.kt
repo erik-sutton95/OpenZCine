@@ -20,14 +20,14 @@ class FramingAssistsTest {
             localDesqueezePresentationRect(
                 feed = feed,
                 enabled = true,
-                ratio = LocalDesqueezeRatio.X200,
+                factor = LocalDesqueezeRatio.X200.factor,
                 orientation = LocalDesqueezeOrientation.HORIZONTAL,
             )
         val vertical =
             localDesqueezePresentationRect(
                 feed = feed,
                 enabled = true,
-                ratio = LocalDesqueezeRatio.X200,
+                factor = LocalDesqueezeRatio.X200.factor,
                 orientation = LocalDesqueezeOrientation.VERTICAL,
             )
 

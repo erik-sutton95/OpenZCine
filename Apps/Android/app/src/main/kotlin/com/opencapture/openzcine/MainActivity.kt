@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -183,6 +184,9 @@ class MainActivity : ComponentActivity() {
             // branded splash is LaunchSplashOverlay (rounded logo + wordmark).
             SideEffect { composeFirstFrameDrawn.set(true) }
             OpenZCineTheme {
+                val operatorHaptics =
+                    rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
+                CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics) {
                 Box(Modifier.fillMaxSize()) {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 // A monitor reached from a saved card retains that exact
@@ -758,8 +762,9 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 } // app-root Box
-            }
-        }
+                } // LocalOperatorHaptics
+            } // OpenZCineTheme
+        } // setContent
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =

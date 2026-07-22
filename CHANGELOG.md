@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- Playback and live **desqueeze**: scales the picture (not only guides), with 1.6× and custom
+  1.00–2.00× (0.01 steps) on iOS and Android.
+- **Auto ISO** for non-R3D movie codecs (N-RAW / ProRes / H.26x): Auto On/Off controls movie ISO
+  auto (not P/A/S/M). Live working ISO while Auto is on (e.g. A51200); manual / Auto Off only in
+  exposure mode **M**. R3D NE keeps Low/High dual-base and stays manual in every exposure mode.
 - USB-C tethered transport (iOS, via ImageCaptureCore): USB camera discovery, connection,
   auto-reconnect on plug-in, and a transport-aware first-pair wizard with real USB-C setup steps.
   Wi-Fi (PTP-IP) and USB-C now share one session layer behind a transaction-level
@@ -22,6 +27,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- Android control writes: facade owns encode + native confirm; shell no longer soft-fails after a
+  successful apply (see `docs/android-control-writes.md`).
 - TestFlight notes are now reviewed, tester-written copy with concrete test steps. CI rejects stale
   notes, commit titles, and common implementation jargon before an iOS build can ship.
 

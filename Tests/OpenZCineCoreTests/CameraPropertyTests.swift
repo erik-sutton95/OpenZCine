@@ -127,6 +127,29 @@ import Testing
     #expect(snapshot.electronicVR == "ON")
 }
 
+@Test func movieISOAutoControlDecodesAndEncodesIndependentlyOfExposureMode() {
+    // MovISOAutoControl 0xD0AD — not exposure program Auto.
+    let autoOn = PTPCameraPropertySnapshot()
+        .applying(property: .movieISOAutoControl, data: Data([1]))
+    #expect(autoOn.isoAuto == true)
+    let autoOff = autoOn.applying(property: .movieISOAutoControl, data: Data([0]))
+    #expect(autoOff.isoAuto == false)
+
+    #expect(
+        PTPCameraPropertyWrite.movieISOAuto(enabled: true)
+            == PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([1])))
+    #expect(
+        PTPCameraPropertyWrite.request(control: .isoAuto, label: "ON")
+            == PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([1])))
+    #expect(
+        PTPCameraPropertyWrite.request(control: .isoAuto, label: "OFF")
+            == PTPCameraPropertyWrite(property: .movieISOAutoControl, data: Data([0])))
+
+    let display = CameraDisplayState.preview.applyingCameraProperties(
+        PTPCameraPropertySnapshot(iso: 800, isoAuto: true))
+    #expect(display.values.first(where: { $0.label == "ISO" })?.value == "A800")
+}
+
 @Test func snapshotDecodesZRSoundProperties() {
     // ZR sound properties: input selection (1 Mic / 2 Line), INT8 sensitivity (0xFF Auto, 0–20),
     // 32-bit float on/off.
@@ -248,11 +271,37 @@ import Testing
 }
 
 @Test func cameraPropertyWriteRequestsEncodePickerValues() {
+    // Non dual-base path (default without snapshot): MovieExposureIndex 0xD1AA.
     #expect(
         PTPCameraPropertyWrite.request(control: .iso, label: "800")
             == PTPCameraPropertyWrite(
+                property: .movieExposureIndex,
+                data: Data([0x20, 0x03, 0x00, 0x00])
+            )
+    )
+    // Dual-base R3D NE: MovieISOSensitivity 0x0001_D09E.
+    #expect(
+        PTPCameraPropertyWrite.request(
+            control: .iso,
+            label: "800",
+            snapshot: PTPCameraPropertySnapshot(fileType: "R3D NE 12-bit R3D")
+        )
+            == PTPCameraPropertyWrite(
                 property: .movieISOSensitivity,
                 data: Data([0x20, 0x03, 0x00, 0x00])
+            )
+    )
+    // Manual ISO while auto is on: turn auto off first, then write ExposureIndex.
+    let autoOn = PTPCameraPropertySnapshot(isoAuto: true, fileType: "ProRes 422 HQ")
+    let isoWhileAuto = PTPCameraPropertyWrite.requests(
+        control: .iso, label: "1600", snapshot: autoOn)
+    #expect(isoWhileAuto.count == 2)
+    #expect(isoWhileAuto[0] == PTPCameraPropertyWrite.movieISOAuto(enabled: false))
+    #expect(
+        isoWhileAuto[1]
+            == PTPCameraPropertyWrite(
+                property: .movieExposureIndex,
+                data: Data([0x40, 0x06, 0x00, 0x00])
             )
     )
     #expect(
@@ -355,7 +404,8 @@ import Testing
 
 @Test func cameraPropertySnapshotAppliesRawPropertyValues() {
     let snapshot = PTPCameraPropertySnapshot()
-        .applying(property: .movieISOSensitivity, data: Data([0x20, 0x03, 0x00, 0x00]))
+        // Effective ISO (0xD0B5) is the authoritative working readout.
+        .applying(property: .isoControlSensitivity, data: Data([0x20, 0x03, 0x00, 0x00]))
         .applying(property: .movieShutterAngle, data: Data([0x50, 0x46, 0x00, 0x00]))
         .applying(property: .movieFNumber, data: Data([0x18, 0x01]))
         .applying(property: .movieWBColorTemp, data: Data([0xE0, 0x15]))
@@ -373,6 +423,31 @@ import Testing
     #expect(snapshot.wbKelvin == UInt16(5_600))
     #expect(snapshot.resolution == "6048x4032")
     #expect(snapshot.fps == 25)
+}
+
+@Test func cameraPropertySnapshotPrefersEffectiveISOOverStaleDualBase() {
+    // Non-R3D: dual-base D09E often sticks at native base 800; effective D0B5 tracks Auto.
+    let staleDualBase = Data(ByteCoding.uint32LE(800))
+    let effective = Data(ByteCoding.uint32LE(51_200))
+    let snapshot = PTPCameraPropertySnapshot(fileType: "ProRes 422 HQ")
+        .applying(property: .movieISOSensitivity, data: staleDualBase)
+        .applying(property: .isoControlSensitivity, data: effective)
+        // A later dual-base poll must not clobber effective ISO on non-R3D.
+        .applying(property: .movieISOSensitivity, data: staleDualBase)
+    #expect(snapshot.iso == UInt32(51_200))
+
+    // R3D dual-base still updates from D09E.
+    let r3d = PTPCameraPropertySnapshot(fileType: "R3D NE 12-bit R3D")
+        .applying(property: .movieISOSensitivity, data: Data(ByteCoding.uint32LE(6_400)))
+    #expect(r3d.iso == UInt32(6_400))
+}
+
+@Test func liveMonitorPollOrderIncludesEffectiveISO() {
+    #expect(PTPPropertyCode.liveMonitorPollOrder.contains(.isoControlSensitivity))
+    let effectiveIdx = PTPPropertyCode.liveMonitorPollOrder.firstIndex(of: .isoControlSensitivity)
+    let dualBaseIdx = PTPPropertyCode.liveMonitorPollOrder.firstIndex(of: .movieISOSensitivity)
+    #expect(effectiveIdx != nil && dualBaseIdx != nil)
+    #expect(effectiveIdx! < dualBaseIdx!)
 }
 
 @Test func devicePropDescEnumParserReadsTrailingEnumValues() {

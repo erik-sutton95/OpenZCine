@@ -962,7 +962,7 @@ internal fun FloatingScopePanel(
                     onDragStart = {
                         isDragging = true
                         if (hapticsEnabled) {
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                         }
                     },
                     onDragEnd = {
@@ -988,7 +988,7 @@ internal fun FloatingScopePanel(
                     if (cell != hapticCell) {
                         hapticCell = cell
                         if (hapticsEnabled) {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                         }
                     }
                     frame = snapped
@@ -1023,7 +1023,7 @@ internal fun FloatingScopePanel(
                             startScale = liveScale
                             accumulated = 0f
                             if (hapticsEnabled) {
-                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                             }
                         },
                         onDragEnd = {

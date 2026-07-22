@@ -88,8 +88,14 @@ public enum PTPPropertyCode: UInt32, Sendable {
 
     // Exposure.
     case isoControlSensitivity = 0xD0B5
+    /// Movie ISO auto/manual control (libgphoto2 `PTP_DPC_NIKON_MovISOAutoControl`).
+    /// UINT8 On/Off — independent of exposure-program Auto (0x500E). MAID: MovieISOControl bool.
+    case movieISOAutoControl = 0xD0AD
+    /// Movie exposure index / video ISO write (libgphoto2 `PTP_DPC_NIKON_MovieISO` / design docs).
+    /// UINT32. Rejected on R3D NE — dual-base uses `movieISOSensitivity` instead.
     case movieExposureIndex = 0xD1AA
     case movieBaseISO = 0x0001_D09D  // [ZR-only · verify-on-HW]
+    /// Dual-base working video ISO (ZR). Range follows Low/High base circuit.
     case movieISOSensitivity = 0x0001_D09E  // [ZR-only · verify-on-HW]
     case movieShutterMode = 0x0001_D074  // UINT8: 1 speed, 2 angle [ZR-only · verify-on-HW]
     case movieTVLockSetting = 0x0001_D00F  // movie shutter speed/angle lock
