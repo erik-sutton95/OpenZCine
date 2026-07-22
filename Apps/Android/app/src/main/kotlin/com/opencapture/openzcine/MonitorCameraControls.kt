@@ -793,14 +793,18 @@ internal fun isoPickerPresentation(
             ?.takeIf { it != "—" }
             ?.removePrefix("A")
             ?.takeIf { !it.equals("Auto", ignoreCase = true) }
-    val canWrite = isoTile?.request != null || IsoPickerPolicy.showsAutoISOControl(codec)
-    if (!canWrite && isoTile?.unavailableReason == null && live == null &&
-        !IsoPickerPolicy.showsAutoISOControl(codec)
+    val dual = IsoPickerPolicy.showsDualBaseCircuits(codec)
+    val autoControl = IsoPickerPolicy.showsAutoISOControl(codec)
+    // Empty / non-writable ISO tile must not invent a unified drum. Require a live
+    // value, a camera-backed request, or a known Auto/dual-base codec layout.
+    if (
+        live == null &&
+            isoTile?.request == null &&
+            !autoControl &&
+            !dual
     ) {
         return null
     }
-    val dual = IsoPickerPolicy.showsDualBaseCircuits(codec)
-    val autoControl = IsoPickerPolicy.showsAutoISOControl(codec)
     val title = strings.resolve(R.string.camera_label_iso)
     val subtitle = IsoPickerPolicy.pickerSubtitle(codec, exposureMode)
     val ladder = IsoPickerPolicy.unifiedOptions
