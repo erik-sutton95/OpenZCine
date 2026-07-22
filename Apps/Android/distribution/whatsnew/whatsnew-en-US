@@ -1,5 +1,5 @@
-- Shared diagnostics now record closed connection phases and failure kinds (USB, Wi‑Fi join, PTP).
+- Camera Wi‑Fi credential scan no longer crashes when on-device text recognition fails to start.
+- Shared diagnostics record closed connection phases and failure kinds (USB, Wi‑Fi join, PTP).
 - First-run and failed-connect screens offer Share diagnostics for support.
 - Fix immediate crash when connecting a camera over USB-C on release builds.
-- Playback and live desqueeze scale the picture (1.6× and custom fine steps).
-- Auto ISO On/Off for non-R3D formats; live working ISO while Auto is on; manual ISO in M mode.
+- Playback and live desqueeze; Auto ISO On/Off for non-R3D formats.

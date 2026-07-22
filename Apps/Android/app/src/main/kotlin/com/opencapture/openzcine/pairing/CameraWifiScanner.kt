@@ -455,6 +455,20 @@ private fun CameraWifiScannerFailurePanel(
     }
 }
 
+/**
+ * Opens the bundled Latin text recognizer, or null when ML Kit cannot initialize
+ * (missing model, broken native load). Callers must treat null as
+ * [CameraWifiScannerFailure.RECOGNIZER_UNAVAILABLE] — never crash the scanner UI.
+ */
+internal fun openCameraWifiTextRecognizer(): TextRecognizer? =
+    try {
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    } catch (_: Throwable) {
+        // ML Kit has been observed to throw NullPointerException inside getClient
+        // when the on-device stack is unavailable; also catch Error (e.g. UnsatisfiedLink).
+        null
+    }
+
 /** Binds a temporary rear-camera preview and releases it when the scanner leaves composition. */
 @Composable
 private fun CameraWifiCameraPreview(
@@ -466,7 +480,21 @@ private fun CameraWifiCameraPreview(
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
-    val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+    val recognizer = remember { openCameraWifiTextRecognizer() }
+    val currentFailure by rememberUpdatedState(onFailure)
+
+    // Surface a soft failure once if the recognizer never opens — do not throw
+    // during composition (Play Vitals: NPE in TextRecognition.getClient).
+    LaunchedEffect(recognizer) {
+        if (recognizer == null) {
+            currentFailure(CameraWifiScannerFailure.RECOGNIZER_UNAVAILABLE)
+        }
+    }
+    if (recognizer == null) {
+        // Failure panel is owned by the overlay state machine via [onFailure].
+        return
+    }
+
     val previewView =
         remember(context) {
             PreviewView(context).apply {
@@ -476,7 +504,6 @@ private fun CameraWifiCameraPreview(
         }
     val viewfinderDescription = stringResource(R.string.wifi_scanner_viewfinder_description)
     val currentTranscript by rememberUpdatedState(onTranscript)
-    val currentFailure by rememberUpdatedState(onFailure)
 
     DisposableEffect(lifecycleOwner, previewView, recognizer, analysisExecutor) {
         var disposed = false

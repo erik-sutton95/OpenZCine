@@ -74,4 +74,12 @@ class CameraWifiScannerControllerTest {
         assertFalse(shouldOpenCameraPermissionSettings(denialCount = 2, canRequestAgain = true))
         assertTrue(shouldOpenCameraPermissionSettings(denialCount = 2, canRequestAgain = false))
     }
+
+    @Test
+    fun `opening the text recognizer never throws into the scanner UI`() {
+        // On JVM unit tests ML Kit may return a client or fail soft (null). Either is fine —
+        // the production scanner must not crash when getClient throws NullPointerException.
+        val client = openCameraWifiTextRecognizer()
+        client?.close()
+    }
 }
