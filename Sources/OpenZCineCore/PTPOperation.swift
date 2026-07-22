@@ -54,6 +54,8 @@ public enum PTPOperationCode: UInt16, Sendable {
     // Properties. 2-byte `0xDxxx` props use the standard PIMA 15740 ops (0x1015/0x1016); the `Ex`
     // ops serve the 4-byte `0x0001_Dxxx` extended props. Ex-writing a 2-byte recording-format
     // property makes the ZR close the connection — those must go through 0x1016.
+    /// Early Z bodies vendor property discovery (2-byte codes). Prefer `getVendorCodes` when present.
+    case getVendorPropCodes = 0x90CA
     case getVendorCodes = 0x9439
     case getDevicePropDescEx = 0x943A
     case getDevicePropValueEx = 0x943B
@@ -176,6 +178,8 @@ public enum PTPPropertyCode: UInt32, Sendable {
     // `LiveViewSelector` reports photo mode; movie-path props stay preferred in video.
     /// Photo vs video live-view selector (`PTP_DPC_NIKON_LiveViewSelector`). UINT8: 0 photo, 1 video.
     case liveViewSelector = 0xD1A6
+    /// Early Z bodies application-mode property (UINT8). Prefer op `changeApplicationMode` when present.
+    case applicationMode = 0xD1F0
     case imageSize = 0x5003
     case compressionSetting = 0x5004
     case whiteBalance = 0x5005

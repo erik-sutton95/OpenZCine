@@ -80,9 +80,16 @@ extension PTPPropertyCode {
         .warningStatus,
     ]
 
-    /// Chooses the appropriate monitor polling set for the current camera state.
-    public static func monitorPollOrder(isRecording: Bool) -> [PTPPropertyCode] {
-        isRecording ? recordingMonitorPollOrder : liveMonitorPollOrder
+    /// Chooses the monitor polling set for the current camera state (movie vs photo chrome).
+    public static func monitorPollOrder(
+        isRecording: Bool,
+        captureSelector: CameraCaptureSelector? = nil
+    ) -> [PTPPropertyCode] {
+        if isRecording { return recordingMonitorPollOrder }
+        if StillCapturePolicy.prefersPhotographyChrome(selector: captureSelector) {
+            return StillCapturePolicy.photoMonitorPollOrder
+        }
+        return liveMonitorPollOrder
     }
 }
 

@@ -327,6 +327,14 @@ internal fun MonitorScreen(
         }
     val monitorAccessibilityState = monitorCameraStatusAccessibility(cameraFeedStatus)
     val cameraProperties by session.cameraProperties.collectAsState()
+    var stillCapturing by remember { mutableStateOf(false) }
+    LaunchedEffect(stillCapturing) {
+        if (stillCapturing) {
+            // First iteration: optimistic shutter pulse until still-release is session-wired.
+            kotlinx.coroutines.delay(400)
+            stillCapturing = false
+        }
+    }
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -1835,27 +1843,54 @@ internal fun MonitorScreen(
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     contentAlignment = Alignment.CenterEnd,
                                 ) {
-                                    MonitorCaptureStrip(
-                                        settings = captureSettings,
-                                        activePicker = activeMonitorPickerKind,
-                                        controlsEnabled = commandControlsEnabled,
-                                        pendingControl = pendingCommandControl,
-                                        onOpenPicker = { kind ->
-                                            activeCommandControl = null
-                                            activeMonitorPickerKind =
-                                                nextMonitorPicker(
-                                                    current = activeMonitorPickerKind,
-                                                    requested = kind,
-                                                    controlsEnabled =
-                                                        commandControlsEnabled &&
-                                                            pendingCommandControl == null,
-                                                )
-                                            commandControlFeedback = null
-                                        },
-                                        onShutterLongPress = shutterLongPressToggle,
-                                        onBarBoundsInRoot = { measuredCaptureBar = it },
-                                        maxContentWidth = strip.width.dp,
-                                    )
+                                    if (prefersPhotographyChrome(cameraProperties)) {
+                                        Column(
+                                            Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            PhotographyModeBadge()
+                                            PhotographyCaptureStrip(
+                                                properties = cameraProperties,
+                                                isCapturing = stillCapturing,
+                                                onShutter = { stillCapturing = true },
+                                                onSelectDrive = {},
+                                                onSelectMode = {},
+                                                onSelectIso = {},
+                                                onSelectShutter = {},
+                                                onSelectIris = {},
+                                                onInstantPlayback = onOpenMedia,
+                                            )
+                                            PhotographySecondaryStrip(
+                                                properties = cameraProperties,
+                                                onSelectMetering = {},
+                                                onSelectFlash = {},
+                                                onSelectQuality = {},
+                                                onSelectFocus = {},
+                                            )
+                                        }
+                                    } else {
+                                        MonitorCaptureStrip(
+                                            settings = captureSettings,
+                                            activePicker = activeMonitorPickerKind,
+                                            controlsEnabled = commandControlsEnabled,
+                                            pendingControl = pendingCommandControl,
+                                            onOpenPicker = { kind ->
+                                                activeCommandControl = null
+                                                activeMonitorPickerKind =
+                                                    nextMonitorPicker(
+                                                        current = activeMonitorPickerKind,
+                                                        requested = kind,
+                                                        controlsEnabled =
+                                                            commandControlsEnabled &&
+                                                                pendingCommandControl == null,
+                                                    )
+                                                commandControlFeedback = null
+                                            },
+                                            onShutterLongPress = shutterLongPressToggle,
+                                            onBarBoundsInRoot = { measuredCaptureBar = it },
+                                            maxContentWidth = strip.width.dp,
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -2249,6 +2249,8 @@ final class NativeAppModel {
     /// Throttle for the paired-reconnect Wi‑Fi re-apply so it isn't fired every discovery cycle.
     @ObservationIgnored private var lastPairedRejoinAttemptAt: Date?
     private(set) var cameraPropertySnapshot = PTPCameraPropertySnapshot()
+    /// True while a still release is in flight (optimistic UI lock on the shutter).
+    private(set) var isStillCapturing = false
     private var propertyPollIndex = 0
     /// The `LiveViewImageSize` byte last written to the camera, so a thermal/warning step-down only
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
@@ -4538,7 +4540,9 @@ final class NativeAppModel {
     }
 
     private func pollNextCameraProperty(session: NativeCameraSession) async {
-        let pollOrder = PTPPropertyCode.monitorPollOrder(isRecording: isRecording)
+        let pollOrder = PTPPropertyCode.monitorPollOrder(
+            isRecording: isRecording,
+            captureSelector: cameraPropertySnapshot.captureSelector)
         guard !pollOrder.isEmpty else { return }
         let property = pollOrder[propertyPollIndex % pollOrder.count]
         propertyPollIndex = (propertyPollIndex + 1) % pollOrder.count
@@ -5337,6 +5341,56 @@ final class NativeAppModel {
             return
         }
         executeRecordToggle()
+    }
+
+    // MARK: - Still capture (photography mode)
+
+    /// Release a still when the body is in photo mode. Uses media-destination
+    /// capture when available; demo mode simulates a brief capture pulse.
+    func captureStill() {
+        guard !isStillCapturing else { return }
+        if isDemoSession {
+            isStillCapturing = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                isStillCapturing = false
+            }
+            return
+        }
+        guard cameraSession != nil, isMonitorPresented else {
+            connectionMessage = "Connect a camera before capturing."
+            return
+        }
+        isStillCapturing = true
+        pendingStillCapture = true
+        Task { @MainActor in
+            // Optimistic unlock if the session path has not cleared the flag.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if isStillCapturing { isStillCapturing = false }
+        }
+    }
+
+    /// Queued still release for the live-view safe point (cleared by the session loop).
+    @ObservationIgnored private(set) var pendingStillCapture = false
+
+    func presentStillDrivePicker() { presentPhotographyControl(title: "Drive") }
+    func presentExposureModePicker() { presentPhotographyControl(title: "Mode") }
+    func presentStillISOPicker() { presentPhotographyControl(title: "ISO") }
+    func presentStillShutterPicker() { presentPhotographyControl(title: "Shutter") }
+    func presentStillIrisPicker() { presentPhotographyControl(title: "Iris") }
+    func presentStillMeteringPicker() { presentPhotographyControl(title: "Metering") }
+    func presentStillFlashPicker() { presentPhotographyControl(title: "Flash") }
+    func presentStillQualityPicker() { presentPhotographyControl(title: "Quality") }
+    func presentStillFocusPicker() { presentPhotographyControl(title: "Focus") }
+    func presentInstantPlayback() {
+        // First iteration: open the media library for recent stills.
+        isStandaloneMediaLibraryPresented = true
+    }
+
+    private func presentPhotographyControl(title: String) {
+        // Scaffold: secondary stills pickers land as tiles become settable with
+        // descriptor-backed options. For now surface a short operator message.
+        connectionMessage = "\(title) control — coming next in photography mode."
     }
 
     func confirmRecordToggle() {

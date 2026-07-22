@@ -398,6 +398,23 @@ public data class CameraPropertySnapshot(
     val electronicVr: String? = null,
     /** Camera framing-grid label. */
     val cameraGrid: String? = null,
+    /**
+     * Photo vs video live-view mode (`LiveViewSelector`). `"photo"` or `"video"`.
+     * When `"photo"`, the shell presents photography chrome instead of the cinema strip.
+     */
+    val captureSelector: String? = null,
+    /** Still release/drive mode label (`StillCaptureMode`), such as `Single` or `C30`. */
+    val stillCaptureMode: String? = null,
+    /** Still image size label. */
+    val imageSize: String? = null,
+    /** Still compression / quality label. */
+    val compression: String? = null,
+    /** Exposure metering label. */
+    val meteringMode: String? = null,
+    /** Flash mode label. */
+    val flashMode: String? = null,
+    /** Exposure-compensation label. */
+    val exposureBias: String? = null,
     /** Current descriptor-dependent camera-control capabilities. */
     val controlCapabilities: CameraControlCapabilities = CameraControlCapabilities(),
 )

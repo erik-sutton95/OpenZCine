@@ -109,6 +109,13 @@ internal object CameraPropertySnapshotWire {
             vibrationReduction = value.optionalString("vibrationReduction"),
             electronicVr = value.optionalString("electronicVr"),
             cameraGrid = value.optionalString("cameraGrid"),
+            captureSelector = value.optionalString("captureSelector"),
+            stillCaptureMode = value.optionalString("stillCaptureMode"),
+            imageSize = value.optionalString("imageSize"),
+            compression = value.optionalString("compression"),
+            meteringMode = value.optionalString("meteringMode"),
+            flashMode = value.optionalString("flashMode"),
+            exposureBias = value.optionalString("exposureBias"),
             controlCapabilities =
                 CameraControlCapabilities(
                     isoValues = value.options("options.iso"),

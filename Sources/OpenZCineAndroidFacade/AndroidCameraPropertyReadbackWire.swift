@@ -248,6 +248,13 @@ public enum AndroidCameraPropertyReadbackWire {
         append("vibrationReduction", value: properties.vibrationReduction, to: &fields)
         append("electronicVr", value: properties.electronicVR, to: &fields)
         append("cameraGrid", value: properties.gridDisplay, to: &fields)
+        append("captureSelector", value: properties.captureSelector?.rawValue, to: &fields)
+        append("stillCaptureMode", value: properties.stillCaptureMode, to: &fields)
+        append("imageSize", value: properties.imageSize, to: &fields)
+        append("compression", value: properties.compression, to: &fields)
+        append("meteringMode", value: properties.meteringMode, to: &fields)
+        append("flashMode", value: properties.flashMode, to: &fields)
+        append("exposureBias", value: properties.exposureBias, to: &fields)
         let controls = readback.controls
         append("resolutionFrameRate", value: controls.resolutionFrameRate, to: &fields)
         append("codecSelection", value: controls.codec, to: &fields)

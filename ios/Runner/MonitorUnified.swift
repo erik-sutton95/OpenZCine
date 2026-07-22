@@ -265,11 +265,58 @@ struct MonitorCaptureStrip: View {
     @State private var naturalRowWidth: CGFloat = 0
 
     var body: some View {
-        if fitsWidth {
+        if StillCapturePolicy.prefersPhotographyChrome(
+            selector: model.cameraPropertySnapshot.captureSelector)
+        {
+            photographyBody
+        } else if fitsWidth {
             landscapeBody
         } else {
             portraitBody
         }
+    }
+
+    /// Photo-mode capture chrome (still release + drive/exposure tiles).
+    private var photographyBody: some View {
+        VStack(spacing: 6) {
+            HStack {
+                PhotographyModeBadge()
+                Spacer(minLength: 0)
+            }
+            PhotographyCaptureStrip(
+                properties: model.cameraPropertySnapshot,
+                isCapturing: model.isStillCapturing,
+                onShutter: { model.captureStill() },
+                onSelectDrive: { model.presentStillDrivePicker() },
+                onSelectMode: { model.presentExposureModePicker() },
+                onSelectISO: { model.presentStillISOPicker() },
+                onSelectShutter: { model.presentStillShutterPicker() },
+                onSelectIris: { model.presentStillIrisPicker() },
+                onSelectMetering: { model.presentStillMeteringPicker() },
+                onSelectFlash: { model.presentStillFlashPicker() },
+                onSelectQuality: { model.presentStillQualityPicker() },
+                onInstantPlayback: { model.presentInstantPlayback() }
+            )
+            PhotographySecondaryStrip(
+                properties: model.cameraPropertySnapshot,
+                onSelectMetering: { model.presentStillMeteringPicker() },
+                onSelectFlash: { model.presentStillFlashPicker() },
+                onSelectQuality: { model.presentStillQualityPicker() },
+                onSelectFocus: { model.presentStillFocusPicker() }
+            )
+        }
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { model.captureBarFrame = proxy.frame(in: .global) }
+                    .onChange(of: proxy.frame(in: .global)) { _, frame in
+                        model.captureBarFrame = frame
+                    }
+                    .onDisappear { model.captureBarFrame = .zero }
+            }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {}
     }
 
     // MARK: - fitsWidth: true (former `BottomCaptureSettingsModule`)

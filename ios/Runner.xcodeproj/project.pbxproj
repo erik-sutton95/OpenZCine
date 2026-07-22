@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F2 /* PhotographyChrome.swift */; };
 		079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */; };
 		0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */; };
 		0B1C2D3E4F5061728394A5B6 /* MediaDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */; };
@@ -269,6 +270,7 @@
 		C0DE000000000000000000B3 /* MonitorPortraitModules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortraitModules.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C3 /* MonitorZoneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorZoneLayout.swift; path = ../Sources/OpenZCineCore/MonitorZoneLayout.swift; sourceTree = SOURCE_ROOT; };
 		C0DE000000000000000000C5 /* MonitorUnified.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorUnified.swift; sourceTree = "<group>"; };
+		C0DE000000000000000000F2 /* PhotographyChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotographyChrome.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C7 /* DemoHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoHarness.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothShutterMonitor.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000CB /* LinkSignalBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LinkSignalBars.swift; path = ../Sources/OpenZCineCore/LinkSignalBars.swift; sourceTree = SOURCE_ROOT; };
@@ -388,6 +390,7 @@
 				C0DE000000000000000000B1 /* MonitorPortrait.swift */,
 				C0DE000000000000000000B3 /* MonitorPortraitModules.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
+				C0DE000000000000000000F2 /* PhotographyChrome.swift */,
 				C0DE0000000000000000002F /* MonitorControls.swift */,
 				C0DE00000000000000000031 /* DesignShared.swift */,
 				BRND00000000000000000001 /* Branding.swift */,
@@ -672,6 +675,7 @@
 				C0DE000000000000000000B0 /* MonitorPortrait.swift in Sources */,
 				C0DE000000000000000000B2 /* MonitorPortraitModules.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
+				C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */,
 				C0DE0000000000000000002E /* MonitorControls.swift in Sources */,
 				C0DE00000000000000000030 /* DesignShared.swift in Sources */,
 				BRND00000000000000000002 /* Branding.swift in Sources */,
