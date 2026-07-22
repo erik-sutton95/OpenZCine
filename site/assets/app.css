@@ -563,69 +563,52 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
 .statement__text .w--gold { color: var(--accent); }
 
 /* ================================================================ */
-/* VOICES - beta and community reactions in a continuous film crawl */
+/* FIELD NOTES - quiet reactions scattered through the feature tour */
 /* ================================================================ */
-.voices {
-  position: relative;
-  overflow: hidden;
-  padding: clamp(24px, 3vw, 34px) 0;
-  border-top: 1px solid var(--hairline);
-  border-bottom: 1px solid var(--hairline);
-  background: rgba(4, 4, 4, .18);
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
-  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+.field-note { padding: clamp(12px, 2.5vw, 30px) 0; }
+.field-note .container { display: flex; }
+.field-note--left .field-note__quote {
+  margin-left: clamp(0px, 4vw, 64px);
+  margin-right: auto;
 }
-.voices__track {
-  display: flex;
-  width: max-content;
-  animation: ticker-roll 72s linear infinite;
+.field-note--right .field-note__quote {
+  margin-right: clamp(0px, 6vw, 96px);
+  margin-left: auto;
 }
-.voices__group {
-  display: flex;
-  align-items: center;
-  list-style: none;
+.field-note__quote {
+  width: min(520px, 78vw);
+  padding-left: clamp(14px, 2vw, 20px);
+  border-left: 1px solid var(--hairline-2);
 }
-.voices__group li {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-  padding: 0 clamp(34px, 4.5vw, 72px);
-  color: var(--muted);
-  font: 400 clamp(16px, 1.55vw, 20px)/1.35 var(--mono);
+.field-note blockquote {
+  color: var(--faint);
+  font: 400 clamp(14px, 1.35vw, 17px)/1.6 var(--mono);
   letter-spacing: .01em;
-  white-space: nowrap;
 }
-.voices q { quotes: "\201C" "\201D"; }
-.voices cite {
+.field-note figcaption {
+  margin-top: 9px;
   color: var(--accent);
-  font: 600 11px/1 var(--mono);
-  font-style: normal;
-  letter-spacing: .14em;
+  font: 600 10px/1.4 var(--mono);
+  letter-spacing: .13em;
+  opacity: .7;
   text-transform: uppercase;
-  white-space: nowrap;
 }
-.voices cite a {
+.field-note figcaption a {
   text-decoration: underline;
   text-decoration-color: transparent;
   text-underline-offset: 4px;
-  transition: text-decoration-color .2s ease;
+  transition: opacity .2s ease, text-decoration-color .2s ease;
 }
-.voices cite a:hover,
-.voices cite a:focus-visible { text-decoration-color: currentColor; }
-.voices:hover .voices__track,
-.voices:focus-within .voices__track { animation-play-state: paused; }
+.field-note figcaption a:hover,
+.field-note figcaption a:focus-visible {
+  opacity: 1;
+  text-decoration-color: currentColor;
+}
 @media (max-width: 560px) {
-  .voices__group li { gap: 12px; padding: 0 24px; font-size: 15px; }
-  .voices cite { font-size: 10px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .voices {
-    overflow-x: auto;
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
-  .voices__track { animation: none; }
-  .voices__group[aria-hidden="true"] { display: none; }
+  .field-note { padding: 10px 0; }
+  .field-note__quote { width: 100%; }
+  .field-note--left .field-note__quote,
+  .field-note--right .field-note__quote { margin-right: 0; margin-left: 0; }
 }
 
 /* ================================================================ */
