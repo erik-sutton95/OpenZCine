@@ -612,6 +612,70 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
 }
 
 /* ================================================================ */
+/* IPAD SHOWCASE - the transparent 11-inch render gets open space    */
+/* instead of another card, keeping the monitor image in focus.      */
+/* ================================================================ */
+.ipad-showcase {
+  position: relative;
+  overflow: clip;
+  isolation: isolate;
+  padding-top: clamp(64px, 9vw, 116px);
+  padding-bottom: clamp(70px, 10vw, 128px);
+}
+.ipad-showcase::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  bottom: clamp(20px, 3vw, 48px);
+  width: min(1060px, 94vw);
+  height: 58%;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse at center,
+    oklch(82% 0.155 83 / .11), transparent 68%);
+  pointer-events: none;
+}
+.ipad-showcase__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.ipad-showcase__copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.ipad-showcase__copy h2 {
+  max-width: 15ch;
+  margin: 4px 0 16px;
+  text-wrap: balance;
+}
+.ipad-showcase__copy .lead {
+  max-width: 50ch;
+}
+.ipad-showcase__visual {
+  width: min(1180px, 112vw);
+  margin-top: clamp(24px, 4vw, 50px);
+  flex: 0 0 auto;
+}
+.ipad-showcase__visual img {
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 40px 72px rgba(0,0,0,.55));
+}
+@media (max-width: 560px) {
+  .ipad-showcase {
+    padding-top: 54px;
+    padding-bottom: 58px;
+  }
+  .ipad-showcase__visual {
+    width: 122vw;
+    margin-top: 18px;
+  }
+}
+
+/* ================================================================ */
 /* FEATURE ROWS - copy + real device render, scroll-revealed         */
 /* ================================================================ */
 .feat-row { align-items: center; }
