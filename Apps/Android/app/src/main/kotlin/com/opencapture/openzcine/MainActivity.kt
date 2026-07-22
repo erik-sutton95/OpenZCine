@@ -7,6 +7,7 @@ import android.net.nsd.NsdManager
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.SystemBarStyle
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -451,6 +452,16 @@ class MainActivity : ComponentActivity() {
                                             startupSurface = StartupSurface.PAIRING
                                         }
                                     },
+                                    onShareDiagnostics = {
+                                        if (!systemSettingsActions.shareDiagnostics()) {
+                                            Toast.makeText(
+                                                    this@MainActivity,
+                                                    getString(R.string.system_action_unavailable),
+                                                    Toast.LENGTH_SHORT,
+                                                )
+                                                .show()
+                                        }
+                                    },
                                 )
                             StartupSurface.PAIRING ->
                                 PairingExperience(
@@ -465,6 +476,16 @@ class MainActivity : ComponentActivity() {
                                         } else {
                                             { startupSurface = StartupSurface.SAVED_CAMERAS }
                                         },
+                                    onShareDiagnostics = {
+                                        if (!systemSettingsActions.shareDiagnostics()) {
+                                            Toast.makeText(
+                                                    this@MainActivity,
+                                                    getString(R.string.system_action_unavailable),
+                                                    Toast.LENGTH_SHORT,
+                                                )
+                                                .show()
+                                        }
+                                    },
                                 )
                         }
                         if (standaloneSettingsPresented) {

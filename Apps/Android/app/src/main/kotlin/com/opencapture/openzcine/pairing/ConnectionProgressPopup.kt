@@ -84,6 +84,7 @@ public fun ConnectionProgressPopup(
     phase: ConnectionPopupPhase,
     onConnect: () -> Unit,
     onDismiss: () -> Unit,
+    onShareDiagnostics: (() -> Unit)? = null,
 ) {
     val failed = phase is ConnectionPopupPhase.Failed
     Box(
@@ -158,6 +159,12 @@ public fun ConnectionProgressPopup(
                         label = stringResource(R.string.conn_failed_title),
                         badge = { PopupBadge(PopupColors.failure, "!") },
                     )
+                    onShareDiagnostics?.let { share ->
+                        PopupFilledButton(
+                            stringResource(R.string.conn_share_diagnostics),
+                            share,
+                        )
+                    }
                     PopupCancelButton(stringResource(R.string.action_close), onDismiss)
                 }
                 else -> {

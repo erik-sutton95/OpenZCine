@@ -10,6 +10,10 @@ struct ConnectionProgressSheet: View {
     private let cardCornerRadius: CGFloat = 24
     private let cardMaxWidth: CGFloat = 360
 
+    @State private var isPreparingDiagnostics = false
+    @State private var diagnosticsShareItem: DiagnosticsShareItem?
+    @State private var diagnosticsErrorMessage: String?
+
     var body: some View {
         ZStack {
             backdrop
@@ -22,6 +26,20 @@ struct ConnectionProgressSheet: View {
         }
         .interactiveDismissDisabled(phase != .failed)
         .presentationBackground(.clear)
+        .sheet(item: $diagnosticsShareItem) { item in
+            DiagnosticsShareSheet(url: item.url)
+        }
+        .alert(
+            "Couldn’t Share Diagnostics",
+            isPresented: Binding(
+                get: { diagnosticsErrorMessage != nil },
+                set: { if !$0 { diagnosticsErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(diagnosticsErrorMessage ?? "Please try again.")
+        }
     }
 
     private var phase: CameraConnectionPhase {
@@ -130,6 +148,17 @@ struct ConnectionProgressSheet: View {
                     .foregroundStyle(.primary)
             }
             .font(.body)
+            Button {
+                prepareDiagnosticsReport()
+            } label: {
+                Text(isPreparingDiagnostics ? "Preparing…" : "Share diagnostics")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(isPreparingDiagnostics)
+            .accessibilityLabel("Share diagnostics")
             cancelButton
         default:
             HStack(spacing: 8) {
@@ -218,5 +247,19 @@ struct ConnectionProgressSheet: View {
             phase == .failed
                 ? "Dismisses this connection attempt"
                 : "Cancels connecting to this camera")
+    }
+
+    private func prepareDiagnosticsReport() {
+        guard !isPreparingDiagnostics else { return }
+        isPreparingDiagnostics = true
+        Task {
+            defer { isPreparingDiagnostics = false }
+            do {
+                diagnosticsShareItem = DiagnosticsShareItem(
+                    url: try await AppDiagnostics.shared.makeReport())
+            } catch {
+                diagnosticsErrorMessage = error.localizedDescription
+            }
+        }
     }
 }

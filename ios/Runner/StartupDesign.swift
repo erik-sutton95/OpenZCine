@@ -1436,6 +1436,9 @@ struct StartupFirstPairWizardView: View {
     // Owned here (not inside the step) so the shell's Continue can gate on it — the operator must
     // grant the required permissions before leaving the permissions step.
     @State private var permissions = StartupPermissionsCoordinator()
+    @State private var isPreparingDiagnostics = false
+    @State private var diagnosticsShareItem: DiagnosticsShareItem?
+    @State private var diagnosticsErrorMessage: String?
 
     private var style: WizardCompactStyle {
         WizardCompactStyle.make(profile: contentLayout.profile)
@@ -1483,6 +1486,20 @@ struct StartupFirstPairWizardView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(item: $diagnosticsShareItem) { item in
+            DiagnosticsShareSheet(url: item.url)
+        }
+        .alert(
+            "Couldn’t Share Diagnostics",
+            isPresented: Binding(
+                get: { diagnosticsErrorMessage != nil },
+                set: { if !$0 { diagnosticsErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(diagnosticsErrorMessage ?? "Please try again.")
+        }
     }
 
     // MARK: - Left column: goal + progress
@@ -1527,6 +1544,9 @@ struct StartupFirstPairWizardView: View {
                 yourCamerasButton
                     .padding(.top, 12)
             }
+
+            shareDiagnosticsButton
+                .padding(.top, 12)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1551,6 +1571,36 @@ struct StartupFirstPairWizardView: View {
         }
         .buttonStyle(StartupWizardOutlineButtonStyle())
         .fixedSize()
+    }
+
+    /// Local diagnostics handoff for operators who cannot complete any connect path.
+    private var shareDiagnosticsButton: some View {
+        Button {
+            prepareDiagnosticsReport()
+        } label: {
+            Text(isPreparingDiagnostics ? "Preparing…" : "Share diagnostics")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(StartupColors.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(isPreparingDiagnostics)
+        .accessibilityLabel("Share diagnostics")
+        .accessibilityHint("Creates a local report you can review and send for support")
+    }
+
+    private func prepareDiagnosticsReport() {
+        guard !isPreparingDiagnostics else { return }
+        isPreparingDiagnostics = true
+        Task {
+            defer { isPreparingDiagnostics = false }
+            do {
+                diagnosticsShareItem = DiagnosticsShareItem(
+                    url: try await AppDiagnostics.shared.makeReport())
+            } catch {
+                diagnosticsErrorMessage = error.localizedDescription
+            }
+        }
     }
 
     /// Compact intro for the stacked (portrait) wizard — keeps the walkthrough framing and the
@@ -1586,6 +1636,8 @@ struct StartupFirstPairWizardView: View {
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
+            shareDiagnosticsButton
+                .padding(.top, 8)
         }
     }
 
