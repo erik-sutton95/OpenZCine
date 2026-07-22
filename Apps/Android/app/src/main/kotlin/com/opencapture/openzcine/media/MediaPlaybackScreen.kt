@@ -1004,10 +1004,11 @@ private fun ProgressivePlayer(
     }
 
     val cacheFailed = entry.state == MediaCacheState.FAILED
+    // Apply de-squeeze whenever DESQ is on — do not require other framing tools.
     val horizontalPresentationScale =
-        if (framingAssistsVisible) playbackFramingConfiguration.horizontalPresentationScale else 1f
+        playbackFramingConfiguration.horizontalPresentationScale
     val verticalPresentationScale =
-        if (framingAssistsVisible) playbackFramingConfiguration.verticalPresentationScale else 1f
+        playbackFramingConfiguration.verticalPresentationScale
     val density = LocalDensity.current.density
     val viewportWidthDp = viewport.width / density
     val viewportHeightDp = viewport.height / density

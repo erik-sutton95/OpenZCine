@@ -210,6 +210,7 @@ import Testing
     var configuration = AssistConfiguration.defaults
     configuration.grid = AssistConfiguration.Grid(thirds: true, phi: true, diagonal: false)
     configuration.desqueeze = AssistConfiguration.Desqueeze(
+        // factor is source of truth; ratio chip follows when it matches a preset
         enabled: true,
         ratio: .x165,
         orientation: .vertical

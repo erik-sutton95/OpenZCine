@@ -1,13 +1,11 @@
 What's changed
 
-- Live view keeps updating while you record (from the app or the camera body) and after you stop — the feed should not freeze for the whole take.
-- Downloading RED IPP2 look tables is more reliable: the archive imports cleanly, slight float rounding from RED no longer rejects every LUT, and Close leaves the download screen immediately.
-- After a download that left the camera network for internet, the monitor shows clear reconnect progress instead of a bare “No camera” while the app searches and rejoins.
-- Joining the camera’s Wi‑Fi network is faster and more reliable after pairing Confirm, including when the system network picker needs a short search.
+- Playback de-squeeze now scales the video itself (not only guides), including a 1.6× chip and a custom 1.0–2.0× control in 0.1 steps on live and playback.
+- On non-R3D NE codecs (N-RAW, ProRes, H.264/H.265), ISO no longer stays locked under Auto: use Auto On / Auto Off under the ISO picker, or pick an ISO value to leave Auto and set manual ISO.
+- R3D NE still uses Low / High base ISO circuits; recording lock for R3D NE is unchanged.
 
 Please test
 
-- Start and stop recording from the app and from the camera body. Confirm live view keeps moving through the take and recovers cleanly when you stop.
-- From the LUT picker, run RED download: accept terms, download, confirm LUTs appear under RED, then Close and reconnect to the camera if you hopped off its Wi‑Fi.
-- Pair or reconnect over the camera’s Wi‑Fi after Confirm; the app should reach live view without hanging on Connecting.
-- Drag analysis scopes in landscape and confirm they move freely except at the side control rails.
+- In media playback, enable Desqueeze, try 1.6× and the custom slider, and confirm the picture (not only overlays) changes. Repeat on live view.
+- On ProRes or H.265 with Auto exposure, open ISO: confirm Auto On/Off tabs, that choosing an ISO value exits Auto, and that ISO can be changed.
+- On R3D NE, confirm Low/High base tabs still work and ISO remains locked only while recording.

@@ -1255,8 +1255,26 @@ private fun DesqueezeOptions(actions: AssistOptionsActions, settings: OperatorSe
     SegmentedChoice(
         LocalDesqueezeRatio.entries.toList(),
         LocalDesqueezeRatio::label,
-        selected = { settings.desqueezeRatio == it },
+        selected = {
+            LocalDesqueezeRatio.matching(settings.desqueezeFactor) == it
+        },
     ) { settings.desqueezeRatio = it }
+    // Custom 1.0…2.0 factor (0.1 steps) — same range as iOS playback/live desqueeze.
+    AssistInlineRow(title = "Custom") {
+        GlassPillSlider(
+            value = ((settings.desqueezeFactor - 1f) * 10f).toInt().coerceIn(0, 10),
+            range = 0..10,
+            onChange = { step -> settings.desqueezeFactor = 1f + (step / 10f) },
+            modifier = Modifier.width(150.dp),
+        )
+        Text(
+            String.format("%.1f×", settings.desqueezeFactor),
+            style = chromeStyle(11.5f, FontWeight.Medium, mono = true),
+            color = LiveDesign.text,
+            modifier = Modifier.widthIn(min = 40.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
+    }
     SegmentedChoice(
         LocalDesqueezeOrientation.entries.toList(),
         LocalDesqueezeOrientation::label,

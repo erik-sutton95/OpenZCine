@@ -13,7 +13,19 @@ import Testing
     #expect(ISOPickerPolicy.showsDualBaseCircuits(codec: "R3D NE"))
     #expect(!ISOPickerPolicy.showsDualBaseCircuits(codec: "N-RAW 12-bit NEV"))
     #expect(ISOPickerPolicy.pickerModes(codec: "R3D NE").count == 2)
-    #expect(ISOPickerPolicy.pickerModes(codec: "N-RAW").isEmpty)
+    #expect(ISOPickerPolicy.pickerModes(codec: "N-RAW").count == 2)
+    #expect(ISOPickerPolicy.pickerModes(codec: "N-RAW")[0].title == "Auto On")
+    #expect(ISOPickerPolicy.pickerModes(codec: "N-RAW")[1].title == "Auto Off")
+}
+
+@Test func isoPickerPolicyDetectsAutoISOExposureModes() {
+    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "Auto"))
+    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "A"))
+    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "P"))
+    #expect(ISOPickerPolicy.isAutoISOActive(exposureMode: "S"))
+    #expect(!ISOPickerPolicy.isAutoISOActive(exposureMode: "M"))
+    #expect(ISOPickerPolicy.autoISOModeIndex(exposureMode: "Auto") == 0)
+    #expect(ISOPickerPolicy.autoISOModeIndex(exposureMode: "M") == 1)
 }
 
 @Test func isoPickerPolicyUnifiedDrumMarksBothNativeBases() {

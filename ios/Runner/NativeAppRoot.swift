@@ -5451,18 +5451,31 @@ final class NativeAppModel {
         return mode == .speed ? 1 : 0
     }
 
-    /// Active ISO picker tab: 0 = low base, 1 = high base. Driven by `movieBaseISO`, not the
-    /// sensitivity value — overlapping ISO steps exist on both circuits. Unified-drum codecs
-    /// always report 0 (no LOW/HIGH tabs).
+    /// Active ISO picker tab: R3D NE → low/high base; other codecs → Auto On (0) / Auto Off (1).
     var isoPickerModeIndex: Int {
-        guard showsDualBaseISOPicker else { return 0 }
-        if let pending = pendingBaseISOHigh { return pending ? 1 : 0 }
-        return cameraPropertySnapshot.baseISO == "High" ? 1 : 0
+        if showsDualBaseISOPicker {
+            if let pending = pendingBaseISOHigh { return pending ? 1 : 0 }
+            return cameraPropertySnapshot.baseISO == "High" ? 1 : 0
+        }
+        if showsAutoISOPicker {
+            return ISOPickerPolicy.autoISOModeIndex(exposureMode: commandExposureMode)
+        }
+        return 0
     }
 
     /// Whether the ISO picker shows separate LOW/HIGH base circuits (R3D NE only).
     var showsDualBaseISOPicker: Bool {
         ISOPickerPolicy.showsDualBaseCircuits(codec: cameraState.codec)
+    }
+
+    /// Whether the ISO picker shows Auto On / Auto Off (non-R3D NE movie codecs).
+    var showsAutoISOPicker: Bool {
+        ISOPickerPolicy.showsAutoISOControl(codec: cameraState.codec)
+    }
+
+    /// True when the body is driving ISO (Auto/P/A/S) rather than the operator drum.
+    var isAutoISOActive: Bool {
+        ISOPickerPolicy.isAutoISOActive(exposureMode: commandExposureMode)
     }
 
     /// ISO is locked while recording in R3D NE; other codecs allow mid-roll ISO changes.
@@ -5530,6 +5543,9 @@ final class NativeAppModel {
     /// their own stored value; alternative circuits (ISO/shutter/WB) use the live value when it
     /// belongs to that mode, otherwise the mode's base.
     func pickerModeValue(_ picker: CameraPicker, mode: Int) -> String {
+        if picker == .iso, showsAutoISOPicker {
+            return cameraValue(for: picker)
+        }
         if picker == .iso, !showsDualBaseISOPicker {
             return cameraValue(for: picker)
         }
@@ -5583,6 +5599,12 @@ final class NativeAppModel {
                 default: nil
                 }
             if let control { applyAudioControl(control, value: value) }
+            return
+        }
+        if picker == .iso {
+            // Leaving Auto ISO by choosing a drum value (or Auto Off tab already switched M).
+            prepareManualISOIfNeeded()
+            applyPickerValue(value, for: picker)
             return
         }
         guard picker == .focus else {
@@ -5760,6 +5782,21 @@ final class NativeAppModel {
                 write: write
             )
         )
+    }
+
+    /// Toggles camera-managed ISO (Auto On) vs manual ISO (Auto Off → exposure mode M).
+    func switchAutoISO(enabled: Bool) {
+        guard showsAutoISOPicker, !isISORecordingLocked else { return }
+        let mode =
+            enabled
+            ? ISOPickerPolicy.autoISOOnExposureMode : ISOPickerPolicy.autoISOOffExposureMode
+        applyPickerValue(mode, for: .mode)
+    }
+
+    /// Ensures ISO writes can stick: when Auto ISO is active, leave Auto by switching to M first.
+    func prepareManualISOIfNeeded() {
+        guard showsAutoISOPicker, isAutoISOActive, !isISORecordingLocked else { return }
+        switchAutoISO(enabled: false)
     }
 
     func switchShutterMode(speedMode: Bool) {

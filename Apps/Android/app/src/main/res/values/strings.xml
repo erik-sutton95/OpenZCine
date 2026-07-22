@@ -749,9 +749,11 @@
     <string name="desqueeze_1">1x</string>
     <string name="desqueeze_133">1.33x</string>
     <string name="desqueeze_15">1.5x</string>
+    <string name="desqueeze_16">1.6x</string>
     <string name="desqueeze_165">1.65x</string>
     <string name="desqueeze_18">1.8x</string>
     <string name="desqueeze_2">2x</string>
+    <string name="desqueeze_custom">Custom %1$.1f×</string>
     <string name="orientation_horizontal">Horizontal</string>
     <string name="orientation_vertical">Vertical</string>
     <string name="level_horizon">Horizon</string>

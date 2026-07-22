@@ -112,9 +112,15 @@ internal data class MonitorPickerModePresentation(
     val detail: String? = null,
     /**
      * Optional write fired when this tab becomes active (iOS dual-base ISO
-     * switches `movieBaseISO` before the circuit's ISO drum is used).
+     * switches `movieBaseISO` before the circuit's ISO drum is used; Auto ISO
+     * switches exposure mode).
      */
     val activateRequest: CommandControlRequest? = null,
+    /**
+     * When false, activating the tab runs [activateRequest] only (Auto On).
+     * When true (default), also applies the drum [request] after activate.
+     */
+    val applyValueOnActivate: Boolean = true,
     /** Drum star markers for this tab (native base ISOs). */
     val markedValues: Set<String> = emptySet(),
 )
@@ -319,7 +325,17 @@ internal fun monitorCaptureSettings(
             shutterTile?.unavailableReason != null &&
             shutterTile.value != "—" &&
             shutterTile.unavailableReason.contains("locked", ignoreCase = true)
-    val isoPresentation = isoPickerPresentation(isoTile, codec, exposure.getOrNull(0), strings)
+    val exposureMode =
+        primary[CommandTileKind.MODE]?.value?.takeIf { it != "—" }
+            ?: exposure.getOrNull(0)?.value?.takeIf { it != "—" }
+    val isoPresentation =
+        isoPickerPresentation(
+            isoTile = isoTile,
+            codec = codec,
+            baseIsoTile = exposure.getOrNull(0),
+            exposureMode = exposureMode,
+            strings = strings,
+        )
     val shutterPresentation =
         shutterPickerPresentation(
             shutterTile = shutterTile,
@@ -748,29 +764,86 @@ internal fun shutterPickerPresentation(
 
 /**
  * Projects the ISO capture-bar picker from [IsoPickerPolicy] (iOS
- * `ISOPickerPolicy` / `PickerPanel` dual-base vs unified).
+ * `ISOPickerPolicy` / `PickerPanel`).
  *
  * - R3D NE: Low Base / High Base tabs with full ladders + base-ISO activate.
- * - Other codecs: single unified drum, no mode bar.
+ * - Other codecs: Auto On / Auto Off tabs + unified drum (exit auto by picking ISO).
  * Options always come from the policy (not a partial camera enum).
  */
 internal fun isoPickerPresentation(
     isoTile: CommandTilePresentation?,
     codec: String,
     baseIsoTile: CommandTilePresentation?,
+    exposureMode: String?,
     strings: PhoneStringResolver,
 ): MonitorPickerPresentation? {
-    val live = isoTile?.value?.takeIf { it != "—" } ?: return null
-    // Writable when the command tile still has a request; locked-while-recording
-    // still opens the drum dimmed via controlLocked / unavailableReason.
-    val canWrite = isoTile.request != null
-    if (!canWrite && isoTile.unavailableReason == null) return null
+    // Prefer live ISO; when Auto is driving ISO the body may report "—"/Auto — still open the drum.
+    val live = isoTile?.value?.takeIf { it != "—" && !it.equals("Auto", ignoreCase = true) }
+    val canWrite = isoTile?.request != null || IsoPickerPolicy.showsAutoISOControl(codec)
+    if (!canWrite && isoTile?.unavailableReason == null && live == null &&
+        !IsoPickerPolicy.showsAutoISOControl(codec)
+    ) {
+        return null
+    }
     val dual = IsoPickerPolicy.showsDualBaseCircuits(codec)
+    val autoControl = IsoPickerPolicy.showsAutoISOControl(codec)
     val title = strings.resolve(R.string.camera_label_iso)
     val subtitle = IsoPickerPolicy.pickerSubtitle(codec)
+    val options = IsoPickerPolicy.unifiedOptions
+    val current = live?.takeIf { it in options } ?: options.firstOrNull() ?: return null
+
+    if (autoControl) {
+        val modes =
+            IsoPickerPolicy.pickerModes(codec).map { mode ->
+                val activatesAuto = mode.activatesAutoISO == true
+                MonitorPickerModePresentation(
+                    label = mode.title,
+                    detail = mode.detail,
+                    request =
+                        CommandControlRequest(
+                            title = title,
+                            control = CameraControl.ISO,
+                            currentValue = current,
+                            options = mode.options,
+                        ),
+                    activateRequest =
+                        CommandControlRequest(
+                            title = strings.resolve(R.string.command_title_mode),
+                            control = CameraControl.EXPOSURE_MODE,
+                            currentValue =
+                                if (activatesAuto) {
+                                    IsoPickerPolicy.AUTO_ISO_ON_EXPOSURE_MODE
+                                } else {
+                                    IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE
+                                },
+                            options =
+                                listOf(
+                                    IsoPickerPolicy.AUTO_ISO_ON_EXPOSURE_MODE,
+                                    IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE,
+                                    "P",
+                                    "A",
+                                    "S",
+                                    "M",
+                                    "U1",
+                                    "U2",
+                                    "U3",
+                                ),
+                        ),
+                    // Auto On does not write ISO; Auto Off writes the drum after M.
+                    applyValueOnActivate = mode.activatesAutoISO != true,
+                    markedValues = IsoPickerPolicy.markedValues(codec, 0),
+                )
+            }
+        return MonitorPickerPresentation(
+            kind = MonitorPickerKind.ISO,
+            title = title,
+            subtitle = subtitle,
+            modes = modes,
+            initialModeIndex = IsoPickerPolicy.autoISOModeIndex(exposureMode),
+        )
+    }
+
     if (!dual) {
-        val options = IsoPickerPolicy.unifiedOptions
-        val current = if (live in options) live else options.first()
         return MonitorPickerPresentation(
             kind = MonitorPickerKind.ISO,
             title = title,
@@ -797,7 +870,7 @@ internal fun isoPickerPresentation(
         IsoPickerPolicy.pickerModes(codec).mapIndexed { index, mode ->
             val circuitCurrent =
                 when {
-                    live in mode.options -> live
+                    live != null && live in mode.options -> live
                     else -> mode.base
                 }
             val baseValue = if (index == 0) "Low" else "High"
@@ -1615,11 +1688,13 @@ private fun PickerPanelBody(
                                 // iOS: apply the mode's landed value when switching
                                 // circuits (WB Kelvin↔Preset, ISO bases). Skip Tint
                                 // (pad only), Focus (independent tabs), Shutter
-                                // (mode write is activateRequest only).
+                                // (mode write is activateRequest only), Auto ISO On
+                                // (exposure mode only — no ISO write while camera owns ISO).
                                 val isTint =
                                     candidate.request.control == CameraControl.WHITE_BALANCE_TINT
                                 val skipApply =
-                                    isTint ||
+                                    !candidate.applyValueOnActivate ||
+                                        isTint ||
                                         picker.kind == MonitorPickerKind.FOCUS ||
                                         picker.kind == MonitorPickerKind.SHUTTER
                                 if (!skipApply) {

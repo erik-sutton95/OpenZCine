@@ -547,22 +547,23 @@ internal fun commandDashboardPresentation(
                 run {
                     val isoValue = snapshot.iso?.takeIf { it > 0 }?.toString()
                     val cameraIso = capabilities.options(CameraControl.ISO)
-                    // Capture bar always uses IsoPickerPolicy ladders; keep the command
-                    // tile writable with the same union when the body has not yet named
-                    // a dual-base circuit (otherwise ISO padlocks with "wait for base").
+                    // Always keep the policy ladder available so Auto ISO codecs never
+                    // padlock the drum — operators exit auto by choosing a value.
                     val isoOptions =
                         cameraIso.ifEmpty {
-                            when {
-                                codec == null -> emptyList()
-                                IsoPickerPolicy.showsDualBaseCircuits(codec) ->
-                                    IsoPickerPolicy.unifiedOptions
-                                else -> IsoPickerPolicy.unifiedOptions
-                            }
+                            if (codec == null) emptyList() else IsoPickerPolicy.unifiedOptions
                         }
+                    val displayValue =
+                        isoValue
+                            ?: if (IsoPickerPolicy.isAutoISOActive(snapshot.exposureMode)) {
+                                "Auto"
+                            } else {
+                                null
+                            }
                     editable(
                         kind = CommandTileKind.ISO,
                         title = strings.resolve(R.string.command_title_iso),
-                        value = isoValue,
+                        value = displayValue,
                         control = CameraControl.ISO,
                         options = isoOptions,
                         writable = !isoLockedDuringRecording && isoOptions.isNotEmpty(),

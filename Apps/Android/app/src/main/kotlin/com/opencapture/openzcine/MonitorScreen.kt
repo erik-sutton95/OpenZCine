@@ -708,6 +708,30 @@ internal fun MonitorScreen(
     val applyCameraControl: (CommandControlRequest, String) -> Unit =
         applyCameraControl@{ request, label ->
             if (!commandControlsEnabled) return@applyCameraControl
+            // Exit Auto ISO by choosing a drum value: switch exposure to M first so the
+            // body accepts movie ISO writes (non-R3D NE codecs).
+            if (
+                request.control == CameraControl.ISO &&
+                    IsoPickerPolicy.isAutoISOActive(cameraProperties.exposureMode)
+            ) {
+                desiredControlWrites[CameraControl.EXPOSURE_MODE] =
+                    CommandControlRequest(
+                        title = "MODE",
+                        control = CameraControl.EXPOSURE_MODE,
+                        currentValue = IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE,
+                        options =
+                            listOf(
+                                "Auto",
+                                "P",
+                                "A",
+                                "S",
+                                "M",
+                                "U1",
+                                "U2",
+                                "U3",
+                            ),
+                    ) to IsoPickerPolicy.AUTO_ISO_OFF_EXPOSURE_MODE
+            }
             desiredControlWrites[request.control] = request to label
             commandControlFeedback = null
             if (activeCommandControl?.control == request.control) {

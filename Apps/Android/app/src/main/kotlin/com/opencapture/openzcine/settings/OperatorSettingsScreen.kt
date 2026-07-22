@@ -1026,6 +1026,7 @@ private fun desqueezeRatioLabel(value: LocalDesqueezeRatio): String =
             LocalDesqueezeRatio.X100 -> R.string.desqueeze_1
             LocalDesqueezeRatio.X133 -> R.string.desqueeze_133
             LocalDesqueezeRatio.X150 -> R.string.desqueeze_15
+            LocalDesqueezeRatio.X160 -> R.string.desqueeze_16
             LocalDesqueezeRatio.X165 -> R.string.desqueeze_165
             LocalDesqueezeRatio.X180 -> R.string.desqueeze_18
             LocalDesqueezeRatio.X200 -> R.string.desqueeze_2

@@ -1117,10 +1117,15 @@ struct PickerPanel: View {
                     let value = model.pickerModeValue(picker, mode: index)
                     selection = value
                     lastApplied = value
-                    // ISO's circuits are the camera's dual base — switch the base on the camera
-                    // first, before the new ISO value is applied below.
+                    // ISO dual-base: switch Low/High on the body before applying the circuit value.
                     if picker == .iso, model.showsDualBaseISOPicker {
                         model.switchBaseISO(highBase: index == 1)
+                    }
+                    // ISO auto control (non-R3D NE): Auto On / Auto Off sets exposure mode.
+                    if picker == .iso, model.showsAutoISOPicker {
+                        model.switchAutoISO(enabled: index == 0)
+                        // Auto On: no ISO write. Auto Off: apply the drum value in manual mode.
+                        if index == 0 { return }
                     }
                     if picker == .shutter {
                         model.switchShutterMode(speedMode: index == 1)
@@ -1958,11 +1963,38 @@ struct AssistPanel: View {
                     .buttonStyle(.zcTapTarget)
                     SegmentedButtons(
                         items: AssistConfiguration.Desqueeze.Ratio.allCases.map(\.rawValue),
-                        selected: model.assistConfiguration.desqueeze.ratio.rawValue
+                        selected:
+                            AssistConfiguration.Desqueeze.Ratio.matching(
+                                factor: model.assistConfiguration.desqueeze.factor
+                            )?.rawValue ?? ""
                     ) { value in
                         if let ratio = AssistConfiguration.Desqueeze.Ratio(rawValue: value) {
-                            model.assistConfiguration.desqueeze.ratio = ratio
+                            model.assistConfiguration.desqueeze.select(ratio: ratio)
                         }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Custom")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(LiveDesign.muted)
+                            Spacer()
+                            Text(
+                                String(
+                                    format: "%.1f×",
+                                    model.assistConfiguration.desqueeze.factor)
+                            )
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(LiveDesign.text)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { model.assistConfiguration.desqueeze.factor },
+                                set: { model.assistConfiguration.desqueeze.select(factor: $0) }
+                            ),
+                            in: AssistConfiguration.Desqueeze.factorRange,
+                            step: AssistConfiguration.Desqueeze.factorStep
+                        )
+                        .tint(LiveDesign.accent)
                     }
                     SegmentedButtons(
                         items: AssistConfiguration.Desqueeze.Orientation.allCases.map(\.rawValue),
