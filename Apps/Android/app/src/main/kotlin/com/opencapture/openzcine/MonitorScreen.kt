@@ -743,7 +743,7 @@ internal fun MonitorScreen(
     val shutterHapticView = LocalView.current
     val shutterLongPressToggle: () -> Unit = {
         if (operatorSettings.hapticsEnabled.value) {
-            shutterHapticView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            shutterHapticView.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
         }
         toggleShutterLockOnCamera(
             captureSettings = captureSettings,
@@ -1384,15 +1384,14 @@ internal fun MonitorScreen(
             val next = !focusPointLocked
             focusPointLocked = next
             focusLockHolding = false
-            if (operatorSettings.hapticsEnabled.value) {
-                view.performHapticFeedback(
-                    if (next) {
-                        HapticFeedbackConstants.LONG_PRESS
-                    } else {
-                        HapticFeedbackConstants.KEYBOARD_TAP
-                    },
-                )
-            }
+            view.performOperatorHaptic(
+                if (next) {
+                    HapticFeedbackConstants.LONG_PRESS
+                } else {
+                    HapticFeedbackConstants.KEYBOARD_TAP
+                },
+                enabled = operatorSettings.hapticsEnabled.value,
+            )
         }
         val handleFocusFeedAction: (FocusFeedGestureAction) -> Unit = handleFocusFeedAction@{ action ->
             when (action) {
@@ -1408,7 +1407,7 @@ internal fun MonitorScreen(
                                     CameraFocusPoint(action.coordinate.x, action.coordinate.y),
                                 )
                             if (accepted && operatorSettings.hapticsEnabled.value) {
-                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                             }
                         } catch (error: CameraFocusException) {
                             Toast.makeText(
@@ -1432,7 +1431,7 @@ internal fun MonitorScreen(
                         if (next != effectiveDisplayMode) {
                             displayMode = next
                             if (operatorSettings.hapticsEnabled.value) {
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                view.performOperatorHaptic(HapticFeedbackConstants.CLOCK_TICK)
                             }
                         }
                     }
@@ -1453,7 +1452,7 @@ internal fun MonitorScreen(
                 try {
                     session.resetFocusPoint()
                     if (operatorSettings.hapticsEnabled.value) {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                     }
                 } catch (error: CameraFocusException) {
                     Toast.makeText(
@@ -1711,7 +1710,7 @@ internal fun MonitorScreen(
                     onMoveCommandTile = moveCommandTileTo,
                     onReorderStarted = {
                         if (operatorSettings.hapticsEnabled.value) {
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                         }
                     },
                     onOpenAssistOptions = openAssistOptions,
@@ -1738,7 +1737,7 @@ internal fun MonitorScreen(
                         onMoveTile = moveCommandTileTo,
                         onReorderStarted = {
                             if (operatorSettings.hapticsEnabled.value) {
-                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                             }
                         },
                         liveFps = fpsSampler.formatted,

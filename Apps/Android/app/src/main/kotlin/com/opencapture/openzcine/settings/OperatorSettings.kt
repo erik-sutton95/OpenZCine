@@ -200,11 +200,14 @@ public enum class LocalDesqueezeRatio(
             entries.firstOrNull { it.name == value }
 
         fun matching(factor: Float): LocalDesqueezeRatio? =
-            entries.firstOrNull { kotlin.math.abs(it.factor - factor) < 0.001f }
+            entries.firstOrNull { kotlin.math.abs(it.factor - factor) < 0.005f }
+
+        /** Custom slider step (1.00…2.00 in 0.01 increments). */
+        const val FACTOR_STEP: Float = 0.01f
 
         fun snap(raw: Float): Float {
             val clamped = raw.coerceIn(1f, 2f)
-            return ((clamped / 0.1f).roundToInt() * 0.1f).coerceIn(1f, 2f)
+            return ((clamped / FACTOR_STEP).roundToInt() * FACTOR_STEP).coerceIn(1f, 2f)
         }
     }
 }
@@ -693,7 +696,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 .apply()
         }
 
-    /** Applied de-squeeze factor (1.0…2.0, 0.1 steps); source of truth for presentation scale. */
+    /** Applied de-squeeze factor (1.0…2.0, 0.01 steps); source of truth for presentation scale. */
     public var desqueezeFactor: Float
         get() = desqueezeFactorState.value
         set(new) {

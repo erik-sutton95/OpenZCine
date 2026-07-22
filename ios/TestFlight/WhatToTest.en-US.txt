@@ -1,6 +1,6 @@
 What's changed
 
-- Playback de-squeeze now scales the video itself (not only guides), including a 1.6× chip and a custom 1.0–2.0× control in 0.1 steps on live and playback.
+- Playback de-squeeze now scales the video itself (not only guides), including a 1.6× chip and a custom 1.0–2.0× control in 0.01 steps on live and playback.
 - Auto ISO (non-R3D NE: N-RAW, ProRes, H.264/H.265) now toggles movie ISO auto/manual on the camera — not exposure program Auto/M. Use Auto On / Auto Off under the ISO picker, or pick an ISO value to leave ISO Auto and set a manual ISO.
 - R3D NE still uses Low / High base ISO circuits; recording lock for R3D NE is unchanged.
 

@@ -1,6 +1,7 @@
 @file:androidx.media3.common.util.UnstableApi
 
 package com.opencapture.openzcine.media
+import com.opencapture.openzcine.performOperatorHaptic
 
 import android.net.Uri
 import android.os.Build
@@ -1122,7 +1123,7 @@ private fun ProgressivePlayer(
                                     PlaybackTimeline.clampPosition(player.currentPosition, duration)
                                 frameScrubHorizontal = 0f
                                 scrubPosition = frameScrubOrigin.toFloat()
-                                hapticView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                hapticView.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
                             },
                             onDragEnd = ::finishFrameScrub,
                             onDragCancel = ::finishFrameScrub,

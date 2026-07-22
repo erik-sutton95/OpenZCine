@@ -75,13 +75,18 @@ fun Modifier.chromeClickable(onClick: () -> Unit): Modifier =
 
 /** Disabled chrome controls keep their visual state but reject touch input. */
 @Composable
-fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier =
-    clickable(
+fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier {
+    val haptics = LocalOperatorHaptics.current
+    return clickable(
         enabled = enabled,
         interactionSource = remember { MutableInteractionSource() },
         indication = null,
-        onClick = onClick,
+        onClick = {
+            haptics.selection()
+            onClick()
+        },
     )
+}
 
 /**
  * iOS `.zcTapTarget` press feedback: while pressed the control drops to 60%
@@ -90,6 +95,7 @@ fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier =
  */
 @Composable
 fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
+    val haptics = LocalOperatorHaptics.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val alpha by
@@ -113,7 +119,10 @@ fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
             enabled = true,
             interactionSource = interaction,
             indication = null,
-            onClick = onClick,
+            onClick = {
+                haptics.selection()
+                onClick()
+            },
         )
 }
 

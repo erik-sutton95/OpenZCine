@@ -1255,7 +1255,7 @@ private fun DesqueezeOptions(settings: OperatorSettings) {
             LocalDesqueezeRatio.matching(settings.desqueezeFactor) == it
         },
     ) { settings.desqueezeRatio = it }
-    // Custom 1.0…2.0 factor (0.1 steps) — same range as iOS playback/live desqueeze.
+    // Custom 1.0…2.0 factor (0.01 steps) — same range as iOS playback/live desqueeze.
     // Full-width row (like brightness) so the pill has enough track to drag.
     AssistRowDivider()
     Row(
@@ -1265,16 +1265,21 @@ private fun DesqueezeOptions(settings: OperatorSettings) {
     ) {
         OptionLabel("Custom")
         GlassPillSlider(
-            value = ((settings.desqueezeFactor - 1f) * 10f).toInt().coerceIn(0, 10),
-            range = 0..10,
-            onChange = { step -> settings.desqueezeFactor = 1f + (step / 10f) },
+            value =
+                ((settings.desqueezeFactor - 1f) / LocalDesqueezeRatio.FACTOR_STEP)
+                    .toInt()
+                    .coerceIn(0, 100),
+            range = 0..100,
+            onChange = { step ->
+                settings.desqueezeFactor = 1f + (step * LocalDesqueezeRatio.FACTOR_STEP)
+            },
             modifier = Modifier.weight(1f),
         )
         Text(
-            String.format("%.1f×", settings.desqueezeFactor),
+            String.format("%.2f×", settings.desqueezeFactor),
             style = chromeStyle(11.5f, FontWeight.Medium, mono = true),
             color = LiveDesign.text,
-            modifier = Modifier.widthIn(min = 40.dp),
+            modifier = Modifier.widthIn(min = 48.dp),
             textAlign = androidx.compose.ui.text.style.TextAlign.End,
         )
     }

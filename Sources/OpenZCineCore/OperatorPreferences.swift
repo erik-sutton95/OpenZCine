@@ -702,10 +702,10 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
                 }
             }
 
-            /// Nearest named chip for a snapped factor, if any chip matches within 0.001.
+            /// Nearest named chip for a snapped factor, if any chip matches within half a step.
             public static func matching(factor: Double) -> Ratio? {
                 let snapped = Desqueeze.snap(factor)
-                return allCases.first { abs($0.factor - snapped) < 0.001 }
+                return allCases.first { abs($0.factor - snapped) < 0.005 }
             }
         }
 
@@ -716,8 +716,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
 
         /// Inclusive operator range for custom de-squeeze.
         public static let factorRange: ClosedRange<Double> = 1.0...2.0
-        /// Slider / step size for custom factor (0.1×).
-        public static let factorStep: Double = 0.1
+        /// Slider / step size for custom factor (0.01×).
+        public static let factorStep: Double = 0.01
 
         public init(
             enabled: Bool = false,

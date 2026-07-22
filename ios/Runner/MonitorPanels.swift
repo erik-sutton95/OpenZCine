@@ -1972,7 +1972,7 @@ struct AssistPanel: View {
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(LiveDesign.muted)
                             Spacer()
-                            Text(String(format: "%.1f×", desqueezeSliderFactor))
+                            Text(String(format: "%.2f×", desqueezeSliderFactor))
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(LiveDesign.text)
                         }
