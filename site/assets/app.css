@@ -311,11 +311,16 @@ h3 { font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -0.0
 }
 .nav__links a:hover { color: var(--ink); }
 .nav__links a:hover::after { right: 0; }
+.nav__links a,
+.nav__cta a { white-space: nowrap; }
 .nav__cta { display: flex; align-items: center; gap: 10px; }
 .nav__github { font-size: 14px; color: var(--muted); }
 .nav__github:hover { color: var(--ink); }
 .nav__cta .btn { padding: 9px 16px; font-size: 14px; }
-@media (min-width: 860px) { .nav__links { display: flex; } }
+/* The complete desktop navigation needs breathing room around its intrinsic
+  labels. Below this point, keep the compact brand + CTA treatment instead of
+  letting individual links wrap inside the fixed-height bar. */
+@media (min-width: 960px) { .nav__links { display: flex; } }
 @media (max-width: 560px) { .nav__github { display: none; } }
 
 /* ---- Footer ---- */
