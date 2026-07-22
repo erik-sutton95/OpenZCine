@@ -152,6 +152,7 @@ public fun SavedCamerasExperience(
     onReconnectRequestConsumed: () -> Unit = {},
     suppressedUsbAutoReconnectHosts: Set<String> = emptySet(),
     onUsbAutoReconnectSuppressionCleared: (String) -> Unit = {},
+    onShareDiagnostics: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val work = remember { mutableStateOf<Job?>(null) }
@@ -811,6 +812,8 @@ public fun SavedCamerasExperience(
                 phase = popup,
                 onConnect = ::confirmCameraApJoin,
                 onDismiss = ::cancelWork,
+                onShareDiagnostics =
+                    onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },
             )
         }
     }

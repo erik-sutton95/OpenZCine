@@ -54,6 +54,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -528,6 +532,8 @@ public fun PairingExperience(
     onPairingProfilePrepared: (SavedCameraRecord) -> Unit = {},
     onOpenSettings: (() -> Unit)? = null,
     onShowSavedCameras: (() -> Unit)? = null,
+    /** Explicit local report handoff when pairing cannot complete (no automatic upload). */
+    onShareDiagnostics: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -1125,6 +1131,7 @@ public fun PairingExperience(
                             flow = flow,
                             condensed = condensedIntro,
                             onShowSavedCameras = onShowSavedCameras,
+                            onShareDiagnostics = onShareDiagnostics,
                             modifier = Modifier.width(introWidth).fillMaxSize(),
                         )
                         StepCard(
@@ -1155,6 +1162,7 @@ public fun PairingExperience(
                         PortraitIntroHeader(
                             flow = flow,
                             onShowSavedCameras = onShowSavedCameras,
+                            onShareDiagnostics = onShareDiagnostics,
                         )
                         StartupWizardProgress(
                             currentStep = flow.displayStepNumber,
@@ -1206,6 +1214,8 @@ public fun PairingExperience(
                     }
                 },
                 onDismiss = ::cancelWork,
+                onShareDiagnostics =
+                    onShareDiagnostics.takeIf { popup is ConnectionPopupPhase.Failed },
             )
         }
         if (cameraWifiScannerPresented) {
@@ -1250,6 +1260,7 @@ public fun PairingExperience(
 private fun PortraitIntroHeader(
     flow: PairingFlowState,
     onShowSavedCameras: (() -> Unit)?,
+    onShareDiagnostics: (() -> Unit)?,
 ) {
     // Sizes mirror iOS's compactPortrait profile (StartupDesign.swift
     // `portraitIntroHeader`): 11pt eyebrow / 22pt title / 12pt body / 11pt helper.
@@ -1295,6 +1306,10 @@ private fun PortraitIntroHeader(
             fontSize = 11.sp,
             lineHeight = 15.sp,
         )
+        onShareDiagnostics?.let { share ->
+            Spacer(Modifier.height(8.dp))
+            PairingShareDiagnosticsLink(onClick = share)
+        }
     }
 }
 
@@ -1303,6 +1318,7 @@ private fun IntroCard(
     flow: PairingFlowState,
     condensed: Boolean = false,
     onShowSavedCameras: (() -> Unit)? = null,
+    onShareDiagnostics: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // Vertical budget is tight in the ~360dp-tall landscape band — sizes are
@@ -1361,7 +1377,44 @@ private fun IntroCard(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        onShareDiagnostics?.let { share ->
+            Spacer(Modifier.height(if (condensed) 6.dp else 8.dp))
+            PairingShareDiagnosticsLink(
+                onClick = share,
+                compact = condensed,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
+}
+
+/**
+ * Quiet support handoff on the first-run intro. Same local report as Settings →
+ * Share Diagnostics — operator reviews and chooses where to send it.
+ */
+@Composable
+private fun PairingShareDiagnosticsLink(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    val label = stringResource(R.string.pairing_share_diagnostics)
+    val description = stringResource(R.string.pairing_share_diagnostics_description)
+    Text(
+        text = label,
+        color = StartupColors.accent,
+        fontSize = if (compact) 11.sp else 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier =
+            modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 4.dp)
+                .clearAndSetSemantics {
+                    contentDescription = description
+                    role = Role.Button
+                },
+    )
 }
 
 // MARK: - Right column
