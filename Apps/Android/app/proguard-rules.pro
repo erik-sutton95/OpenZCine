@@ -10,3 +10,10 @@
 # names (`Java_com_opencapture_…` / GetMethodID). R8 must not rename or remove
 # either side of that contract from a release package.
 -keep class com.opencapture.openzcine.bridge.** { *; }
+
+# USB-C PTP byte transport is only called from Swift via GetMethodID on
+# writeBulk/readBulk/readEvent/isClosed/close. R8 cannot see those native
+# call sites and otherwise strips the methods as unused, which surfaces as
+# NoSuchMethodError inside sessionConnectUsb on release/minified builds.
+-keep class com.opencapture.openzcine.transport.UsbPtpTransport { *; }
+-keep class * implements com.opencapture.openzcine.transport.UsbPtpTransport { *; }

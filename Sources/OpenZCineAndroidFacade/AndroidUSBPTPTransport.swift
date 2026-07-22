@@ -44,12 +44,20 @@
                 return nil
             }
             defer { fns.DeleteLocalRef!(env, type) }
+            // Resolve each method independently and clear a pending
+            // NoSuchMethodError on miss. Without ExceptionClear, a single
+            // missing (e.g. R8-stripped) method crashes the Kotlin caller of
+            // sessionConnectUsb even though this initializer returns nil.
             guard
-                let writeBulkMethod = fns.GetMethodID!(env, type, "writeBulk", "([BI)I"),
-                let readBulkMethod = fns.GetMethodID!(env, type, "readBulk", "(II)[B"),
-                let readEventMethod = fns.GetMethodID!(env, type, "readEvent", "(II)[B"),
-                let isClosedMethod = fns.GetMethodID!(env, type, "isClosed", "()Z"),
-                let closeMethod = fns.GetMethodID!(env, type, "close", "()V")
+                let writeBulkMethod = requiredInstanceMethod(
+                    env, type, "writeBulk", "([BI)I"),
+                let readBulkMethod = requiredInstanceMethod(
+                    env, type, "readBulk", "(II)[B"),
+                let readEventMethod = requiredInstanceMethod(
+                    env, type, "readEvent", "(II)[B"),
+                let isClosedMethod = requiredInstanceMethod(
+                    env, type, "isClosed", "()Z"),
+                let closeMethod = requiredInstanceMethod(env, type, "close", "()V")
             else {
                 fns.DeleteGlobalRef!(env, global)
                 return nil
@@ -223,6 +231,27 @@
     /// table to every native entry point, and attached threads inherit it.
     private func jniTable(_ env: UnsafeMutablePointer<JNIEnv?>) -> JNINativeInterface {
         env.pointee!.pointee
+    }
+
+    /// Resolves a required instance method and clears a pending
+    /// `NoSuchMethodError` when lookup fails so the Kotlin caller is not
+    /// aborted by a left-over JNI exception.
+    private func requiredInstanceMethod(
+        _ env: UnsafeMutablePointer<JNIEnv?>,
+        _ type: jclass?,
+        _ name: String,
+        _ signature: String
+    ) -> jmethodID? {
+        let fns = jniTable(env)
+        let method = name.withCString { namePointer in
+            signature.withCString { signaturePointer in
+                fns.GetMethodID!(env, type, namePointer, signaturePointer)
+            }
+        }
+        if method == nil {
+            fns.ExceptionClear!(env)
+        }
+        return method
     }
 
     private func swiftBytes(

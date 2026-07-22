@@ -1,3 +1,4 @@
+- Fix immediate crash when connecting a camera over USB-C on release builds.
 - Internal phone and Wear beta builds update automatically when Android changes merge to main.
 - Playback and live desqueeze scale the picture (1.6× and custom fine steps).
 - Auto ISO On/Off for non-R3D formats; live working ISO while Auto is on; manual ISO in M mode.
