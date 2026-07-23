@@ -504,6 +504,16 @@ struct MediaClipStore {
         saveIndex(clips, cameraID: cameraID)
     }
 
+    /// Full purge for a deliberately deleted clip: cached bytes, thumbnail, and index row.
+    /// Everything `list(cameraID:)`'s disk scan could resurrect an item from goes with it.
+    func purgeClip(cameraID: String, filename: String) {
+        try? removeLocalFile(cameraID: cameraID, filename: filename)
+        if let thumb = try? thumbURL(cameraID: cameraID, filename: filename) {
+            try? FileManager.default.removeItem(at: thumb)
+        }
+        removeEntry(cameraID: cameraID, filename: filename)
+    }
+
     /// Removes cached clip bytes (video files and thumbnails) for one bucket while preserving
     /// `index.json` metadata so favorites, camera handles, and delivery flags survive for re-fetch.
     ///

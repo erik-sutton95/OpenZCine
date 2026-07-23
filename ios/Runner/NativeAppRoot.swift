@@ -6134,6 +6134,10 @@ final class NativeAppModel {
     /// both sides. Protected objects are refused by the body and stay listed. Returns the
     /// number of items actually removed. [verify-on-HW]
     func deleteMediaClips(_ clips: [MediaClip]) async -> Int {
+        // A camera list enumerated before the deletions would re-add the rows when it
+        // lands — cancel it up front and re-list fresh once the deletions are done.
+        mediaFetchTask?.cancel()
+        mediaFetchTask = nil
         var targets: [MediaClip] = []
         for clip in clips {
             targets.append(clip)
@@ -6146,13 +6150,17 @@ final class NativeAppModel {
                     (try? await session.deleteObject(handle: handle)) != nil
                 else { continue }
             }
-            try? mediaClipStore.removeLocalFile(cameraID: clip.cameraID, filename: clip.filename)
-            mediaClipStore.removeEntry(cameraID: clip.cameraID, filename: clip.filename)
+            // Purge every trace the list scan could resurrect an item from: cached
+            // bytes, thumbnail, and the index row.
+            mediaClipStore.purgeClip(cameraID: clip.cameraID, filename: clip.filename)
+            mediaClips.removeAll { $0.id == clip.id }
             deleted += 1
         }
         refreshMediaClips()
-        // The card's object set changed under the instant-review baseline — reseed it.
+        // The card's object set changed under the instant-review baseline — reseed it,
+        // and re-enumerate so the fresh listing confirms the deletions.
         seedInstantReviewBaseline()
+        if isConnected { scheduleFetchClipsFromCamera() }
         return deleted
     }
 
