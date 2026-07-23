@@ -61,6 +61,8 @@ extension PTPPropertyCode {
         .movieRecordScreenSize,
         .movieFileType,
         .exposureProgramMode,
+        .exposureIndicateStatus,
+        .exposureIndicateLightup,
         .batteryLevel,
         .acPower,
         .warningStatus,
@@ -1578,7 +1580,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         rawCompression: String? = nil,
         userModeProgram: String? = nil,
         pictureControl: String? = nil,
-        stillToneMode: String? = nil
+        stillToneMode: String? = nil,
+        evIndicatorSixths: Int? = nil,
+        evIndicatorLit: Bool? = nil
     ) {
         self.iso = iso
         self.baseISO = baseISO
@@ -1628,6 +1632,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.userModeProgram = userModeProgram
         self.pictureControl = pictureControl
         self.stillToneMode = stillToneMode
+        self.evIndicatorSixths = evIndicatorSixths
+        self.evIndicatorLit = evIndicatorLit
     }
 
     // Exposure.
@@ -1713,6 +1719,10 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     /// Stills tone mode ("SDR" / "HLG") — selects the photo exposure-assist transfer curve.
     /// Bodies without the property never fill it; `nil` reads as SDR.
     public let stillToneMode: String?
+    /// The body's exposure-indicator needle in 1/6 EV steps (±60 == ±10 EV).
+    public let evIndicatorSixths: Int?
+    /// Whether the body's exposure indicator is lit — its value is undefined while unlit.
+    public let evIndicatorLit: Bool?
 
     /// Command-monitor stabilisation summary (movie VR + electronic VR).
     public var stabilizationSummary: String? {
@@ -1879,6 +1889,10 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             // Stills colour temperature shares the movie Kelvin field — the active selector
             // decides which property the poll fills it from.
             return replacing(wbKelvin: ByteCoding.readUInt16LE(bytes, at: 0))
+        case .exposureIndicateStatus where bytes.count >= 1:
+            return replacing(evIndicatorSixths: Int(Int8(bitPattern: bytes[0])))
+        case .exposureIndicateLightup where bytes.count >= 1:
+            return replacing(evIndicatorLit: bytes[0] == 0)
         case .exposureMeteringMode where bytes.count >= 2:
             return replacing(
                 meteringMode: PTPCameraPropertyDecoders.exposureMetering(
@@ -1975,7 +1989,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         rawCompression: String? = nil,
         userModeProgram: String? = nil,
         pictureControl: String? = nil,
-        stillToneMode: String? = nil
+        stillToneMode: String? = nil,
+        evIndicatorSixths: Int? = nil,
+        evIndicatorLit: Bool? = nil
     ) -> PTPCameraPropertySnapshot {
         PTPCameraPropertySnapshot(
             iso: iso ?? self.iso,
@@ -2025,7 +2041,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             rawCompression: rawCompression ?? self.rawCompression,
             userModeProgram: userModeProgram ?? self.userModeProgram,
             pictureControl: pictureControl ?? self.pictureControl,
-            stillToneMode: stillToneMode ?? self.stillToneMode
+            stillToneMode: stillToneMode ?? self.stillToneMode,
+            evIndicatorSixths: evIndicatorSixths ?? self.evIndicatorSixths,
+            evIndicatorLit: evIndicatorLit ?? self.evIndicatorLit
         )
     }
 }

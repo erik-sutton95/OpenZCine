@@ -126,6 +126,8 @@ public enum StillCapturePolicy: Sendable {
         .stillShutterSpeed,
         .fNumber,
         .exposureBiasCompensation,
+        .exposureIndicateStatus,
+        .exposureIndicateLightup,
         .exposureMeteringMode,
         .flashMode,
         .focusMode,
@@ -175,7 +177,7 @@ extension MonitorAssistTool {
     /// deliberately shorter so the stills strip gets the bar width.
     public var appliesToPhotography: Bool {
         switch self {
-        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .instantReview:
+        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview:
             true
         case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
             .guides, .crosshair, .desqueeze:

@@ -22,6 +22,8 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     case grid = "GRID"
     case crosshair = "CROSS"
     case level = "LEVEL"
+    /// Camera-fed exposure indicator (the body's own metering needle).
+    case evMeter = "EV"
     case desqueeze = "DE-SQ"
     case instantReview = "PLAY"
 
@@ -37,8 +39,8 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
             .guides, .grid,
             .crosshair, .level, .desqueeze, .instantReview:
             true
-        case .audioMeters:
-            // Tap-only tool — the meters carry no operator-tunable options.
+        case .audioMeters, .evMeter:
+            // Tap-only tools — the meters carry no operator-tunable options.
             false
         }
     }
@@ -82,6 +84,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .grid: "Grid"
         case .crosshair: "Crosshair"
         case .level: "Horizon"
+        case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
         case .instantReview: "Instant Playback"
         }

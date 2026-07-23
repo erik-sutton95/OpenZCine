@@ -120,6 +120,13 @@ enum DemoHarness {
                     // "16:9") so aspect-dependent chrome states capture headlessly.
                     model.setStillImageArea(area)
                 }
+                if let raw = env["ZC_DEMO_EV"], let sixths = Int8(raw) {
+                    // Demo/screenshot affordance: light the EV meter with a fixed needle.
+                    model.applyDemoProperty(
+                        .exposureIndicateStatus, data: Data([UInt8(bitPattern: sixths)]))
+                    model.applyDemoProperty(.exposureIndicateLightup, data: Data([0]))
+                    model.setAssist(.evMeter, visible: true)
+                }
                 if let raw = env["ZC_DEMO_APP_TIMER"], Int(raw) != nil {
                     // Demo/screenshot affordance: arm the app self-timer so the countdown
                     // (beeper + tally border pulse) captures headlessly.

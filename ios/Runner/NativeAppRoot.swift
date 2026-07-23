@@ -2135,6 +2135,13 @@ final class NativeAppModel {
     // with these compiled out, `isDemoSession`/`demoUIMode` can never become true in a Release
     // build, which keeps the demo-interaction helpers further down inert without #if in views.
     #if DEBUG
+        /// Demo/screenshot affordance: applies one raw property datum to the snapshot so
+        /// camera-fed chrome (e.g. the EV meter) captures headlessly.
+        func applyDemoProperty(_ property: PTPPropertyCode, data: Data) {
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: property, data: data)
+        }
+
         func startDemoSession() {
             stopDiscoveryLoop()
             disconnectCameraSession(resetConnection: false)
@@ -8252,6 +8259,7 @@ extension MonitorAssistTool {
         case .grid: "grid"
         case .crosshair: "plus"
         case .level: "gyroscope"
+        case .evMeter: "plusminus"
         case .desqueeze: "arrow.left.and.right"
         case .instantReview: "photo.badge.checkmark"
         }
@@ -8273,6 +8281,7 @@ extension MonitorAssistTool {
         case .grid: "Grid"
         case .crosshair: "Crosshair"
         case .level: "Horizon"
+        case .evMeter: "EV Meter"
         case .desqueeze: "Desqueeze"
         case .instantReview: "Instant Playback"
         }

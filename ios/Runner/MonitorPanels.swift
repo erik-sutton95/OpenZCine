@@ -2413,6 +2413,12 @@ struct AssistPanel: View {
                     Text("Meters the playing clip's audio. Available during media playback.")
                         .font(.system(size: 13))
                         .foregroundStyle(LiveDesign.muted)
+                case .evMeter:
+                    // Unreachable via long-press (`hasConfiguration == false`); kept for
+                    // exhaustiveness and the Display settings strips.
+                    Text("The camera's own exposure indicator, read live from the body.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(LiveDesign.muted)
                 }
             }
         }

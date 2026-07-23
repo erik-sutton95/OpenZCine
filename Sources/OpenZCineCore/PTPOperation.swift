@@ -156,6 +156,10 @@ public enum PTPPropertyCode: UInt32, Sendable {
     case lensFocalMax = 0xD0E4
     case lensApertureMin = 0xD0E5
     case acPower = 0xD101  // non-zero on external/USB power; drives the charging indicator
+    /// Exposure indicator readout (INT8, 1/6 EV steps, ±60 == ±10 EV). Read-only.
+    case exposureIndicateStatus = 0xD1B1
+    /// Exposure indicator lit state (UINT8: 0 on, 1 off) — the readout is undefined while off.
+    case exposureIndicateLightup = 0xD1B3
     // Aggregate warning bitfield. Bit positions are runtime-enumerated by the body — the overheat
     // bit is decoded behind the `CameraWarningStatus` verify-on-HW seam (TEMP tile + thermal
     // live-view step-down), not a guessed constant.

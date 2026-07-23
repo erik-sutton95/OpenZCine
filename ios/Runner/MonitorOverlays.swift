@@ -771,6 +771,16 @@ struct FeedAlignedAssists: View {
                     if visible.contains(.grid) {
                         FeedGridView(grid: model.assistConfiguration.grid, feed: feed)
                     }
+                    if visible.contains(.evMeter),
+                        let sixths = model.cameraPropertySnapshot.evIndicatorSixths,
+                        model.cameraPropertySnapshot.evIndicatorLit != false
+                    {
+                        // Camera-fed exposure needle, seated bottom-centre of the feed but
+                        // above the capture bar's lane so the band glass never covers it.
+                        EVMeterView(sixths: sixths)
+                            .position(x: feed.midX, y: feed.maxY - 92)
+                            .allowsHitTesting(false)
+                    }
                     if visible.contains(.crosshair) {
                         FeedCrosshairView(feed: feed)
                     }
@@ -930,6 +940,67 @@ struct LevelHorizonView: View {
 /// right. Each track carries 2° tick graduations so you can feel how far off you are, a correction
 /// chevron pointing the way back to centre (more chevrons = further off), and a live degree readout.
 /// A track snaps green within ±0.6° on its own axis.
+/// The body's exposure indicator as a compact glass strip: a ±3 EV tick bar (taller ticks
+/// on whole stops), the camera's 1/6-EV needle, and a signed numeric readout that keeps the
+/// truth when the needle clamps at the rail. Read-only — the value comes straight from the
+/// camera's own metering.
+struct EVMeterView: View {
+    let sixths: Int
+
+    private var ev: Double { Double(sixths) / 6 }
+
+    private var readout: String {
+        String(format: "%+.1f", ev)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(readout)
+                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(abs(ev) < 0.01 ? LiveDesign.text : LiveDesign.accent)
+                .frame(width: 34, alignment: .trailing)
+            Canvas { context, size in
+                let midY = size.height / 2
+                let usable = size.width
+                let evSpan = 3.0
+                func x(forEV value: Double) -> CGFloat {
+                    let clamped = min(evSpan, max(-evSpan, value))
+                    return CGFloat((clamped + evSpan) / (2 * evSpan)) * usable
+                }
+                // Baseline.
+                var base = Path()
+                base.move(to: CGPoint(x: 0, y: midY))
+                base.addLine(to: CGPoint(x: usable, y: midY))
+                context.stroke(base, with: .color(.white.opacity(0.25)), lineWidth: 1)
+                // Ticks every 1/3 EV; whole stops taller.
+                var third = -9
+                while third <= 9 {
+                    let value = Double(third) / 3
+                    let tall = third % 3 == 0
+                    let height: CGFloat = tall ? 8 : 4
+                    var tick = Path()
+                    let tickX = x(forEV: value)
+                    tick.move(to: CGPoint(x: tickX, y: midY - height / 2))
+                    tick.addLine(to: CGPoint(x: tickX, y: midY + height / 2))
+                    context.stroke(
+                        tick, with: .color(.white.opacity(tall ? 0.55 : 0.3)), lineWidth: 1)
+                    third += 1
+                }
+                // The needle.
+                var needle = Path()
+                let needleX = x(forEV: ev)
+                needle.move(to: CGPoint(x: needleX, y: 1))
+                needle.addLine(to: CGPoint(x: needleX, y: size.height - 1))
+                context.stroke(needle, with: .color(LiveDesign.accent), lineWidth: 2)
+            }
+            .frame(width: 132, height: 16)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .liquidGlass(in: Capsule())
+    }
+}
+
 struct LevelGaugeView: View {
     let roll: Double
     let pitch: Double
