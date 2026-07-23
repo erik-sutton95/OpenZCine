@@ -43,15 +43,14 @@ import java.util.Locale
  * Photography capture strip when the body reports photo mode (iOS
  * `MonitorCaptureStrip` while `isPhotography`): the SAME glass pill, cell
  * shape, and typography as the cinema capture strip, rendering the stills
- * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/FLASH/METER plus a trailing
- * instant-playback button. Stills pickers are still stubs, so every tile
+ * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/FLASH/METER. Stills pickers
+ * are still stubs, so every tile
  * routes to [onOpenControl] with its label instead of a drum picker.
  */
 @Composable
 internal fun PhotographyCaptureStrip(
     properties: CameraPropertySnapshot,
     onOpenControl: (String) -> Unit,
-    onInstantPlayback: () -> Unit,
     modifier: Modifier = Modifier,
     maxContentWidth: Dp? = null,
     /**
@@ -94,7 +93,6 @@ internal fun PhotographyCaptureStrip(
             PhotographyStripCells(
                 properties = properties,
                 onOpenControl = onOpenControl,
-                onInstantPlayback = onInstantPlayback,
             )
         }
         if (maxContentWidth != null) {
@@ -109,7 +107,6 @@ internal fun PhotographyCaptureStrip(
 private fun PhotographyStripCells(
     properties: CameraPropertySnapshot,
     onOpenControl: (String) -> Unit,
-    onInstantPlayback: () -> Unit,
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -132,18 +129,6 @@ private fun PhotographyStripCells(
                     wbIcon = null,
                 )
             }
-        }
-        // Instant playback rides at the strip's trailing edge (iOS `playbackButton`).
-        Box(
-            Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(LiveDesign.glassBright, CircleShape)
-                .chromeClickable(onClick = onInstantPlayback)
-                .semantics { contentDescription = "Instant playback" },
-            contentAlignment = Alignment.Center,
-        ) {
-            PhotoGlyph(LiveDesign.text.copy(alpha = 0.9f), Modifier.size(16.dp, 13.dp))
         }
     }
 }

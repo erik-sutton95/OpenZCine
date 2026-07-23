@@ -214,14 +214,43 @@ public enum MonitorFeedLayout {
     /// Builds the feed frame, using height as the stable landscape constraint. `aspect`
     /// defaults to the native 16:9 monitor frame; photography passes the active still
     /// image area's shape (3:2, 1:1, 16:9) so the full photo frame letterboxes instead
-    /// of cropping top and bottom.
+    /// of cropping top and bottom. `anchorToRailSide` keeps a narrower-than-16:9 frame's
+    /// rail-side edge where the native frame's would be — the operator's gap to the
+    /// record/settings rail stays constant and the slack collects on the notch side.
     public static func frame(
         viewportWidth: Double,
         viewportHeight: Double,
         safeArea: MonitorEdgeInsets,
         horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
-        aspect: Double = aspectRatio
+        aspect: Double = aspectRatio,
+        anchorToRailSide: Bool = false
     ) -> MonitorFeedFrame {
+        if anchorToRailSide, aspect < aspectRatio {
+            let base = frame(
+                viewportWidth: viewportWidth,
+                viewportHeight: viewportHeight,
+                safeArea: safeArea,
+                horizontalDirection: horizontalDirection,
+                aspect: aspect
+            )
+            let reference = frame(
+                viewportWidth: viewportWidth,
+                viewportHeight: viewportHeight,
+                safeArea: safeArea,
+                horizontalDirection: horizontalDirection
+            )
+            // Landscape full-height frames only; portrait and width-constrained mounts
+            // keep their own placement (base equals reference shape there).
+            guard viewportHeight <= viewportWidth, base.width < reference.width else {
+                return base
+            }
+            let railSideX =
+                horizontalDirection == .mirrored
+                ? reference.x
+                : reference.x + reference.width - base.width
+            return MonitorFeedFrame(
+                x: railSideX, y: base.y, width: base.width, height: base.height)
+        }
         let aspectRatio = max(0.1, aspect)
         let leadingInset = leadingInset(for: safeArea)
         let viewportWidth = max(0, viewportWidth)
@@ -280,14 +309,16 @@ public enum MonitorFeedLayout {
         viewportHeight: Double,
         safeArea: MonitorEdgeInsets,
         horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
-        aspect: Double = aspectRatio
+        aspect: Double = aspectRatio,
+        anchorToRailSide: Bool = false
     ) -> MonitorFeedFrame {
         frame(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
             safeArea: safeArea,
             horizontalDirection: horizontalDirection,
-            aspect: aspect
+            aspect: aspect,
+            anchorToRailSide: anchorToRailSide
         )
     }
 }

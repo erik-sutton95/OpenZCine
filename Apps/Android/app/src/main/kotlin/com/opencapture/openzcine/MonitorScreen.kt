@@ -1869,7 +1869,6 @@ internal fun MonitorScreen(
                                                     )
                                                     .show()
                                             },
-                                            onInstantPlayback = onOpenMedia,
                                             maxContentWidth = strip.width.dp,
                                         )
                                     } else {
@@ -1965,7 +1964,7 @@ internal fun MonitorScreen(
                             onOpenMedia()
                         },
                     ) { glyphModifier, tint ->
-                        MediaStackGlyph(tint, glyphModifier)
+                        PhotoGlyph(tint, glyphModifier)
                     }
                     if (prefersPhotographyChrome(cameraProperties)) {
                         PhotographyShutterButton(
@@ -2656,7 +2655,6 @@ private fun PortraitChrome(
                                 )
                                 .show()
                         },
-                        onInstantPlayback = onOpenMedia,
                         maxContentWidth = strip.width.dp,
                     )
                 } else {
@@ -2744,7 +2742,7 @@ private fun PortraitChrome(
         }
         Spacer(Modifier.weight(1f))
         AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
-            MediaStackGlyph(tint, glyphModifier)
+            PhotoGlyph(tint, glyphModifier)
         }
         Spacer(Modifier.weight(1f))
         AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->

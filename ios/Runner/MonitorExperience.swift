@@ -242,7 +242,8 @@ struct LiveFeedModule: View {
                     horizontalDirection: horizontalDirection,
                     aspect: isPhotography
                         ? model.cameraPropertySnapshot.photographyFeedAspect
-                        : MonitorFeedLayout.aspectRatio
+                        : MonitorFeedLayout.aspectRatio,
+                    anchorToRailSide: isPhotography
                 )
                 let imageWidth = CGFloat(feedFrame.width)
                 let imageHeight = CGFloat(feedFrame.height)

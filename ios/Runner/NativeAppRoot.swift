@@ -5581,11 +5581,6 @@ final class NativeAppModel {
         if let message { connectionMessage = message }
     }
 
-    func presentInstantPlayback() {
-        // First iteration: open the media library for recent stills.
-        isStandaloneMediaLibraryPresented = true
-    }
-
     /// Scaffold: stills pickers land as tiles become settable with descriptor-backed
     /// options. Until then a strip tap surfaces a short operator message.
     func presentPhotographyControl(label: String) {

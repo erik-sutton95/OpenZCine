@@ -367,10 +367,10 @@ struct MonitorCaptureStrip: View {
         }
     }
 
-    /// Nine stills tiles hug the landscape band only at a reduced tile scale; the cinema
-    /// five keep scale 1. (The shell sizes this side with `fixedSize`, so the fitted
-    /// GeometryReader row is portrait-only.)
-    private var landscapeTileScale: CGFloat { isPhotography ? 0.85 : 1 }
+    /// The stills tiles own the whole band (assist lives on the left rail), so they run
+    /// at the cinema scale; the fitted GeometryReader row stays portrait-only because the
+    /// shell sizes this side with `fixedSize`.
+    private var landscapeTileScale: CGFloat { 1 }
 
     /// True while the body reports photo mode — the strip then renders the stills readouts
     /// through the exact same bar, tiles and typography as the cinema settings.
@@ -392,23 +392,6 @@ struct MonitorCaptureStrip: View {
         return { model.presentPhotographyControl(label: item.label) }
     }
 
-    /// Instant playback rides at the strip's trailing edge in photo mode.
-    @ViewBuilder private var playbackButton: some View {
-        if isPhotography {
-            Button {
-                model.presentInstantPlayback()
-            } label: {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(LiveDesign.text.opacity(0.9))
-                    .frame(width: 38, height: 38)
-                    .background(LiveDesign.glassBright, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Instant playback")
-        }
-    }
-
     // MARK: - fitsWidth: true (former `BottomCaptureSettingsModule`)
 
     private var landscapeBody: some View {
@@ -421,7 +404,6 @@ struct MonitorCaptureStrip: View {
                         value: item, scale: landscapeTileScale,
                         overrideAction: photographyAction(for: item))
                 }
-                playbackButton
             }
             // Fill the bar height so both bottom bars render at the same height (GlassPanel
             // otherwise hugs its content, leaving this pill shorter or taller than the toolbar).
@@ -505,7 +487,6 @@ struct MonitorCaptureStrip: View {
                     CaptureSettingButton(
                         value: item, scale: scale, overrideAction: photographyAction(for: item))
                 }
-                playbackButton
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .opacity(naturalRowWidth > 0 ? 1 : 0)  // one measurement pass before first paint
@@ -519,7 +500,6 @@ struct MonitorCaptureStrip: View {
             ForEach(stripValues) { item in
                 CaptureSettingButton(value: item)
             }
-            playbackButton
         }
         .fixedSize()
         .hidden()
@@ -868,14 +848,17 @@ struct MonitorSystemCluster: View {
     }
 
     private var mediaButton: some View {
-        Button {
+        let size = CGFloat(MonitorSideRailControlLayout.auxiliaryButtonSize)
+        return Button {
             model.activePanel = .media
         } label: {
-            AssetCircleButton(
-                assetName: "IconMedia",
-                systemName: "rectangle.stack",
-                size: CGFloat(MonitorSideRailControlLayout.auxiliaryButtonSize)
-            )
+            // The photo-stack glyph (formerly the strip's instant-playback icon) reads
+            // better as "media" than the old filmstrip asset.
+            Image(systemName: "photo.on.rectangle")
+                .font(.system(size: size * 0.36, weight: .medium))
+                .foregroundStyle(LiveDesign.text.opacity(0.86))
+                .frame(width: size, height: size)
+                .liquidGlass(in: Circle())
         }
         .buttonStyle(.zcTapTarget)
         .accessibilityLabel("Open Media")
@@ -1069,6 +1052,21 @@ struct MonitorShell: View {
     let context: LiveViewLayoutContext
     /// Portrait assist-rail expand state (owned here so the rail's own frame can size around it).
     @State private var railExpanded = false
+    /// Photography's landscape assist rail (in the notch-side gap the 3:2 feed opens up).
+    @State private var photoRailExpanded = true
+
+    /// The photography feed frame, recomputed with the module's own inputs so the shell can
+    /// place chrome in the notch-side gap the rail-anchored 3:2/1:1 frame opens up.
+    private func photographyFeedFrame() -> MonitorFeedFrame {
+        MonitorFeedLayout.fullBleedFrame(
+            viewportWidth: context.viewportWidth,
+            viewportHeight: context.viewportHeight,
+            safeArea: context.feedSafeArea,
+            horizontalDirection: context.horizontalDirection,
+            aspect: model.cameraPropertySnapshot.photographyFeedAspect,
+            anchorToRailSide: true
+        )
+    }
 
     /// Count of scopes the portrait-fit stacked zone displays — the recency-selected ≤2 (R8);
     /// sizes the portrait scopes zone. Fit-only: fill floats all active scopes independently.
@@ -1224,9 +1222,19 @@ struct MonitorShell: View {
         }
 
         // Bottom bars (assist + capture) — live only; clean/lock hide them. In photography
-        // the assist strip stays but self-filters to the stills toolset (shorter bar).
+        // the assist tools move to a vertical rail in the notch-side gap the 3:2 frame
+        // opens up (below), handing the whole band to the capture strip; the horizontal
+        // strip stays only when the photo frame is 16:9 and there is no gap to use.
         if !isClean {
-            let assistVisible = chrome.assistToolbarVisible
+            let isPhotographyBand = StillCapturePolicy.prefersPhotographyChrome(
+                selector: model.cameraPropertySnapshot.captureSelector)
+            let photoFeed = isPhotographyBand ? photographyFeedFrame() : nil
+            let photoGap =
+                photoFeed.map {
+                    $0.x - MonitorFeedLayout.leadingInset(for: context.feedSafeArea)
+                } ?? 0
+            let leftRailFits = photoGap >= Double(MonitorAssistStrip.expandedWidth + 12)
+            let assistVisible = chrome.assistToolbarVisible && !(isPhotographyBand && leftRailFits)
             let captureVisible = chrome.cameraValuesVisible
             if let assist = map.assistStrip, let capture = map.captureStrip,
                 assistVisible || captureVisible
@@ -1266,12 +1274,41 @@ struct MonitorShell: View {
                     }
                 }
                 .opacity(model.interfaceLocked ? 0.4 : 1)
+                // Photography hugs the strip against the system rail (cinema keeps the
+                // assist-then-strip leading flow).
                 .frame(
-                    width: CGFloat(width), height: CGFloat(assist.frame.height), alignment: .leading
+                    width: CGFloat(width), height: CGFloat(assist.frame.height),
+                    alignment: isPhotographyBand && !assistVisible ? .trailing : .leading
                 )
                 .position(
                     x: CGFloat(leftX + width / 2),
                     y: CGFloat(assist.frame.y + assist.frame.height / 2))
+            }
+
+            // Photography's vertical assist rail, centered in the notch-side gap beside the
+            // rail-anchored photo frame — bounded between the top deck and the capture band
+            // so it never runs under either. Collapsible like the portrait rail.
+            if let photoFeed, leftRailFits, chrome.assistToolbarVisible, !model.interfaceLocked,
+                let band = map.assistStrip
+            {
+                let deckFrame = map.infoBar.frame
+                let leadingInset = MonitorFeedLayout.leadingInset(for: context.feedSafeArea)
+                let railX = leadingInset + photoGap / 2
+                let railTop = deckFrame.y + deckFrame.height + 10
+                let railBottom = band.frame.y - 10
+                let railHeight = max(0, railBottom - railTop)
+                MonitorAssistStrip(
+                    axis: .vertical,
+                    collapsible: true,
+                    feedHeight: CGFloat(railHeight),
+                    expanded: $photoRailExpanded
+                )
+                .environment(model)
+                .liveViewGuideAnchor(.viewAssist)
+                .frame(maxHeight: CGFloat(railHeight))
+                .position(
+                    x: CGFloat(railX),
+                    y: CGFloat(railTop + railHeight / 2))
             }
 
             // Recenter-focus affordance, bottom-left above the bars, when the AF point is off
