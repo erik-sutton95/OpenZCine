@@ -295,7 +295,8 @@ final class NativeCameraSession: @unchecked Sendable {
         establishmentSummary: String,
         identity: NativeCameraIdentity,
         operationPolicy: ZCameraOperationPolicy = ZCameraOperationPolicy(operations: []),
-        propertiesSupported: Set<UInt16> = []
+        propertiesSupported: Set<UInt16> = [],
+        vendorPropertiesSupported: Set<UInt32> = []
     ) {
         self.host = host
         self.transport = transport
@@ -304,6 +305,7 @@ final class NativeCameraSession: @unchecked Sendable {
         self.identity = identity
         self.operationPolicy = operationPolicy
         self.propertiesSupported = propertiesSupported
+        self.vendorPropertiesSupported = vendorPropertiesSupported
     }
 
     /// Stable camera key: the IPv4 address over Wi-Fi, or a `usb:<device-id>` host key over USB-C.
@@ -311,17 +313,28 @@ final class NativeCameraSession: @unchecked Sendable {
     let identity: NativeCameraIdentity
     /// Op selection driven by the body's advertised DeviceInfo operations.
     let operationPolicy: ZCameraOperationPolicy
-    /// Standard 2-byte property codes the body advertises. Extended `0x0001_xxxx` codes are
-    /// discovered separately, so only 2-byte polls are gated on this.
+    /// Standard PIMA property codes the body advertises in DeviceInfo. Vendor
+    /// `0xDxxx` codes are NEVER listed here — they only appear in the vendor
+    /// discovery list below, so each space is gated on its own list.
     let propertiesSupported: Set<UInt16>
+    /// Vendor property codes advertised through vendor-code discovery (2- and
+    /// 4-byte). Empty when discovery is unavailable or failed — vendor polls
+    /// are then never skipped.
+    let vendorPropertiesSupported: Set<UInt32>
 
-    /// Whether a steady-state poll of `property` can succeed on this body. With no
-    /// advertised list (DeviceInfo missing), everything is assumed pollable.
+    /// Whether a steady-state poll of `property` can succeed on this body. Only a
+    /// non-empty advertisement list for the property's own space may veto a poll;
+    /// anything unknown stays pollable and relies on per-read error handling.
     func supportsProperty(_ property: PTPPropertyCode) -> Bool {
-        guard property.rawValue <= UInt32(UInt16.max), !propertiesSupported.isEmpty else {
-            return true
+        let raw = property.rawValue
+        if raw < 0xD000 {
+            guard !propertiesSupported.isEmpty else { return true }
+            return propertiesSupported.contains(UInt16(truncatingIfNeeded: raw))
         }
-        return propertiesSupported.contains(UInt16(property.rawValue))
+        guard !vendorPropertiesSupported.isEmpty else { return true }
+        // 4-byte extended codes may be advertised in either width.
+        return vendorPropertiesSupported.contains(raw)
+            || vendorPropertiesSupported.contains(raw & 0xFFFF)
     }
 
     private let transport: any CameraTransport
@@ -1062,6 +1075,26 @@ final class NativeCameraSession: @unchecked Sendable {
             )
         }
         let info = try PTPDeviceInfo(data: infoResult.data)
+        let policy = ZCameraOperationPolicy(deviceInfo: info)
+
+        // Vendor properties are advertised only through vendor-code discovery, never in
+        // DeviceInfo. Best-effort: a failed or garbled fetch leaves the list empty, which
+        // downgrades poll gating to "poll everything" rather than skipping anything.
+        onStage?("vendor codes")
+        var vendorProperties: Set<UInt32> = []
+        if let discovery = policy.vendorCodeDiscoveryOperation, policy.supports(discovery) {
+            let parameters: [UInt32] =
+                discovery == .getVendorCodes
+                ? [ZCameraOperationPolicy.vendorCodesPropertyListParameter] : []
+            if let result = try? await transact(
+                operationCode: discovery, parameters: parameters, dataPhase: .dataIn),
+                result.operationResponse.responseCode == .ok
+            {
+                vendorProperties = PTPVendorPropertyCodeList.decode(
+                    result.data, fourByteCodes: discovery == .getVendorCodes)
+            }
+        }
+
         let updatedIdentity = NativeCameraIdentity(
             host: host,
             cameraName: cameraName ?? info.model,
@@ -1077,8 +1110,9 @@ final class NativeCameraSession: @unchecked Sendable {
             cameraName: cameraName,
             establishmentSummary: establishmentSummary.trimmingCharacters(in: .whitespaces),
             identity: updatedIdentity,
-            operationPolicy: ZCameraOperationPolicy(deviceInfo: info),
-            propertiesSupported: info.propertiesSupported
+            operationPolicy: policy,
+            propertiesSupported: info.propertiesSupported,
+            vendorPropertiesSupported: vendorProperties
         )
     }
 

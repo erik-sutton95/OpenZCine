@@ -1,3 +1,4 @@
+import Foundation
 import OpenZCineCore
 import Testing
 
@@ -48,5 +49,36 @@ struct ZCameraCapabilityProfileTests {
     @Test func missingMediaCaptureFallsBackToStandardCapture() {
         let policy = ZCameraOperationPolicy(operations: [0x100E])
         #expect(policy.stillCaptureOperation == .initiateCapture)
+    }
+
+    @Test func vendorPropertyListDecodesBothWidths() {
+        // Eight 4-byte codes (the plausibility floor) incl. one extended code.
+        var wide = Data(ByteCoding.uint32LE(8))
+        for code in [0xD1A6, 0xD100, 0xD061, 0xD05D, 0xD054, 0xD030, 0xD0B5, 0x0001_D070] {
+            wide += Data(ByteCoding.uint32LE(UInt32(code)))
+        }
+        let wideCodes = PTPVendorPropertyCodeList.decode(wide, fourByteCodes: true)
+        #expect(wideCodes.contains(0xD1A6))
+        #expect(wideCodes.contains(0x0001_D070))
+
+        var narrow = Data(ByteCoding.uint32LE(8))
+        for code in [0xD1A6, 0xD100, 0xD061, 0xD05D, 0xD054, 0xD030, 0xD0A2, 0xD16C] {
+            narrow += Data(ByteCoding.uint16LE(UInt16(code)))
+        }
+        let narrowCodes = PTPVendorPropertyCodeList.decode(narrow, fourByteCodes: false)
+        #expect(narrowCodes.contains(0xD0A2))
+        #expect(narrowCodes.count == 8)
+    }
+
+    @Test func vendorPropertyListRejectsGarbledPayloads() {
+        #expect(PTPVendorPropertyCodeList.decode(Data(), fourByteCodes: true).isEmpty)
+        // Count claims more elements than the payload carries.
+        var truncated = Data(ByteCoding.uint32LE(100))
+        truncated += Data(ByteCoding.uint32LE(0xD1A6))
+        #expect(PTPVendorPropertyCodeList.decode(truncated, fourByteCodes: true).isEmpty)
+        // Implausibly small lists are treated as garbage, not a poll veto.
+        var tiny = Data(ByteCoding.uint32LE(2))
+        tiny += Data(ByteCoding.uint32LE(0xD1A6)) + Data(ByteCoding.uint32LE(0xD100))
+        #expect(PTPVendorPropertyCodeList.decode(tiny, fourByteCodes: true).isEmpty)
     }
 }

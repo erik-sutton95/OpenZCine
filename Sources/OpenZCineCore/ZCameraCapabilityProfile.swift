@@ -70,4 +70,36 @@ public struct ZCameraOperationPolicy: Equatable, Sendable {
     public var supportsOpenCapture: Bool {
         isKnown && supports(.initiateOpenCaptureV)
     }
+
+    /// Parameter for `GetVendorCodes` selecting the vendor DevicePropCode array.
+    public static let vendorCodesPropertyListParameter: UInt32 = 0x0D
+}
+
+/// Decodes the vendor property-code array returned by the vendor discovery ops:
+/// a UINT32 element count followed by 4-byte codes (`GetVendorCodes`) or 2-byte
+/// codes (`GetVendorPropCodes`). Vendor properties never appear in the standard
+/// DeviceInfo array, so this list is the only advertisement they get.
+public enum PTPVendorPropertyCodeList {
+    /// Returns the advertised codes, or an empty set when the payload is malformed
+    /// or implausibly small (callers treat empty as "discovery unavailable" and
+    /// never skip vendor polls on it).
+    public static func decode(_ data: Data, fourByteCodes: Bool) -> Set<UInt32> {
+        let bytes = Array(data)
+        guard bytes.count >= 4 else { return [] }
+        let count = Int(ByteCoding.readUInt32LE(bytes, at: 0))
+        let width = fourByteCodes ? 4 : 2
+        guard count > 0, bytes.count >= 4 + count * width else { return [] }
+        var codes: Set<UInt32> = []
+        codes.reserveCapacity(count)
+        for index in 0..<count {
+            let offset = 4 + index * width
+            codes.insert(
+                fourByteCodes
+                    ? ByteCoding.readUInt32LE(bytes, at: offset)
+                    : UInt32(ByteCoding.readUInt16LE(bytes, at: offset)))
+        }
+        // A real body advertises dozens of vendor properties; a near-empty list is
+        // a garbled payload and must not become a poll veto.
+        return codes.count >= 8 ? codes : []
+    }
 }
