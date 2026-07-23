@@ -7746,11 +7746,9 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                     options: StillDriveMode.allCases
                         .filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label),
                     base: "Single"),
+                PickerMode(title: "Built-in Timer", options: ["Off", "On"], base: "Off"),
                 PickerMode(
-                    title: "Built-in", detail: "delay set on body",
-                    options: ["Off", "On"], base: "Off"),
-                PickerMode(
-                    title: "App", detail: "app countdown",
+                    title: "App-timer",
                     options: ["Off", "1s", "2s", "3s", "5s", "10s", "20s", "30s", "60s"],
                     base: "Off"),
             ]

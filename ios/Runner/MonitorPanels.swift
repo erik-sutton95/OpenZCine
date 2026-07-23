@@ -1241,6 +1241,8 @@ struct PickerPanel: View {
                             .font(.system(size: 13, weight: .bold, design: .default))
                             .kerning(0.5)
                             .textCase(.uppercase)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                         if let detail = mode.detail {
                             Text(detail)
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
