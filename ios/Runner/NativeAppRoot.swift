@@ -3068,13 +3068,36 @@ final class NativeAppModel {
         onEstablishmentDiagnostic: (@Sendable (String) -> Void)? = nil
     ) async throws -> NativeCameraSession {
         guard host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) else {
-            return try await NativeCameraSession.establish(
-                host: host,
-                guid: guid,
-                requestPairing: requestPairing,
-                onPairingChallenge: onPairingChallenge,
-                onEstablishmentDiagnostic: onEstablishmentDiagnostic
-            )
+            do {
+                return try await NativeCameraSession.establish(
+                    host: host,
+                    guid: guid,
+                    requestPairing: requestPairing,
+                    onPairingChallenge: onPairingChallenge,
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                )
+            } catch let error
+                where NativeCameraSession.isRetryableEstablishFailure(
+                    error, requestPairing: requestPairing)
+            {
+                // Right after a camera-AP join the ZR's PTP-IP endpoint can lag the network, or
+                // the previous session slot can still read busy. One silent in-place retry after
+                // a settle beat clears the field-reported one-off connect failures; a second
+                // failure surfaces through the normal path. No Wi-Fi re-join, no pairing —
+                // isRetryableEstablishFailure only passes non-pairing attempts. The sleep throws
+                // on cancellation, so an abandoned attempt never retries.
+                connectionLogger.info(
+                    "Wi-Fi establish failed once, retrying in place: \(error.localizedDescription, privacy: .private(mask: .hash))"
+                )
+                try await Task.sleep(for: .seconds(1))
+                return try await NativeCameraSession.establish(
+                    host: host,
+                    guid: guid,
+                    requestPairing: requestPairing,
+                    onPairingChallenge: onPairingChallenge,
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic
+                )
+            }
         }
         guard let device = USBCameraDeviceBrowser.shared.device(forHostKey: host) else {
             throw NativeCameraSessionError.connectionFailed(
