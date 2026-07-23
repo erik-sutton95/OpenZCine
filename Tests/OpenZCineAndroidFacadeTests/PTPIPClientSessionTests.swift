@@ -578,17 +578,29 @@ struct PTPIPClientSessionTests {
 
         // The event may be delayed, dropped, or reordered. The regular monitor poll must still
         // invalidate and rebuild the codec-dependent D0A0 descriptor after it observes D0AF.
+        // Steady-state polls interleave LiveViewSelector every other tick, so walk until
+        // MovFileType is actually read rather than assuming a linear index into the order.
         server.setCameraMovieFileType(r3dNE)
         let requestBaseline = server.receivedRequests().count
         let pollOrder = PTPIPClientSession.androidMonitorPollOrder(isRecording: false)
-        guard let codecPollIndex = pollOrder.firstIndex(of: .movieFileType) else {
+        guard pollOrder.contains(.movieFileType) else {
             Issue.record("The live monitor poll must include MovFileType.")
             return
         }
         var r3dReadback = bootstrap
-        for _ in 0...codecPollIndex {
+        var sawFileType = false
+        for step in 0..<(pollOrder.count * 3) {
             r3dReadback = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
+            let prop = PTPPropertyCode.nextMonitorPollProperty(
+                pollIndex: step,
+                isRecording: false,
+                order: pollOrder)
+            if prop == .movieFileType {
+                sawFileType = true
+                break
+            }
         }
+        #expect(sawFileType)
 
         #expect(r3dReadback.result == .accepted)
         #expect(r3dReadback.controls.codec == "R3D NE")

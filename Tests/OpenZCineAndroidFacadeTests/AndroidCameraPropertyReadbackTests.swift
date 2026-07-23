@@ -45,11 +45,11 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(bootstrap.controls.baseISO == ["Low", "High"])
         #expect(bootstrap.controls.resolutionFrameRates == ["6K · 25p", "4K · 60p"])
 
-        // Bootstrap already issued the full live-monitor set back-to-back. One
-        // additional steady-state pass exercises `.next` round-robin (and any
-        // idle-only extras such as storage / descriptor cadence).
+        // Bootstrap already issued the full live-monitor set back-to-back. Steady-state
+        // `.next` interleaves LiveViewSelector every other tick, so walk 2× the poll
+        // order to visit every non-selector property at least once.
         let androidPollOrder = PTPIPClientSession.androidMonitorPollOrder(isRecording: false)
-        for _ in androidPollOrder {
+        for _ in 0..<(androidPollOrder.count * 2) {
             _ = session.refreshAndroidPropertySnapshot(.next(isRecording: false))
         }
         let complete = session.refreshAndroidPropertySnapshot(.propertyChanged(0xDEAD))

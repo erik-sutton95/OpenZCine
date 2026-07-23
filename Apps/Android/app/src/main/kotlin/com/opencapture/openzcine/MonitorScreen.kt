@@ -1684,6 +1684,9 @@ internal fun MonitorScreen(
                     pendingCommandControl = pendingCommandControl,
                     displayMode = effectiveDisplayMode,
                     enabledDisplayModeOrder = operatorSettings.enabledDisplayModeOrder,
+                    cameraProperties = cameraProperties,
+                    stillCapturing = stillCapturing,
+                    onShutter = { stillCapturing = true },
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
                     onRecord = requestRecordToggle,
@@ -1822,8 +1825,10 @@ internal fun MonitorScreen(
                     // assist toolbar at its zone, and the capture strip whose
                     // glass hugs its readouts against the band's trailing edge
                     // like the iOS content-hugging strip.
+                    // Photography mode hides View Assist (cinema tools).
+                    val isPhotography = prefersPhotographyChrome(cameraProperties)
                     if (!isClean) {
-                        if (assistToolbarVisible) {
+                        if (assistToolbarVisible && !isPhotography) {
                             zones.assistStrip?.let { strip ->
                                 AssistToolbar(
                                     assist,
@@ -1843,31 +1848,20 @@ internal fun MonitorScreen(
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     contentAlignment = Alignment.CenterEnd,
                                 ) {
-                                    if (prefersPhotographyChrome(cameraProperties)) {
-                                        Column(
-                                            Modifier.fillMaxWidth(),
-                                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                                        ) {
-                                            PhotographyModeBadge()
-                                            PhotographyCaptureStrip(
-                                                properties = cameraProperties,
-                                                isCapturing = stillCapturing,
-                                                onShutter = { stillCapturing = true },
-                                                onSelectDrive = {},
-                                                onSelectMode = {},
-                                                onSelectIso = {},
-                                                onSelectShutter = {},
-                                                onSelectIris = {},
-                                                onInstantPlayback = onOpenMedia,
-                                            )
-                                            PhotographySecondaryStrip(
-                                                properties = cameraProperties,
-                                                onSelectMetering = {},
-                                                onSelectFlash = {},
-                                                onSelectQuality = {},
-                                                onSelectFocus = {},
-                                            )
-                                        }
+                                    if (isPhotography) {
+                                        PhotographyCaptureStrip(
+                                            properties = cameraProperties,
+                                            onSelectDrive = {},
+                                            onSelectMode = {},
+                                            onSelectIso = {},
+                                            onSelectShutter = {},
+                                            onSelectIris = {},
+                                            onSelectMetering = {},
+                                            onSelectFlash = {},
+                                            onSelectQuality = {},
+                                            onSelectFocus = {},
+                                            onInstantPlayback = onOpenMedia,
+                                        )
                                     } else {
                                         MonitorCaptureStrip(
                                             settings = captureSettings,
@@ -1963,12 +1957,20 @@ internal fun MonitorScreen(
                     ) { glyphModifier, tint ->
                         MediaStackGlyph(tint, glyphModifier)
                     }
-                    RecordButton(
-                        recording = recording,
-                        modifier = Modifier.zone(zones.record),
-                        enabled = recordControlEnabled,
-                        onClick = requestRecordToggle,
-                    )
+                    if (prefersPhotographyChrome(cameraProperties)) {
+                        PhotographyShutterButton(
+                            isCapturing = stillCapturing,
+                            onClick = { stillCapturing = true },
+                            modifier = Modifier.zone(zones.record),
+                        )
+                    } else {
+                        RecordButton(
+                            recording = recording,
+                            modifier = Modifier.zone(zones.record),
+                            enabled = recordControlEnabled,
+                            onClick = requestRecordToggle,
+                        )
+                    }
                     val enabledOrder = operatorSettings.enabledDisplayModeOrder
                     DispButton(
                         activeIndex = enabledOrder.indexOf(effectiveDisplayMode),
@@ -1981,12 +1983,20 @@ internal fun MonitorScreen(
                     }
                 } else {
                     if (railPlan.recordingSafetyVisible) {
-                        RecordButton(
-                            recording = recording,
-                            modifier = Modifier.zone(zones.record),
-                            enabled = recordControlEnabled,
-                            onClick = requestRecordToggle,
-                        )
+                        if (prefersPhotographyChrome(cameraProperties)) {
+                            PhotographyShutterButton(
+                                isCapturing = stillCapturing,
+                                onClick = { stillCapturing = true },
+                                modifier = Modifier.zone(zones.record),
+                            )
+                        } else {
+                            RecordButton(
+                                recording = recording,
+                                modifier = Modifier.zone(zones.record),
+                                enabled = recordControlEnabled,
+                                onClick = requestRecordToggle,
+                            )
+                        }
                     }
                     LandscapeSettingsRecoveryButton(
                         modifier = Modifier.zone(zones.settings),
@@ -2442,6 +2452,9 @@ private fun PortraitChrome(
     pendingCommandControl: CameraControl?,
     displayMode: MonitorDisplayMode,
     enabledDisplayModeOrder: List<MonitorDisplayMode>,
+    cameraProperties: CameraPropertySnapshot,
+    stillCapturing: Boolean,
+    onShutter: () -> Unit,
     onLock: () -> Unit,
     recordEnabled: Boolean,
     onRecord: () -> Unit,
@@ -2458,6 +2471,7 @@ private fun PortraitChrome(
     onReorderStarted: () -> Unit,
     onOpenAssistOptions: (AssistTool, Rect) -> Unit,
 ) {
+    val isPhotography = prefersPhotographyChrome(cameraProperties)
     val context = LocalContext.current
     val scopeLimitMessage = stringResource(R.string.scope_fit_limit)
     var railExpanded by remember { mutableStateOf(false) }
@@ -2511,8 +2525,8 @@ private fun PortraitChrome(
 
     // Fit-mode horizontal assist toolbar between the scopes zone and the tile
     // grid (live only — the map emits the zone). 12/4dp insets float the
-    // glass pill off the screen edges, like iOS.
-    if (!isCommand && operatorSettings.assistToolbarVisible.value) {
+    // glass pill off the screen edges, like iOS. Hidden in photography mode.
+    if (!isCommand && !isPhotography && operatorSettings.assistToolbarVisible.value) {
         zones.assistStrip?.let { strip ->
             AssistToolbar(
                 assist,
@@ -2587,21 +2601,37 @@ private fun PortraitChrome(
                 Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                 contentAlignment = Alignment.Center,
             ) {
-                MonitorCaptureStrip(
-                    settings = captureSettings,
-                    activePicker = activeMonitorPicker,
-                    controlsEnabled = commandControlsEnabled,
-                    pendingControl = pendingCommandControl,
-                    onOpenPicker = onOpenMonitorPicker,
-                    onShutterLongPress = onShutterLongPress,
-                    onBarBoundsInRoot = onCaptureBarBounds,
-                    maxContentWidth = strip.width.dp,
-                )
+                if (isPhotography) {
+                    PhotographyCaptureStrip(
+                        properties = cameraProperties,
+                        onSelectDrive = {},
+                        onSelectMode = {},
+                        onSelectIso = {},
+                        onSelectShutter = {},
+                        onSelectIris = {},
+                        onSelectMetering = {},
+                        onSelectFlash = {},
+                        onSelectQuality = {},
+                        onSelectFocus = {},
+                        onInstantPlayback = onOpenMedia,
+                    )
+                } else {
+                    MonitorCaptureStrip(
+                        settings = captureSettings,
+                        activePicker = activeMonitorPicker,
+                        controlsEnabled = commandControlsEnabled,
+                        pendingControl = pendingCommandControl,
+                        onOpenPicker = onOpenMonitorPicker,
+                        onShutterLongPress = onShutterLongPress,
+                        onBarBoundsInRoot = onCaptureBarBounds,
+                        maxContentWidth = strip.width.dp,
+                    )
+                }
             }
         }
     }
 
-    if (!isCommand && isFill && operatorSettings.assistToolbarVisible.value) {
+    if (!isCommand && isFill && !isPhotography && operatorSettings.assistToolbarVisible.value) {
         val railFrame =
             portraitFillAssistRailFrame(
                 feed = zones.feed,
@@ -2654,12 +2684,20 @@ private fun PortraitChrome(
             onClick = onDisp,
         )
         Spacer(Modifier.weight(1f))
-        RecordButton(
-            recording = recording,
-            modifier = Modifier.size(83.dp),
-            enabled = recordEnabled,
-            onClick = onRecord,
-        )
+        if (isPhotography) {
+            PhotographyShutterButton(
+                isCapturing = stillCapturing,
+                onClick = onShutter,
+                modifier = Modifier.size(83.dp),
+            )
+        } else {
+            RecordButton(
+                recording = recording,
+                modifier = Modifier.size(83.dp),
+                enabled = recordEnabled,
+                onClick = onRecord,
+            )
+        }
         Spacer(Modifier.weight(1f))
         AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
             MediaStackGlyph(tint, glyphModifier)

@@ -102,6 +102,10 @@ enum DemoHarness {
                     model.isRecording = true
                     model.cameraState = model.cameraState.updating(recordState: .recording)
                 }
+                if env["ZC_DEMO_PHOTO"] == "1" {
+                    // Stage photography chrome (compact stills strip + rail shutter, no assist).
+                    model.demoTogglePhotographyMode()
+                }
                 if let raw = env["ZC_DEMO_LUT"] {
                     // Demo/screenshot affordance: seed a LUT and switch the tool on. `custom:<file>`
                     // selects a stored custom cube; otherwise the value names a built-in look.

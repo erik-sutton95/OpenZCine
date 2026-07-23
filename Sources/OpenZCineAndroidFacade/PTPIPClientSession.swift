@@ -1176,13 +1176,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // (seen as a hitch every ~1.5–3 s). Keep steady-state polls to a
             // single property; defer storage/descriptor/screen-size extras
             // until live view is idle (Command / media / standby).
+            // High-priority LiveViewSelector interleave (every other tick) so
+            // photo/video chrome flips without waiting a full round-robin cycle.
             let liveViewStreaming = liveViewIsActive()
-            let pollOrder = Self.androidMonitorPollOrder(isRecording: isRecording)
-            guard !pollOrder.isEmpty else {
-                return androidPropertyReadback(result: .accepted)
-            }
-            let property = pollOrder[androidPropertyPollIndex % pollOrder.count]
-            androidPropertyPollIndex = (androidPropertyPollIndex + 1) % pollOrder.count
+            let property = PTPPropertyCode.nextMonitorPollProperty(
+                pollIndex: androidPropertyPollIndex,
+                isRecording: isRecording,
+                captureSelector: androidPropertySnapshot.captureSelector,
+                order: Self.androidMonitorPollOrder(
+                    isRecording: isRecording,
+                    captureSelector: androidPropertySnapshot.captureSelector))
+            androidPropertyPollIndex &+= 1
             let previousFileType = androidPropertySnapshot.fileType
             var result = refreshAndroidProperty(property)
             if property == .movieFileType,
@@ -1875,8 +1879,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     /// Android keeps codec immediately before its codec-dependent frame-size value so a missed
     /// property event cannot publish a new D0A0 value with the prior codec's picker domain.
-    static func androidMonitorPollOrder(isRecording: Bool) -> [PTPPropertyCode] {
-        isRecording ? PTPPropertyCode.recordingMonitorPollOrder : androidLiveMonitorPollOrder
+    /// Photo mode uses the portable stills poll set (selector already high-priority interleaved).
+    static func androidMonitorPollOrder(
+        isRecording: Bool,
+        captureSelector: CameraCaptureSelector? = nil
+    ) -> [PTPPropertyCode] {
+        if isRecording { return PTPPropertyCode.recordingMonitorPollOrder }
+        if StillCapturePolicy.prefersPhotographyChrome(selector: captureSelector) {
+            return StillCapturePolicy.photoMonitorPollOrder
+        }
+        return androidLiveMonitorPollOrder
     }
 
     /// Full live-monitor property set used for both the post-connect bootstrap

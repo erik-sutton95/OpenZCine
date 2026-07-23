@@ -1,14 +1,12 @@
 import SwiftUI
 
-/// First-iteration photography monitor chrome when the body reports photo mode.
+/// Compact photography capture chrome when the body reports photo mode.
 ///
-/// Mirrors the cinema monitor philosophy: warm dark tiles, compact capture strip,
-/// long-press overflow for secondary controls. Wired to live property readouts;
-/// capture actions call into the session when a still-release command is available.
+/// Single GlassPanel row matching cinema capture-strip height so it sits cleanly in the
+/// landscape bottom bar without stacking over View Assist / record chrome. The system-rail
+/// shutter replaces the red record button; this strip is exposure/drive readouts only.
 struct PhotographyCaptureStrip: View {
     let properties: PTPCameraPropertySnapshot
-    let isCapturing: Bool
-    let onShutter: () -> Void
     let onSelectDrive: () -> Void
     let onSelectMode: () -> Void
     let onSelectISO: () -> Void
@@ -17,138 +15,100 @@ struct PhotographyCaptureStrip: View {
     let onSelectMetering: () -> Void
     let onSelectFlash: () -> Void
     let onSelectQuality: () -> Void
+    let onSelectFocus: () -> Void
     let onInstantPlayback: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            PhotographyTile(
-                title: "MODE",
-                value: properties.exposureMode ?? "—",
-                action: onSelectMode
-            )
-            PhotographyTile(
-                title: "DRIVE",
-                value: properties.stillCaptureMode ?? "Single",
-                action: onSelectDrive
-            )
-            PhotographyTile(
-                title: "ISO",
-                value: properties.iso.map { "\($0)" } ?? "—",
-                action: onSelectISO
-            )
-            PhotographyTile(
-                title: "SHUTTER",
-                value: properties.shutterSpeed ?? "—",
-                action: onSelectShutter
-            )
-            PhotographyTile(
-                title: "IRIS",
-                value: properties.fNumber ?? "—",
-                action: onSelectIris
-            )
+        GlassPanel(
+            padding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
+        ) {
+            HStack(spacing: 6) {
+                PhotographyModeBadge()
 
-            Spacer(minLength: 4)
+                PhotographyTile(
+                    title: "ISO",
+                    value: properties.iso.map { "\($0)" } ?? "—",
+                    action: onSelectISO
+                )
+                PhotographyTile(
+                    title: "SHUTTER",
+                    value: properties.shutterSpeed ?? "—",
+                    action: onSelectShutter
+                )
+                PhotographyTile(
+                    title: "IRIS",
+                    value: properties.fNumber ?? "—",
+                    action: onSelectIris
+                )
+                PhotographyTile(
+                    title: "MODE",
+                    value: properties.exposureMode ?? "—",
+                    action: onSelectMode
+                )
+                PhotographyTile(
+                    title: "DRIVE",
+                    value: properties.stillCaptureMode ?? "Single",
+                    action: onSelectDrive
+                )
+                PhotographyTile(
+                    title: "FOCUS",
+                    value: properties.focusMode ?? "—",
+                    action: onSelectFocus
+                )
+                PhotographyTile(
+                    title: "QUAL",
+                    value: properties.compression ?? properties.imageSize ?? "—",
+                    action: onSelectQuality
+                )
+                PhotographyTile(
+                    title: "FLASH",
+                    value: properties.flashMode ?? "—",
+                    action: onSelectFlash
+                )
+                PhotographyTile(
+                    title: "METER",
+                    value: properties.meteringMode ?? "—",
+                    action: onSelectMetering
+                )
 
-            Button(action: onInstantPlayback) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(StartupColors.ink.opacity(0.85))
-                    .frame(width: 40, height: 40)
-                    .background(StartupColors.control.opacity(0.75), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Instant playback")
-
-            Button(action: onShutter) {
-                ZStack {
-                    Circle()
-                        .strokeBorder(Color.white.opacity(0.92), lineWidth: 3)
-                        .frame(width: 58, height: 58)
-                    Circle()
-                        .fill(isCapturing ? Color.white.opacity(0.55) : Color.white)
-                        .frame(width: 46, height: 46)
+                Button(action: onInstantPlayback) {
+                    Image(systemName: "photo.on.rectangle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(LiveDesign.text.opacity(0.9))
+                        .frame(width: 36, height: 36)
+                        .background(LiveDesign.glassBright, in: Circle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Instant playback")
             }
-            .buttonStyle(.plain)
-            .disabled(isCapturing)
-            .accessibilityLabel(isCapturing ? "Capturing" : "Shutter")
+            .frame(maxHeight: .infinity)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            StartupColors.control.opacity(0.55),
-            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-        )
-    }
-}
-
-/// Secondary stills options revealed by long-press / overflow (first iteration: always visible row).
-struct PhotographySecondaryStrip: View {
-    let properties: PTPCameraPropertySnapshot
-    let onSelectMetering: () -> Void
-    let onSelectFlash: () -> Void
-    let onSelectQuality: () -> Void
-    let onSelectFocus: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            PhotographyTile(
-                title: "METER",
-                value: properties.meteringMode ?? "—",
-                compact: true,
-                action: onSelectMetering
-            )
-            PhotographyTile(
-                title: "FLASH",
-                value: properties.flashMode ?? "—",
-                compact: true,
-                action: onSelectFlash
-            )
-            PhotographyTile(
-                title: "QUAL",
-                value: properties.compression ?? properties.imageSize ?? "—",
-                compact: true,
-                action: onSelectQuality
-            )
-            PhotographyTile(
-                title: "FOCUS",
-                value: properties.focusMode ?? "—",
-                compact: true,
-                action: onSelectFocus
-            )
-            if let bias = properties.exposureBias {
-                PhotographyTile(title: "EV", value: bias, compact: true, action: {})
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
     }
 }
 
 struct PhotographyTile: View {
     let title: String
     let value: String
-    var compact: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: compact ? 8 : 9, weight: .semibold, design: .rounded))
-                    .tracking(0.6)
-                    .foregroundStyle(StartupColors.muted)
+                    .font(.system(size: 8, weight: .semibold, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(LiveDesign.muted)
                 Text(value)
-                    .font(.system(size: compact ? 12 : 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LiveDesign.text)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .minimumScaleFactor(0.65)
             }
-            .padding(.horizontal, compact ? 8 : 10)
-            .padding(.vertical, compact ? 6 : 8)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
             .background(
-                StartupColors.control.opacity(0.82),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                LiveDesign.glassBright,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
             )
         }
         .buttonStyle(.plain)
@@ -160,12 +120,30 @@ struct PhotographyTile: View {
 struct PhotographyModeBadge: View {
     var body: some View {
         Text("PHOTO")
-            .font(.system(size: 10, weight: .bold, design: .rounded))
-            .tracking(1.2)
-            .foregroundStyle(StartupColors.ink)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(StartupColors.accent.opacity(0.9), in: Capsule())
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .tracking(1.0)
+            .foregroundStyle(LiveDesign.text)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .background(LiveDesign.accent.opacity(0.92), in: Capsule())
             .accessibilityLabel("Photography mode")
+    }
+}
+
+/// System-rail still shutter (replaces the red record control in photography mode).
+struct PhotographyShutterButton: View {
+    let isCapturing: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(Color.white.opacity(0.92), lineWidth: 3)
+                .frame(width: 54, height: 54)
+            Circle()
+                .fill(isCapturing ? Color.white.opacity(0.5) : Color.white)
+                .frame(width: 42, height: 42)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(isCapturing ? "Capturing" : "Shutter")
     }
 }

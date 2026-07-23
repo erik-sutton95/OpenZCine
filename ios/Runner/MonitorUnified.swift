@@ -276,35 +276,21 @@ struct MonitorCaptureStrip: View {
         }
     }
 
-    /// Photo-mode capture chrome (still release + drive/exposure tiles).
+    /// Photo-mode capture chrome: single compact row (shutter lives on the system rail).
     private var photographyBody: some View {
-        VStack(spacing: 6) {
-            HStack {
-                PhotographyModeBadge()
-                Spacer(minLength: 0)
-            }
-            PhotographyCaptureStrip(
-                properties: model.cameraPropertySnapshot,
-                isCapturing: model.isStillCapturing,
-                onShutter: { model.captureStill() },
-                onSelectDrive: { model.presentStillDrivePicker() },
-                onSelectMode: { model.presentExposureModePicker() },
-                onSelectISO: { model.presentStillISOPicker() },
-                onSelectShutter: { model.presentStillShutterPicker() },
-                onSelectIris: { model.presentStillIrisPicker() },
-                onSelectMetering: { model.presentStillMeteringPicker() },
-                onSelectFlash: { model.presentStillFlashPicker() },
-                onSelectQuality: { model.presentStillQualityPicker() },
-                onInstantPlayback: { model.presentInstantPlayback() }
-            )
-            PhotographySecondaryStrip(
-                properties: model.cameraPropertySnapshot,
-                onSelectMetering: { model.presentStillMeteringPicker() },
-                onSelectFlash: { model.presentStillFlashPicker() },
-                onSelectQuality: { model.presentStillQualityPicker() },
-                onSelectFocus: { model.presentStillFocusPicker() }
-            )
-        }
+        PhotographyCaptureStrip(
+            properties: model.cameraPropertySnapshot,
+            onSelectDrive: { model.presentStillDrivePicker() },
+            onSelectMode: { model.presentExposureModePicker() },
+            onSelectISO: { model.presentStillISOPicker() },
+            onSelectShutter: { model.presentStillShutterPicker() },
+            onSelectIris: { model.presentStillIrisPicker() },
+            onSelectMetering: { model.presentStillMeteringPicker() },
+            onSelectFlash: { model.presentStillFlashPicker() },
+            onSelectQuality: { model.presentStillQualityPicker() },
+            onSelectFocus: { model.presentStillFocusPicker() },
+            onInstantPlayback: { model.presentInstantPlayback() }
+        )
         .background(
             GeometryReader { proxy in
                 Color.clear
@@ -835,29 +821,47 @@ struct MonitorSystemCluster: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Record button + confirmation alert (shared by both axes)
+    // MARK: - Record / shutter + confirmation alert (shared by both axes)
 
-    private var recordButton: some View {
-        Button {
-            model.toggleRecording()
-        } label: {
-            RecordButton(isRecording: model.cameraState.recordState == .recording)
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(
-            model.cameraState.recordState == .recording ? "Stop recording" : "Start recording"
-        )
-        .accessibilityIdentifier("monitor.system.record")
-        .liveViewGuideAnchor(.record)
-        .alert(recordConfirmationTitle, isPresented: isRecordConfirmationPresented) {
-            Button("Cancel", role: .cancel) {
-                model.cancelRecordToggle()
+    private var isPhotographyMode: Bool {
+        StillCapturePolicy.prefersPhotographyChrome(
+            selector: model.cameraPropertySnapshot.captureSelector)
+    }
+
+    @ViewBuilder private var recordButton: some View {
+        if isPhotographyMode {
+            Button {
+                model.captureStill()
+            } label: {
+                PhotographyShutterButton(isCapturing: model.isStillCapturing)
             }
-            Button(recordConfirmationActionTitle, role: .destructive) {
-                model.confirmRecordToggle()
+            .buttonStyle(.zcTapTarget)
+            .disabled(model.isStillCapturing)
+            .accessibilityLabel(model.isStillCapturing ? "Capturing" : "Shutter")
+            .accessibilityIdentifier("monitor.system.shutter")
+            .liveViewGuideAnchor(.record)
+        } else {
+            Button {
+                model.toggleRecording()
+            } label: {
+                RecordButton(isRecording: model.cameraState.recordState == .recording)
             }
-        } message: {
-            Text(recordConfirmationMessage)
+            .buttonStyle(.zcTapTarget)
+            .accessibilityLabel(
+                model.cameraState.recordState == .recording ? "Stop recording" : "Start recording"
+            )
+            .accessibilityIdentifier("monitor.system.record")
+            .liveViewGuideAnchor(.record)
+            .alert(recordConfirmationTitle, isPresented: isRecordConfirmationPresented) {
+                Button("Cancel", role: .cancel) {
+                    model.cancelRecordToggle()
+                }
+                Button(recordConfirmationActionTitle, role: .destructive) {
+                    model.confirmRecordToggle()
+                }
+            } message: {
+                Text(recordConfirmationMessage)
+            }
         }
     }
 
@@ -1097,8 +1101,11 @@ struct MonitorShell: View {
         }
 
         // Bottom bars (assist + capture) — live only; clean/lock hide them.
+        // Photography mode drops View Assist (cinema tools) so the photo strip owns the bar.
         if !isClean {
-            let assistVisible = chrome.assistToolbarVisible
+            let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
+                selector: model.cameraPropertySnapshot.captureSelector)
+            let assistVisible = chrome.assistToolbarVisible && !isPhotography
             let captureVisible = chrome.cameraValuesVisible
             if let assist = map.assistStrip, let capture = map.captureStrip,
                 assistVisible || captureVisible
@@ -1387,7 +1394,10 @@ struct MonitorShell: View {
             // Fit mode: horizontal assist toolbar between the scopes zone and the tile grid (R6).
             // The core emits `assistStrip` only for fit + live; 12/4pt insets float the glass pill
             // off the screen edges. The vertical rail is fill-only (below).
-            if let assist = map.assistStrip {
+            // Hidden in photography mode — peaking/zebra/false-color are cinema tools.
+            let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
+                selector: model.cameraPropertySnapshot.captureSelector)
+            if let assist = map.assistStrip, !isPhotography {
                 MonitorAssistStrip(axis: .horizontal, collapsible: false)
                     .environment(model)
                     .liveViewGuideAnchor(.viewAssist)
@@ -1404,7 +1414,8 @@ struct MonitorShell: View {
             // Assist rail (fill only): collapsed pill on the feed's bottom-left; expanded spans the
             // feed height. Fit mode uses the horizontal toolbar above instead.
             // `axis: .vertical, collapsible: true` renders the collapse pill.
-            if model.displayMode != .command, isFill {
+            // Hidden in photography mode (same cinema-tool gate as the fit toolbar).
+            if model.displayMode != .command, isFill, !isPhotography {
                 let controlsHeight = map.captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 // The bar no longer overlays the feed, so the expanded rail spans the feed from
