@@ -657,8 +657,10 @@ struct MonitorAssistStrip: View {
     /// Expanded-rail width — wide enough for `AssistToolButtonRow`'s icon + label. Also used by
     /// `MonitorShell`'s portrait branch for the outer frame it sizes around this view.
     static let expandedWidth: CGFloat = 60
+    /// Collapsed-pill diameter, exposed so the photo rail can centre the pill on the lock row.
+    static let collapsedPillSize: CGFloat = 44
     /// Height of the bottom scroll-fade so the last tool row never hard-clips mid-glyph.
-    private static let bottomFadeHeight: CGFloat = 28
+    private static let bottomFadeHeight: CGFloat = 40
 
     private var tools: [MonitorAssistTool] {
         // Audio monitoring stays last — the vertical rail's counterpart of the horizontal strip's
@@ -688,7 +690,7 @@ struct MonitorAssistStrip: View {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(LiveDesign.text.opacity(0.86))
-                .frame(width: 44, height: 44)
+                .frame(width: Self.collapsedPillSize, height: Self.collapsedPillSize)
                 .liquidGlass(in: Circle())
         }
         .buttonStyle(.zcTapTarget)
@@ -711,15 +713,24 @@ struct MonitorAssistStrip: View {
             }
             // Mirrors MediaBrowser's `portraitGridControlsBand` fade shape: rows scroll UNDER a
             // bottom gradient so the last tool never hard-clips mid-glyph against the rail's
-            // rounded edge — the fade itself is the scroll affordance.
+            // rounded edge — the fade itself is the scroll affordance. The gradient reaches
+            // near-opaque well before the rail's end so a row is fully swallowed by the time
+            // it meets the rounded corner.
             LinearGradient(
-                colors: [LiveDesign.background.opacity(0), LiveDesign.background.opacity(0.7)],
+                stops: [
+                    .init(color: LiveDesign.background.opacity(0), location: 0),
+                    .init(color: LiveDesign.background.opacity(0.85), location: 0.55),
+                    .init(color: LiveDesign.background.opacity(0.98), location: 1),
+                ],
                 startPoint: .top, endPoint: .bottom
             )
             .frame(height: Self.bottomFadeHeight)
             .allowsHitTesting(false)
         }
         .frame(width: Self.expandedWidth, height: feedHeight)
+        // Rows must never draw outside the rail's rounded silhouette — the scroll view clips
+        // to its rectangular bounds, which lets content poke past the rounded corners.
+        .clipShape(RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
         .liquidGlass(
             in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous))
     }
@@ -1308,7 +1319,13 @@ struct MonitorShell: View {
                     MonitorBatteryRailLayout.batteryPillTrailing(safeArea: context.feedSafeArea))
                 let railX =
                     leftChromeTrailing + 12 + Double(MonitorAssistStrip.expandedWidth) / 2
-                let railTop = lock.y
+                // Expanded: the tool column's top hugs the lock row. Collapsed: the pill is
+                // taller than the lock button, so shift its top up to centre-align the two.
+                let railTop =
+                    photoRailExpanded
+                    ? lock.y
+                    : lock.y
+                        + (lock.height - Double(MonitorAssistStrip.collapsedPillSize)) / 2
                 // "Fill until it hits the bottom bar": the trailing-aligned capture strip on a
                 // wider body (Pro Max) never reaches the rail's lane, so the rail runs down to
                 // the band's bottom edge there; it stops above the band only when the strip's
