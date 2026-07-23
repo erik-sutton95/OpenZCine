@@ -852,10 +852,11 @@ struct BatteryRailModule: View {
 
             ZStack {
                 if layout.usesBatteryPill {
-                    // Centred in the rail zone's own width — the zone ends short of the feed
-                    // frame, which keeps the gauges off the image.
+                    // Anchored in the rail zone's own width, nudged toward the screen edge —
+                    // the zone ends short of the feed frame, which keeps the gauges off the
+                    // image.
                     batteryPill
-                        .position(x: proxy.size.width / 2, y: CGFloat(layout.pillCenterY))
+                        .position(x: proxy.size.width / 2 - 6, y: CGFloat(layout.pillCenterY))
                 } else {
                     phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
                         .position(
@@ -1411,7 +1412,7 @@ struct BatteryIndicator: View {
     /// number inside (the tight lane drops the % sign — the context is unambiguous). The
     /// outline's stroke carries the state tint; a bolt precedes the number while charging.
     private var pillRowBody: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 5) {
             Image(systemName: deviceSystemName)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(LiveDesign.muted)
