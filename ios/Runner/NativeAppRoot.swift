@@ -4767,6 +4767,9 @@ final class NativeAppModel {
                 // trickling through the interleaved poll. (The nil→first read is the bootstrap's
                 // own selector read — its loop already covers the right order.)
                 burstPropertiesAfterSelectorFlip(session: session)
+                // The other side's panels/popups make no sense on this chrome — close
+                // whatever is open rather than leaving a stale drum floating.
+                dismissActivePanel()
                 // Photography hides the command monitor — snap out if the flip lands on it.
                 if isPhotographyMode, displayMode == .command {
                     displayMode = .live
