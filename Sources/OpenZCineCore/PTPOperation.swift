@@ -201,6 +201,8 @@ public enum PTPPropertyCode: UInt32, Sendable {
     case rawCompressionType = 0xD016
     /// Frames recordable to the card (`ExposureRemaining`, UINT32). Photo top-bar counter.
     case exposureRemaining = 0xD1F1
+    /// Photo image area (`CaptureAreaCrop`, UINT8) — FX/DX/1:1/16:9 sensor crop.
+    case captureAreaCrop = 0xD030
 }
 
 /// PTP response codes used by the app.

@@ -96,6 +96,7 @@ public enum StillCapturePolicy: Sendable {
         .liveViewSelector,
         .stillCaptureMode,
         .imageSize,
+        .captureAreaCrop,
         .compressionSetting,
         .exposureProgramMode,
         .stillISOAutoControl,
@@ -159,9 +160,46 @@ extension MonitorAssistTool {
     }
 }
 
+/// Photo image area (`CaptureAreaCrop`): the sensor crop photographers pick per shot.
+/// Raw values and frame aspects are shared across the lineup; DX halves the sensor but
+/// keeps the 3:2 frame shape.
+public enum StillImageArea: UInt8, Equatable, Sendable, CaseIterable {
+    case fx = 0
+    case dx = 2
+    case square = 4
+    case wide = 5
+
+    public var label: String {
+        switch self {
+        case .fx: "FX"
+        case .dx: "DX"
+        case .square: "1:1"
+        case .wide: "16:9"
+        }
+    }
+
+    /// Width / height of the framed image in this area.
+    public var frameAspect: Double {
+        switch self {
+        case .fx, .dx: 3.0 / 2.0
+        case .square: 1.0
+        case .wide: 16.0 / 9.0
+        }
+    }
+
+    public static func decode(raw: UInt8) -> StillImageArea? {
+        StillImageArea(rawValue: raw)
+    }
+
+    public static func area(forLabel label: String) -> StillImageArea? {
+        allCases.first { $0.label == label }
+    }
+}
+
 extension PTPCameraPropertySnapshot {
     /// The photography capture strip, in the same `CameraValue` shape the cinema strip
-    /// renders — same tiles, same bar, different readouts.
+    /// renders — same tiles, same bar, different readouts. Quality and image size live
+    /// in the top bar, keeping this strip to shooting settings.
     public var photographyCaptureValues: [CameraValue] {
         [
             CameraValue(label: "MODE", value: exposureMode ?? "—"),
@@ -170,10 +208,27 @@ extension PTPCameraPropertySnapshot {
             CameraValue(label: "IRIS", value: fNumber ?? "—"),
             CameraValue(label: "DRIVE", value: compactDriveLabel ?? "—"),
             CameraValue(label: "FOCUS", value: focusMode ?? "—"),
-            CameraValue(label: "QUAL", value: stillQualityCompactLabel ?? "—"),
             CameraValue(label: "FLASH", value: compactFlashLabel ?? "—"),
             CameraValue(label: "METER", value: meteringMode ?? "—"),
         ]
+    }
+
+    /// Top-bar size readout: image area + size ("FX · L"). Falls back to whichever half
+    /// the camera has reported so far.
+    public var stillSizeAreaLabel: String? {
+        let size = stillSizeCompactLabel
+        let area = imageArea?.label
+        switch (area, size) {
+        case (let area?, let size?): return "\(area) · \(size)"
+        case (let area?, nil): return area
+        case (nil, let size?): return size
+        case (nil, nil): return nil
+        }
+    }
+
+    /// The live-view frame aspect for the current photo image area (3:2 default).
+    public var photographyFeedAspect: Double {
+        (imageArea ?? .fx).frameAspect
     }
 
     /// Flash label compacted to strip width ("Red-eye slow" → "Red+S").

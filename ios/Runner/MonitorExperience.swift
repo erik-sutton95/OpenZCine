@@ -231,11 +231,18 @@ struct LiveFeedModule: View {
             LiveDesign.background
 
             GeometryReader { proxy in
+                // Photography frames the feed at the still image area's shape (FX/DX 3:2,
+                // 1:1, 16:9) so the whole photo frame shows; cinema keeps the native 16:9.
+                let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
+                    selector: model.cameraPropertySnapshot.captureSelector)
                 let feedFrame = MonitorFeedLayout.fullBleedFrame(
                     viewportWidth: viewportWidth,
                     viewportHeight: fixedContentHeight ?? Double(proxy.size.height),
                     safeArea: safeArea,
-                    horizontalDirection: horizontalDirection
+                    horizontalDirection: horizontalDirection,
+                    aspect: isPhotography
+                        ? model.cameraPropertySnapshot.photographyFeedAspect
+                        : MonitorFeedLayout.aspectRatio
                 )
                 let imageWidth = CGFloat(feedFrame.width)
                 let imageHeight = CGFloat(feedFrame.height)
@@ -840,7 +847,6 @@ struct CaptureSettingButton: View {
         // Photography strip pins, so the bar doesn't shift as stills values change.
         case "MODE": "Auto"
         case "DRIVE": "Single"
-        case "QUAL": "R+JF★"
         case "FLASH": "Red+S"
         case "METER": "Matrix"
         default: value.value

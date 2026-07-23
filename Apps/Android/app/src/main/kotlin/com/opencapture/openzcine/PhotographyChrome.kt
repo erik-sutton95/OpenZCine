@@ -43,7 +43,7 @@ import java.util.Locale
  * Photography capture strip when the body reports photo mode (iOS
  * `MonitorCaptureStrip` while `isPhotography`): the SAME glass pill, cell
  * shape, and typography as the cinema capture strip, rendering the stills
- * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/QUAL/FLASH/METER plus a trailing
+ * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/FLASH/METER plus a trailing
  * instant-playback button. Stills pickers are still stubs, so every tile
  * routes to [onOpenControl] with its label instead of a drum picker.
  */
@@ -166,7 +166,6 @@ private fun photographyStripTiles(
         PhotographyStripTile("IRIS", properties.iris ?: "—", "f/2.8"),
         PhotographyStripTile("DRIVE", compactDriveLabel(properties.stillCaptureMode) ?: "—", "Single"),
         PhotographyStripTile("FOCUS", properties.focusMode ?: "—", "Wide-L"),
-        PhotographyStripTile("QUAL", properties.stillQualityCompactLabel() ?: "—", "R+JF★"),
         PhotographyStripTile("FLASH", compactFlashLabel(properties.flashMode) ?: "—", "Red+S"),
         PhotographyStripTile("METER", properties.meteringMode ?: "—", "Matrix"),
     )

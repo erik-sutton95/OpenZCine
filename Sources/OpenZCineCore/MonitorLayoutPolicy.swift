@@ -211,13 +211,18 @@ public enum MonitorFeedLayout {
         return cutout.leading
     }
 
-    /// Builds a 16:9 feed frame, using height as the stable landscape constraint.
+    /// Builds the feed frame, using height as the stable landscape constraint. `aspect`
+    /// defaults to the native 16:9 monitor frame; photography passes the active still
+    /// image area's shape (3:2, 1:1, 16:9) so the full photo frame letterboxes instead
+    /// of cropping top and bottom.
     public static func frame(
         viewportWidth: Double,
         viewportHeight: Double,
         safeArea: MonitorEdgeInsets,
-        horizontalDirection: MonitorHorizontalLayoutDirection = .standard
+        horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
+        aspect: Double = aspectRatio
     ) -> MonitorFeedFrame {
+        let aspectRatio = max(0.1, aspect)
         let leadingInset = leadingInset(for: safeArea)
         let viewportWidth = max(0, viewportWidth)
         let viewportHeight = max(0, viewportHeight)
@@ -269,18 +274,20 @@ public enum MonitorFeedLayout {
         return MonitorFeedFrame(x: x, y: 0, width: width, height: viewportHeight)
     }
 
-    /// Fits the feed to the visible viewport without expanding the native 16:9 source frame.
+    /// Fits the feed to the visible viewport without expanding the source frame.
     public static func fullBleedFrame(
         viewportWidth: Double,
         viewportHeight: Double,
         safeArea: MonitorEdgeInsets,
-        horizontalDirection: MonitorHorizontalLayoutDirection = .standard
+        horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
+        aspect: Double = aspectRatio
     ) -> MonitorFeedFrame {
         frame(
             viewportWidth: viewportWidth,
             viewportHeight: viewportHeight,
             safeArea: safeArea,
-            horizontalDirection: horizontalDirection
+            horizontalDirection: horizontalDirection,
+            aspect: aspect
         )
     }
 }
