@@ -396,6 +396,36 @@ final class NativeCameraSession: @unchecked Sendable {
         }
     }
 
+    /// Whether a failed establishment may be retried once in place, silently. Right after a
+    /// camera-AP Wi-Fi join the ZR's PTP-IP endpoint can lag the network by a beat (connect
+    /// refused / handshake timeout), or a just-released session slot can still read busy —
+    /// transient failures an immediate second attempt clears.
+    ///
+    /// Never retried:
+    /// - any attempt that requested pairing — a body on its pairing wizard must not be re-probed
+    ///   (attempt 1 may have knocked it out of pairing mode) and a retry re-fires camera-side
+    ///   pairing prompts;
+    /// - failures with their own fallback or recovery copy (`savedProfileRequired` → re-pair
+    ///   flow, `rejectedInitiator` → "create a Connect to PC profile", Local Network permission,
+    ///   pairing errors);
+    /// - cancellation (the operator already abandoned the attempt).
+    ///
+    /// Errors outside `NativeCameraSessionError` are raw socket/NW failures — transient.
+    static func isRetryableEstablishFailure(_ error: Error, requestPairing: Bool) -> Bool {
+        if requestPairing { return false }
+        if error is CancellationError { return false }
+        guard let sessionError = error as? NativeCameraSessionError else { return true }
+        switch sessionError {
+        case .noHost, .localNetworkPermissionDenied, .pairingRejected,
+            .pairingChallengeUnavailable, .savedProfileRequired,
+            .initFailed(.rejectedInitiator):
+            return false
+        case .connectionFailed, .connectionClosed, .timeout, .unexpectedPacket,
+            .invalidPacketLength, .operationRejected, .initFailed:
+            return true
+        }
+    }
+
     func close() {
         transport.close()
     }

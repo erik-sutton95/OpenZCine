@@ -119,6 +119,7 @@
 		R3D00000000000000000006 /* MediaClipFilename.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3D00000000000000000007 /* MediaClipFilename.swift */; };
 		R3D00000000000000000008 /* MediaResolutionBucket.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3D00000000000000000009 /* MediaResolutionBucket.swift */; };
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
+		TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */; };
 		USBC00000000000000000002 /* PTPUSBContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBC00000000000000000001 /* PTPUSBContainer.swift */; };
 		USBT00000000000000000002 /* USBCameraTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = USBT00000000000000000001 /* USBCameraTransport.swift */; };
 		WBKL00000000000000000002 /* WhiteBalanceKelvinPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */; };
@@ -294,6 +295,7 @@
 		R3D00000000000000000007 /* MediaClipFilename.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MediaClipFilename.swift; path = ../Sources/OpenZCineCore/MediaClipFilename.swift; sourceTree = SOURCE_ROOT; };
 		R3D00000000000000000009 /* MediaResolutionBucket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MediaResolutionBucket.swift; path = ../Sources/OpenZCineCore/MediaResolutionBucket.swift; sourceTree = SOURCE_ROOT; };
 		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
+		TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraEstablishRetryTests.swift; sourceTree = "<group>"; };
 		USBC00000000000000000001 /* PTPUSBContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPUSBContainer.swift; path = ../Sources/OpenZCineCore/PTPUSBContainer.swift; sourceTree = SOURCE_ROOT; };
 		USBT00000000000000000001 /* USBCameraTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBCameraTransport.swift; sourceTree = "<group>"; };
 		WBKL00000000000000000003 /* WhiteBalanceKelvinPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WhiteBalanceKelvinPolicy.swift; path = ../Sources/OpenZCineCore/WhiteBalanceKelvinPolicy.swift; sourceTree = SOURCE_ROOT; };
@@ -330,6 +332,7 @@
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
 				331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */,
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
+				TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -642,6 +645,7 @@
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
 				331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */,
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
+				TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
