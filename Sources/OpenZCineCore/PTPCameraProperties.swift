@@ -33,6 +33,7 @@ public enum PTPCameraControl: Equatable, Sendable {
     case stillFlash
     case stillMeter
     case stillImageSize
+    case stillQuality
 }
 
 extension PTPPropertyCode {
@@ -331,6 +332,12 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
             // null terminator, the exact form the body reports back.
             return PTPCameraPropertyWrite(
                 property: .imageSize, data: PTPCameraPropertyDecoders.ptpStringData(label))
+        case .stillQuality:
+            // `CompressionSetting` (0x5004, UINT8) — RAW / RAW+JPEG / JPEG grades.
+            guard let code = PTPCameraPropertyDecoders.compressionSettingCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(property: .compressionSetting, data: Data([code]))
         case .codec, .resolution:
             // Label-based encoding is intentionally unsupported: the picker writes the camera's
             // exact advertised raw value directly via `screenSize(raw:)` / `fileType(raw:)`
@@ -956,6 +963,12 @@ public enum PTPCameraPropertyDecoders {
         case 13: "RAW+JPEG Fine★"
         default: hex(UInt32(raw))
         }
+    }
+
+    /// Inverse of `compressionSetting`, for encoding a quality picker selection.
+    public static func compressionSettingCode(for label: String) -> UInt8? {
+        // ponytail: derived by scanning the forward decoder so the two can never drift.
+        (UInt8(0)...13).first { compressionSetting($0) == label }
     }
 
     /// `ExposureMeteringMode` (0x500B, UINT16) raw → label. Movie mode has a separate prop.

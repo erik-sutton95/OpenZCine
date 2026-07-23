@@ -46,10 +46,12 @@ struct MonitorInfoBar: View {
                         if !compact {
                             imageAreaButton
                             if chrome.codecReadoutVisible {
-                                inlineReadout(
-                                    icon: "camera.aperture",
+                                readoutButton(
+                                    .stillQuality, icon: "camera.aperture",
                                     value: model.cameraPropertySnapshot.stillQualityCompactLabel
-                                        ?? "—")
+                                        ?? "—"
+                                )
+                                .accessibilityLabel("Image quality")
                             }
                             if chrome.mediaReadoutVisible {
                                 mediaCell

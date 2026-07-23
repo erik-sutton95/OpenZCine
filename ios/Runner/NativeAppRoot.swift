@@ -5877,6 +5877,7 @@ final class NativeAppModel {
         case .stillFlash: cameraPropertySnapshot.flashMode ?? ""
         case .stillMeter: cameraPropertySnapshot.meteringMode ?? ""
         case .stillSize: cameraPropertySnapshot.stillSizeAreaLabel ?? ""
+        case .stillQuality: cameraPropertySnapshot.compression ?? ""
         default: cameraState.values.first(where: { $0.label == picker.valueLabel })?.value ?? ""
         }
     }
@@ -6825,6 +6826,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     case stillFlash
     case stillMeter
     case stillSize
+    case stillQuality
 
     var id: String { rawValue }
 
@@ -6832,7 +6834,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     var isStillPicker: Bool {
         switch self {
         case .stillMode, .stillISO, .stillShutter, .stillIris, .stillDrive, .stillFocus,
-            .stillFlash, .stillMeter, .stillSize:
+            .stillFlash, .stillMeter, .stillSize, .stillQuality:
             true
         default:
             false
@@ -6860,6 +6862,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillFlash: "Flash"
         case .stillMeter: "Metering"
         case .stillSize: "Image Size"
+        case .stillQuality: "Image Quality"
         }
     }
 
@@ -6884,6 +6887,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillFlash: "Flash mode"
         case .stillMeter: "Metering pattern"
         case .stillSize: "Area · size"
+        case .stillQuality: "RAW · JPEG"
         }
     }
 
@@ -6903,6 +6907,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillFlash: "FLASH"
         case .stillMeter: "METER"
         case .stillSize: "SIZE"
+        case .stillQuality: "QUAL"
         }
     }
 
@@ -6929,7 +6934,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     /// `PickerPanel` drum — only the anchor and slide direction differ.
     var isTopBar: Bool {
         switch self {
-        case .resolution, .codec, .stillSize: true
+        case .resolution, .codec, .stillSize, .stillQuality: true
         default: false
         }
     }
@@ -6981,6 +6986,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // Two independent camera settings chosen by tab (area crop / size string) — routed
             // per mode in `applyPicker`, like FOCUS.
             nil
+        case .stillQuality:
+            .stillQuality
         }
     }
 
@@ -7027,6 +7034,13 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillMeter: ["Matrix", "Center", "Spot", "Highlight"]
         // SIZE is modes-driven (Area | Size tabs).
         case .stillSize: []
+        // Doc-verified `CompressionSetting` ladder minus the ★ size-priority variants and TIFF —
+        // labels round-trip through `PTPCameraPropertyDecoders.compressionSetting`.
+        case .stillQuality:
+            [
+                "RAW", "RAW+JPEG Fine", "RAW+JPEG Normal", "RAW+JPEG Basic", "JPEG Fine",
+                "JPEG Normal", "JPEG Basic",
+            ]
         }
     }
 
@@ -7121,7 +7135,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(title: "Size", options: ["Size L", "Size M", "Size S"], base: "Size L"),
             ]
         case .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
-            .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter:
+            .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
+            .stillQuality:
             []
         }
     }
@@ -7159,7 +7174,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             }
         case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
             .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
-            .stillSize:
+            .stillSize, .stillQuality:
             // Stills pickers keep their doc-verified hardcoded ladders — no descriptor enum path.
             return nil
         }

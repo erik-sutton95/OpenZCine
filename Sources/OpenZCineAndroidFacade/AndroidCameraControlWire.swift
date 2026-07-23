@@ -102,7 +102,7 @@ enum AndroidCameraControl: Hashable, Sendable {
         case .attenuator: self = .attenuator
         case .audio32BitFloat: self = .audio32BitFloat
         case .stillISO, .stillShutter, .stillIris, .stillDrive, .stillFocus,
-            .stillFlash, .stillMeter, .stillImageSize:
+            .stillFlash, .stillMeter, .stillImageSize, .stillQuality:
             return nil
         }
     }
