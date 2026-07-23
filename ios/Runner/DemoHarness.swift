@@ -120,6 +120,15 @@ enum DemoHarness {
                     // "16:9") so aspect-dependent chrome states capture headlessly.
                     model.setStillImageArea(area)
                 }
+                if let raw = env["ZC_DEMO_INSTANT_REVIEW"] {
+                    // Arms the REVIEW tool and fires one demo release so the post-capture
+                    // review overlay captures headlessly; "hold" pins it up (∞ duration).
+                    if raw == "hold" {
+                        model.assistConfiguration.instantReviewSeconds = 0
+                    }
+                    model.setAssist(.instantReview, visible: true)
+                    model.captureStill()
+                }
                 if let raw = env["ZC_DEMO_LUT"] {
                     // Demo/screenshot affordance: seed a LUT and switch the tool on. `custom:<file>`
                     // selects a stored custom cube; otherwise the value names a built-in look.

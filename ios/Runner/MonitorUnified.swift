@@ -636,7 +636,7 @@ struct MonitorAssistStrip: View {
         model.preferences.assistToolbarOrder.filter {
             // Audio meters render as their own trailing section (above), not inside the groups.
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
-                && (!isPhotographyToolset || $0.appliesToPhotography)
+                && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
         }
     }
 
@@ -665,7 +665,7 @@ struct MonitorAssistStrip: View {
         // trailing audio section.
         let regular = model.preferences.assistToolbarOrder.filter {
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
-                && (!isPhotographyToolset || $0.appliesToPhotography)
+                && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
         }
         return regular + (audioMetersButtonVisible ? [.audioMeters] : [])
     }

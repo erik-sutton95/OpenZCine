@@ -1714,9 +1714,39 @@ struct AssistQuickSettingsContent: View {
             trafficLightsRows
         case .peaking:
             peakingRows
+        case .instantReview:
+            instantReviewRows
         default:
             EmptyView()
         }
+    }
+
+    private var instantReviewRows: some View {
+        SettingsInlineRow(
+            title: "Review Duration",
+            help:
+                "How long the freshest capture stays over the feed after a release. ∞ keeps it up until tapped. Continuous drive modes skip the review.",
+            showTopDivider: false,
+            stacked: compact
+        ) {
+            SettingsSegmented(
+                options: ["3s", "5s", "7s", "∞"],
+                selected: instantReviewDurationLabel,
+                compact: compact,
+                stacked: compact
+            ) {
+                model.assistConfiguration.instantReviewSeconds = Self.reviewSeconds(for: $0)
+            }
+        }
+    }
+
+    private var instantReviewDurationLabel: String {
+        let seconds = model.assistConfiguration.instantReviewSeconds
+        return seconds > 0 ? "\(seconds)s" : "∞"
+    }
+
+    private static func reviewSeconds(for label: String) -> Int {
+        label == "∞" ? 0 : Int(label.dropLast()) ?? 5
     }
 
     private var falseColorRows: some View {
@@ -2247,12 +2277,12 @@ struct AssistPanel: View {
                     LUTPickerContent()
                 case .falseColor, .zebra, .waveform, .parade, .histogram, .vectorscope,
                     .trafficLights,
-                    .peaking:
+                    .peaking, .instantReview:
                     ScrollView {
                         AssistQuickSettingsContent(tool: tool)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: tool == .falseColor ? 110 : 360)
+                    .frame(maxHeight: tool == .falseColor || tool == .instantReview ? 110 : 360)
                 case .crosshair:
                     Text("Tap the toolbar button to show or hide the centre crosshair.")
                         .font(.system(size: 13))

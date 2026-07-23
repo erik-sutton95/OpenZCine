@@ -170,7 +170,7 @@ extension MonitorAssistTool {
     /// deliberately shorter so the stills strip gets the bar width.
     public var appliesToPhotography: Bool {
         switch self {
-        case .peaking, .falseColor, .zebra, .histogram, .grid, .level:
+        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .instantReview:
             true
         case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
             .guides, .crosshair, .desqueeze:

@@ -5588,6 +5588,69 @@ final class NativeAppModel {
         pendingStillTerminate = true
     }
 
+    // MARK: - Instant playback (view-assist REVIEW tool)
+
+    /// The freshest captured still, overlaid on the feed until the review duration elapses
+    /// (or until tapped when the duration is ∞).
+    private(set) var instantReviewImage: UIImage?
+    @ObservationIgnored private var instantReviewDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var instantReviewFetchTask: Task<Void, Never>?
+
+    func presentInstantReview(_ image: UIImage) {
+        withAnimation(.easeInOut(duration: 0.18)) { instantReviewImage = image }
+        instantReviewDismissTask?.cancel()
+        let seconds = assistConfiguration.instantReviewSeconds
+        guard seconds > 0 else { return }
+        instantReviewDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Double(seconds)))
+            guard !Task.isCancelled else { return }
+            self?.dismissInstantReview()
+        }
+    }
+
+    func dismissInstantReview() {
+        instantReviewDismissTask?.cancel()
+        instantReviewDismissTask = nil
+        withAnimation(.easeInOut(duration: 0.18)) { instantReviewImage = nil }
+    }
+
+    /// After a completed release with the REVIEW tool on (and a non-burst drive — continuous
+    /// modes would thrash the card), fetch the newest object's preview and overlay it. The
+    /// newest object is the highest handle across usable slots; the image may take a beat to
+    /// enumerate after DeviceReady, so a few short retries. [verify-on-HW: handle ordering and
+    /// GetThumb preview size per body]
+    private func scheduleInstantReview(session: NativeCameraSession) {
+        guard preferences.liveViewVisibleAssistTools.contains(.instantReview) else { return }
+        let drive = cameraPropertySnapshot.stillCaptureMode.flatMap(StillDriveMode.mode(forLabel:))
+        guard drive?.isContinuous != true else { return }
+        instantReviewFetchTask?.cancel()
+        instantReviewFetchTask = Task { [weak self] in
+            for attempt in 0..<4 {
+                guard let self, !Task.isCancelled, self.cameraSession === session else { return }
+                if let image = await self.fetchNewestStillPreview(session: session) {
+                    guard !Task.isCancelled else { return }
+                    self.presentInstantReview(image)
+                    return
+                }
+                if attempt < 3 {
+                    try? await Task.sleep(for: .milliseconds(350))
+                }
+            }
+        }
+    }
+
+    private func fetchNewestStillPreview(session: NativeCameraSession) async -> UIImage? {
+        var newest: UInt32 = 0
+        for (storageID, _) in await session.readAllStorageInfo() {
+            let handles = (try? await session.getObjectHandles(storageID: storageID)) ?? []
+            newest = max(newest, handles.max() ?? 0)
+        }
+        guard newest > 0, let data = try? await session.getThumb(handle: newest) else {
+            return nil
+        }
+        return UIImage(data: data)
+    }
+
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
     /// While a bulb/time exposure is holding the shutter open, a second tap ends it.
     func captureStill() {
@@ -5597,6 +5660,14 @@ final class NativeAppModel {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 isStillCapturing = false
+                // Demo instant playback: the staged feed still (or the mock-feed asset the
+                // raster falls back to) stands in for the card's newest object so the review
+                // overlay is verifiable without a body.
+                if preferences.liveViewVisibleAssistTools.contains(.instantReview),
+                    let image = liveFrameImage ?? UIImage(named: "MockFeed")
+                {
+                    presentInstantReview(image)
+                }
             }
             return
         }
@@ -5733,6 +5804,7 @@ final class NativeAppModel {
             switch try await session.pollStillReleaseReadiness() {
             case .complete:
                 finishStillRelease(message: nil)
+                scheduleInstantReview(session: session)
             case .inProgress:
                 stillReleaseIsOpenShutter = false
                 // Self-timer waits up to 20 s and bursts can run long; only give up well
@@ -7429,6 +7501,7 @@ extension MonitorAssistTool {
         case .crosshair: "plus"
         case .level: "gyroscope"
         case .desqueeze: "arrow.left.and.right"
+        case .instantReview: "photo.badge.checkmark"
         }
     }
 
@@ -7449,6 +7522,7 @@ extension MonitorAssistTool {
         case .crosshair: "Crosshair"
         case .level: "Horizon"
         case .desqueeze: "Desqueeze"
+        case .instantReview: "Instant Playback"
         }
     }
 }

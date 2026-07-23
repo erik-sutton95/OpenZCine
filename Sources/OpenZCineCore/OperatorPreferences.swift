@@ -23,6 +23,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     case crosshair = "CROSS"
     case level = "LEVEL"
     case desqueeze = "DE-SQ"
+    case instantReview = "PLAY"
 
     public var id: String { rawValue }
 
@@ -34,12 +35,17 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .lut, .peaking, .falseColor, .zebra, .waveform, .parade, .histogram, .vectorscope,
             .trafficLights,
             .guides, .grid,
-            .crosshair, .level, .desqueeze:
+            .crosshair, .level, .desqueeze, .instantReview:
             true
         case .audioMeters:
             // Tap-only tool — the meters carry no operator-tunable options.
             false
         }
+    }
+
+    /// Tools that only exist in the photography toolset — the cinema strip never offers them.
+    public var isPhotographyOnly: Bool {
+        self == .instantReview
     }
 
     /// Exposure-analysis tools on the bottom assist toolbar (Display ▸ Exposure Tools).
@@ -77,6 +83,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .crosshair: "Crosshair"
         case .level: "Horizon"
         case .desqueeze: "Desqueeze"
+        case .instantReview: "Instant Playback"
         }
     }
 }
@@ -420,7 +427,12 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     ) throws -> [MonitorAssistTool] {
         let raw = try container.decode([String].self, forKey: key)
         let valid = Set(MonitorAssistTool.allCases)
-        return raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) }
+        let decoded = raw.compactMap(MonitorAssistTool.init(rawValue:)).filter {
+            valid.contains($0)
+        }
+        // Tools introduced after the order was first persisted append at the end — without
+        // this, a saved order simply never shows a new tool.
+        return decoded + MonitorAssistTool.allCases.filter { !decoded.contains($0) }
     }
 
     /// Same as ``decodeAssistToolArray`` but tolerates an absent key (returns `nil` instead of
@@ -1264,6 +1276,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     public var peakingColor: Peaking.Color
     /// How aggressively peaking flags edges (maps to the detector threshold in the renderer).
     public var peakingSensitivity: Peaking.Sensitivity
+    /// Instant playback review duration in seconds; 0 keeps the still up until dismissed.
+    public var instantReviewSeconds: Int = 5
     /// Per-scope display options (size, mode, guide lines, traffic lights).
     public var scopes: Scopes
     /// The LUT applied to the live view (gated by the `.lut` assist tool being on).
@@ -1278,7 +1292,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case guides, grid, level, desqueeze, falseColorReferenceEnabled, falseColorScale,
             zebra, trafficLights,
-            zebraHighlightIRE, peakingColor, peakingSensitivity, scopes, selectedLUT
+            zebraHighlightIRE, peakingColor, peakingSensitivity, scopes, selectedLUT,
+            instantReviewSeconds
     }
 
     /// Removed settings — decoded and discarded so older saved configs still load.
@@ -1338,6 +1353,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         peakingColor = try c.decodeIfPresent(Peaking.Color.self, forKey: .peakingColor) ?? .red
         peakingSensitivity =
             try c.decodeIfPresent(Peaking.Sensitivity.self, forKey: .peakingSensitivity) ?? .medium
+        instantReviewSeconds =
+            try c.decodeIfPresent(Int.self, forKey: .instantReviewSeconds) ?? 5
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -1354,6 +1371,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         try c.encode(peakingSensitivity, forKey: .peakingSensitivity)
         try c.encode(scopes, forKey: .scopes)
         try c.encode(selectedLUT, forKey: .selectedLUT)
+        try c.encode(instantReviewSeconds, forKey: .instantReviewSeconds)
     }
 
     public static let defaults = AssistConfiguration()

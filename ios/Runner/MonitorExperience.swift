@@ -326,6 +326,11 @@ struct LiveFeedModule: View {
         .overlay {
             FeedAlignedAssists(clean: model.displayMode == .clean)
         }
+        // Instant playback rides above the feed gestures so its tap dismisses instead of
+        // moving the AF point.
+        .overlay {
+            InstantReviewOverlay()
+        }
     }
 
     /// Composed feed gesture: a vertical swipe switches output mode, else a tap moves the focus
@@ -555,6 +560,29 @@ private struct LiveFeedFocusOverlay: View {
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress
             )
             .equatable()
+        }
+    }
+}
+
+/// Post-capture instant playback: the freshest still fills the feed rect for the configured
+/// review duration (until tapped when ∞). A tap anywhere — or the close control — dismisses.
+private struct InstantReviewOverlay: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        if let image = model.instantReviewImage {
+            ZStack(alignment: .topTrailing) {
+                Color.black.opacity(0.88)
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                CloseButton { model.dismissInstantReview() }
+                    .padding(10)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { model.dismissInstantReview() }
+            .transition(.opacity)
         }
     }
 }
