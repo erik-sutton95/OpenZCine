@@ -94,6 +94,9 @@ struct MediaBrowserView: View {
     @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
     @State private var playingClip: MediaClip?
     @State private var viewingPhoto: MediaClip?
+    /// Transient explanation shown when a proxy-less R3D master is tapped.
+    @State private var masterNotice: String?
+    @State private var masterNoticeDismissTask: Task<Void, Never>?
     @State private var isSelecting = false
     @State private var selectedClipIDs: Set<String> = []
     /// Realised grid cells' frames in ``MediaGridSpace`` — the sweep-select hit-test registry.
@@ -148,6 +151,19 @@ struct MediaBrowserView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             LiveDesign.background
+                .overlay(alignment: .bottom) {
+                    if let masterNotice {
+                        Text(masterNotice)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(LiveDesign.text)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .liquidGlass(in: Capsule())
+                            .padding(.bottom, 24)
+                            .transition(.opacity)
+                    }
+                }
+                .zIndex(1)
 
             GeometryReader { proxy in
                 let portrait = proxy.size.height > proxy.size.width
@@ -867,8 +883,24 @@ struct MediaBrowserView: View {
         }
         if clip.mediaKind == .photo {
             viewingPhoto = clip
-        } else {
-            playingClip = clip
+            return
+        }
+        // An R3D master only reaches the grid when no same-stem proxy was found on the
+        // card; the player cannot decode it, so explain instead of opening a dead player.
+        if MediaClipFilename.isR3D(clip.filename) {
+            showMasterNotice("R3D master — no playable proxy was found for this clip.")
+            return
+        }
+        playingClip = clip
+    }
+
+    private func showMasterNotice(_ message: String) {
+        withAnimation { masterNotice = message }
+        masterNoticeDismissTask?.cancel()
+        masterNoticeDismissTask = Task {
+            try? await Task.sleep(for: .seconds(2.6))
+            guard !Task.isCancelled else { return }
+            withAnimation { masterNotice = nil }
         }
     }
 }
@@ -1816,6 +1848,8 @@ struct MediaPhotoViewer: View {
     @State private var loadTask: Task<Void, Never>?
     @State private var zoomScale: CGFloat = 1
     @State private var lastZoomScale: CGFloat = 1
+    @State private var isSharePresented = false
+    @State private var isPreparingShare = false
 
     var body: some View {
         ZStack {
@@ -1858,6 +1892,7 @@ struct MediaPhotoViewer: View {
                         .foregroundStyle(LiveDesign.text)
                         .lineLimit(1)
                     Spacer()
+                    shareButton
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
@@ -1872,6 +1907,45 @@ struct MediaPhotoViewer: View {
             model.cancelClipStream()
             image = nil
         }
+        .sheet(isPresented: $isSharePresented) {
+            if let url = model.clipLocalURL(clip) {
+                MultiShareSheet(urls: [url], metadataText: nil) {
+                    isSharePresented = false
+                }
+            }
+        }
+    }
+
+    /// Shares the original file (JPEG/HEIF/NEF alike) once its camera download completes —
+    /// the share sheet covers AirDrop, Files, and Save Image for the photo workflow.
+    private var shareButton: some View {
+        Button {
+            guard !isPreparingShare else { return }
+            if model.isClipDownloaded(clip) {
+                isSharePresented = true
+            } else {
+                isPreparingShare = true
+                Task {
+                    // The viewer already streams the full file; wait for it to land.
+                    while !Task.isCancelled, !model.isClipDownloaded(clip) {
+                        try? await Task.sleep(for: .milliseconds(300))
+                    }
+                    isPreparingShare = false
+                    if model.isClipDownloaded(clip) { isSharePresented = true }
+                }
+            }
+        } label: {
+            if isPreparingShare {
+                ProgressView()
+                    .tint(LiveDesign.accent)
+                    .frame(width: 34, height: 34)
+            } else {
+                CircleIconButton(systemName: "square.and.arrow.up", size: 34)
+                    .contentShape(Circle())
+            }
+        }
+        .buttonStyle(.zcTapTarget)
+        .accessibilityLabel("Share photo")
     }
 
     private var loadingMessage: String {
