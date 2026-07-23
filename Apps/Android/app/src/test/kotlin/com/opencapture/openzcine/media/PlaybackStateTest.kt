@@ -98,6 +98,37 @@ class PlaybackStateTest {
     }
 
     @Test
+    fun `anchored pinch keeps the content under the centroid fixed`() {
+        // A point p renders at p·zoom + pan. Zooming 1×→2× about anchor (100, 50)
+        // from a centred pan must keep that rendered point stationary.
+        val zoomed = anchoredPinchPan(PlaybackPan(), anchorX = 100f, anchorY = 50f, scaleRatio = 2f)
+        assertEquals(PlaybackPan(x = -100f, y = -50f), zoomed)
+        // The content point that was under the anchor ((c − pan)/zoom = (100, 50))
+        // still renders at the anchor after the step: p·2 + pan' = (100, 50).
+        assertEquals(100f, 100f * 2f + zoomed.x)
+        assertEquals(50f, 50f * 2f + zoomed.y)
+
+        // An unchanged scale reduces to a plain finger pan.
+        assertEquals(
+            PlaybackPan(x = 10f, y = -6f),
+            anchoredPinchPan(
+                PlaybackPan(),
+                anchorX = 100f,
+                anchorY = 50f,
+                scaleRatio = 1f,
+                panChangeX = 10f,
+                panChangeY = -6f,
+            ),
+        )
+
+        // Zooming back out about the same anchor inverts the offset exactly.
+        assertEquals(
+            PlaybackPan(),
+            anchoredPinchPan(zoomed, anchorX = 100f, anchorY = 50f, scaleRatio = 0.5f),
+        )
+    }
+
+    @Test
     fun `pan remains inside the zoomed presentation including desqueeze`() {
         assertEquals(
             PlaybackPan(x = 0f, y = 300f),

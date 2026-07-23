@@ -123,6 +123,26 @@ internal data class PlaybackPan(
 )
 
 /**
+ * One anchored pinch step (iOS `AnchoredPinchZoom`): with a centre-pivot scale
+ * followed by a translation, a content point p renders at `p·zoom + pan`, so
+ * the content under the pinch centroid stays fixed across a scale step via
+ * `pan' = c − (c − pan)·(zoom'/zoom)`, with the simultaneous finger drag added
+ * on top. [anchorX]/[anchorY] are the centroid relative to the transform pivot.
+ */
+internal fun anchoredPinchPan(
+    current: PlaybackPan,
+    anchorX: Float,
+    anchorY: Float,
+    scaleRatio: Float,
+    panChangeX: Float = 0f,
+    panChangeY: Float = 0f,
+): PlaybackPan =
+    PlaybackPan(
+        x = anchorX - (anchorX - current.x) * scaleRatio + panChangeX,
+        y = anchorY - (anchorY - current.y) * scaleRatio + panChangeY,
+    )
+
+/**
  * Bounds a zoomed video to its viewport. A configured anamorphic presentation
  * can shrink either source axis before zooming, so the horizontal and
  * vertical limits are intentionally independent.

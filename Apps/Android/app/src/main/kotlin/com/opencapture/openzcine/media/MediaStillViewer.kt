@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -361,16 +362,38 @@ private fun ZoomableStillPreview(
         panOffset = boundedPan(panOffset, scale, viewportSize)
     }
     val transformState =
-        rememberTransformableState { _, zoomChange, panChange, _ ->
-            val updatedScale = (scale * zoomChange).coerceIn(1f, 4f)
+        rememberTransformableState { centroid, zoomChange, panChange, _ ->
+            val previousScale = scale
+            val updatedScale = (previousScale * zoomChange).coerceIn(1f, 4f)
+            // Anchored pinch (iOS `AnchoredPinchZoom`): with a centre-pivot scale
+            // followed by a translation, a content point p renders at
+            // p·scale + offset — so holding the point under the pinch centroid c
+            // fixed across a scale step means offset' = c − (c − offset)·ratio.
+            val center = Offset(viewportSize.width / 2f, viewportSize.height / 2f)
+            val anchor = centroid - center
+            val ratio = if (previousScale > 0f) updatedScale / previousScale else 1f
             scale = updatedScale
             panOffset =
                 if (updatedScale <= 1f) {
                     Offset.Zero
                 } else {
-                    boundedPan(panOffset + panChange, updatedScale, viewportSize)
+                    boundedPan(
+                        anchor - (anchor - panOffset) * ratio + panChange,
+                        updatedScale,
+                        viewportSize,
+                    )
                 }
         }
+    // iOS `endGesture`: a pinch released just about 1× settles back to exactly 1×.
+    LaunchedEffect(transformState, bitmap) {
+        snapshotFlow { transformState.isTransformInProgress }
+            .collect { inProgress ->
+                if (!inProgress && scale < 1.05f) {
+                    scale = 1f
+                    panOffset = Offset.Zero
+                }
+            }
+    }
     val zoomLabel = String.format(Locale.US, "Zoom %.1fx", scale)
 
     Box(

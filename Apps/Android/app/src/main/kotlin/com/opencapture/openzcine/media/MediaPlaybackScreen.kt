@@ -64,9 +64,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -75,6 +77,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -804,13 +807,31 @@ private fun ProgressivePlayer(
         if (playbackFlash == displayed) playbackFlash = null
     }
 
+    // The gesture box is the aspect-fit video rectangle, but the zoom transform
+    // pivots on the full-viewport video layer's centre — re-root the pinch
+    // centroid through the box's measured position in that viewport.
+    var gestureBoxOrigin by remember(entry) { mutableStateOf(Offset.Zero) }
     val transformState =
-        rememberTransformableState { _, zoomChange, panChange, _ ->
-            val nextZoom = (zoom * zoomChange).coerceIn(1f, PLAYBACK_ZOOM_MAX)
+        rememberTransformableState { centroid, zoomChange, panChange, _ ->
+            val previousZoom = zoom
+            val nextZoom = (previousZoom * zoomChange).coerceIn(1f, PLAYBACK_ZOOM_MAX)
+            // Anchored pinch (iOS `AnchoredPinchZoom`): the point under the pinch
+            // centroid stays fixed across the scale step — see `anchoredPinchPan`.
+            val center = Offset(viewport.width / 2f, viewport.height / 2f)
+            val anchor = gestureBoxOrigin + centroid - center
+            val ratio = if (previousZoom > 0f) nextZoom / previousZoom else 1f
             zoom = nextZoom
             pan =
                 clampPlaybackPan(
-                    requested = PlaybackPan(pan.x + panChange.x, pan.y + panChange.y),
+                    requested =
+                        anchoredPinchPan(
+                            current = pan,
+                            anchorX = anchor.x,
+                            anchorY = anchor.y,
+                            scaleRatio = ratio,
+                            panChangeX = panChange.x,
+                            panChangeY = panChange.y,
+                        ),
                     viewportWidth = viewport.width.toFloat(),
                     viewportHeight = viewport.height.toFloat(),
                     zoom = nextZoom,
@@ -829,6 +850,13 @@ private fun ProgressivePlayer(
                 )
             if (nextZoom <= 1.01f) pan = PlaybackPan()
         }
+    // iOS `endGesture`: a pinch released just about 1× settles back to exactly 1×.
+    LaunchedEffect(transformState, entry) {
+        snapshotFlow { transformState.isTransformInProgress }
+            .collect { inProgress ->
+                if (!inProgress && zoom < 1.05f) resetZoom()
+            }
+    }
 
     DisposableEffect(player) {
         val listener =
@@ -1091,6 +1119,7 @@ private fun ProgressivePlayer(
         // chrome retains its own hit targets where it overlaps that rectangle.
         Box(
             Modifier.zone(feedFrame)
+                .onGloballyPositioned { gestureBoxOrigin = it.positionInParent() }
                 .pointerInput(frameScrubbing, density) {
                     if (frameScrubbing) return@pointerInput
                     awaitEachGesture {
