@@ -92,22 +92,31 @@
 			</array>
 		</dict>
 	</dict>
-	<!-- Portrait + LandscapeRight ONLY, by design — the monitor chrome is laid out for one
-	     landscape side (interface LandscapeRight = device rotated left, island on the left);
+	<!-- iPhone: Portrait + LandscapeRight ONLY, by design — the monitor chrome is laid out for
+	     one landscape side (interface LandscapeRight = device rotated left, island on the left);
 	     do not re-add LandscapeLeft/upside-down. Careful: Xcode's orientation checkboxes
 	     regenerate this whole file (comments stripped, keys re-sorted) — edit here, not in
 	     the project editor. UIRequiresFullScreen opts out of iPad multitasking
-	     (App Store error 90474). -->
+	     (App Store error 90474) on iPadOS 17/18; per TN3192 it is deprecated on 26+, where
+	     keeping it bare leaves the app in a floating aspect-constrained compatibility window —
+	     the Ignored… key below makes 26+ treat the app as a normal resizable fullscreen app. -->
 	<key>UIRequiresFullScreen</key>
 	<true/>
+	<key>UIRequiresFullScreenIgnoredStartingWithVersion</key>
+	<string>26</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- iPad: all four orientations. No island, so the one-landscape-side rule above does not
+	     apply, and iPadOS 26 windowing floats orientation-restricted apps in a non-fullscreen
+	     compatibility window on rotation instead of filling the screen. -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<!-- With UIViewControllerBasedStatusBarAppearance=false, SwiftUI's .statusBarHidden(true)
