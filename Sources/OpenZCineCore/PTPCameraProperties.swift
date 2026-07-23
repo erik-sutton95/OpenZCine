@@ -1079,13 +1079,16 @@ public enum PTPCameraPropertyDecoders {
         case 119: "Binary"
         case 120: "Carbon"
         case 201...209: "Custom \(raw - 200)"
+        // Downloaded cloud picture controls occupy their own registered band; bodies
+        // enumerate only the occupied slots. [verify-on-HW]
+        case 301...309: "Cloud \(raw - 300)"
         default: hex(UInt32(raw))
         }
     }
 
     /// Inverse of `pictureControl`, for encoding the PROFILE picker selection.
     public static func pictureControlCode(for label: String) -> UInt16? {
-        let ranges: [ClosedRange<UInt16>] = [1...11, 101...120, 201...209]
+        let ranges: [ClosedRange<UInt16>] = [1...11, 101...120, 201...209, 301...309]
         for range in ranges {
             if let hit = range.first(where: { pictureControl($0) == label }) {
                 return hit

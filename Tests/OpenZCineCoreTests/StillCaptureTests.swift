@@ -86,6 +86,27 @@ struct StillCaptureTests {
         #expect(snap.compression == "JPEG Fine")
     }
 
+    @Test("Picture-control bands decode built-ins, creatives, customs, and cloud slots")
+    func pictureControlBands() {
+        #expect(PTPCameraPropertyDecoders.pictureControl(8) == "Auto")
+        #expect(PTPCameraPropertyDecoders.pictureControl(120) == "Carbon")
+        #expect(PTPCameraPropertyDecoders.pictureControl(201) == "Custom 1")
+        // Downloaded profiles occupy the cloud band — 0x131 is slot 5, not a hex fallback.
+        #expect(PTPCameraPropertyDecoders.pictureControl(305) == "Cloud 5")
+        #expect(PTPCameraPropertyDecoders.pictureControlCode(for: "Cloud 5") == 305)
+        #expect(PTPCameraPropertyDecoders.pictureControl(310) == "0x136")
+    }
+
+    @Test("Stills tone mode fills the snapshot and defaults to SDR")
+    func stillToneModeDecode() {
+        var snap = PTPCameraPropertySnapshot()
+        #expect(snap.stillToneMode == nil)
+        snap = snap.applying(property: .stillToneMode, data: Data([2]))
+        #expect(snap.stillToneMode == "HLG")
+        snap = snap.applying(property: .stillToneMode, data: Data([0]))
+        #expect(snap.stillToneMode == "SDR")
+    }
+
     @Test func photoPollOrderIncludesSelectorAndDrive() {
         #expect(StillCapturePolicy.photoMonitorPollOrder.contains(.liveViewSelector))
         #expect(StillCapturePolicy.photoMonitorPollOrder.contains(.stillCaptureMode))

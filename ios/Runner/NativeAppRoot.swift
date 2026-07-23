@@ -7752,7 +7752,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 "Dream", "Morning", "Pop", "Sunday", "Somber", "Drama", "Silence", "Bleach",
                 "Melancholic", "Pure", "Denim", "Toy", "Sepia", "Blue", "Red", "Pink",
                 "Charcoal", "Graphite", "Binary", "Carbon",
-            ] + (1...9).map { "Custom \($0)" }
+            ] + (1...9).map { "Custom \($0)" } + (1...9).map { "Cloud \($0)" }
         }
     }
 
