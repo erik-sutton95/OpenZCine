@@ -5752,6 +5752,9 @@ final class NativeAppModel {
         let image: UIImage
         let focus: PTPLiveViewFocusInfo?
         let infoLine: String?
+        /// False while the tiny embedded thumb stands in — the overlay blurs it behind a
+        /// spinner, and the review duration doesn't start counting until the full image lands.
+        var isFullResolution: Bool = true
     }
 
     /// The freshest captured still, shown full-screen until the review duration elapses
@@ -5763,7 +5766,7 @@ final class NativeAppModel {
     /// Maintained outside the shutter path so the release itself never waits on enumeration.
     @ObservationIgnored private var knownObjectHandles: [UInt32: Set<UInt32>] = [:]
 
-    func presentInstantReview(_ image: UIImage) {
+    func presentInstantReview(_ image: UIImage, isFullResolution: Bool = true) {
         let snap = cameraPropertySnapshot
         let info = [
             snap.iso.map { "ISO \($0)" },
@@ -5777,8 +5780,16 @@ final class NativeAppModel {
             instantReview = InstantReviewState(
                 image: image,
                 focus: liveViewFocus,
-                infoLine: info.isEmpty ? nil : info)
+                infoLine: info.isEmpty ? nil : info,
+                isFullResolution: isFullResolution)
         }
+        // A stand-in thumb doesn't start the clock — the operator gets the full duration
+        // with the real image; the countdown begins on upgrade (or its failure fallback).
+        if isFullResolution { startInstantReviewCountdown() }
+    }
+
+    /// (Re)arms the auto-dismiss for the configured review duration; ∞ never arms.
+    private func startInstantReviewCountdown() {
         instantReviewDismissTask?.cancel()
         let seconds = assistConfiguration.instantReviewSeconds
         guard seconds > 0 else { return }
@@ -5871,11 +5882,15 @@ final class NativeAppModel {
         guard let thumbData = try? await session.getThumb(handle: handle),
             let thumb = UIImage(data: thumbData)
         else { return false }
-        presentInstantReview(thumb)
+        presentInstantReview(thumb, isFullResolution: false)
         // The embedded thumb is instant but tiny — stream the full image and swap it over
-        // the presented review (abandoned if the review is dismissed meanwhile).
+        // the presented review (abandoned if the review is dismissed meanwhile). If the
+        // stream fails while the review is still up, the countdown starts on the thumb so
+        // a timed review can never hang on the blurred stand-in.
         if let full = await fetchFullImage(session: session, handle: handle) {
             upgradeInstantReview(full)
+        } else if instantReview?.isFullResolution == false {
+            startInstantReviewCountdown()
         }
         return true
     }
@@ -5909,11 +5924,16 @@ final class NativeAppModel {
     }
 
     /// Swaps the streamed full-resolution image over the presented review, keeping the
-    /// captured focus state and settings line. No-op once dismissed.
+    /// captured focus state and settings line, and starts the review countdown — the
+    /// animated flag change drives the overlay's blur-to-sharp blend. No-op once dismissed.
     private func upgradeInstantReview(_ image: UIImage) {
         guard let current = instantReview else { return }
-        instantReview = InstantReviewState(
-            image: image, focus: current.focus, infoLine: current.infoLine)
+        withAnimation(.easeInOut(duration: 0.4)) {
+            instantReview = InstantReviewState(
+                image: image, focus: current.focus, infoLine: current.infoLine,
+                isFullResolution: true)
+        }
+        startInstantReviewCountdown()
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.

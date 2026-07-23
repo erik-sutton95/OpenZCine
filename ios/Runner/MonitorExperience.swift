@@ -578,10 +578,14 @@ struct InstantReviewOverlay: View {
                 GeometryReader { proxy in
                     let fitted = Self.fittedRect(
                         image: review.image.size, container: proxy.size)
+                    // The stand-in thumb shows blurred; the upgrade animates the blur away
+                    // as the full image swaps underneath, reading as one continuous sharpen.
                     Image(uiImage: review.image)
                         .resizable()
                         .frame(width: fitted.width, height: fitted.height)
                         .position(x: fitted.midX, y: fitted.midY)
+                        .blur(radius: review.isFullResolution ? 0 : 14, opaque: true)
+                        .clipped()
                     if model.assistConfiguration.instantReviewShowsFocusPoint,
                         let focus = review.focus, focus.coordinateWidth > 0,
                         focus.coordinateHeight > 0
@@ -606,6 +610,16 @@ struct InstantReviewOverlay: View {
                         }
                     }
                 }
+                if !review.isFullResolution {
+                    ZStack {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(LiveDesign.text.opacity(0.9))
+                            .scaleEffect(1.4)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+                }
                 if model.assistConfiguration.instantReviewShowsCaptureInfo,
                     let info = review.infoLine
                 {
@@ -624,6 +638,7 @@ struct InstantReviewOverlay: View {
                 CloseButton { model.dismissInstantReview() }
                     .padding(14)
             }
+            .animation(.easeInOut(duration: 0.4), value: review.isFullResolution)
             .contentShape(Rectangle())
             .onTapGesture { model.dismissInstantReview() }
             .transition(.opacity)

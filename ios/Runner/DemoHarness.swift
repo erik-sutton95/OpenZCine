@@ -122,12 +122,19 @@ enum DemoHarness {
                 }
                 if let raw = env["ZC_DEMO_INSTANT_REVIEW"] {
                     // Arms the REVIEW tool and fires one demo release so the post-capture
-                    // review overlay captures headlessly; "hold" pins it up (∞ duration).
-                    if raw == "hold" {
+                    // review overlay captures headlessly; "hold" pins it up (∞ duration);
+                    // "lowres" pins the blurred stand-in + spinner phase instead.
+                    if raw == "hold" || raw == "lowres" {
                         model.assistConfiguration.instantReviewSeconds = 0
                     }
                     model.setAssist(.instantReview, visible: true)
-                    model.captureStill()
+                    if raw == "lowres" {
+                        if let image = model.liveFrameImage ?? UIImage(named: "MockFeed") {
+                            model.presentInstantReview(image, isFullResolution: false)
+                        }
+                    } else {
+                        model.captureStill()
+                    }
                 }
                 if let raw = env["ZC_DEMO_LUT"] {
                     // Demo/screenshot affordance: seed a LUT and switch the tool on. `custom:<file>`
