@@ -614,6 +614,8 @@ struct TimerTallyBorderOverlay: View {
 
 struct InstantReviewOverlay: View {
     @Environment(NativeAppModel.self) private var model
+    /// Freshly captured shots start unrated; resets per review.
+    @State private var reviewStars = 0
 
     var body: some View {
         if let review = model.instantReview {
@@ -664,25 +666,40 @@ struct InstantReviewOverlay: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
                 }
-                if model.assistConfiguration.instantReviewShowsCaptureInfo,
-                    let info = review.infoLine
-                {
-                    VStack {
-                        Spacer()
+                VStack(spacing: 10) {
+                    Spacer()
+                    if review.handle != nil {
+                        // Rate the shot right here — the culling decision lands on the card
+                        // before the next frame.
+                        StarRatingRow(stars: reviewStars) { target in
+                            let previous = reviewStars
+                            reviewStars = target
+                            Task {
+                                if await !model.rateInstantReview(stars: target) {
+                                    reviewStars = previous
+                                }
+                            }
+                        }
+                    }
+                    if model.assistConfiguration.instantReviewShowsCaptureInfo,
+                        let info = review.infoLine
+                    {
                         Text(info)
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .foregroundStyle(LiveDesign.text.opacity(0.85))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 7)
                             .liquidGlass(in: Capsule())
-                            .padding(.bottom, 14)
                     }
-                    .frame(maxWidth: .infinity)
                 }
+                .padding(.bottom, 14)
+                .frame(maxWidth: .infinity)
                 CloseButton { model.dismissInstantReview() }
                     .padding(14)
             }
             .animation(.easeInOut(duration: 0.4), value: review.isFullResolution)
+            .onChange(of: review.handle) { _, _ in reviewStars = 0 }
+            .onAppear { reviewStars = 0 }
             .contentShape(Rectangle())
             .onTapGesture { model.dismissInstantReview() }
             .transition(.opacity)

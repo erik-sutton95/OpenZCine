@@ -1048,6 +1048,53 @@ final class NativeCameraSession: @unchecked Sendable {
         return result.data
     }
 
+    /// The object star-rating property (UINT16). Values 0/1/25/50/75/100 == Off…★★★★★;
+    /// anything else rounds down to the nearest step. RAW stills don't carry it — a pair's
+    /// JPEG/HEIF side does. [verify-on-HW]
+    private static let ratingObjectPropCode: UInt32 = 0xDC8A
+
+    /// Deletes one object from the card. Protected objects are refused by the body, and the
+    /// release stays locked until the deletion completes. [verify-on-HW]
+    func deleteObject(handle: UInt32) async throws {
+        let result = try await transact(
+            operationCode: .deleteObject,
+            parameters: [handle],
+            dataPhase: .noDataOrDataIn
+        )
+        guard result.operationResponse.responseCode == .ok else {
+            throw NativeCameraSessionError.operationRejected(
+                .deleteObject, result.operationResponse.responseCode)
+        }
+    }
+
+    /// Reads one object's star rating (raw property value, not stars).
+    func objectRating(handle: UInt32) async throws -> UInt16 {
+        let result = try await transact(
+            operationCode: .getObjectPropValue,
+            parameters: [handle, Self.ratingObjectPropCode],
+            dataPhase: .dataIn
+        )
+        guard result.operationResponse.responseCode == .ok, result.data.count >= 2 else {
+            throw NativeCameraSessionError.operationRejected(
+                .getObjectPropValue, result.operationResponse.responseCode)
+        }
+        return UInt16(result.data[0]) | (UInt16(result.data[1]) << 8)
+    }
+
+    /// Writes one object's star rating (raw property value).
+    func setObjectRating(handle: UInt32, value: UInt16) async throws {
+        let result = try await transact(
+            operationCode: .setObjectPropValue,
+            parameters: [handle, Self.ratingObjectPropCode],
+            dataPhase: .dataOut,
+            dataOut: Data([UInt8(value & 0xFF), UInt8(value >> 8)])
+        )
+        guard result.operationResponse.responseCode == .ok else {
+            throw NativeCameraSessionError.operationRejected(
+                .setObjectPropValue, result.operationResponse.responseCode)
+        }
+    }
+
     /// Lightweight keep-alive: a side-effect-free `DeviceReady` through the transaction gate (so it
     /// can't interleave with other PTP traffic), keeping an idle command channel warm — e.g. live
     /// view paused in command mode — so Wi-Fi / iPhone-hotspot NAT doesn't drop the TCP session.

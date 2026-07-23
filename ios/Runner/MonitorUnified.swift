@@ -633,11 +633,14 @@ struct MonitorAssistStrip: View {
     }
 
     private var visibleToolbarTools: [MonitorAssistTool] {
-        model.preferences.assistToolbarOrder.filter {
+        let regular = model.preferences.assistToolbarOrder.filter {
             // Audio meters render as their own trailing section (above), not inside the groups.
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
                 && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
         }
+        // Photography leads with instant playback — the tool touched between every shot.
+        guard isPhotographyToolset else { return regular }
+        return regular.filter { $0 == .instantReview } + regular.filter { $0 != .instantReview }
     }
 
     private var audioMetersButtonVisible: Bool {
@@ -669,7 +672,12 @@ struct MonitorAssistStrip: View {
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
                 && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
         }
-        return regular + (audioMetersButtonVisible ? [.audioMeters] : [])
+        // Photography leads with instant playback — the tool touched between every shot.
+        let ordered =
+            isPhotographyToolset
+            ? regular.filter { $0 == .instantReview } + regular.filter { $0 != .instantReview }
+            : regular
+        return ordered + (audioMetersButtonVisible ? [.audioMeters] : [])
     }
 
     private var verticalBody: some View {

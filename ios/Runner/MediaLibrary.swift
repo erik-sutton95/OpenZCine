@@ -496,6 +496,14 @@ struct MediaClipStore {
         try FileManager.default.removeItem(at: localURL(cameraID: cameraID, filename: filename))
     }
 
+    /// Drops one clip row from the index entirely (deliberate deletion — unlike
+    /// `applyCameraRemoval`, downloaded copies don't keep a row alive).
+    func removeEntry(cameraID: String, filename: String) {
+        var clips = loadIndex(cameraID: cameraID)
+        clips.removeAll { $0.filename == filename }
+        saveIndex(clips, cameraID: cameraID)
+    }
+
     /// Removes cached clip bytes (video files and thumbnails) for one bucket while preserving
     /// `index.json` metadata so favorites, camera handles, and delivery flags survive for re-fetch.
     ///

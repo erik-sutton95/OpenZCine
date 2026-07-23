@@ -30,7 +30,10 @@ public enum PTPOperationCode: UInt16, Sendable {
     case getObjectHandles = 0x1007  // p1 storageID, p2 formatCode, p3 association; data-in
     case getObjectInfo = 0x1008  // p1 objectHandle; data-in (ObjectInfo dataset)
     case getThumb = 0x100A  // p1 objectHandle; data-in (embedded JPEG thumbnail)
+    case deleteObject = 0x100B  // p1 objectHandle; no data. Protected objects are refused.
     case getPartialObject = 0x101B  // p1 objectHandle, p2 offset, p3 maxBytes; data-in
+    case getObjectPropValue = 0x9803  // p1 objectHandle, p2 objectPropCode; data-in
+    case setObjectPropValue = 0x9804  // p1 objectHandle, p2 objectPropCode; data-out
     case getDevicePropDesc = 0x1014
     case getDevicePropValue = 0x1015
     // Returns the *valid* (card-present) StorageIDs. Standard GetStorageIDs reports placeholder

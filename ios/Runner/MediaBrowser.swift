@@ -127,6 +127,7 @@ struct MediaBrowserView: View {
     @State private var masterNoticeDismissTask: Task<Void, Never>?
     @State private var isSelecting = false
     @State private var selectedClipIDs: Set<String> = []
+    @State private var isBatchDeleteConfirmPresented = false
     /// Realised grid cells' frames in ``MediaGridSpace`` — the sweep-select hit-test registry.
     @State private var cellFrames: [String: CGRect] = [:]
     /// Set by the post-hop share resume: the player opens with its share popup already on this
@@ -635,6 +636,31 @@ struct MediaBrowserView: View {
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(LiveDesign.text)
             Spacer(minLength: 8)
+            Button {
+                isBatchDeleteConfirmPresented = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(selectedClipIDs.isEmpty ? LiveDesign.faint : Color.red)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
+            }
+            .buttonStyle(.zcTapTarget)
+            .disabled(selectedClipIDs.isEmpty)
+            .confirmationDialog(
+                "Delete \(selectedClipIDs.count) item\(selectedClipIDs.count == 1 ? "" : "s") from the camera card? RAW+JPEG pairs delete both files.",
+                isPresented: $isBatchDeleteConfirmPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    let clips = selectedClips
+                    Task {
+                        _ = await model.deleteMediaClips(clips)
+                        exitSelectionMode()
+                    }
+                }
+            }
             Button {
                 deliveryRequest = MediaDeliveryRequest(clips: selectedClips)
             } label: {
@@ -1907,6 +1933,9 @@ struct MediaPhotoViewer: View {
     @State private var zoom = AnchoredPinchZoom()
     @State private var isSharePresented = false
     @State private var isPreparingShare = false
+    @State private var isDeleteConfirmPresented = false
+    /// Camera-read star rating; nil until loaded (or unreachable — row hidden).
+    @State private var ratingStars: Int?
     /// RAW side of the JPG/RAW toggle is active (paired stills only).
     @State private var showingRaw = false
 
@@ -1960,15 +1989,31 @@ struct MediaPhotoViewer: View {
                     if rawSibling != nil {
                         sideToggle
                     }
+                    deleteButton
                     shareButton
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 Spacer()
+                if let stars = ratingStars {
+                    StarRatingRow(stars: stars) { target in
+                        let previous = ratingStars
+                        ratingStars = target
+                        Task {
+                            if await !model.setMediaStarRating(target, for: clip) {
+                                ratingStars = previous
+                            }
+                        }
+                    }
+                    .padding(.bottom, 18)
+                }
             }
         }
         .statusBarHidden()
-        .onAppear { loadTask = Task { await loadImage() } }
+        .onAppear {
+            loadTask = Task { await loadImage() }
+            Task { ratingStars = await model.mediaStarRating(for: clip) }
+        }
         .onDisappear {
             loadTask?.cancel()
             loadTask = nil
@@ -1979,6 +2024,32 @@ struct MediaPhotoViewer: View {
             if let url = model.clipLocalURL(displayClip) {
                 MultiShareSheet(urls: [url], metadataText: nil) {
                     isSharePresented = false
+                }
+            }
+        }
+    }
+
+    /// Deletes the shot from the camera card (both sides of a RAW+JPEG pair) after a
+    /// destructive confirmation, then closes the viewer.
+    private var deleteButton: some View {
+        Button {
+            isDeleteConfirmPresented = true
+        } label: {
+            CircleIconButton(systemName: "trash", size: 34)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.zcTapTarget)
+        .confirmationDialog(
+            rawSibling == nil
+                ? "Delete this photo from the camera card?"
+                : "Delete this photo from the camera card? Both the RAW and JPEG files are removed.",
+            isPresented: $isDeleteConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    _ = await model.deleteMediaClips([clip])
+                    dismiss()
                 }
             }
         }
@@ -2192,6 +2263,31 @@ private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
 }
 
 /// Full-screen AVPlayer with LiveDesign controls: play/pause, ±15s, mute, view-assist, favorite,
+/// Five-star rating row on glass: tap a star to set the count, tap the active count to
+/// clear. Optimistic — the caller writes to the camera and rolls back on failure.
+struct StarRatingRow: View {
+    let stars: Int
+    let onSelect: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(1...5, id: \.self) { star in
+                Button {
+                    onSelect(star == stars ? 0 : star)
+                } label: {
+                    Image(systemName: star <= stars ? "star.fill" : "star")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(star <= stars ? LiveDesign.accent : LiveDesign.muted)
+                }
+                .buttonStyle(.zcTapTarget)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .liquidGlass(in: Capsule())
+    }
+}
+
 /// Pinch/pan zoom that stays anchored under the fingers: the content point beneath the
 /// pinch centroid is held fixed as the scale changes (the system Photos feel), instead of
 /// growing from the view centre and drifting away from the gesture. The transform contract

@@ -5888,6 +5888,9 @@ final class NativeAppModel {
         /// False while the tiny embedded thumb stands in — the overlay blurs it behind a
         /// spinner, and the review duration doesn't start counting until the full image lands.
         var isFullResolution: Bool = true
+        /// The captured JPEG's object handle, so the overlay can rate the shot in place.
+        /// Nil in the demo and for fallback presentations without a resolved object.
+        var handle: UInt32? = nil
     }
 
     /// The freshest captured still, shown full-screen until the review duration elapses
@@ -5899,7 +5902,9 @@ final class NativeAppModel {
     /// Maintained outside the shutter path so the release itself never waits on enumeration.
     @ObservationIgnored private var knownObjectHandles: [UInt32: Set<UInt32>] = [:]
 
-    func presentInstantReview(_ image: UIImage, isFullResolution: Bool = true) {
+    func presentInstantReview(
+        _ image: UIImage, isFullResolution: Bool = true, handle: UInt32? = nil
+    ) {
         let snap = cameraPropertySnapshot
         let info = [
             snap.iso.map { "ISO \($0)" },
@@ -5914,7 +5919,8 @@ final class NativeAppModel {
                 image: image,
                 focus: liveViewFocus,
                 infoLine: info.isEmpty ? nil : info,
-                isFullResolution: isFullResolution)
+                isFullResolution: isFullResolution,
+                handle: handle)
         }
         // A stand-in thumb doesn't start the clock — the operator gets the full duration
         // with the real image; the countdown begins on upgrade (or its failure fallback).
@@ -6015,7 +6021,7 @@ final class NativeAppModel {
         guard let thumbData = try? await session.getThumb(handle: handle),
             let thumb = UIImage(data: thumbData)
         else { return false }
-        presentInstantReview(thumb, isFullResolution: false)
+        presentInstantReview(thumb, isFullResolution: false, handle: handle)
         // The embedded thumb is instant but tiny — stream the full image and swap it over
         // the presented review (abandoned if the review is dismissed meanwhile). If the
         // stream fails while the review is still up, the countdown starts on the thumb so
@@ -6064,9 +6070,88 @@ final class NativeAppModel {
         withAnimation(.easeInOut(duration: 0.4)) {
             instantReview = InstantReviewState(
                 image: image, focus: current.focus, infoLine: current.infoLine,
-                isFullResolution: true)
+                isFullResolution: true, handle: current.handle)
         }
         startInstantReviewCountdown()
+    }
+
+    /// Rates the reviewed shot in place (0–5 stars) — writes straight to the captured
+    /// object so the culling decision is done before the next frame. [verify-on-HW]
+    func rateInstantReview(stars: Int) async -> Bool {
+        guard let handle = instantReview?.handle, let session = cameraSession else {
+            return false
+        }
+        return
+            (try? await session.setObjectRating(
+                handle: handle, value: Self.ratingValue(forStars: stars))) != nil
+    }
+
+    // MARK: - Media delete + star rating
+
+    /// The rating property's step table: index == stars.
+    private static let ratingSteps: [UInt16] = [0, 1, 25, 50, 75, 100]
+
+    static func ratingValue(forStars stars: Int) -> UInt16 {
+        ratingSteps[max(0, min(5, stars))]
+    }
+
+    static func stars(fromRatingValue value: UInt16) -> Int {
+        switch value {
+        case 100...: 5
+        case 75...: 4
+        case 50...: 3
+        case 25...: 2
+        case 1...: 1
+        default: 0
+        }
+    }
+
+    /// Deletes clips from the camera card (and any local copies). A RAW+JPEG pair deletes
+    /// both sides. Protected objects are refused by the body and stay listed. Returns the
+    /// number of items actually removed. [verify-on-HW]
+    func deleteMediaClips(_ clips: [MediaClip]) async -> Int {
+        var targets: [MediaClip] = []
+        for clip in clips {
+            targets.append(clip)
+            if let raw = rawSibling(of: clip) { targets.append(raw) }
+        }
+        var deleted = 0
+        for clip in targets {
+            if let handle = clip.handle {
+                guard let session = cameraSession,
+                    (try? await session.deleteObject(handle: handle)) != nil
+                else { continue }
+            }
+            try? mediaClipStore.removeLocalFile(cameraID: clip.cameraID, filename: clip.filename)
+            mediaClipStore.removeEntry(cameraID: clip.cameraID, filename: clip.filename)
+            deleted += 1
+        }
+        refreshMediaClips()
+        // The card's object set changed under the instant-review baseline — reseed it.
+        seedInstantReviewBaseline()
+        return deleted
+    }
+
+    /// The clip's star rating from the camera (0–5); nil when unreachable (offline or a
+    /// local-only clip).
+    func mediaStarRating(for clip: MediaClip) async -> Int? {
+        guard let handle = clip.handle, let session = cameraSession else { return nil }
+        guard let value = try? await session.objectRating(handle: handle) else { return nil }
+        return Self.stars(fromRatingValue: value)
+    }
+
+    /// Writes a 0–5 star rating to the clip; a RAW+JPEG pair writes both sides, tolerating
+    /// the RAW side's refusal (RAW stills don't carry the property). [verify-on-HW]
+    func setMediaStarRating(_ stars: Int, for clip: MediaClip) async -> Bool {
+        guard let handle = clip.handle, let session = cameraSession else { return false }
+        let value = Self.ratingValue(forStars: stars)
+        guard (try? await session.setObjectRating(handle: handle, value: value)) != nil else {
+            return false
+        }
+        if let raw = rawSibling(of: clip), let rawHandle = raw.handle {
+            _ = try? await session.setObjectRating(handle: rawHandle, value: value)
+        }
+        return true
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
