@@ -419,6 +419,12 @@ public data class CameraPropertySnapshot(
     val exposureBias: String? = null,
     /** Frames remaining on the active card in photo mode. */
     val shotsRemaining: Int? = null,
+    /** Active picture-control (profile) label, such as `Standard`. */
+    val pictureControl: String? = null,
+    /** The body's exposure-indicator needle in 1/6 EV steps (±60 == ±10 EV). */
+    val evIndicatorSixths: Int? = null,
+    /** Whether the body reports its exposure indicator lit (value undefined while off). */
+    val evIndicatorLit: Boolean? = null,
     /** Current descriptor-dependent camera-control capabilities. */
     val controlCapabilities: CameraControlCapabilities = CameraControlCapabilities(),
 )
@@ -765,6 +771,13 @@ public interface CameraSession {
      * that non-terminal outcome. Transport-only implementations do no I/O.
      */
     public suspend fun refreshProperties(): Unit = Unit
+
+    /**
+     * Asks the session to read the camera's exposure indicator at a fast
+     * needle cadence between regular property polls (the EV meter tool is
+     * visible). No-op for sessions without a property poll loop.
+     */
+    public fun setExposureIndicatorFastPolling(active: Boolean) {}
 
     /** Tears down the session and returns [state] to [CameraSessionState.Disconnected]. */
     public suspend fun disconnect()

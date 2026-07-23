@@ -489,6 +489,12 @@ object SwiftCore {
     /** One debounced read requested by a camera `DevicePropChanged` event. */
     const val PROPERTY_REFRESH_EVENT: Int = 2
 
+    /**
+     * One fast EV-meter needle read while the tool is visible: the exposure
+     * indicator only, never a round-robin monitor property.
+     */
+    const val PROPERTY_REFRESH_EV_INDICATOR: Int = 3
+
     /** `sessionSetRecording` completed and the camera accepted the command. */
     const val RECORDING_COMMAND_ACCEPTED: Int = 0
 
@@ -858,6 +864,24 @@ object SwiftCore {
      * a background dispatcher.
      */
     external fun sessionThumbnail(handle: Int): ByteArray?
+
+    /**
+     * Deletes one object from the camera card; false when disconnected or the
+     * body refuses (protected objects). Blocking — call from IO.
+     */
+    external fun sessionDeleteObject(handle: Int): Boolean
+
+    /**
+     * One object's camera star rating as 0–5, or -1 when unreadable (RAW
+     * stills don't carry the property). Blocking — call from IO.
+     */
+    external fun sessionObjectRating(handle: Int): Int
+
+    /**
+     * Writes a 0–5 star rating and returns the camera-confirmed star count
+     * after readback, or -1 on failure. Blocking — call from IO.
+     */
+    external fun sessionSetObjectRating(handle: Int, stars: Int): Int
 
     /**
      * Releases exclusive camera-media ownership. This stops any progressive

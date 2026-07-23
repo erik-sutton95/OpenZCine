@@ -720,6 +720,68 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
+    fun `EV fast polling interleaves needle reads between round-robin ticks`() = runTest {
+        val bridge = FakeBridge()
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                propertyPollIntervalMillis = 3_000,
+                evIndicatorPollIntervalMillis = 750,
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        runCurrent()
+        bridge.clearRefreshRequests()
+
+        // Off: one regular tick per 3 s and no EV reads.
+        advanceTimeBy(3_100)
+        runCurrent()
+        assertEquals(
+            listOf(SwiftCore.PROPERTY_REFRESH_NEXT),
+            bridge.refreshRequests().map { it.request },
+        )
+
+        // On: the flip engages after the in-flight regular delay, then the
+        // needle reads every 750 ms with the round-robin kept at its stride.
+        session.setExposureIndicatorFastPolling(true)
+        advanceTimeBy(3_100)
+        runCurrent()
+        bridge.clearRefreshRequests()
+        advanceTimeBy(3_100)
+        runCurrent()
+        assertEquals(
+            listOf(
+                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
+                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
+                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
+                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
+                SwiftCore.PROPERTY_REFRESH_NEXT,
+            ),
+            bridge.refreshRequests().map { it.request },
+        )
+
+        // Off again: after the residual fast tick flushes, plain cadence only.
+        session.setExposureIndicatorFastPolling(false)
+        advanceTimeBy(800)
+        runCurrent()
+        bridge.clearRefreshRequests()
+        advanceTimeBy(6_200)
+        runCurrent()
+        assertEquals(
+            listOf(SwiftCore.PROPERTY_REFRESH_NEXT, SwiftCore.PROPERTY_REFRESH_NEXT),
+            bridge.refreshRequests().map { it.request },
+        )
+
+        session.disconnect()
+    }
+
+    @Test
     fun `property events debounce and coalesce into one semantic refresh`() = runTest {
         val bridge = FakeBridge()
         bridge.propertyRefreshHandler = { request ->

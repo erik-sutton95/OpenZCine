@@ -268,6 +268,7 @@ class SwiftCoreCameraSession internal constructor(
         CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val propertyRefreshDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val propertyPollIntervalMillis: Long = PROPERTY_POLL_INTERVAL_MILLIS,
+    private val evIndicatorPollIntervalMillis: Long = EV_INDICATOR_POLL_INTERVAL_MILLIS,
     private val propertyEventDebounceMillis: Long = PROPERTY_EVENT_DEBOUNCE_MILLIS,
     private val automaticallyRefreshProperties: Boolean = true,
     private val usbTransport: UsbPtpTransport? = null,
@@ -404,6 +405,13 @@ class SwiftCoreCameraSession internal constructor(
 
     /** Incremented only by authoritative camera record events. */
     @Volatile private var cameraRecordingEventVersion: Long = 0L
+
+    /** True while the monitor's EV meter tool wants fast needle reads. */
+    @Volatile private var evIndicatorFastPolling = false
+
+    override fun setExposureIndicatorFastPolling(active: Boolean) {
+        evIndicatorFastPolling = active
+    }
 
     /**
      * Live-view frames from the Swift core's pump. Collect only while the
@@ -929,8 +937,29 @@ class SwiftCoreCameraSession internal constructor(
                         _initialMonitorPropertiesReady.value = true
                     }
                 }
+                var fastTick = 0
                 while (isActive && ownsConnectedAttempt(attempt)) {
-                    delay(propertyPollIntervalMillis.coerceAtLeast(1L))
+                    // While the EV meter tool is visible (and not recording),
+                    // the needle reads at its own fast cadence between the
+                    // regular ticks — one full-cycle visit lags the meter by
+                    // minutes. Every [EV_TICKS_PER_PROPERTY_POLL]th fast tick
+                    // still runs the normal round-robin so nothing starves.
+                    val evFast =
+                        evIndicatorFastPolling &&
+                            _recordingState.value != CameraRecordingState.RECORDING
+                    if (evFast) {
+                        delay(evIndicatorPollIntervalMillis.coerceAtLeast(1L))
+                        if (!isActive || !ownsConnectedAttempt(attempt)) break
+                        refreshCameraProperties(
+                            attempt = attempt,
+                            request = SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
+                            propertyCode = 0L,
+                        )
+                        fastTick += 1
+                        if (fastTick % EV_TICKS_PER_PROPERTY_POLL != 0) continue
+                    } else {
+                        delay(propertyPollIntervalMillis.coerceAtLeast(1L))
+                    }
                     if (!isActive || !ownsConnectedAttempt(attempt)) break
                     refreshCameraProperties(
                         attempt = attempt,
@@ -1170,6 +1199,15 @@ class SwiftCoreCameraSession internal constructor(
          * frames. 3 s keeps battery/ISO fresh enough without punching the feed.
          */
         const val PROPERTY_POLL_INTERVAL_MILLIS: Long = 3_000L
+        /**
+         * Fast EV-needle gap while the meter tool is visible. A single-byte
+         * indicator read is the cheapest possible transaction, but it still
+         * shares the live-view `transactionLock` — keep it well below the
+         * feed's hitch-visibility threshold.
+         */
+        const val EV_INDICATOR_POLL_INTERVAL_MILLIS: Long = 750L
+        /** Fast EV ticks per regular round-robin property poll (750 ms × 4 = 3 s). */
+        const val EV_TICKS_PER_PROPERTY_POLL: Int = 4
         const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
         /** Max rate for command RTT StateFlow updates (LV frames fire every present). */
         const val ROUND_TRIP_PUBLISH_INTERVAL_NANOS: Long = 250_000_000L

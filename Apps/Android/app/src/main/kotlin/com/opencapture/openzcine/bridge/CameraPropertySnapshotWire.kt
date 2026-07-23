@@ -118,6 +118,9 @@ internal object CameraPropertySnapshotWire {
             flashMode = value.optionalString("flashMode"),
             exposureBias = value.optionalString("exposureBias"),
             shotsRemaining = value.optionalInt("shotsRemaining"),
+            pictureControl = value.optionalString("pictureControl"),
+            evIndicatorSixths = value.optionalInt("evIndicatorSixths"),
+            evIndicatorLit = value.optionalBoolean("evIndicatorLit"),
             controlCapabilities =
                 CameraControlCapabilities(
                     isoValues = value.options("options.iso"),

@@ -148,6 +148,27 @@ class CameraPropertySnapshotWireTest {
         assertTrue(noStorage.snapshot.storageSlots.isEmpty())
     }
 
+    @Test
+    fun decodesTheProfileAndExposureIndicatorFields() {
+        val decoded =
+            CameraPropertySnapshotWire.decode(
+                validPayload() +
+                    "\npictureControl\tStandard" +
+                    "\nevIndicatorSixths\t-4" +
+                    "\nevIndicatorLit\ttrue",
+            )
+        assertTrue(decoded.isValid)
+        assertEquals("Standard", decoded.snapshot.pictureControl)
+        assertEquals(-4, decoded.snapshot.evIndicatorSixths)
+        assertEquals(true, decoded.snapshot.evIndicatorLit)
+
+        // Absent fields stay null — the meter hides rather than inventing 0 EV.
+        val bare = CameraPropertySnapshotWire.decode(validPayload())
+        assertNull(bare.snapshot.pictureControl)
+        assertNull(bare.snapshot.evIndicatorSixths)
+        assertNull(bare.snapshot.evIndicatorLit)
+    }
+
     private fun assertRejected(payload: String) {
         val decoded = CameraPropertySnapshotWire.decode(payload)
         assertFalse(decoded.isValid)
