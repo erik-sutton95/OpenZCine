@@ -511,14 +511,20 @@ final class NativeCameraSession: @unchecked Sendable {
     }
 
     func readCameraProperty(_ property: PTPPropertyCode) async throws -> Data {
+        // Mirror the write path: 2-byte `0xDxxx` / PIMA props use standard
+        // GetDevicePropValue (0x1015); only 4-byte extended `0x0001_Dxxx` props
+        // use GetDevicePropValueEx (0x943B). Ex-reading 2-byte command tiles
+        // (mic, grid) fails with an unknown response on the ZR.
+        let op: PTPOperationCode =
+            property.rawValue <= 0xFFFF ? .getDevicePropValue : .getDevicePropValueEx
         let result = try await transact(
-            operationCode: .getDevicePropValueEx,
+            operationCode: op,
             parameters: [property.rawValue],
             dataPhase: .dataIn
         )
         guard result.operationResponse.responseCode == .ok else {
             throw NativeCameraSessionError.operationRejected(
-                .getDevicePropValueEx,
+                op,
                 result.operationResponse.responseCode
             )
         }
