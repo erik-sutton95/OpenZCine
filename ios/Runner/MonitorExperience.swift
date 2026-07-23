@@ -819,6 +819,9 @@ struct CaptureSettingButton: View {
     /// Uniform readout scale (R9): portrait-fill passes 0.8 so all 5 settings fit the strip
     /// width with no horizontal scroll. Landscape's default of 1 is unaffected.
     var scale: CGFloat = 1
+    /// Replaces the `CameraPicker` tap routing — the photography strip reuses this tile with
+    /// its own (stub) control handlers until stills pickers exist.
+    var overrideAction: (() -> Void)? = nil
 
     /// True while this setting's picker is the active panel.
     private var isActive: Bool {
@@ -834,6 +837,12 @@ struct CaptureSettingButton: View {
         case "IRIS": "f/2.8"  // f/X.X
         case "FOCUS": "Wide-L"
         case "WB": "5560K"  // Kelvin dial step; presets render as icons (narrower)
+        // Photography strip pins, so the bar doesn't shift as stills values change.
+        case "MODE": "Auto"
+        case "DRIVE": "Single"
+        case "QUAL": "R+JF★"
+        case "FLASH": "Red+S"
+        case "METER": "Matrix"
         default: value.value
         }
     }
@@ -938,7 +947,12 @@ struct CaptureSettingButton: View {
 
     var body: some View {
         Group {
-            if value.label == "SHUTTER" {
+            if let overrideAction {
+                Button(action: overrideAction) {
+                    readoutLabel
+                }
+                .buttonStyle(.zcTapTarget)
+            } else if value.label == "SHUTTER" {
                 readoutLabel
                     .opacity(isShutterLocked ? 0.55 : 1.0)
                     .minTapTarget()

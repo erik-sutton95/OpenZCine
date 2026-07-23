@@ -1001,6 +1001,8 @@ final class FakeZRServer: @unchecked Sendable {
             return Data([0])
         case .stillISOAutoControl:
             return Data([0])
+        case .exposureRemaining:
+            return Data(ByteCoding.uint32LE(1234))
         case .exposureBiasCompensation:
             return Data(ByteCoding.uint16LE(0))
         case .whiteBalance:

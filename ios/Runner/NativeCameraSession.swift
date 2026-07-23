@@ -294,7 +294,8 @@ final class NativeCameraSession: @unchecked Sendable {
         cameraName: String?,
         establishmentSummary: String,
         identity: NativeCameraIdentity,
-        operationPolicy: ZCameraOperationPolicy = ZCameraOperationPolicy(operations: [])
+        operationPolicy: ZCameraOperationPolicy = ZCameraOperationPolicy(operations: []),
+        propertiesSupported: Set<UInt16> = []
     ) {
         self.host = host
         self.transport = transport
@@ -302,6 +303,7 @@ final class NativeCameraSession: @unchecked Sendable {
         self.establishmentSummary = establishmentSummary
         self.identity = identity
         self.operationPolicy = operationPolicy
+        self.propertiesSupported = propertiesSupported
     }
 
     /// Stable camera key: the IPv4 address over Wi-Fi, or a `usb:<device-id>` host key over USB-C.
@@ -309,6 +311,18 @@ final class NativeCameraSession: @unchecked Sendable {
     let identity: NativeCameraIdentity
     /// Op selection driven by the body's advertised DeviceInfo operations.
     let operationPolicy: ZCameraOperationPolicy
+    /// Standard 2-byte property codes the body advertises. Extended `0x0001_xxxx` codes are
+    /// discovered separately, so only 2-byte polls are gated on this.
+    let propertiesSupported: Set<UInt16>
+
+    /// Whether a steady-state poll of `property` can succeed on this body. With no
+    /// advertised list (DeviceInfo missing), everything is assumed pollable.
+    func supportsProperty(_ property: PTPPropertyCode) -> Bool {
+        guard property.rawValue <= UInt32(UInt16.max), !propertiesSupported.isEmpty else {
+            return true
+        }
+        return propertiesSupported.contains(UInt16(property.rawValue))
+    }
 
     private let transport: any CameraTransport
     private let cameraName: String?
@@ -1033,7 +1047,8 @@ final class NativeCameraSession: @unchecked Sendable {
             cameraName: cameraName,
             establishmentSummary: establishmentSummary.trimmingCharacters(in: .whitespaces),
             identity: updatedIdentity,
-            operationPolicy: ZCameraOperationPolicy(deviceInfo: info)
+            operationPolicy: ZCameraOperationPolicy(deviceInfo: info),
+            propertiesSupported: info.propertiesSupported
         )
     }
 

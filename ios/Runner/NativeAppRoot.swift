@@ -2187,13 +2187,26 @@ final class NativeAppModel {
                         property: .exposureMeteringMode, data: Data(ByteCoding.uint16LE(3))
                     )
                     .applying(property: .compressionSetting, data: Data([7]))
-                    .applying(property: .imageSize, data: Data([0]))
+                    .applying(
+                        property: .exposureRemaining, data: Data(ByteCoding.uint32LE(1234))
+                    )
+                    .applying(property: .imageSize, data: demoSizeLString)
             }
             publishCameraDisplayState()
             connectionMessage =
                 toPhoto
                 ? "Demo photography mode (press P for cinema)."
                 : "Demo cinema mode (press P for photo)."
+        }
+
+        /// PTP-string bytes for "Size L" (count-prefixed UTF-16LE with terminator).
+        private var demoSizeLString: Data {
+            let scalars = Array("Size L".utf16) + [0]
+            var bytes: [UInt8] = [UInt8(scalars.count)]
+            for unit in scalars {
+                bytes += [UInt8(unit & 0xFF), UInt8(unit >> 8)]
+            }
+            return Data(bytes)
         }
 
         /// Simulator marketing entry point for ⌘O. It is intentionally accepted only while the
@@ -4585,6 +4598,9 @@ final class NativeAppModel {
             isRecording: isRecording,
             captureSelector: cameraPropertySnapshot.captureSelector)
         propertyPollIndex &+= 1
+        // Skip 2-byte properties the body's DeviceInfo doesn't advertise (e.g. the legacy
+        // microphone pair on cinema bodies) — the read would fail every cycle.
+        guard session.supportsProperty(property) else { return }
         if property == .movieShutterMode, shouldSuppressShutterModePoll() {
             // A mode switch is queued or optimistic — don't let stale camera readback undo the bar.
         } else if property == .movieTVLockSetting, shouldSuppressShutterLockPoll() {
@@ -5501,24 +5517,15 @@ final class NativeAppModel {
         if let message { connectionMessage = message }
     }
 
-    func presentStillDrivePicker() { presentPhotographyControl(title: "Drive") }
-    func presentExposureModePicker() { presentPhotographyControl(title: "Mode") }
-    func presentStillISOPicker() { presentPhotographyControl(title: "ISO") }
-    func presentStillShutterPicker() { presentPhotographyControl(title: "Shutter") }
-    func presentStillIrisPicker() { presentPhotographyControl(title: "Iris") }
-    func presentStillMeteringPicker() { presentPhotographyControl(title: "Metering") }
-    func presentStillFlashPicker() { presentPhotographyControl(title: "Flash") }
-    func presentStillQualityPicker() { presentPhotographyControl(title: "Quality") }
-    func presentStillFocusPicker() { presentPhotographyControl(title: "Focus") }
     func presentInstantPlayback() {
         // First iteration: open the media library for recent stills.
         isStandaloneMediaLibraryPresented = true
     }
 
-    private func presentPhotographyControl(title: String) {
-        // Scaffold: secondary stills pickers land as tiles become settable with
-        // descriptor-backed options. For now surface a short operator message.
-        connectionMessage = "\(title) control — coming next in photography mode."
+    /// Scaffold: stills pickers land as tiles become settable with descriptor-backed
+    /// options. Until then a strip tap surfaces a short operator message.
+    func presentPhotographyControl(label: String) {
+        connectionMessage = "\(label.capitalized) control — coming next in photography mode."
     }
 
     func confirmRecordToggle() {
@@ -7585,6 +7592,20 @@ extension NativeAppModel {
         mediaLibraryLogger.info(
             "delta sync listed \(listedCount, privacy: .public) clip(s) on this tab — card objects: \(delta.reuseHandles.count, privacy: .public) reused, \(delta.fetchHandles.count, privacy: .public) fetched (\(learnedOffTab, privacy: .public) learned off-tab), \(delta.removedHandles.count, privacy: .public) removed"
         )
+        // Proxy-pairing diagnostic: masters without a same-stem proxy stay visible in the
+        // grid (and un-openable), so one line per pass says whether the card's proxies were
+        // enumerated at all. [ZR · verify-on-HW: whether flat GetObjectHandles surfaces the
+        // in-folder proxy files]
+        let filenames = mediaClips.map(\.filename)
+        let proxyStems = MediaClipFilename.playableProxyStems(in: filenames)
+        let unpairedMasters = filenames.filter {
+            MediaClipFilename.isR3D($0) && !proxyStems.contains(MediaClipFilename.stem(of: $0))
+        }
+        if !unpairedMasters.isEmpty {
+            mediaLibraryLogger.info(
+                "proxy pairing: \(unpairedMasters.count, privacy: .public) R3D master(s) with no playable proxy (\(proxyStems.count, privacy: .public) proxies enumerated)"
+            )
+        }
     }
 
     /// The handles a listing pass should process for the active sidebar category, newest first.

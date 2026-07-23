@@ -1237,7 +1237,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         compression: String? = nil,
         meteringMode: String? = nil,
         flashMode: String? = nil,
-        exposureBias: String? = nil
+        exposureBias: String? = nil,
+        shotsRemaining: Int? = nil
     ) {
         self.iso = iso
         self.baseISO = baseISO
@@ -1281,6 +1282,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.meteringMode = meteringMode
         self.flashMode = flashMode
         self.exposureBias = exposureBias
+        self.shotsRemaining = shotsRemaining
     }
 
     // Exposure.
@@ -1353,6 +1355,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public let meteringMode: String?
     public let flashMode: String?
     public let exposureBias: String?
+    /// Frames recordable to the card, for the photo top-bar counter.
+    public let shotsRemaining: Int?
 
     /// Command-monitor stabilisation summary (movie VR + electronic VR).
     public var stabilizationSummary: String? {
@@ -1521,6 +1525,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                     Int16(bitPattern: ByteCoding.readUInt16LE(bytes, at: 0))))
         case .stillISOAutoControl where bytes.count >= 1:
             return replacing(isoAuto: bytes[0] != 0)
+        case .exposureRemaining where bytes.count >= 4:
+            return replacing(shotsRemaining: Int(ByteCoding.readUInt32LE(bytes, at: 0)))
         case .stillFocusMode where bytes.count >= 1:
             // UINT8 space (0 AF-S / 1 AF-C / 4 MF / 5 AF-A) — not the 0x500A UINT16 codes.
             return replacing(focusMode: PTPCameraPropertyDecoders.stillFocusModeD061(bytes[0]))
@@ -1583,7 +1589,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         compression: String? = nil,
         meteringMode: String? = nil,
         flashMode: String? = nil,
-        exposureBias: String? = nil
+        exposureBias: String? = nil,
+        shotsRemaining: Int? = nil
     ) -> PTPCameraPropertySnapshot {
         PTPCameraPropertySnapshot(
             iso: iso ?? self.iso,
@@ -1627,7 +1634,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             compression: compression ?? self.compression,
             meteringMode: meteringMode ?? self.meteringMode,
             flashMode: flashMode ?? self.flashMode,
-            exposureBias: exposureBias ?? self.exposureBias
+            exposureBias: exposureBias ?? self.exposureBias,
+            shotsRemaining: shotsRemaining ?? self.shotsRemaining
         )
     }
 }

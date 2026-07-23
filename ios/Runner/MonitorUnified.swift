@@ -28,27 +28,54 @@ struct MonitorInfoBar: View {
         @Environment(NativeAppModel.self) private var model
         var compact: Bool = false
 
+        /// Photography swaps the movie readouts for stills ones in the same pill: the shots
+        /// counter takes the timecode slot, image size and quality take resolution and codec.
+        private var isPhotography: Bool {
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: model.cameraPropertySnapshot.captureSelector)
+        }
+
         var body: some View {
             GlassPanel(
                 padding: EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
             ) {
                 HStack(spacing: 10) {
                     let chrome = model.preferences.displayChrome
-                    if chrome.recReadoutVisible {
-                        RecordChip(state: model.cameraState.recordState)
-                    }
-                    TimecodeReadout()
-                    if !compact {
-                        readoutButton(
-                            .resolution, icon: "video", value: model.cameraState.resolutionFrameRate
-                        )
-                        if chrome.codecReadoutVisible {
-                            readoutButton(
-                                .codec, icon: "film",
-                                value: MonitorTextFormat.codecCompactLabel(model.cameraState.codec))
+                    if isPhotography {
+                        ShotsRemainingReadout()
+                        if !compact {
+                            inlineReadout(
+                                icon: "photo",
+                                value: model.cameraPropertySnapshot.stillSizeCompactLabel ?? "—")
+                            if chrome.codecReadoutVisible {
+                                inlineReadout(
+                                    icon: "camera.aperture",
+                                    value: model.cameraPropertySnapshot.stillQualityCompactLabel
+                                        ?? "—")
+                            }
+                            if chrome.mediaReadoutVisible {
+                                mediaCell
+                            }
                         }
-                        if chrome.mediaReadoutVisible {
-                            mediaCell
+                    } else {
+                        if chrome.recReadoutVisible {
+                            RecordChip(state: model.cameraState.recordState)
+                        }
+                        TimecodeReadout()
+                        if !compact {
+                            readoutButton(
+                                .resolution, icon: "video",
+                                value: model.cameraState.resolutionFrameRate
+                            )
+                            if chrome.codecReadoutVisible {
+                                readoutButton(
+                                    .codec, icon: "film",
+                                    value: MonitorTextFormat.codecCompactLabel(
+                                        model.cameraState.codec))
+                            }
+                            if chrome.mediaReadoutVisible {
+                                mediaCell
+                            }
                         }
                     }
                     if chrome.fpsReadoutVisible {
@@ -57,6 +84,28 @@ struct MonitorInfoBar: View {
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
+        }
+
+        /// Frames left on the card, in the timecode slot's typography. Counts above four
+        /// digits compact to "12.3k" the way camera bodies do.
+        private struct ShotsRemainingReadout: View {
+            @Environment(NativeAppModel.self) private var model
+            var body: some View {
+                let remaining = model.cameraPropertySnapshot.shotsRemaining
+                let label = remaining.map(Self.compactCount) ?? "—"
+                return
+                    (Text(label).foregroundStyle(LiveDesign.text)
+                    + Text(" SHOTS").font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LiveDesign.muted))
+                    .font(.system(size: 20, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+
+            private static func compactCount(_ count: Int) -> String {
+                guard count > 9999 else { return String(count) }
+                return String(format: "%.1fk", Double(count) / 1000)
+            }
         }
 
         /// Timecode with the frame field tinted, isolated into its own leaf `View` so the ~30 Hz
@@ -265,44 +314,53 @@ struct MonitorCaptureStrip: View {
     @State private var naturalRowWidth: CGFloat = 0
 
     var body: some View {
-        if StillCapturePolicy.prefersPhotographyChrome(
-            selector: model.cameraPropertySnapshot.captureSelector)
-        {
-            photographyBody
-        } else if fitsWidth {
+        if fitsWidth {
             landscapeBody
         } else {
             portraitBody
         }
     }
 
-    /// Photo-mode capture chrome: single compact row (shutter lives on the system rail).
-    private var photographyBody: some View {
-        PhotographyCaptureStrip(
-            properties: model.cameraPropertySnapshot,
-            onSelectDrive: { model.presentStillDrivePicker() },
-            onSelectMode: { model.presentExposureModePicker() },
-            onSelectISO: { model.presentStillISOPicker() },
-            onSelectShutter: { model.presentStillShutterPicker() },
-            onSelectIris: { model.presentStillIrisPicker() },
-            onSelectMetering: { model.presentStillMeteringPicker() },
-            onSelectFlash: { model.presentStillFlashPicker() },
-            onSelectQuality: { model.presentStillQualityPicker() },
-            onSelectFocus: { model.presentStillFocusPicker() },
-            onInstantPlayback: { model.presentInstantPlayback() }
-        )
-        .background(
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { model.captureBarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        model.captureBarFrame = frame
-                    }
-                    .onDisappear { model.captureBarFrame = .zero }
+    /// Nine stills tiles hug the landscape band only at a reduced tile scale; the cinema
+    /// five keep scale 1. (The shell sizes this side with `fixedSize`, so the fitted
+    /// GeometryReader row is portrait-only.)
+    private var landscapeTileScale: CGFloat { isPhotography ? 0.85 : 1 }
+
+    /// True while the body reports photo mode — the strip then renders the stills readouts
+    /// through the exact same bar, tiles and typography as the cinema settings.
+    private var isPhotography: Bool {
+        StillCapturePolicy.prefersPhotographyChrome(
+            selector: model.cameraPropertySnapshot.captureSelector)
+    }
+
+    private var stripValues: [CameraValue] {
+        isPhotography
+            ? model.cameraPropertySnapshot.photographyCaptureValues
+            : model.cameraState.values
+    }
+
+    /// Stills pickers are still stubs, and the cinema pickers write movie properties — so
+    /// photography tiles route to the model's stub handler instead of `CameraPicker`.
+    private func photographyAction(for item: CameraValue) -> (() -> Void)? {
+        guard isPhotography else { return nil }
+        return { model.presentPhotographyControl(label: item.label) }
+    }
+
+    /// Instant playback rides at the strip's trailing edge in photo mode.
+    @ViewBuilder private var playbackButton: some View {
+        if isPhotography {
+            Button {
+                model.presentInstantPlayback()
+            } label: {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text.opacity(0.9))
+                    .frame(width: 38, height: 38)
+                    .background(LiveDesign.glassBright, in: Circle())
             }
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {}
+            .buttonStyle(.plain)
+            .accessibilityLabel("Instant playback")
+        }
     }
 
     // MARK: - fitsWidth: true (former `BottomCaptureSettingsModule`)
@@ -312,9 +370,12 @@ struct MonitorCaptureStrip: View {
             padding: EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
         ) {
             HStack(spacing: 8) {
-                ForEach(model.cameraState.values) { item in
-                    CaptureSettingButton(value: item)
+                ForEach(stripValues) { item in
+                    CaptureSettingButton(
+                        value: item, scale: landscapeTileScale,
+                        overrideAction: photographyAction(for: item))
                 }
+                playbackButton
             }
             // Fill the bar height so both bottom bars render at the same height (GlassPanel
             // otherwise hugs its content, leaving this pill shorter or taller than the toolbar).
@@ -383,7 +444,7 @@ struct MonitorCaptureStrip: View {
     /// scale-1 row is measured hidden so the math holds for any cell set or future widths.
     private var fittedRow: some View {
         GeometryReader { proxy in
-            let values = model.cameraState.values
+            let values = stripValues
             let n = CGFloat(max(1, values.count))
             let gaps = n - 1
             let cellsNatural = max(1, naturalRowWidth - Self.baseSpacing * gaps)
@@ -395,8 +456,10 @@ struct MonitorCaptureStrip: View {
                 : 0
             HStack(spacing: spacing) {
                 ForEach(values) { item in
-                    CaptureSettingButton(value: item, scale: scale)
+                    CaptureSettingButton(
+                        value: item, scale: scale, overrideAction: photographyAction(for: item))
                 }
+                playbackButton
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .opacity(naturalRowWidth > 0 ? 1 : 0)  // one measurement pass before first paint
@@ -407,9 +470,10 @@ struct MonitorCaptureStrip: View {
     /// Off-screen scale-1 row whose width feeds `fittedRow`'s math. Hidden and non-interactive.
     private var naturalRowMeasurer: some View {
         HStack(spacing: Self.baseSpacing) {
-            ForEach(model.cameraState.values) { item in
+            ForEach(stripValues) { item in
                 CaptureSettingButton(value: item)
             }
+            playbackButton
         }
         .fixedSize()
         .hidden()
@@ -562,15 +626,23 @@ struct MonitorAssistStrip: View {
         }
     }
 
+    /// Photography narrows the toolbar to the stills-relevant tools (the cinema scopes,
+    /// LUT and audio monitoring drop out), which also frees bar width for the photo strip.
+    private var isPhotographyToolset: Bool {
+        StillCapturePolicy.prefersPhotographyChrome(
+            selector: model.cameraPropertySnapshot.captureSelector)
+    }
+
     private var visibleToolbarTools: [MonitorAssistTool] {
         model.preferences.assistToolbarOrder.filter {
             // Audio meters render as their own trailing section (above), not inside the groups.
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
+                && (!isPhotographyToolset || $0.appliesToPhotography)
         }
     }
 
     private var audioMetersButtonVisible: Bool {
-        model.preferences.isAssistToolbarButtonVisible(.audioMeters)
+        model.preferences.isAssistToolbarButtonVisible(.audioMeters) && !isPhotographyToolset
     }
 
     /// Thin vertical rule separating assist tools into groups of three.
@@ -594,9 +666,9 @@ struct MonitorAssistStrip: View {
         // trailing audio section.
         let regular = model.preferences.assistToolbarOrder.filter {
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
+                && (!isPhotographyToolset || $0.appliesToPhotography)
         }
-        return regular
-            + (model.preferences.isAssistToolbarButtonVisible(.audioMeters) ? [.audioMeters] : [])
+        return regular + (audioMetersButtonVisible ? [.audioMeters] : [])
     }
 
     private var verticalBody: some View {
@@ -1105,12 +1177,10 @@ struct MonitorShell: View {
                 .position(x: CGFloat(deck.midX), y: CGFloat(deck.midY))
         }
 
-        // Bottom bars (assist + capture) — live only; clean/lock hide them.
-        // Photography mode drops View Assist (cinema tools) so the photo strip owns the bar.
+        // Bottom bars (assist + capture) — live only; clean/lock hide them. In photography
+        // the assist strip stays but self-filters to the stills toolset (shorter bar).
         if !isClean {
-            let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
-                selector: model.cameraPropertySnapshot.captureSelector)
-            let assistVisible = chrome.assistToolbarVisible && !isPhotography
+            let assistVisible = chrome.assistToolbarVisible
             let captureVisible = chrome.cameraValuesVisible
             if let assist = map.assistStrip, let capture = map.captureStrip,
                 assistVisible || captureVisible
@@ -1399,10 +1469,7 @@ struct MonitorShell: View {
             // Fit mode: horizontal assist toolbar between the scopes zone and the tile grid (R6).
             // The core emits `assistStrip` only for fit + live; 12/4pt insets float the glass pill
             // off the screen edges. The vertical rail is fill-only (below).
-            // Hidden in photography mode — peaking/zebra/false-color are cinema tools.
-            let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
-                selector: model.cameraPropertySnapshot.captureSelector)
-            if let assist = map.assistStrip, !isPhotography {
+            if let assist = map.assistStrip {
                 MonitorAssistStrip(axis: .horizontal, collapsible: false)
                     .environment(model)
                     .liveViewGuideAnchor(.viewAssist)
@@ -1419,8 +1486,7 @@ struct MonitorShell: View {
             // Assist rail (fill only): collapsed pill on the feed's bottom-left; expanded spans the
             // feed height. Fit mode uses the horizontal toolbar above instead.
             // `axis: .vertical, collapsible: true` renders the collapse pill.
-            // Hidden in photography mode (same cinema-tool gate as the fit toolbar).
-            if model.displayMode != .command, isFill, !isPhotography {
+            if model.displayMode != .command, isFill {
                 let controlsHeight = map.captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
                 // The bar no longer overlays the feed, so the expanded rail spans the feed from

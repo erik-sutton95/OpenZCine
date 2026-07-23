@@ -109,6 +109,7 @@ public enum StillCapturePolicy: Sendable {
         .stillFocusMode,
         .stillFocusMeteringMode,
         .whiteBalance,
+        .exposureRemaining,
         .batteryLevel,
         .acPower,
         .warningStatus,
@@ -139,6 +140,85 @@ public enum StillCapturePolicy: Sendable {
         case .bulbReleaseBusy: .openShutterInProgress
         default: .failed(code)
         }
+    }
+}
+
+extension MonitorAssistTool {
+    /// Assist tools that apply to still photography — the exposure aids (peaking, false
+    /// color, zebra, histogram) plus the composition aids photographers actually use
+    /// (grid, level). Everything else is cinema-only, which keeps the photo toolbar
+    /// deliberately shorter so the stills strip gets the bar width.
+    public var appliesToPhotography: Bool {
+        switch self {
+        case .peaking, .falseColor, .zebra, .histogram, .grid, .level:
+            true
+        case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
+            .guides, .crosshair, .desqueeze:
+            false
+        }
+    }
+}
+
+extension PTPCameraPropertySnapshot {
+    /// The photography capture strip, in the same `CameraValue` shape the cinema strip
+    /// renders — same tiles, same bar, different readouts.
+    public var photographyCaptureValues: [CameraValue] {
+        [
+            CameraValue(label: "MODE", value: exposureMode ?? "—"),
+            CameraValue(label: "ISO", value: iso.map(String.init) ?? "—"),
+            CameraValue(label: "SHUTTER", value: shutterSpeed ?? "—"),
+            CameraValue(label: "IRIS", value: fNumber ?? "—"),
+            CameraValue(label: "DRIVE", value: compactDriveLabel ?? "—"),
+            CameraValue(label: "FOCUS", value: focusMode ?? "—"),
+            CameraValue(label: "QUAL", value: stillQualityCompactLabel ?? "—"),
+            CameraValue(label: "FLASH", value: compactFlashLabel ?? "—"),
+            CameraValue(label: "METER", value: meteringMode ?? "—"),
+        ]
+    }
+
+    /// Flash label compacted to strip width ("Red-eye slow" → "Red+S").
+    private var compactFlashLabel: String? {
+        switch flashMode {
+        case nil: nil
+        case "Red-eye": "Red"
+        case "Red-eye slow": "Red+S"
+        case let other: other
+        }
+    }
+
+    /// Drive-mode label compacted to strip width ("Continuous H" → "CH").
+    private var compactDriveLabel: String? {
+        switch stillCaptureMode {
+        case nil: nil
+        case "Continuous H": "CH"
+        case "Continuous L": "CL"
+        case "Continuous H+": "CH+"
+        case "Self-timer": "Timer"
+        case let other: other
+        }
+    }
+
+    /// Image-size label compacted for the photo top bar ("Size L" → "L").
+    public var stillSizeCompactLabel: String? {
+        imageSize.map { $0.replacingOccurrences(of: "Size ", with: "") }
+    }
+
+    /// Quality label compacted to strip width ("RAW+JPEG Fine★" → "R+JF★").
+    public var stillQualityCompactLabel: String? {
+        guard let compression else { return imageSize }
+        if compression.hasPrefix("RAW+JPEG") {
+            let suffix = compression.dropFirst("RAW+JPEG ".count)
+            let letter = suffix.first.map(String.init) ?? ""
+            let star = suffix.hasSuffix("★") ? "★" : ""
+            return "R+J\(letter)\(star)"
+        }
+        if compression.hasPrefix("JPEG") {
+            let suffix = compression.dropFirst("JPEG ".count)
+            let letter = suffix.first.map(String.init) ?? ""
+            let star = suffix.hasSuffix("★") ? "★" : ""
+            return "JPG \(letter)\(star)"
+        }
+        return compression
     }
 }
 
