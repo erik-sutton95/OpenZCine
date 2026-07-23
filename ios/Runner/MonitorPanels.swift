@@ -1792,7 +1792,7 @@ struct AssistQuickSettingsContent: View {
             SettingsInlineRow(
                 title: "Review Duration",
                 help:
-                    "How long the captured frame stays up after a release. ∞ keeps it until tapped. Continuous drive modes skip the review.",
+                    "How long the captured frame stays up after a release. ∞ keeps it until tapped. A held burst reviews its last frame once the run ends.",
                 showTopDivider: false,
                 stacked: compact
             ) {

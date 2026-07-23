@@ -5794,16 +5794,15 @@ final class NativeAppModel {
         }
     }
 
-    /// After a completed release with the PLAY tool on (and a non-burst drive — continuous
-    /// modes would thrash the card), overlay the just-captured frame: the tiny embedded thumb
-    /// lands instantly, then the full JPEG streams in and replaces it. JPEG-gated — a RAW-only
-    /// quality has no streamable full image, so the review sits out. [verify-on-HW:
-    /// enumeration lag per body]
+    /// After a completed release with the PLAY tool on, overlay the just-captured frame: the
+    /// tiny embedded thumb lands instantly, then the full JPEG streams in and replaces it.
+    /// Completion is per-run, never per-frame — a held burst schedules exactly one review,
+    /// of its last frame, only after the finger lifts and the run ends. JPEG-gated — a
+    /// RAW-only quality has no streamable full image, so the review sits out.
+    /// [verify-on-HW: enumeration lag per body]
     private func scheduleInstantReview(session: NativeCameraSession) {
         guard preferences.liveViewVisibleAssistTools.contains(.instantReview) else { return }
         guard cameraPropertySnapshot.compression?.contains("JPEG") == true else { return }
-        let drive = cameraPropertySnapshot.stillCaptureMode.flatMap(StillDriveMode.mode(forLabel:))
-        guard drive?.isContinuous != true else { return }
         instantReviewFetchTask?.cancel()
         instantReviewFetchTask = Task { [weak self] in
             for attempt in 0..<6 {
