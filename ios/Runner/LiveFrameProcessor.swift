@@ -256,12 +256,15 @@ extension NativeAppModel {
     }
 
     var liveImageEffects: LiveImageEffects {
-        imageEffects(for: preferences.visibleAssistTools(for: .liveView))
+        // The photo-filtered set: a creative LUT (or any cinema-only effect) left on in video
+        // must not ride into the photo feed — it cannot even be turned off from the photo
+        // toolbar. It comes back untouched on the flip to video.
+        imageEffects(for: renderedLiveAssistTools)
     }
 
     /// Whether any scope tool is on, so the frame loop only pays for sampling when a scope is shown.
     var scopesActive: Bool {
-        let visible = preferences.visibleAssistTools(for: .liveView)
+        let visible = renderedLiveAssistTools
         return visible.contains(.waveform) || visible.contains(.parade)
             || visible.contains(.histogram) || visible.contains(.vectorscope)
             || visible.contains(.trafficLights)
@@ -269,14 +272,13 @@ extension NativeAppModel {
 
     /// Whether a scope assist that only needs histogram bins is on (GPU path samples for these).
     var histogramScopeActive: Bool {
-        let visible = preferences.visibleAssistTools(for: .liveView)
+        let visible = renderedLiveAssistTools
         return visible.contains(.histogram) || visible.contains(.trafficLights)
     }
 
     /// Whether the horizon level overlay is visible — gates per-frame virtual-horizon updates.
     var levelAssistActive: Bool {
-        preferences.visibleAssistTools(for: .liveView).contains(.level)
-            && assistConfiguration.level.enabled
+        renderedLiveAssistTools.contains(.level) && assistConfiguration.level.enabled
     }
 
     /// The cube the vectorscope pushes its sampled points through so it reads the MONITOR image:
@@ -306,7 +308,7 @@ extension NativeAppModel {
         let trafficLightsCrushClip = assistConfiguration.scopes.crushClipCompensation
         let mapping = exposureSignalMapping
         let vectorscopeCube = vectorscopeMonitorCube(
-            visibleTools: preferences.visibleAssistTools(for: .liveView),
+            visibleTools: renderedLiveAssistTools,
             curve: mapping.curve)
         let previous = scopeAssist
         let bundle = await Task.detached(priority: .userInitiated) {
@@ -329,7 +331,7 @@ extension NativeAppModel {
     /// surfaces that don't register as assist tools (e.g. the portrait scopes frame).
     func refreshScopes(from image: UIImage, full: Bool = false) async {
         guard let buffer = FrameSampling.rgbaBuffer(from: image, maxWidth: 200) else { return }
-        let visible = preferences.visibleAssistTools(for: .liveView)
+        let visible = renderedLiveAssistTools
         let includePoints =
             full || ScopeAssistSampling.needsPointSamples(visible: visible)
         let stride = ScopeAssistSampling.pointStride

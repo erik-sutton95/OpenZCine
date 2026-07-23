@@ -902,6 +902,7 @@ struct PickerPanel: View {
 
     private var isDrumInteractionLocked: Bool {
         isPickerInteractionLocked || isISOAutoValueLocked
+            || model.pickerModeDisabled(picker, mode: selectedMode)
     }
 
     private var activePickerModes: [PickerMode] {
@@ -1139,11 +1140,15 @@ struct PickerPanel: View {
 
     /// Segmented tabs (e.g. ANGLE / SPEED) beneath the wheel; the active tab is gold-outlined.
     private var modeBar: some View {
-        HStack(spacing: 10) {
+        // When any tab carries a detail line, every tab reserves the two-line height so the
+        // row reads as one bar instead of mismatched chips.
+        let anyDetail = activePickerModes.contains { $0.detail != nil }
+        return HStack(spacing: 10) {
             ForEach(Array(activePickerModes.enumerated()), id: \.offset) { index, mode in
                 let active = index == selectedMode
+                let modeDisabled = model.pickerModeDisabled(picker, mode: index)
                 Button {
-                    guard !isPickerInteractionLocked else { return }
+                    guard !isPickerInteractionLocked, !modeDisabled else { return }
                     selectedMode = index
                     // Re-centre on the mode's own value: a circuit's base (ISO High → 6400) or an
                     // independent FOCUS tab's stored value.
@@ -1187,8 +1192,8 @@ struct PickerPanel: View {
                         }
                     }
                     .foregroundStyle(active ? LiveDesign.accent : LiveDesign.muted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, mode.detail == nil ? 12 : 9)
+                    .frame(maxWidth: .infinity, minHeight: anyDetail ? 46 : 1)
+                    .padding(.vertical, mode.detail == nil ? (anyDetail ? 5 : 12) : 9)
                     .background(
                         active ? LiveDesign.accentDim : LiveDesign.background.opacity(0.28),
                         in: RoundedRectangle(
@@ -1201,6 +1206,8 @@ struct PickerPanel: View {
                     }
                 }
                 .buttonStyle(.zcTapTarget)
+                .opacity(modeDisabled ? 0.35 : 1)
+                .disabled(modeDisabled)
                 // Full locks (shutter / R3D record) freeze tabs; Auto ISO only freezes the drum.
                 .opacity(isPickerInteractionLocked ? 0.55 : 1)
                 .allowsHitTesting(!isPickerInteractionLocked)

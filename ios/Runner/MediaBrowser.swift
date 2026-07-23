@@ -18,17 +18,32 @@ actor MediaCellImageLoader {
             guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
                 return nil
             }
-            let thumbnailOptions =
-                [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-                ] as [CFString: Any] as CFDictionary
-            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions)
-            else { return nil }
-            return UIImage(cgImage: cgImage)
+            return Self.downsampled(source: source, maxPixelSize: maxPixelSize)
         }
+    }
+
+    /// In-memory variant for bytes that never touch disk (the instant-playback stream).
+    func downsampled(data: Data, maxPixelSize: Int) -> sending UIImage? {
+        autoreleasepool {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+                return nil
+            }
+            return Self.downsampled(source: source, maxPixelSize: maxPixelSize)
+        }
+    }
+
+    private static func downsampled(source: CGImageSource, maxPixelSize: Int) -> UIImage? {
+        let thumbnailOptions =
+            [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            ] as [CFString: Any] as CFDictionary
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions)
+        else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 }
 
@@ -2079,26 +2094,78 @@ struct MediaPhotoViewer: View {
         }
 
         model.startClipStream(displayClip)
+        // Incremental decode of the growing file. Brute-force `UIImage(contentsOfFile:)` per
+        // tick sprayed Console: format sniffing fails until the header lands ("could not find
+        // plugin"), every partial decode logs a JFIF-incomplete warning, and each tick re-decoded
+        // from byte zero. The incremental source keeps the parse state, and attempts are gated
+        // to a meaningful chunk of fresh bytes.
+        let incremental = CGImageSourceCreateIncremental(
+            [kCGImageSourceShouldCache: false] as CFDictionary)
+        var deliveredBytes = 0
+        var lastAttemptBytes = 0
         while !Task.isCancelled {
             if model.isClipDownloaded(displayClip) {
                 await loadFromDisk()
                 return
             }
             guard let url = model.clipLocalURL(displayClip) else { return }
-            if FileManager.default.fileExists(atPath: url.path),
-                let partial = UIImage(contentsOfFile: url.path)
-            {
-                await MainActor.run { image = partial }
+            if let data = try? Data(contentsOf: url), data.count > deliveredBytes {
+                deliveredBytes = data.count
+                CGImageSourceUpdateData(incremental, data as CFData, false)
+                if deliveredBytes >= 262_144, deliveredBytes - lastAttemptBytes >= 1_000_000,
+                    let partial = Self.partialImage(from: incremental)
+                {
+                    lastAttemptBytes = deliveredBytes
+                    await MainActor.run { image = partial }
+                }
             }
-            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: .milliseconds(600))
         }
     }
 
-    @MainActor
+    /// The decodable top portion of a partially streamed still, EXIF orientation applied.
+    private static func partialImage(from source: CGImageSource) -> UIImage? {
+        guard CGImageSourceGetCount(source) > 0,
+            let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        var orientation = UIImage.Orientation.up
+        if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+            as? [CFString: Any],
+            let raw = properties[kCGImagePropertyOrientation] as? UInt32,
+            let exif = CGImagePropertyOrientation(rawValue: raw)
+        {
+            orientation = UIImage.Orientation(exif)
+        }
+        return UIImage(cgImage: cgImage, scale: 1, orientation: orientation)
+    }
+
     private func loadFromDisk() async {
         guard let url = model.clipLocalURL(displayClip) else { return }
-        guard let loaded = UIImage(contentsOfFile: url.path) else { return }
-        image = loaded
+        // Display-sized decode: a full-resolution still would allocate a decode surface far
+        // beyond what any zoom shows (the IOSurface failures in Console).
+        // ponytail: 4096 long edge ≈ 3× zoom headroom on phone screens; raise if deep
+        // pinch-zoom ever needs more.
+        guard
+            let loaded = await MediaCellImageLoader.shared.downsampled(
+                at: url, maxPixelSize: 4096)
+        else { return }
+        await MainActor.run { image = loaded }
+    }
+}
+
+extension UIImage.Orientation {
+    /// EXIF/CGImage orientation → UIKit orientation (no built-in bridge exists).
+    fileprivate init(_ exif: CGImagePropertyOrientation) {
+        switch exif {
+        case .up: self = .up
+        case .upMirrored: self = .upMirrored
+        case .down: self = .down
+        case .downMirrored: self = .downMirrored
+        case .left: self = .left
+        case .leftMirrored: self = .leftMirrored
+        case .right: self = .right
+        case .rightMirrored: self = .rightMirrored
+        }
     }
 }
 

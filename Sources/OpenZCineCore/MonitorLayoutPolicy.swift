@@ -257,8 +257,10 @@ public enum MonitorFeedLayout {
 
         let remainingWidth = max(0, viewportWidth - width)
         let x: Double
-        if centered {
-            // Mid-viewport, clamped so neither edge runs under a safe-area inset.
+        if centered, aspectRatio < Self.aspectRatio - 0.001 {
+            // Mid-viewport, clamped so neither edge runs under a safe-area inset. Only the
+            // narrower-than-native shapes (3:2, 1:1) centre — a 16:9 photo frame takes the
+            // exact video-mode placement, clear of the system rail.
             let maxX = max(leadingInset, remainingWidth - max(0, safeArea.trailing))
             x = min(max(remainingWidth / 2, leadingInset), maxX)
         } else if MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) {

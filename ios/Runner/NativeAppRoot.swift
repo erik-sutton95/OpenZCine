@@ -921,7 +921,9 @@ final class NativeAppModel {
     var linkHealthDetail = "Not connected"
 
     var displayOrder: [DispMode] {
-        preferences.enabledDispOrder
+        // Photography hides the command monitor (its dashboard is still movie-shaped);
+        // the DISP indicator and cycle follow this filtered order.
+        preferences.enabledDispOrder.filter { !isPhotographyMode || $0 != .command }
     }
 
     var isConnected: Bool {
@@ -2183,6 +2185,7 @@ final class NativeAppModel {
             let toPhoto = cameraPropertySnapshot.captureSelector != .photo
             cameraPropertySnapshot = cameraPropertySnapshot.applying(
                 property: .liveViewSelector, data: Data([toPhoto ? 0 : 1]))
+            if toPhoto, displayMode == .command { displayMode = .live }
             if toPhoto {
                 // Representative stills readouts so the compact photo strip has real labels.
                 cameraPropertySnapshot =
@@ -4751,6 +4754,10 @@ final class NativeAppModel {
                 // trickling through the interleaved poll. (The nil→first read is the bootstrap's
                 // own selector read — its loop already covers the right order.)
                 burstPropertiesAfterSelectorFlip(session: session)
+                // Photography hides the command monitor — snap out if the flip lands on it.
+                if isPhotographyMode, displayMode == .command {
+                    displayMode = .live
+                }
             }
             if property == .warningStatus {
                 applyThermalStreamStepDownIfNeeded()
@@ -5086,13 +5093,20 @@ final class NativeAppModel {
 
     func cycleDisplayMode() {
         guard !interfaceLocked else { return }
-        displayMode = preferences.nextDisplayMode(after: displayMode)
+        // Cycle within the mode-filtered order (photography skips command).
+        let order = displayOrder
+        guard !order.isEmpty else { return }
+        if let index = order.firstIndex(of: displayMode) {
+            displayMode = order[(index + 1) % order.count]
+        } else {
+            displayMode = order[0]
+        }
     }
 
     /// Jump straight to a display mode (used by the feed swipe: down → clean, up → live).
     func setDisplayMode(_ mode: DispMode) {
         guard !interfaceLocked, displayMode != mode else { return }
-        guard preferences.enabledDispModes.contains(mode) else { return }
+        guard displayOrder.contains(mode) else { return }
         displayMode = mode
     }
 
@@ -5539,6 +5553,9 @@ final class NativeAppModel {
     /// App-side self-timer: countdown seconds a shutter press waits before firing (0 = off).
     /// The countdown is the app's — a remote release never runs the body's own self-timer.
     var photoTimerDelaySeconds = 0
+    /// Releases fired back-to-back once the app countdown hits zero (the body's own shot
+    /// count is menu-only, so the app covers it).
+    var photoTimerShotCount = 1
     /// Seconds left in a running countdown (nil when idle); the shutter core renders it.
     private(set) var stillTimerRemaining: Int?
     @ObservationIgnored private var stillTimerTask: Task<Void, Never>?
@@ -5549,8 +5566,29 @@ final class NativeAppModel {
     }
 
     func setPhotoTimer(label: String) {
-        photoTimerDelaySeconds = Int(label.hasSuffix("s") ? String(label.dropLast()) : label) ?? 0
+        let seconds = Int(label.hasSuffix("s") ? String(label.dropLast()) : label) ?? 0
+        // The body's own timer owns the release while engaged — the app timer stays off.
+        guard
+            seconds == 0
+                || cameraPropertySnapshot.stillCaptureMode != StillDriveMode.selfTimer.label
+        else { return }
+        photoTimerDelaySeconds = seconds
         if photoTimerDelaySeconds == 0 { cancelStillTimer() }
+    }
+
+    /// Photo DRIVE tab gating: the two timers are mutually exclusive, and an engaged body
+    /// timer owns the release mode. States derive from the polled snapshot, so a change made
+    /// on the camera itself flows straight into which tabs are live — the camera stays ground
+    /// truth.
+    func pickerModeDisabled(_ picker: CameraPicker, mode: Int) -> Bool {
+        guard picker == .stillDrive else { return false }
+        let builtInOn =
+            cameraPropertySnapshot.stillCaptureMode == StillDriveMode.selfTimer.label
+        switch mode {
+        case 0, 2, 3: return builtInOn
+        case 1: return photoTimerDelaySeconds > 0
+        default: return false
+        }
     }
 
     /// The drive that was active before the Built-in timer engaged, restored on Off.
@@ -5560,6 +5598,7 @@ final class NativeAppModel {
     /// camera menu — no remote property exposes them — and the countdown runs only for presses
     /// of the physical shutter; command releases still fire immediately.
     func setBuiltInTimer(on: Bool) {
+        guard photoTimerDelaySeconds == 0 || !on else { return }
         let timerLabel = StillDriveMode.selfTimer.label
         if on {
             if cameraPropertySnapshot.stillCaptureMode != timerLabel {
@@ -5580,7 +5619,9 @@ final class NativeAppModel {
         stillTimerRemaining = nil
     }
 
-    /// Runs the armed countdown on the shutter, ticking once a second, then fires the release.
+    /// Runs the armed countdown on the shutter, ticking once a second, then fires the
+    /// configured number of releases back-to-back. A press during the countdown or the shot
+    /// run cancels the rest.
     private func startStillTimer() {
         stillTimerRemaining = photoTimerDelaySeconds
         OperatorSettingsHaptics.selection(enabled: preferences.hapticsEnabled)
@@ -5594,8 +5635,24 @@ final class NativeAppModel {
             }
             guard let self, !Task.isCancelled, self.stillTimerRemaining == 0 else { return }
             self.stillTimerRemaining = nil
+            await self.fireTimerShots()
             self.stillTimerTask = nil
-            self.captureStill()
+        }
+    }
+
+    /// The post-countdown release run: each shot waits out the previous one's completion.
+    private func fireTimerShots() async {
+        let count = max(1, photoTimerShotCount)
+        for index in 0..<count {
+            if index > 0 {
+                var waited = 0.0
+                while isStillCapturing, waited < 20, !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    waited += 0.15
+                }
+                guard !isStillCapturing, !Task.isCancelled else { return }
+            }
+            captureStill()
         }
     }
 
@@ -5604,8 +5661,9 @@ final class NativeAppModel {
     /// the release until `shutterButtonReleased`. [verify-on-HW: continuous latch-until-
     /// terminate per body]
     func shutterButtonPressed() {
-        if stillTimerRemaining != nil {
-            // Second press cancels a running countdown, matching body behaviour.
+        if stillTimerTask != nil {
+            // Second press cancels a running countdown (or the remaining shot run),
+            // matching body behaviour.
             cancelStillTimer()
             return
         }
@@ -5620,13 +5678,19 @@ final class NativeAppModel {
         shutterPressLatchedBurst = drive?.isContinuous == true
     }
 
-    /// Finger-up: ends a latched continuous burst (no-op for single/timer/bulb presses, or
-    /// when the body already finished the burst on its own).
+    /// Finger-up: ends a latched continuous burst — cancelling a chained-but-unsent release,
+    /// or terminating whatever run is still in flight. No-op for single/timer/bulb presses.
     func shutterButtonReleased() {
         guard shutterPressLatchedBurst else { return }
         shutterPressLatchedBurst = false
-        guard isStillCapturing else { return }
-        pendingStillTerminate = true
+        if pendingStillCapture {
+            pendingStillCapture = false
+            finishStillRelease(message: nil)
+        } else if isStillCapturing {
+            // Expected to be refused when the run already ended on its own — stay quiet.
+            pendingStillTerminateQuiet = true
+            pendingStillTerminate = true
+        }
     }
 
     // MARK: - Instant playback (view-assist PLAY tool)
@@ -5789,7 +5853,9 @@ final class NativeAppModel {
             data.append(part)
             offset += UInt32(part.count)
         }
-        return UIImage(data: data)
+        // Display-sized decode — the review never shows more pixels than the screen, and a
+        // full 45 MP decode allocates surfaces the device may refuse.
+        return await MediaCellImageLoader.shared.downsampled(data: data, maxPixelSize: 4096)
     }
 
     /// Swaps the streamed full-resolution image over the presented review, keeping the
@@ -5901,6 +5967,8 @@ final class NativeAppModel {
     @ObservationIgnored private var pendingStillCapture = false
     /// Queued bulb/time termination, consumed at the next safe point.
     @ObservationIgnored private var pendingStillTerminate = false
+    /// The queued terminate is a burst-end courtesy — a refusal is expected and stays silent.
+    @ObservationIgnored private var pendingStillTerminateQuiet = false
     /// A release was accepted and DeviceReady has not yet confirmed completion.
     @ObservationIgnored private var stillReleaseAwaitingReady = false
     /// DeviceReady reported a bulb/time exposure holding the shutter open.
@@ -5925,12 +5993,16 @@ final class NativeAppModel {
         }
         if pendingStillTerminate {
             pendingStillTerminate = false
+            let quiet = pendingStillTerminateQuiet
+            pendingStillTerminateQuiet = false
             do {
                 try await session.terminateStillCapture()
                 // Completion (frame delivery) still lands via the readiness poll below.
             } catch {
-                connectionMessage =
-                    "Ending the exposure failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                if !quiet {
+                    connectionMessage =
+                        "Ending the exposure failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                }
             }
             return true
         }
@@ -5967,6 +6039,14 @@ final class NativeAppModel {
         do {
             switch try await session.pollStillReleaseReadiness() {
             case .complete:
+                if shutterPressLatchedBurst, !pendingStillTerminate {
+                    // Finger still down in a continuous drive: chain the next release right
+                    // away — one command release delivers a bounded run of frames no matter
+                    // the ceiling, so the hold itself drives the burst. [verify-on-HW]
+                    pendingStillCapture = true
+                    stillReleaseAwaitingReady = false
+                    return
+                }
                 finishStillRelease(message: nil)
                 // The SHOTS pill reflects the frame immediately (a burst consumes more — the
                 // read-back right after corrects the estimate rather than waiting for the
@@ -6381,6 +6461,7 @@ final class NativeAppModel {
                 return cameraPropertySnapshot.stillCaptureMode == StillDriveMode.selfTimer.label
                     ? "On" : "Off"
             case 2: return photoTimerLabel
+            case 3: return String(photoTimerShotCount)
             default: break
             }
         }
@@ -6414,12 +6495,12 @@ final class NativeAppModel {
             return
         }
         if picker == .stillDrive, mode > 0 {
-            // Built-in engages/releases the body's self-timer drive; App is the in-app
-            // countdown, never a camera write.
-            if mode == 1 {
-                setBuiltInTimer(on: value == "On")
-            } else {
-                setPhotoTimer(label: value)
+            // Built-in engages/releases the body's self-timer drive; App and Shots are the
+            // in-app countdown settings, never camera writes.
+            switch mode {
+            case 1: setBuiltInTimer(on: value == "On")
+            case 2: setPhotoTimer(label: value)
+            default: photoTimerShotCount = Int(value) ?? 1
             }
             return
         }
@@ -7629,12 +7710,15 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                         .filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label),
                     base: "Single"),
                 PickerMode(
-                    title: "Built-in", detail: "body timer",
+                    title: "Built-in", detail: "delay set on body",
                     options: ["Off", "On"], base: "Off"),
                 PickerMode(
                     title: "App", detail: "app countdown",
                     options: ["Off", "1s", "2s", "3s", "5s", "10s", "20s", "30s", "60s"],
                     base: "Off"),
+                PickerMode(
+                    title: "Shots", detail: "after countdown",
+                    options: (1...9).map(String.init), base: "1"),
             ]
         case .stillFocus:
             // AF mode, AF-area, and subject detection — three independent stills settings by

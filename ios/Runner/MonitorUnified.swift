@@ -703,7 +703,10 @@ struct MonitorAssistStrip: View {
                         AssistToolButtonRow(tool: tool)
                     }
                 }
-                .padding(.vertical, 10)
+                .padding(.top, 10)
+                // The last row must be able to scroll fully clear of the bottom fade —
+                // without this it parks half-faded against the rail's rounded end.
+                .padding(.bottom, Self.bottomFadeHeight + 10)
                 .padding(.horizontal, 6)
             }
             // Mirrors MediaBrowser's `portraitGridControlsBand` fade shape: rows scroll UNDER a
