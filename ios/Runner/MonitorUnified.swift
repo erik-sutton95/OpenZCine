@@ -836,8 +836,13 @@ struct MonitorSystemCluster: View {
                 PhotographyShutterButton(isCapturing: model.isStillCapturing)
             }
             .buttonStyle(.zcTapTarget)
-            .disabled(model.isStillCapturing)
-            .accessibilityLabel(model.isStillCapturing ? "Capturing" : "Shutter")
+            // Stays tappable while a bulb/time exposure holds the shutter open —
+            // the second tap ends the exposure; other in-flight releases ignore taps.
+            .disabled(model.isStillCapturing && !model.stillReleaseIsOpenShutter)
+            .accessibilityLabel(
+                model.stillReleaseIsOpenShutter
+                    ? "End exposure" : model.isStillCapturing ? "Capturing" : "Shutter"
+            )
             .accessibilityIdentifier("monitor.system.shutter")
             .liveViewGuideAnchor(.record)
         } else {

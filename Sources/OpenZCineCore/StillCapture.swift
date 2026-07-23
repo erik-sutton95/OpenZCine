@@ -130,4 +130,27 @@ public enum StillCapturePolicy: Sendable {
     ) -> Bool {
         selector == .photo
     }
+
+    /// Classifies a `DeviceReady` response while a still release is in flight.
+    public static func releaseReadiness(_ code: PTPResponseCode) -> StillReleaseReadiness {
+        switch code {
+        case .ok: .complete
+        case .deviceBusy, .silentReleaseBusy, .movieFrameReleaseBusy: .inProgress
+        case .bulbReleaseBusy: .openShutterInProgress
+        default: .failed(code)
+        }
+    }
+}
+
+/// Progress of a still release as reported by polling `DeviceReady` after the release op.
+public enum StillReleaseReadiness: Equatable, Sendable {
+    /// The release (including every frame of a burst) finished.
+    case complete
+    /// AF / shooting / self-timer still running — poll again.
+    case inProgress
+    /// A bulb or time exposure is holding the shutter open; a second shutter action ends it
+    /// via `TerminateCapture`, and no timeout applies.
+    case openShutterInProgress
+    /// The release failed (out of focus, storage full, …).
+    case failed(PTPResponseCode)
 }

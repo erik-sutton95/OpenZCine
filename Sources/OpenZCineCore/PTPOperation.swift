@@ -208,6 +208,14 @@ public enum PTPResponseCode: UInt16, Sendable {
     // return this — the session is usable; the open didn't fail.
     case sessionAlreadyOpen = 0x201E
     case deviceBusy = 0x2019
+    // Vendor release-status codes DeviceReady returns while a still release runs
+    // (names mirror their libgphoto2 `PTP_RC_NIKON_*` symbols).
+    case outOfFocus = 0xA002
+    case shutterSpeedBulb = 0xA008
+    case bulbReleaseBusy = 0xA200
+    case silentReleaseBusy = 0xA201
+    case movieFrameReleaseBusy = 0xA202
+    case shutterSpeedTime = 0xA204
     case unknown = 0xFFFF
 }
 

@@ -293,18 +293,22 @@ final class NativeCameraSession: @unchecked Sendable {
         transport: any CameraTransport,
         cameraName: String?,
         establishmentSummary: String,
-        identity: NativeCameraIdentity
+        identity: NativeCameraIdentity,
+        operationPolicy: ZCameraOperationPolicy = ZCameraOperationPolicy(operations: [])
     ) {
         self.host = host
         self.transport = transport
         self.cameraName = cameraName
         self.establishmentSummary = establishmentSummary
         self.identity = identity
+        self.operationPolicy = operationPolicy
     }
 
     /// Stable camera key: the IPv4 address over Wi-Fi, or a `usb:<device-id>` host key over USB-C.
     let host: String
     let identity: NativeCameraIdentity
+    /// Op selection driven by the body's advertised DeviceInfo operations.
+    let operationPolicy: ZCameraOperationPolicy
 
     private let transport: any CameraTransport
     private let cameraName: String?
@@ -462,6 +466,41 @@ final class NativeCameraSession: @unchecked Sendable {
     }
 
     /// Starts / stops movie recording to the card (Nikon StartMovieRecInCard / EndMovieRec).
+    // MARK: - Still release (photography mode)
+
+    /// Fires a still release. Activation-style: the OK response only confirms the release
+    /// started — completion (including every frame of a burst, or a running bulb) is observed
+    /// by polling ``pollStillReleaseReadiness()`` between live-view frames.
+    func initiateStillCapture() async throws {
+        let op = operationPolicy.stillCaptureOperation
+        // Media capture: p1 selects AF-then-release (half-press-then-fire, like the body's
+        // shutter button), p2 targets the card. The standard-capture fallback has no params.
+        let parameters: [UInt32] =
+            op == .initiateCaptureRecInMedia ? [0xFFFF_FFFE, 0x0000] : []
+        let result = try await transact(
+            operationCode: op, parameters: parameters, dataPhase: .noDataOrDataIn)
+        guard result.operationResponse.responseCode == .ok else {
+            throw NativeCameraSessionError.operationRejected(
+                op, result.operationResponse.responseCode)
+        }
+    }
+
+    /// One `DeviceReady` poll after a still release.
+    func pollStillReleaseReadiness() async throws -> StillReleaseReadiness {
+        let result = try await transact(operationCode: .deviceReady, dataPhase: .noDataOrDataIn)
+        return StillCapturePolicy.releaseReadiness(result.operationResponse.responseCode)
+    }
+
+    /// Ends a bulb/time exposure or stops a running burst; frames captured so far are kept.
+    func terminateStillCapture() async throws {
+        let result = try await transact(
+            operationCode: .terminateCapture, parameters: [0, 0], dataPhase: .noDataOrDataIn)
+        guard result.operationResponse.responseCode == .ok else {
+            throw NativeCameraSessionError.operationRejected(
+                .terminateCapture, result.operationResponse.responseCode)
+        }
+    }
+
     func startRecording() async throws {
         let result = try await transact(operationCode: .startMovieRecInCard)
         guard result.operationResponse.responseCode == .ok else {
@@ -993,7 +1032,8 @@ final class NativeCameraSession: @unchecked Sendable {
             transport: transport,
             cameraName: cameraName,
             establishmentSummary: establishmentSummary.trimmingCharacters(in: .whitespaces),
-            identity: updatedIdentity
+            identity: updatedIdentity,
+            operationPolicy: ZCameraOperationPolicy(deviceInfo: info)
         )
     }
 

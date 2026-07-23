@@ -3970,6 +3970,11 @@ final class NativeAppModel {
             }
             return
         }
+        // Still release (photography mode): fire queued releases and track completion
+        // with DeviceReady between frames, exactly like the record path above.
+        if await serviceStillCaptureWork(session: session) {
+            return
+        }
         if await performNextPendingCameraWrite(session: session) {
             return
         }
@@ -5379,11 +5384,11 @@ final class NativeAppModel {
 
     // MARK: - Still capture (photography mode)
 
-    /// Release a still when the body is in photo mode. Uses media-destination
-    /// capture when available; demo mode simulates a brief capture pulse.
+    /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
+    /// While a bulb/time exposure is holding the shutter open, a second tap ends it.
     func captureStill() {
-        guard !isStillCapturing else { return }
         if isDemoSession {
+            guard !isStillCapturing else { return }
             isStillCapturing = true
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 250_000_000)
@@ -5395,17 +5400,106 @@ final class NativeAppModel {
             connectionMessage = "Connect a camera before capturing."
             return
         }
+        if isStillCapturing {
+            if stillReleaseIsOpenShutter { pendingStillTerminate = true }
+            return
+        }
         isStillCapturing = true
         pendingStillCapture = true
-        Task { @MainActor in
-            // Optimistic unlock if the session path has not cleared the flag.
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if isStillCapturing { isStillCapturing = false }
+    }
+
+    /// Queued still release, consumed at the next live-view/command safe point.
+    @ObservationIgnored private var pendingStillCapture = false
+    /// Queued bulb/time termination, consumed at the next safe point.
+    @ObservationIgnored private var pendingStillTerminate = false
+    /// A release was accepted and DeviceReady has not yet confirmed completion.
+    @ObservationIgnored private var stillReleaseAwaitingReady = false
+    /// DeviceReady reported a bulb/time exposure holding the shutter open.
+    private(set) var stillReleaseIsOpenShutter = false
+    @ObservationIgnored private var stillReleaseStartedAt: Date?
+    @ObservationIgnored private var lastStillReadyPollAt: Date?
+
+    /// Services queued still-release work at a safe point. Returns true when it consumed
+    /// the safe point (mirrors the record-toggle contract).
+    private func serviceStillCaptureWork(session: NativeCameraSession) async -> Bool {
+        if pendingStillTerminate {
+            pendingStillTerminate = false
+            do {
+                try await session.terminateStillCapture()
+                // Completion (frame delivery) still lands via the readiness poll below.
+            } catch {
+                connectionMessage =
+                    "Ending the exposure failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            }
+            return true
+        }
+        if pendingStillCapture {
+            pendingStillCapture = false
+            do {
+                try await session.initiateStillCapture()
+                stillReleaseAwaitingReady = true
+                stillReleaseStartedAt = Date()
+                lastStillReadyPollAt = nil
+            } catch {
+                finishStillRelease(
+                    message:
+                        "Still capture failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                )
+            }
+            return true
+        }
+        if stillReleaseAwaitingReady {
+            // One DeviceReady between frames, throttled so bursts/self-timer don't
+            // monopolise the transaction gate.
+            let now = Date()
+            if let last = lastStillReadyPollAt, now.timeIntervalSince(last) < 0.35 {
+                return false
+            }
+            lastStillReadyPollAt = now
+            await pollStillReleaseProgress(session: session)
+            return true
+        }
+        return false
+    }
+
+    private func pollStillReleaseProgress(session: NativeCameraSession) async {
+        do {
+            switch try await session.pollStillReleaseReadiness() {
+            case .complete:
+                finishStillRelease(message: nil)
+            case .inProgress:
+                stillReleaseIsOpenShutter = false
+                // Self-timer waits up to 20 s and bursts can run long; only give up well
+                // past anything a working release should need.
+                if let startedAt = stillReleaseStartedAt,
+                    Date().timeIntervalSince(startedAt) > 45
+                {
+                    finishStillRelease(
+                        message: "The camera did not confirm the still release.")
+                }
+            case .openShutterInProgress:
+                stillReleaseIsOpenShutter = true
+            case .failed(let code):
+                finishStillRelease(
+                    message: code == .outOfFocus
+                        ? "AF did not focus — still not captured."
+                        : "Still capture failed (0x\(String(code.rawValue, radix: 16))).")
+            }
+        } catch {
+            finishStillRelease(
+                message:
+                    "Still capture status failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            )
         }
     }
 
-    /// Queued still release for the live-view safe point (cleared by the session loop).
-    @ObservationIgnored private(set) var pendingStillCapture = false
+    private func finishStillRelease(message: String?) {
+        stillReleaseAwaitingReady = false
+        stillReleaseIsOpenShutter = false
+        stillReleaseStartedAt = nil
+        isStillCapturing = false
+        if let message { connectionMessage = message }
+    }
 
     func presentStillDrivePicker() { presentPhotographyControl(title: "Drive") }
     func presentExposureModePicker() { presentPhotographyControl(title: "Mode") }
