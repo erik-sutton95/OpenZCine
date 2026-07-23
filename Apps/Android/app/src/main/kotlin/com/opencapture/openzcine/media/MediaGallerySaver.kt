@@ -21,7 +21,7 @@ import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** A complete immutable video copy that may be written into the device gallery. */
+/** A complete immutable video or still copy that may be written into the device gallery. */
 internal data class MediaGalleryArtifact(
     val file: Path,
     val displayName: String,
@@ -35,15 +35,17 @@ internal data class MediaGalleryArtifact(
             share: StagedMediaShare,
             captureTimestampMillis: Long? = null,
         ): MediaGalleryArtifact {
-            if (!share.mimeType.startsWith("video/")) {
-                throw InvalidMediaGalleryArtifactException("Only staged video media can be saved to Gallery.")
+            if (!share.mimeType.startsWith("video/") && !share.mimeType.startsWith("image/")) {
+                throw InvalidMediaGalleryArtifactException(
+                    "Only staged video or still-image media can be saved to Gallery.",
+                )
             }
             if (!isSafeMediaDisplayName(share.displayName)) {
-                throw InvalidMediaGalleryArtifactException("The prepared video has an unsafe display name.")
+                throw InvalidMediaGalleryArtifactException("The prepared media has an unsafe display name.")
             }
-            val mimeType = galleryVideoMimeType(share.displayName)
+            val mimeType = galleryMediaMimeType(share.displayName)
                 ?: throw InvalidMediaGalleryArtifactException(
-                    "${share.displayName} isn't a supported Gallery video.",
+                    "${share.displayName} isn't a supported Gallery video or photo.",
                 )
             val file = share.file.toAbsolutePath().normalize()
             val byteCount =
@@ -94,7 +96,7 @@ internal enum class MediaGalleryFailureInjection {
     }
 }
 
-/** Android 10+ scoped-storage adapter for publishing operator-selected videos. */
+/** Android 10+ scoped-storage adapter for publishing operator-selected media. */
 internal class AndroidMediaGalleryGateway(
     private val resolver: ContentResolver,
     failureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
@@ -102,24 +104,45 @@ internal class AndroidMediaGalleryGateway(
     private val failNextWrite = AtomicBoolean(failureInjection == MediaGalleryFailureInjection.WRITE_ONCE)
 
     override fun createPending(artifact: MediaGalleryArtifact): PendingMediaGalleryItem {
-        val values =
+        val isImage = artifact.mimeType.startsWith("image/")
+        val collection =
+            if (isImage) {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            }
+        fun values(mimeType: String) =
             ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, artifact.displayName)
-                put(MediaStore.MediaColumns.MIME_TYPE, artifact.mimeType)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(
                     MediaStore.MediaColumns.RELATIVE_PATH,
-                    "${Environment.DIRECTORY_MOVIES}/$GALLERY_DIRECTORY",
+                    "${if (isImage) {
+                        Environment.DIRECTORY_PICTURES
+                    } else {
+                        Environment.DIRECTORY_MOVIES
+                    }}/$GALLERY_DIRECTORY",
                 )
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
                 artifact.captureTimestampMillis?.let { timestamp ->
-                    put(MediaStore.Video.VideoColumns.DATE_TAKEN, timestamp)
+                    put(
+                        if (isImage) {
+                            MediaStore.Images.ImageColumns.DATE_TAKEN
+                        } else {
+                            MediaStore.Video.VideoColumns.DATE_TAKEN
+                        },
+                        timestamp,
+                    )
                 }
             }
         val uri =
-            resolver.insert(
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-                values,
-            ) ?: throw MediaGalleryStoreUnavailableException(
+            try {
+                resolver.insert(collection, values(artifact.mimeType))
+            } catch (rejected: IllegalArgumentException) {
+                // Some providers reject camera-raw MIME types (.nef); retry the
+                // same row generically so the bytes still land in the Gallery.
+                resolver.insert(collection, values(FALLBACK_MIME_TYPE))
+            } ?: throw MediaGalleryStoreUnavailableException(
                 "Android didn't create a pending Gallery item.",
             )
         return PendingMediaGalleryItem(uri.toString())
@@ -157,6 +180,9 @@ internal class AndroidMediaGalleryGateway(
 
     private companion object {
         const val GALLERY_DIRECTORY = "OpenZCine"
+
+        /** Generic MIME retried when a provider rejects an exact raw-photo type. */
+        const val FALLBACK_MIME_TYPE = "application/octet-stream"
     }
 }
 
@@ -264,7 +290,7 @@ internal data class MediaGalleryBatchResult(
 }
 
 /**
- * Sequentially copies complete prepared videos into scoped MediaStore rows.
+ * Sequentially copies complete prepared media into scoped MediaStore rows.
  *
  * Each row remains `IS_PENDING=1` until the source byte count is verified. Any
  * exception or cancellation after insertion attempts deletion before the
@@ -319,18 +345,18 @@ internal class MediaGallerySaver(private val gateway: MediaGalleryGateway) {
         if (!isSafeMediaDisplayName(artifact.displayName)) {
             throw InvalidMediaGalleryArtifactException("The Gallery display name is unsafe.")
         }
-        if (galleryVideoMimeType(artifact.displayName) != artifact.mimeType) {
-            throw InvalidMediaGalleryArtifactException("The prepared Gallery video type is inconsistent.")
+        if (galleryMediaMimeType(artifact.displayName) != artifact.mimeType) {
+            throw InvalidMediaGalleryArtifactException("The prepared Gallery media type is inconsistent.")
         }
         if (artifact.expectedBytes <= 0) {
-            throw InvalidMediaGalleryArtifactException("The prepared Gallery video is empty.")
+            throw InvalidMediaGalleryArtifactException("The prepared Gallery media is empty.")
         }
         if (
             !Files.isRegularFile(artifact.file, LinkOption.NOFOLLOW_LINKS) ||
                 Files.isSymbolicLink(artifact.file) ||
                 Files.size(artifact.file) != artifact.expectedBytes
         ) {
-            throw InvalidMediaGalleryArtifactException("The prepared Gallery video is no longer complete.")
+            throw InvalidMediaGalleryArtifactException("The prepared Gallery media is no longer complete.")
         }
     }
 
@@ -345,7 +371,7 @@ internal class MediaGallerySaver(private val gateway: MediaGalleryGateway) {
             LinkOption.NOFOLLOW_LINKS,
         ).use { source ->
             if (source.size() != artifact.expectedBytes) {
-                throw InvalidMediaGalleryArtifactException("The prepared Gallery video changed before writing.")
+                throw InvalidMediaGalleryArtifactException("The prepared Gallery media changed before writing.")
             }
             val buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES)
             var copied = 0L
@@ -357,7 +383,7 @@ internal class MediaGallerySaver(private val gateway: MediaGalleryGateway) {
                 )
                 val read = source.read(buffer)
                 if (read < 0) {
-                    throw InvalidMediaGalleryArtifactException("The prepared Gallery video ended early.")
+                    throw InvalidMediaGalleryArtifactException("The prepared Gallery media ended early.")
                 }
                 if (read == 0) continue
                 output.write(buffer.array(), 0, read)
@@ -366,7 +392,7 @@ internal class MediaGallerySaver(private val gateway: MediaGalleryGateway) {
             cancellationCheck()
             output.flush()
             if (copied != artifact.expectedBytes || source.size() != artifact.expectedBytes) {
-                throw InvalidMediaGalleryArtifactException("The prepared Gallery video changed while writing.")
+                throw InvalidMediaGalleryArtifactException("The prepared Gallery media changed while writing.")
             }
         }
     }
@@ -457,3 +483,19 @@ internal fun galleryVideoMimeType(displayName: String): String? =
         "mp4", "m4v" -> "video/mp4"
         else -> null
     }
+
+/** Exact MediaStore image MIME metadata for camera stills, raws included. */
+internal fun galleryImageMimeType(displayName: String): String? =
+    when (displayName.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT)) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "heif", "heic", "hif" -> "image/heif"
+        "nef" -> "image/x-nikon-nef"
+        "tif", "tiff" -> "image/tiff"
+        "dng" -> "image/x-adobe-dng"
+        "png" -> "image/png"
+        else -> null
+    }
+
+/** Exact Gallery MIME for any supported staged camera media, video or still. */
+internal fun galleryMediaMimeType(displayName: String): String? =
+    galleryVideoMimeType(displayName) ?: galleryImageMimeType(displayName)

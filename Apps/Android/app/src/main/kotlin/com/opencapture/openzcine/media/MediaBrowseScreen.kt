@@ -745,7 +745,10 @@ internal fun MediaBrowseScreen(
     }
     val readyGalleryCount =
         selectedClips.count { clip ->
-            clip.contentKind == MediaContentKind.PLAYABLE_PROXY &&
+            (
+                clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
+                    clip.contentKind == MediaContentKind.STILL_PHOTO
+            ) &&
                 clipKey(clip) in readySelectionIDs
         }
     val selectedLutLabel =
@@ -935,16 +938,19 @@ internal fun MediaBrowseScreen(
     fun beginBatchGallerySave(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedClips
-        val videoSelection =
+        // Gallery accepts playable proxies AND still photos; only R3D masters
+        // and unsupported objects are omitted.
+        val savableSelection =
             selectionSnapshot.filter { clip ->
-                clip.contentKind == MediaContentKind.PLAYABLE_PROXY
+                clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
+                    clip.contentKind == MediaContentKind.STILL_PHOTO
             }
-        val nonVideoCount = selectionSnapshot.size - videoSelection.size
+        val omittedCount = selectionSnapshot.size - savableSelection.size
         nativeDeliveryPresented = false
-        if (videoSelection.isEmpty()) {
+        if (savableSelection.isEmpty()) {
             shareMessage =
                 MediaGalleryBatchResult(savedCount = 0, failures = emptyList())
-                    .operatorMessage(MediaGalleryOmissions(nonVideoCount = nonVideoCount))
+                    .operatorMessage(MediaGalleryOmissions(nonVideoCount = omittedCount))
             return
         }
         val coordinator = mediaDeliveryCoordinator
@@ -952,7 +958,7 @@ internal fun MediaBrowseScreen(
             scope.launch {
                 val items =
                     withContext(Dispatchers.IO) {
-                        videoSelection.mapNotNull { clip ->
+                        savableSelection.mapNotNull { clip ->
                             val owner = ownerCameraID(clip)
                             val entry =
                                 runCatching {
@@ -966,7 +972,7 @@ internal fun MediaBrowseScreen(
                         }
                     }
                 if (items.isEmpty()) {
-                    shareMessage = "No complete cached video is ready."
+                    shareMessage = "No complete cached media is ready."
                     return@launch
                 }
                 coordinator.beginSaveToPhotos(items, configuration)
@@ -986,7 +992,7 @@ internal fun MediaBrowseScreen(
                                 context,
                                 cacheStore,
                                 cameraID,
-                                videoSelection,
+                                savableSelection,
                             ) { stageContext.ensureActive() }
                         }
                     val configured =
@@ -1034,7 +1040,7 @@ internal fun MediaBrowseScreen(
                             result = result,
                             omissions =
                                 MediaGalleryOmissions(
-                                    nonVideoCount = nonVideoCount,
+                                    nonVideoCount = omittedCount,
                                     incompleteCount = staged.incompleteCount,
                                     preparationFailureCount =
                                         staged.failedCount +
@@ -1045,7 +1051,7 @@ internal fun MediaBrowseScreen(
                         )
                     shareMessage = delivery.result.operatorMessage(delivery.omissions)
                     if (
-                        delivery.result.savedCount == videoSelection.size &&
+                        delivery.result.savedCount == savableSelection.size &&
                             delivery.result.failedCount == 0 &&
                             delivery.omissions.totalCount == 0
                     ) {
@@ -1054,7 +1060,7 @@ internal fun MediaBrowseScreen(
                 } catch (error: CancellationException) {
                     throw error
                 } catch (_: Exception) {
-                    shareMessage = "Couldn't prepare the selected videos for Gallery."
+                    shareMessage = "Couldn't prepare the selected media for Gallery."
                 } finally {
                     shareInProgress = false
                     shareJob = null

@@ -164,11 +164,12 @@ class MediaGallerySaverTest {
 
             assertEquals("video/quicktime", artifact.mimeType)
             assertEquals(4, artifact.expectedBytes)
-            assertFailsWith<InvalidMediaGalleryArtifactException> {
+            // Stills are gallery-savable now: JPEG resolves to an image artifact.
+            val stillArtifact =
                 MediaGalleryArtifact.fromStagedShare(
                     StagedMediaShare(file, "DSC_0070.JPG", "image/*"),
                 )
-            }
+            assertEquals("image/jpeg", stillArtifact.mimeType)
             assertFailsWith<InvalidMediaGalleryArtifactException> {
                 MediaGalleryArtifact.fromStagedShare(
                     StagedMediaShare(file, "../C0070.MOV", "video/*"),

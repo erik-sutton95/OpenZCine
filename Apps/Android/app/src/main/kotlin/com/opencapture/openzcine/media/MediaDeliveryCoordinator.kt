@@ -193,32 +193,35 @@ internal class MediaDeliveryCoordinator(
         configuration: MediaDeliveryConfiguration,
     ) {
         if (items.isEmpty()) return
-        val videoItems =
-            items.filter { it.clip.contentKind == MediaContentKind.PLAYABLE_PROXY }
-        if (videoItems.isEmpty()) {
-            showToast("No complete cached video is ready. Non-video items stay private.")
+        val savableItems =
+            items.filter {
+                it.clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
+                    it.clip.contentKind == MediaContentKind.STILL_PHOTO
+            }
+        if (savableItems.isEmpty()) {
+            showToast("No complete cached video or photo is ready to save.")
             return
         }
         start(
             destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
-            items = videoItems,
+            items = savableItems,
             configuration = configuration,
         ) { prepared, gen ->
             if (generation.get() != gen) return@start
             publish(
                 MediaDeliveryOverlayState(
                     destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
-                    totalClips = videoItems.size,
-                    clipIndex = videoItems.size,
+                    totalClips = savableItems.size,
+                    clipIndex = savableItems.size,
                     clipFraction = 0.85,
-                    filename = videoItems.last().clip.filename,
+                    filename = savableItems.last().clip.filename,
                 ),
             )
             val artifacts =
                 prepared.mapIndexed { index, preparedArtifact ->
                     MediaGalleryArtifact.fromStagedShare(
                         preparedArtifact.share,
-                        mediaCaptureTimestampMillis(videoItems[index].clip.captureDate)
+                        mediaCaptureTimestampMillis(savableItems[index].clip.captureDate)
                             .takeIf { configuration.includeMetadata },
                     )
                 }
