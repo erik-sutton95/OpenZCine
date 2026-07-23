@@ -717,10 +717,12 @@ struct PanelHost: View {
             // Portrait: no capture bar to anchor to — the sheet sits full-width (minus a 12pt
             // margin per side) with its bottom edge AT the screen bottom, overlapping the system
             // bar, instead of the landscape 420pt box that stops above the bar.
-            let width = hasBar ? bar.width : (isPortrait ? max(0, host.width - 24) : 420)
+            // Landscape panels cap at the top-popup width and centre over the bar rather than
+            // spanning it — a bar-wide drum panel reads as a full-screen sheet.
+            let width = hasBar ? min(bar.width, 420) : (isPortrait ? max(0, host.width - 24) : 420)
             let boxWidth =
                 hasBar
-                ? max(0, bar.maxX - host.minX)
+                ? min(max(width, bar.midX - host.minX + width / 2), host.maxX - host.minX - 8)
                 : (isPortrait || isCommandCenter
                     ? host.width : max(0, host.width - chromeInsets.trailing))
             let boxHeight =
@@ -1169,7 +1171,7 @@ struct PickerPanel: View {
                     // is pre-set above so this write isn't duplicated by the `selection`
                     // `onChange`.
                     if picker != .focus, picker != .shutter, picker != .stillSize,
-                        picker != .stillDrive
+                        picker != .stillDrive, picker != .stillFocus
                     {
                         model.applyPicker(picker, mode: index, value: value)
                     }
@@ -1722,20 +1724,38 @@ struct AssistQuickSettingsContent: View {
     }
 
     private var instantReviewRows: some View {
-        SettingsInlineRow(
-            title: "Review Duration",
-            help:
-                "How long the freshest capture stays over the feed after a release. ∞ keeps it up until tapped. Continuous drive modes skip the review.",
-            showTopDivider: false,
-            stacked: compact
-        ) {
-            SettingsSegmented(
-                options: ["3s", "5s", "7s", "∞"],
-                selected: instantReviewDurationLabel,
-                compact: compact,
+        Group {
+            SettingsInlineRow(
+                title: "Review Duration",
+                help:
+                    "How long the captured frame stays up after a release. ∞ keeps it until tapped. Continuous drive modes skip the review.",
+                showTopDivider: false,
                 stacked: compact
             ) {
-                model.assistConfiguration.instantReviewSeconds = Self.reviewSeconds(for: $0)
+                SettingsSegmented(
+                    options: ["3s", "5s", "7s", "∞"],
+                    selected: instantReviewDurationLabel,
+                    compact: compact,
+                    stacked: compact
+                ) {
+                    model.assistConfiguration.instantReviewSeconds = Self.reviewSeconds(for: $0)
+                }
+            }
+            SettingsSwitchInlineRow(
+                title: "Focus Point",
+                help: "Overlay the AF box the shot focused with on the review.",
+                stacked: compact,
+                isOn: model.assistConfiguration.instantReviewShowsFocusPoint
+            ) {
+                model.assistConfiguration.instantReviewShowsFocusPoint.toggle()
+            }
+            SettingsSwitchInlineRow(
+                title: "Capture Info",
+                help: "Show the shot's ISO, shutter, iris, and quality under the review.",
+                stacked: compact,
+                isOn: model.assistConfiguration.instantReviewShowsCaptureInfo
+            ) {
+                model.assistConfiguration.instantReviewShowsCaptureInfo.toggle()
             }
         }
     }
@@ -2282,7 +2302,7 @@ struct AssistPanel: View {
                         AssistQuickSettingsContent(tool: tool)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: tool == .falseColor || tool == .instantReview ? 110 : 360)
+                    .frame(maxHeight: tool == .falseColor ? 110 : 360)
                 case .crosshair:
                     Text("Tap the toolbar button to show or hide the centre crosshair.")
                         .font(.system(size: 13))

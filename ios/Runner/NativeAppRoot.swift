@@ -4661,6 +4661,26 @@ final class NativeAppModel {
             guard session.supportsProperty(property) else { continue }
             await readAndApplyCameraProperty(session: session, property: property)
         }
+        await raiseCommandBurstCeiling(session: session)
+    }
+
+    /// A command release fires `BurstNumber` frames in the continuous drives, and its default is
+    /// one — the single-frame-per-press symptom on a held shutter. Raise it to the maximum when
+    /// photography engages; the effective burst still clamps to the body's buffer estimate, and
+    /// finger-up terminates early. [verify-on-HW]
+    private func raiseCommandBurstCeiling(session: NativeCameraSession) async {
+        guard
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector)
+        else { return }
+        let write = PTPCameraPropertyWrite(
+            property: .burstNumber, data: Data(ByteCoding.uint16LE(65535)))
+        do {
+            try await session.writeCameraProperty(write)
+        } catch {
+            logConnection("burst-ceiling write rejected: \(error)")
+        }
+        seedInstantReviewBaseline()
     }
 
     /// Single-flight selector-flip burst: when the body switches photo ↔ movie mid-session, the
@@ -5533,6 +5553,27 @@ final class NativeAppModel {
         if photoTimerDelaySeconds == 0 { cancelStillTimer() }
     }
 
+    /// The drive that was active before the Built-in timer engaged, restored on Off.
+    @ObservationIgnored private var driveBeforeBuiltInTimer: String?
+
+    /// Engages the body's own self-timer release mode. Its delay and shot count come from the
+    /// camera menu — no remote property exposes them — and the countdown runs only for presses
+    /// of the physical shutter; command releases still fire immediately.
+    func setBuiltInTimer(on: Bool) {
+        let timerLabel = StillDriveMode.selfTimer.label
+        if on {
+            if cameraPropertySnapshot.stillCaptureMode != timerLabel {
+                driveBeforeBuiltInTimer = cameraPropertySnapshot.stillCaptureMode
+            }
+            applyPickerValue(timerLabel, for: .stillDrive)
+        } else {
+            guard cameraPropertySnapshot.stillCaptureMode == timerLabel else { return }
+            applyPickerValue(
+                driveBeforeBuiltInTimer ?? StillDriveMode.single.label, for: .stillDrive)
+            driveBeforeBuiltInTimer = nil
+        }
+    }
+
     private func cancelStillTimer() {
         stillTimerTask?.cancel()
         stillTimerTask = nil
@@ -5588,16 +5629,41 @@ final class NativeAppModel {
         pendingStillTerminate = true
     }
 
-    // MARK: - Instant playback (view-assist REVIEW tool)
+    // MARK: - Instant playback (view-assist PLAY tool)
 
-    /// The freshest captured still, overlaid on the feed until the review duration elapses
+    /// One presented review: the captured still plus the shot's focus state and a settings
+    /// line, both captured at present time so later polls can't rewrite them.
+    struct InstantReviewState {
+        let image: UIImage
+        let focus: PTPLiveViewFocusInfo?
+        let infoLine: String?
+    }
+
+    /// The freshest captured still, shown full-screen until the review duration elapses
     /// (or until tapped when the duration is ∞).
-    private(set) var instantReviewImage: UIImage?
+    private(set) var instantReview: InstantReviewState?
     @ObservationIgnored private var instantReviewDismissTask: Task<Void, Never>?
     @ObservationIgnored private var instantReviewFetchTask: Task<Void, Never>?
+    /// Last known object handles per storage — the baseline a post-capture diff runs against.
+    /// Maintained outside the shutter path so the release itself never waits on enumeration.
+    @ObservationIgnored private var knownObjectHandles: [UInt32: Set<UInt32>] = [:]
 
     func presentInstantReview(_ image: UIImage) {
-        withAnimation(.easeInOut(duration: 0.18)) { instantReviewImage = image }
+        let snap = cameraPropertySnapshot
+        let info = [
+            snap.iso.map { "ISO \($0)" },
+            snap.shutterSpeed,
+            snap.fNumber,
+            snap.compression,
+        ]
+        .compactMap { $0 }
+        .joined(separator: "   ")
+        withAnimation(.easeInOut(duration: 0.18)) {
+            instantReview = InstantReviewState(
+                image: image,
+                focus: liveViewFocus,
+                infoLine: info.isEmpty ? nil : info)
+        }
         instantReviewDismissTask?.cancel()
         let seconds = assistConfiguration.instantReviewSeconds
         guard seconds > 0 else { return }
@@ -5611,41 +5677,74 @@ final class NativeAppModel {
     func dismissInstantReview() {
         instantReviewDismissTask?.cancel()
         instantReviewDismissTask = nil
-        withAnimation(.easeInOut(duration: 0.18)) { instantReviewImage = nil }
+        withAnimation(.easeInOut(duration: 0.18)) { instantReview = nil }
     }
 
-    /// After a completed release with the REVIEW tool on (and a non-burst drive — continuous
-    /// modes would thrash the card), fetch the newest object's preview and overlay it. The
-    /// newest object is the highest handle across usable slots; the image may take a beat to
-    /// enumerate after DeviceReady, so a few short retries. [verify-on-HW: handle ordering and
-    /// GetThumb preview size per body]
+    /// Seeds the handle baseline so the first post-capture diff has something to diff against.
+    /// Called from the photo bootstrap and when the PLAY tool switches on.
+    func seedInstantReviewBaseline() {
+        guard let session = cameraSession,
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector),
+            preferences.liveViewVisibleAssistTools.contains(.instantReview)
+        else { return }
+        Task { [weak self] in
+            for (storageID, _) in await session.readAllStorageInfo() {
+                let handles = (try? await session.getObjectHandles(storageID: storageID)) ?? []
+                self?.knownObjectHandles[storageID] = Set(handles)
+            }
+        }
+    }
+
+    /// After a completed release with the PLAY tool on (and a non-burst drive — continuous
+    /// modes would thrash the card), fetch the just-captured object's preview and overlay it.
+    /// The new object is the diff against the pre-capture handle baseline (the highest handle
+    /// as a fallback when no baseline exists); enumeration can lag DeviceReady by a beat, so
+    /// short quick retries. [verify-on-HW: enumeration lag and GetThumb preview size per body]
     private func scheduleInstantReview(session: NativeCameraSession) {
         guard preferences.liveViewVisibleAssistTools.contains(.instantReview) else { return }
         let drive = cameraPropertySnapshot.stillCaptureMode.flatMap(StillDriveMode.mode(forLabel:))
         guard drive?.isContinuous != true else { return }
         instantReviewFetchTask?.cancel()
         instantReviewFetchTask = Task { [weak self] in
-            for attempt in 0..<4 {
+            for attempt in 0..<6 {
                 guard let self, !Task.isCancelled, self.cameraSession === session else { return }
                 if let image = await self.fetchNewestStillPreview(session: session) {
                     guard !Task.isCancelled else { return }
                     self.presentInstantReview(image)
                     return
                 }
-                if attempt < 3 {
-                    try? await Task.sleep(for: .milliseconds(350))
+                if attempt < 5 {
+                    try? await Task.sleep(for: .milliseconds(150))
                 }
             }
         }
     }
 
     private func fetchNewestStillPreview(session: NativeCameraSession) async -> UIImage? {
-        var newest: UInt32 = 0
+        let hadBaseline = !knownObjectHandles.isEmpty
+        var newHandles: Set<UInt32> = []
+        var maxHandle: UInt32 = 0
         for (storageID, _) in await session.readAllStorageInfo() {
-            let handles = (try? await session.getObjectHandles(storageID: storageID)) ?? []
-            newest = max(newest, handles.max() ?? 0)
+            let handles = Set((try? await session.getObjectHandles(storageID: storageID)) ?? [])
+            if let known = knownObjectHandles[storageID] {
+                newHandles.formUnion(handles.subtracting(known))
+            }
+            maxHandle = max(maxHandle, handles.max() ?? 0)
+            knownObjectHandles[storageID] = handles
         }
-        guard newest > 0, let data = try? await session.getThumb(handle: newest) else {
+        // The diff IS the just-captured object. With a baseline but no diff yet the caller
+        // retries — falling back to the highest handle there would show the PREVIOUS photo.
+        // The highest handle stands in only when no baseline was ever seeded.
+        let target: UInt32?
+        if let newest = newHandles.max() {
+            target = newest
+        } else if !hadBaseline, maxHandle > 0 {
+            target = maxHandle
+        } else {
+            target = nil
+        }
+        guard let target, let data = try? await session.getThumb(handle: target) else {
             return nil
         }
         return UIImage(data: data)
@@ -5661,8 +5760,8 @@ final class NativeAppModel {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 isStillCapturing = false
                 // Demo instant playback: the staged feed still (or the mock-feed asset the
-                // raster falls back to) stands in for the card's newest object so the review
-                // overlay is verifiable without a body.
+                // raster falls back to) stands in for the card's just-captured object so the
+                // review overlay is verifiable without a body.
                 if preferences.liveViewVisibleAssistTools.contains(.instantReview),
                     let image = liveFrameImage ?? UIImage(named: "MockFeed")
                 {
@@ -5712,6 +5811,21 @@ final class NativeAppModel {
             isMonitorPresented
             ? "Queued Image Size \(value) for the next live-view safe point."
             : "Queued Image Size \(value)."
+        drainPendingWritesIfIdle()
+    }
+
+    /// Queues a stills AF-area / subject-detection write with an optimistic snapshot update;
+    /// the poll confirms or corrects it. A body lacking the position rejects through the
+    /// queue's rejection surface.
+    private func applyStillFocusControl(_ control: PTPCameraControl, value: String) {
+        guard let write = PTPCameraPropertyWrite.request(control: control, label: value) else {
+            return
+        }
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: write.property, data: write.data)
+        publishCameraDisplayState()
+        guard !isDemoSession else { return }
+        enqueueCameraWrite(PendingCameraWrite(picker: .stillFocus, value: value, write: write))
         drainPendingWritesIfIdle()
     }
 
@@ -5804,6 +5918,16 @@ final class NativeAppModel {
             switch try await session.pollStillReleaseReadiness() {
             case .complete:
                 finishStillRelease(message: nil)
+                // The SHOTS pill reflects the frame immediately (a burst consumes more — the
+                // read-back right after corrects the estimate rather than waiting for the
+                // slow poll round-robin to reach ExposureRemaining).
+                if let shots = cameraPropertySnapshot.shotsRemaining, shots > 0 {
+                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                        property: .exposureRemaining,
+                        data: Data(ByteCoding.uint32LE(UInt32(shots - 1))))
+                    publishCameraDisplayState()
+                }
+                await readAndApplyCameraProperty(session: session, property: .exposureRemaining)
                 scheduleInstantReview(session: session)
             case .inProgress:
                 stillReleaseIsOpenShutter = false
@@ -5844,6 +5968,15 @@ final class NativeAppModel {
     var isPhotographyMode: Bool {
         StillCapturePolicy.prefersPhotographyChrome(
             selector: cameraPropertySnapshot.captureSelector)
+    }
+
+    /// The live assist tools that actually render right now — photography filters the
+    /// cinema-only overlays (video scopes, audio meters, …) while the persisted set stays
+    /// untouched for the flip back to video.
+    var renderedLiveAssistTools: Set<MonitorAssistTool> {
+        let tools = preferences.liveViewVisibleAssistTools
+        guard isPhotographyMode else { return tools }
+        return tools.filter(\.appliesToPhotography)
     }
 
     func confirmRecordToggle() {
@@ -6190,10 +6323,22 @@ final class NativeAppModel {
             }
         }
         if picker == .stillDrive {
-            // Drive is camera state; Timer is the app-side countdown setting.
+            // Drive is camera state; Built-in reflects the body's self-timer release mode;
+            // App is the app-side countdown setting.
             switch mode {
             case 0: return cameraPropertySnapshot.stillCaptureMode ?? modes[0].base
-            case 1: return photoTimerLabel
+            case 1:
+                return cameraPropertySnapshot.stillCaptureMode == StillDriveMode.selfTimer.label
+                    ? "On" : "Off"
+            case 2: return photoTimerLabel
+            default: break
+            }
+        }
+        if picker == .stillFocus {
+            // The Area / Subject tabs are independent stills settings with their own values.
+            switch mode {
+            case 1: return cameraPropertySnapshot.focusArea ?? modes[1].base
+            case 2: return cameraPropertySnapshot.focusSubject ?? modes[2].base
             default: break
             }
         }
@@ -6218,9 +6363,19 @@ final class NativeAppModel {
             }
             return
         }
-        if picker == .stillDrive, mode == 1 {
-            // The Timer tab is the app-side countdown, never a camera write.
-            setPhotoTimer(label: value)
+        if picker == .stillDrive, mode > 0 {
+            // Built-in engages/releases the body's self-timer drive; App is the in-app
+            // countdown, never a camera write.
+            if mode == 1 {
+                setBuiltInTimer(on: value == "On")
+            } else {
+                setPhotoTimer(label: value)
+            }
+            return
+        }
+        if picker == .stillFocus, mode > 0 {
+            // AF-area and subject detection are their own stills properties.
+            applyStillFocusControl(mode == 1 ? .stillFocusArea : .stillFocusSubject, value: value)
             return
         }
         if picker == .audio {
@@ -6913,6 +7068,10 @@ final class NativeAppModel {
         AssistToolActivation.set(
             tool, visible: visible, context: context, preferences: &preferences,
             configuration: &assistConfiguration)
+        if tool == .instantReview, visible {
+            // Arm the post-capture diff with the card's current handles right away.
+            seedInstantReviewBaseline()
+        }
     }
 
     func toggleChrome(_ section: DisplayChromeVisibility.Section) {
@@ -7276,7 +7435,9 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stabilization: []
         case .mode: ["Auto", "P", "A", "S", "M", "U1", "U2", "U3"]
         case .audio: ["Auto"] + (1...20).map(String.init)
-        case .stillMode: ["M", "P", "A", "S"]
+        // Auto and the user banks round-trip through `exposureProgramCode`; scene/effects
+        // positions are dial-only and stay out of the drum.
+        case .stillMode: ["Auto", "P", "S", "A", "M", "U1", "U2", "U3"]
         case .stillISO:
             [
                 "100", "125", "160", "200", "250", "320", "400", "500", "640", "800", "1000",
@@ -7407,9 +7568,10 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(title: "Size", options: ["Size L", "Size M", "Size S"], base: "Size L"),
             ]
         case .stillDrive:
-            // Release mode plus the app-side timer as its own tab — a remote release never runs
-            // the body's own self-timer countdown, so the countdown lives in the app and the
-            // drive drum drops the on-body Self-timer position.
+            // Release mode plus two timers: Built-in engages the body's self-timer release
+            // mode (its delay and shot count come from the camera menu — no remote property
+            // exposes them), and App is the in-app countdown with a wider ladder. A remote
+            // release never runs the body's countdown, so the two are complementary.
             [
                 PickerMode(
                     title: "Drive",
@@ -7417,11 +7579,32 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                         .filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label),
                     base: "Single"),
                 PickerMode(
-                    title: "Timer", detail: "app countdown",
-                    options: ["Off", "2s", "5s", "10s", "20s"], base: "Off"),
+                    title: "Built-in", detail: "body timer",
+                    options: ["Off", "On"], base: "Off"),
+                PickerMode(
+                    title: "App", detail: "app countdown",
+                    options: ["Off", "1s", "2s", "3s", "5s", "10s", "20s", "30s", "60s"],
+                    base: "Off"),
+            ]
+        case .stillFocus:
+            // AF mode, AF-area, and subject detection — three independent stills settings by
+            // tab, mirroring the movie FOCUS picker.
+            [
+                PickerMode(title: "Mode", options: ["AF-S", "AF-C", "AF-A", "MF"], base: "AF-S"),
+                PickerMode(
+                    title: "Area",
+                    options: [
+                        "Pin", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L", "3D",
+                        "Auto",
+                    ],
+                    base: "Single"),
+                PickerMode(
+                    title: "Subject",
+                    options: ["Off", "Auto", "People", "Animal", "Vehicle", "Bird", "Airplane"],
+                    base: "Auto"),
             ]
         case .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
-            .stillShutter, .stillIris, .stillFocus, .stillFlash, .stillMeter,
+            .stillShutter, .stillIris, .stillFlash, .stillMeter,
             .stillQuality:
             []
         }

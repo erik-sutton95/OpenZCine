@@ -35,6 +35,8 @@ public enum PTPCameraControl: Equatable, Sendable {
     case stillImageSize
     case stillQuality
     case stillRawCompression
+    case stillFocusArea
+    case stillFocusSubject
 }
 
 extension PTPPropertyCode {
@@ -347,6 +349,19 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
                 return nil
             }
             return PTPCameraPropertyWrite(property: .rawCompressionType, data: Data([code]))
+        case .stillFocusArea:
+            // Stills AF-area (UINT16); a body lacking a position rejects the write.
+            guard let code = PTPCameraPropertyDecoders.stillFocusAreaCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(
+                property: .stillFocusMeteringMode, data: Data(ByteCoding.uint16LE(code)))
+        case .stillFocusSubject:
+            // Stills subject detection (UINT8) — same value table as the movie side.
+            guard let code = PTPCameraPropertyDecoders.movieAFSubjectCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(property: .afSubjectDetection, data: Data([code]))
         case .codec, .resolution:
             // Label-based encoding is intentionally unsupported: the picker writes the camera's
             // exact advertised raw value directly via `screenSize(raw:)` / `fileType(raw:)`
@@ -889,6 +904,19 @@ public enum PTPCameraPropertyDecoders {
         case 0x801F: "Wide-C2"
         case 0x8033: "Subject"
         default: hex(UInt32(raw))
+        }
+    }
+
+    /// Inverse of `stillFocusArea` — the stills-specific dynamic/3D/pinpoint codes first,
+    /// shared positions via the movie map.
+    public static func stillFocusAreaCode(for label: String) -> UInt16? {
+        switch label {
+        case "Dyn-S": 0x0002
+        case "3D": 0x8012
+        case "Dyn-M": 0x8013
+        case "Dyn-L": 0x8014
+        case "Pin": 0x8017
+        default: movieFocusAreaCode(for: label)
         }
     }
 
@@ -1676,6 +1704,10 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                 focusArea: PTPCameraPropertyDecoders.movieFocusArea(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         case .movieAFSubjectDetection where bytes.count >= 1:
+            return replacing(focusSubject: PTPCameraPropertyDecoders.movieAFSubject(bytes[0]))
+        case .afSubjectDetection where bytes.count >= 1:
+            // Stills subject detection shares the movie value table and picker field; the
+            // active selector decides which property the poll fills it from.
             return replacing(focusSubject: PTPCameraPropertyDecoders.movieAFSubject(bytes[0]))
         case .movMicrophone where bytes.count >= 1:
             return replacing(

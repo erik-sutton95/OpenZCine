@@ -1278,6 +1278,10 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     public var peakingSensitivity: Peaking.Sensitivity
     /// Instant playback review duration in seconds; 0 keeps the still up until dismissed.
     public var instantReviewSeconds: Int = 5
+    /// Overlay the AF box the shot focused with on the instant-playback still.
+    public var instantReviewShowsFocusPoint: Bool = true
+    /// Show the capture settings line (ISO · shutter · iris · quality) under the still.
+    public var instantReviewShowsCaptureInfo: Bool = true
     /// Per-scope display options (size, mode, guide lines, traffic lights).
     public var scopes: Scopes
     /// The LUT applied to the live view (gated by the `.lut` assist tool being on).
@@ -1293,7 +1297,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         case guides, grid, level, desqueeze, falseColorReferenceEnabled, falseColorScale,
             zebra, trafficLights,
             zebraHighlightIRE, peakingColor, peakingSensitivity, scopes, selectedLUT,
-            instantReviewSeconds
+            instantReviewSeconds, instantReviewShowsFocusPoint, instantReviewShowsCaptureInfo
     }
 
     /// Removed settings — decoded and discarded so older saved configs still load.
@@ -1355,6 +1359,10 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             try c.decodeIfPresent(Peaking.Sensitivity.self, forKey: .peakingSensitivity) ?? .medium
         instantReviewSeconds =
             try c.decodeIfPresent(Int.self, forKey: .instantReviewSeconds) ?? 5
+        instantReviewShowsFocusPoint =
+            try c.decodeIfPresent(Bool.self, forKey: .instantReviewShowsFocusPoint) ?? true
+        instantReviewShowsCaptureInfo =
+            try c.decodeIfPresent(Bool.self, forKey: .instantReviewShowsCaptureInfo) ?? true
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -1372,6 +1380,8 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
         try c.encode(scopes, forKey: .scopes)
         try c.encode(selectedLUT, forKey: .selectedLUT)
         try c.encode(instantReviewSeconds, forKey: .instantReviewSeconds)
+        try c.encode(instantReviewShowsFocusPoint, forKey: .instantReviewShowsFocusPoint)
+        try c.encode(instantReviewShowsCaptureInfo, forKey: .instantReviewShowsCaptureInfo)
     }
 
     public static let defaults = AssistConfiguration()

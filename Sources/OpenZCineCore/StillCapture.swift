@@ -128,6 +128,7 @@ public enum StillCapturePolicy: Sendable {
         .focusMode,
         .stillFocusMode,
         .stillFocusMeteringMode,
+        .afSubjectDetection,
         .whiteBalance,
         .exposureRemaining,
         .batteryLevel,

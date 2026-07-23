@@ -33,6 +33,11 @@ struct MonitorExperience: View {
 
     var body: some View {
         LiveViewShell()
+            // Instant playback covers the whole monitor — a focused look at the captured
+            // frame, above every piece of chrome.
+            .overlay {
+                InstantReviewOverlay()
+            }
             // Haptics: tap on panel open/close, tick on DISP cycle / assist toggle, firm thump on
             // record start/stop. (Value wheels add their own per-detent feedback.)
             .sensoryFeedback(.selection, trigger: model.activePanel)
@@ -326,11 +331,6 @@ struct LiveFeedModule: View {
         .overlay {
             FeedAlignedAssists(clean: model.displayMode == .clean)
         }
-        // Instant playback rides above the feed gestures so its tap dismisses instead of
-        // moving the AF point.
-        .overlay {
-            InstantReviewOverlay()
-        }
     }
 
     /// Composed feed gesture: a vertical swipe switches output mode, else a tap moves the focus
@@ -564,26 +564,85 @@ private struct LiveFeedFocusOverlay: View {
     }
 }
 
-/// Post-capture instant playback: the freshest still fills the feed rect for the configured
-/// review duration (until tapped when ∞). A tap anywhere — or the close control — dismisses.
-private struct InstantReviewOverlay: View {
+/// Post-capture instant playback: the just-captured still, full-screen over the entire monitor
+/// chrome for the configured review duration (until tapped when ∞) — a focused look at the
+/// frame, not another chrome state. Optional overlays: the AF box the shot focused with, and a
+/// capture-settings line. A tap anywhere — or the close control — dismisses.
+struct InstantReviewOverlay: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if let image = model.instantReviewImage {
+        if let review = model.instantReview {
             ZStack(alignment: .topTrailing) {
-                Color.black.opacity(0.88)
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Color.black
+                GeometryReader { proxy in
+                    let fitted = Self.fittedRect(
+                        image: review.image.size, container: proxy.size)
+                    Image(uiImage: review.image)
+                        .resizable()
+                        .frame(width: fitted.width, height: fitted.height)
+                        .position(x: fitted.midX, y: fitted.midY)
+                    if model.assistConfiguration.instantReviewShowsFocusPoint,
+                        let focus = review.focus, focus.coordinateWidth > 0,
+                        focus.coordinateHeight > 0
+                    {
+                        ForEach(Array(focus.boxes.enumerated()), id: \.offset) { _, box in
+                            let scaleX = fitted.width / CGFloat(focus.coordinateWidth)
+                            let scaleY = fitted.height / CGFloat(focus.coordinateHeight)
+                            Rectangle()
+                                .strokeBorder(
+                                    focus.focusResult == .focused
+                                        ? Color.green : Color.white.opacity(0.9),
+                                    lineWidth: 2
+                                )
+                                .frame(
+                                    width: max(10, CGFloat(box.width) * scaleX),
+                                    height: max(10, CGFloat(box.height) * scaleY)
+                                )
+                                .position(
+                                    x: fitted.minX + CGFloat(box.centerX) * scaleX,
+                                    y: fitted.minY + CGFloat(box.centerY) * scaleY
+                                )
+                        }
+                    }
+                }
+                if model.assistConfiguration.instantReviewShowsCaptureInfo,
+                    let info = review.infoLine
+                {
+                    VStack {
+                        Spacer()
+                        Text(info)
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(LiveDesign.text.opacity(0.85))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .liquidGlass(in: Capsule())
+                            .padding(.bottom, 14)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
                 CloseButton { model.dismissInstantReview() }
-                    .padding(10)
+                    .padding(14)
             }
             .contentShape(Rectangle())
             .onTapGesture { model.dismissInstantReview() }
             .transition(.opacity)
+            .ignoresSafeArea()
         }
+    }
+
+    /// Aspect-fit rect for the image inside the container.
+    private static func fittedRect(image: CGSize, container: CGSize) -> CGRect {
+        guard image.width > 0, image.height > 0, container.width > 0, container.height > 0
+        else { return .zero }
+        let scale = min(container.width / image.width, container.height / image.height)
+        let size = CGSize(width: image.width * scale, height: image.height * scale)
+        return CGRect(
+            x: (container.width - size.width) / 2,
+            y: (container.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        )
     }
 }
 

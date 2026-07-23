@@ -1299,7 +1299,19 @@ struct MonitorShell: View {
                 let lock = map.systemSlots.lock
                 let railX = lock.x + lock.width + 12 + Double(MonitorAssistStrip.expandedWidth) / 2
                 let railTop = lock.y
-                let railBottom = band.frame.y - 10
+                // "Fill until it hits the bottom bar": the trailing-aligned capture strip on a
+                // wider body (Pro Max) never reaches the rail's lane, so the rail runs down to
+                // the band's bottom edge there; it stops above the band only when the strip's
+                // measured frame actually enters the lane.
+                let laneTrailing =
+                    lock.x + lock.width + 12 + Double(MonitorAssistStrip.expandedWidth)
+                let stripFrame = model.captureBarFrame
+                let stripEntersLane =
+                    stripFrame.width > 1 && Double(stripFrame.minX) < laneTrailing + 16
+                let railBottom =
+                    stripEntersLane
+                    ? band.frame.y - 10
+                    : band.frame.y + band.frame.height
                 let railHeight = max(0, railBottom - railTop)
                 MonitorAssistStrip(
                     axis: .vertical,

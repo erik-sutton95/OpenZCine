@@ -13,7 +13,9 @@ struct FeedAssistOverlayModule: View {
     var suppressFloatingScopes: Bool = false
 
     var body: some View {
-        let visible = model.preferences.liveViewVisibleAssistTools
+        // Photography filters the cinema-only panels (a flipped-over video scope must not
+        // ride into the photo chrome); the persisted set itself is untouched.
+        let visible = model.renderedLiveAssistTools
         GeometryReader { proxy in
             let feedFrame = MonitorFeedLayout.fullBleedFrame(
                 viewportWidth: viewportWidth,

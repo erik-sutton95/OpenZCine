@@ -161,6 +161,7 @@ public enum PTPPropertyCode: UInt32, Sendable {
     // Movie AF. Value tables are app-decoded (no libgphoto2 config.c tables). [verify-on-HW]
     case movieFocusMode = 0xD1FA
     case movieFocusMeteringMode = 0xD1F8  // libgphoto2 names this `MovieAfAreaMode`
+    case afSubjectDetection = 0x0001_D005
     case movieAFSubjectDetection = 0x0001_D006
 
     // Audio + stabilisation. Value tables are app-decoded. [verify-on-HW]
