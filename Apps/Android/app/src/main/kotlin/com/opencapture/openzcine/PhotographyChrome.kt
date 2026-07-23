@@ -43,7 +43,7 @@ import java.util.Locale
  * Photography capture strip when the body reports photo mode (iOS
  * `MonitorCaptureStrip` while `isPhotography`): the SAME glass pill, cell
  * shape, and typography as the cinema capture strip, rendering the stills
- * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/FLASH/METER. Stills pickers
+ * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/METER. Stills pickers
  * are still stubs, so every tile
  * routes to [onOpenControl] with its label instead of a drum picker.
  */
@@ -126,7 +126,8 @@ private fun PhotographyStripCells(
                     widestValue = tile.widestValue,
                     active = false,
                     controlLocked = false,
-                    wbIcon = null,
+                    // WB presets render as icons like the movie tile; Kelvin stays numeric.
+                    wbIcon = if (tile.label == "WB") captureBarWbIcon(tile.value) else null,
                 )
             }
         }
@@ -151,7 +152,7 @@ private fun photographyStripTiles(
         PhotographyStripTile("IRIS", properties.iris ?: "—", "f/2.8"),
         PhotographyStripTile("DRIVE", compactDriveLabel(properties.stillCaptureMode) ?: "—", "Single"),
         PhotographyStripTile("FOCUS", properties.focusMode ?: "—", "Wide-L"),
-        PhotographyStripTile("FLASH", compactFlashLabel(properties.flashMode) ?: "—", "Red+S"),
+        PhotographyStripTile("WB", stillWhiteBalanceValue(properties), "5560K"),
         PhotographyStripTile("METER", properties.meteringMode ?: "—", "Matrix"),
     )
 
@@ -166,14 +167,16 @@ private fun compactDriveLabel(stillCaptureMode: String?): String? =
         else -> stillCaptureMode
     }
 
-/** Flash label compacted to strip width ("Red-eye slow" → "Red+S"). */
-private fun compactFlashLabel(flashMode: String?): String? =
-    when (flashMode) {
-        null -> null
-        "Red-eye" -> "Red"
-        "Red-eye slow" -> "Red+S"
-        else -> flashMode
-    }
+/**
+ * WB tile readout (iOS `stillWhiteBalanceValue`): the Kelvin figure while in
+ * colour-temperature mode, else the preset name (presets render as icons in
+ * the strip, like the movie tile).
+ */
+internal fun stillWhiteBalanceValue(properties: CameraPropertySnapshot): String {
+    val kelvin = properties.whiteBalanceKelvin
+    if (properties.whiteBalanceMode == "Color temp" && kelvin != null) return "${kelvin}K"
+    return properties.whiteBalanceMode ?: "—"
+}
 
 /** Quality label compacted to strip width ("RAW+JPEG Fine★" → "R+JF★"). */
 internal fun CameraPropertySnapshot.stillQualityCompactLabel(): String? {
