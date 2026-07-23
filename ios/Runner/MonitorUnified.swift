@@ -1301,14 +1301,20 @@ struct MonitorShell: View {
                 let band = map.assistStrip
             {
                 let lock = map.systemSlots.lock
-                let railX = lock.x + lock.width + 12 + Double(MonitorAssistStrip.expandedWidth) / 2
+                // The rail clears whichever left-edge chrome reaches furthest: the lock
+                // button or the combined battery pill.
+                let leftChromeTrailing = max(
+                    lock.x + lock.width,
+                    MonitorBatteryRailLayout.batteryPillTrailing(safeArea: context.feedSafeArea))
+                let railX =
+                    leftChromeTrailing + 12 + Double(MonitorAssistStrip.expandedWidth) / 2
                 let railTop = lock.y
                 // "Fill until it hits the bottom bar": the trailing-aligned capture strip on a
                 // wider body (Pro Max) never reaches the rail's lane, so the rail runs down to
                 // the band's bottom edge there; it stops above the band only when the strip's
                 // measured frame actually enters the lane.
                 let laneTrailing =
-                    lock.x + lock.width + 12 + Double(MonitorAssistStrip.expandedWidth)
+                    leftChromeTrailing + 12 + Double(MonitorAssistStrip.expandedWidth)
                 let stripFrame = model.captureBarFrame
                 let stripEntersLane =
                     stripFrame.width > 1 && Double(stripFrame.minX) < laneTrailing + 16
@@ -1348,8 +1354,11 @@ struct MonitorShell: View {
                 // clearance the rail layout produced (indicator width 38 + 24). Photography's
                 // lock-side assist rail owns that lane instead, so clear past it there.
                 let photographyRailTrailing =
-                    map.systemSlots.lock.x + map.systemSlots.lock.width + 12
-                    + Double(MonitorAssistStrip.expandedWidth)
+                    max(
+                        map.systemSlots.lock.x + map.systemSlots.lock.width,
+                        MonitorBatteryRailLayout.batteryPillTrailing(
+                            safeArea: context.feedSafeArea)
+                    ) + 12 + Double(MonitorAssistStrip.expandedWidth)
                 let x =
                     isPhotographyBand && chrome.assistToolbarVisible
                     ? CGFloat(photographyRailTrailing) + 24 + size / 2

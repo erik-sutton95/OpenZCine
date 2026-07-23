@@ -764,6 +764,22 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// the island itself.
     public static let indicatorFrameSlack = 8.0
 
+    /// The combined two-row battery pill (device icon · glyph · number per row) shown above
+    /// the island on Dynamic-Island rails; classic-notch rails keep the split layout — their
+    /// taller notch leaves no lane between the lock button and the reservation.
+    public static let pillWidth = 86.0
+    public static let pillHeight = 48.0
+    /// Clearance between the pill and the lock button above / the island below.
+    public static let pillGap = 4.0
+    /// The pill's leading inset from the screen edge.
+    public static let pillLeading = 6.0
+
+    /// The pill's trailing edge — chrome beside the rail (the photo assist rail) clears this.
+    /// Zero on classic-notch rails, which keep the split indicators inside the narrow lane.
+    public static func batteryPillTrailing(safeArea: MonitorEdgeInsets) -> Double {
+        usesClassicSideNotch(safeArea: safeArea) ? 0 : pillLeading + pillWidth
+    }
+
     /// Horizontal nudge that aligns the indicators with the Dynamic Island, which sits slightly
     /// inboard of the chrome's leading inset.
     public static let notchAlignmentInsetX = 3.0
@@ -786,6 +802,11 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     // Side notch reservation edges.
     public let notchTop: Double
     public let notchBottom: Double
+
+    // Combined-pill placement (Dynamic-Island rails; unused when `usesBatteryPill` is false).
+    public let usesBatteryPill: Bool
+    public let pillCenterX: Double
+    public let pillCenterY: Double
 
     public var phoneTop: Double { phoneCenterY - phoneIndicatorHeight / 2 }
     public var phoneBottom: Double { phoneCenterY + phoneIndicatorHeight / 2 }
@@ -827,6 +848,12 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
             notchBottom + padding + indicatorHeight / 2 - slack
         )
 
+        // Dynamic-Island rails collapse the pair into one two-row pill above the island,
+        // clamped below the lock clearance.
+        let pillCenterY = max(
+            max(0, phoneTopClearance) + pillHeight / 2,
+            notchTop - pillGap - pillHeight / 2
+        )
         return MonitorBatteryRailLayout(
             phoneCenterX: indicatorCenterX,
             phoneCenterY: phoneCenterY,
@@ -834,7 +861,10 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
             cameraCenterX: indicatorCenterX,
             cameraCenterY: cameraCenterY,
             notchTop: notchTop,
-            notchBottom: notchBottom
+            notchBottom: notchBottom,
+            usesBatteryPill: !usesCompactPhoneIndicator,
+            pillCenterX: pillLeading + pillWidth / 2,
+            pillCenterY: pillCenterY
         )
     }
 

@@ -851,12 +851,42 @@ struct BatteryRailModule: View {
             )
 
             ZStack {
-                phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
-                    .position(x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
-                cameraBatteryIndicator
-                    .position(x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
+                if layout.usesBatteryPill {
+                    batteryPill
+                        .position(x: CGFloat(layout.pillCenterX), y: CGFloat(layout.pillCenterY))
+                } else {
+                    phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
+                        .position(
+                            x: CGFloat(layout.phoneCenterX), y: CGFloat(layout.phoneCenterY))
+                    cameraBatteryIndicator
+                        .position(
+                            x: CGFloat(layout.cameraCenterX), y: CGFloat(layout.cameraCenterY))
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+
+    /// The combined two-row battery pill (Dynamic-Island rails): one glass unit above the
+    /// island, a row per device — icon, glyph, number.
+    private var batteryPill: some View {
+        GlassPanel(padding: EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9)) {
+            VStack(alignment: .leading, spacing: 4) {
+                BatteryIndicator(
+                    percent: model.cameraState.phoneBatteryPercent,
+                    deviceSystemName: "iphone",
+                    isCamera: false,
+                    isCharging: model.phoneBatteryCharging,
+                    layout: .pillRow
+                )
+                BatteryIndicator(
+                    percent: model.cameraState.cameraBatteryPercent,
+                    deviceSystemName: "camera",
+                    isCamera: true,
+                    isCharging: model.cameraBatteryCharging,
+                    layout: .pillRow
+                )
+            }
         }
     }
 
@@ -1327,9 +1357,10 @@ struct RecordButton: View {
 
 struct BatteryIndicator: View {
     /// `.rail`: 3-row landscape rail. `.compactRail`: battery + percentage between a classic
-    /// notch and lock button. `.inline`: single-row portrait/iPad presentation.
+    /// notch and lock button. `.inline`: single-row portrait/iPad presentation. `.pillRow`:
+    /// one compact row (icon · glyph · number) inside the combined rail pill.
     enum Layout {
-        case rail, compactRail, inline
+        case rail, compactRail, inline, pillRow
     }
 
     let percent: Int
@@ -1371,6 +1402,26 @@ struct BatteryIndicator: View {
         case .rail: railBody
         case .compactRail: compactRailBody
         case .inline: inlineBody
+        case .pillRow: pillRowBody
+        }
+    }
+
+    /// One compact pill row: device icon, tinted glyph, bare number (the pill's tight width
+    /// drops the % sign — the context is unambiguous).
+    private var pillRowBody: some View {
+        HStack(spacing: 4) {
+            Image(systemName: deviceSystemName)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(LiveDesign.muted)
+                .frame(width: 12)
+            Image(systemName: batterySymbol)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(batteryTint)
+                .overlay { chargingOverlay }
+            Text("\(percent)")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(LiveDesign.text.opacity(0.72))
+                .frame(minWidth: 22, alignment: .trailing)
         }
     }
 
