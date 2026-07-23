@@ -9,9 +9,9 @@ class BatteryRowStackFrameTest {
     private val lock = ZoneFrame(16f, 10f, 40f, 40f)
 
     @Test
-    fun `hugs the display cutout from above`() {
-        val frame = batteryRowStackFrame(anchor, lock, cutoutTopY = 192f)
-        assertEquals(192f - BATTERY_STACK_CLEARANCE_DP - BATTERY_STACK_HEIGHT_DP, frame.y)
+    fun `seats directly under the lock button`() {
+        val frame = batteryRowStackFrame(anchor, lock)
+        assertEquals(lock.y + lock.height + BATTERY_STACK_CLEARANCE_DP, frame.y)
         // The stack keeps the zone lane's leading x and its fixed footprint.
         assertEquals(13f, frame.x)
         assertEquals(BATTERY_STACK_WIDTH_DP, frame.width)
@@ -19,14 +19,9 @@ class BatteryRowStackFrameTest {
     }
 
     @Test
-    fun `seats under the lock button without a cutout`() {
-        val frame = batteryRowStackFrame(anchor, lock, cutoutTopY = null)
-        assertEquals(lock.y + lock.height + BATTERY_STACK_CLEARANCE_DP, frame.y)
-    }
-
-    @Test
-    fun `never rises above the lock clearance for a high cutout`() {
-        val frame = batteryRowStackFrame(anchor, lock, cutoutTopY = 20f)
-        assertEquals(lock.y + lock.height + BATTERY_STACK_CLEARANCE_DP, frame.y)
+    fun `tracks the lock frame, not the anchor's own y`() {
+        val lowerLock = ZoneFrame(16f, 24f, 40f, 44f)
+        val frame = batteryRowStackFrame(anchor, lowerLock)
+        assertEquals(24f + 44f + BATTERY_STACK_CLEARANCE_DP, frame.y)
     }
 }

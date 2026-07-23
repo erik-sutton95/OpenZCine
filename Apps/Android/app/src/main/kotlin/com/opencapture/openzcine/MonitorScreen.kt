@@ -1904,40 +1904,16 @@ internal fun MonitorScreen(
                     // Persistent side rails: lock + authoritative batteries +
                     // record / configured DISP / media / settings.
                     LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
-                    // Like iOS collapsing the pair into one combined indicator
-                    // above the Dynamic Island, the two battery rows stack in
-                    // the leading lane — below the lock button, hugging the
-                    // punch-hole camera from above when the display cutout
-                    // sits in that lane; cutout-less hardware keeps the same
-                    // seat directly under the lock.
-                    val batteryView = LocalView.current
-                    val batteryDensity = LocalDensity.current
-                    val cutoutTopY =
-                        remember(batteryView, isPortrait, zones) {
-                            if (isPortrait) {
-                                null
-                            } else {
-                                batteryView.rootWindowInsets
-                                    ?.displayCutout
-                                    ?.boundingRects
-                                    ?.minByOrNull { it.left }
-                                    ?.takeIf { it.left.toFloat() < zones.feed.width / 2f }
-                                    ?.top
-                                    ?.toFloat()
-                                    ?.div(batteryDensity.density)
-                            }
-                        }
+                    // Like iOS seating the combined indicator directly under the
+                    // lock button, the two battery rows stack at the top of the
+                    // leading lane, just below the lock's clearance.
                     zones.batteryPhone?.let { anchor ->
                         BatteryRowStack(
                             phonePercent = phoneBatteryReadout.percent,
                             cameraPercent = cameraReadouts.batteryPercent,
                             modifier =
                                 Modifier.zone(
-                                    batteryRowStackFrame(
-                                        anchor = anchor,
-                                        lock = zones.lock,
-                                        cutoutTopY = cutoutTopY,
-                                    ),
+                                    batteryRowStackFrame(anchor = anchor, lock = zones.lock),
                                 ),
                             phoneExternalPower = phoneBatteryReadout.externalPower,
                             cameraExternalPower = cameraReadouts.externalPower,
@@ -2891,32 +2867,18 @@ internal fun toggleShutterLockOnCamera(
     )
 }
 
-/**
- * Clearance between the battery row stack and the lock button above / the
- * display cutout below (dp).
- */
+/** Clearance between the battery row stack and the lock button above it (dp). */
 internal const val BATTERY_STACK_CLEARANCE_DP = 4f
 
 /**
- * Seats the stacked battery rows in the leading rail lane: hugging the
- * display cutout from above (iOS: the combined indicator above the Dynamic
- * Island), clamped below the lock button's clearance. Without a usable
- * cutout the stack keeps the same top-left seat under the lock button.
- * [anchor] is the zone map's phone-indicator frame — it carries the lane's
- * leading x.
+ * Seats the stacked battery rows in the leading rail lane, directly under the
+ * lock button (iOS parity). [anchor] is the zone map's phone-indicator frame —
+ * it carries the lane's leading x.
  */
-internal fun batteryRowStackFrame(
-    anchor: ZoneFrame,
-    lock: ZoneFrame,
-    cutoutTopY: Float?,
-): ZoneFrame {
-    val belowLock = lock.y + lock.height + BATTERY_STACK_CLEARANCE_DP
-    val aboveCutout =
-        cutoutTopY?.minus(BATTERY_STACK_CLEARANCE_DP + BATTERY_STACK_HEIGHT_DP) ?: belowLock
-    return ZoneFrame(
+internal fun batteryRowStackFrame(anchor: ZoneFrame, lock: ZoneFrame): ZoneFrame =
+    ZoneFrame(
         x = anchor.x,
-        y = maxOf(belowLock, aboveCutout),
+        y = lock.y + lock.height + BATTERY_STACK_CLEARANCE_DP,
         width = BATTERY_STACK_WIDTH_DP,
         height = BATTERY_STACK_HEIGHT_DP,
     )
-}
