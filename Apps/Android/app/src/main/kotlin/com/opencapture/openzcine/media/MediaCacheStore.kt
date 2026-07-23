@@ -301,6 +301,37 @@ class MediaCacheStore(rootDirectory: Path) {
         }
     }
 
+    /**
+     * Full purge for one deliberately deleted camera object: the final
+     * `.media` artifact AND its resumable `.part` go together (iOS
+     * `MediaLibrary.purgeClip` semantics — nothing a later scan or resume
+     * could resurrect the item from). The in-process entry is dropped so an
+     * open reader cannot republish the identity.
+     */
+    @Synchronized
+    fun purgeEntry(cameraID: String, identity: MediaCacheObjectIdentity) {
+        require(cameraID.isNotBlank()) { "cameraID must not be blank." }
+        validateFilename(identity.filename)
+
+        val bucket = bucketPath(cameraID)
+        if (
+            !Files.isDirectory(bucket, LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(bucket)
+        ) {
+            return
+        }
+        val artifactName = sha256Hex(identity.cacheKeyMaterial())
+        entries.remove(CacheKey(bucket.fileName.toString(), artifactName))
+        try {
+            Files.deleteIfExists(containedPath(bucket, "$artifactName.media"))
+        } catch (_: IOException) {
+        }
+        try {
+            Files.deleteIfExists(containedPath(bucket, "$artifactName.part"))
+        } catch (_: IOException) {
+        }
+    }
+
     private fun createEntry(
         partialPath: Path,
         finalPath: Path,

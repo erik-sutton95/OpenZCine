@@ -222,6 +222,30 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
     fun persistedClips(cameraID: String): List<MediaClipRecord> =
         synchronized(persistenceLock) { persistedClipsLocked(cameraID) }
 
+    /**
+     * Drops one deliberately deleted clip's index row and favorite (iOS
+     * `MediaLibrary.purgeClip` counterpart — unlike a listing removal, a
+     * downloaded copy does not keep the row alive). Cache artifacts are the
+     * [MediaCacheStore]'s side of the purge.
+     */
+    fun purgeClip(cameraID: String, clip: MediaClipRecord) {
+        val identity = clip.libraryKey(cameraID)
+        synchronized(persistenceLock) {
+            val remaining = persistedClipsLocked(cameraID).filter { it.libraryKey(cameraID) != identity }
+            preferences.putString(
+                indexKey(cameraID),
+                MediaLibraryRecordCodec.encode(remaining).takeIf { remaining.isNotEmpty() },
+            )
+        }
+        val favorites = favoriteIDs(cameraID)
+        if (identity in favorites) {
+            preferences.putString(
+                favoritesKey(cameraID),
+                (favorites - identity).sorted().joinToString(separator = "\n").ifEmpty { null },
+            )
+        }
+    }
+
     private fun persistedClipsLocked(cameraID: String): List<MediaClipRecord> =
         preferences.getString(indexKey(cameraID))
             ?.let(MediaLibraryRecordCodec::decode)

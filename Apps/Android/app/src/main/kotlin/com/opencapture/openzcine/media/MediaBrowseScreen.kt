@@ -544,6 +544,10 @@ internal fun MediaBrowseScreen(
     fun clipKey(clip: MediaClipRecord): String = clip.libraryKey(ownerCameraID(clip))
     var state by remember(cameraID) { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var reloadKey by remember { mutableIntStateOf(0) }
+    // Camera-card deletion in flight: the listing effect stays cancelled while
+    // non-null so an already-enumerated page cannot re-add the deleted rows.
+    var pendingDeletion by remember(cameraID) { mutableStateOf<List<MediaClipRecord>?>(null) }
+    var deleteConfirmTargets by remember { mutableStateOf<List<MediaClipRecord>?>(null) }
     var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
     var viewingPhoto by remember { mutableStateOf<MediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
@@ -610,7 +614,17 @@ internal fun MediaBrowseScreen(
             }
     }
 
-    LaunchedEffect(cameraID, offlineCameraIDs, librarySource, effectiveCameraConnected, reloadKey) {
+    LaunchedEffect(
+        cameraID,
+        offlineCameraIDs,
+        librarySource,
+        effectiveCameraConnected,
+        reloadKey,
+        pendingDeletion != null,
+    ) {
+        // A deletion owns the camera between the cancelled old listing and the
+        // fresh re-enumeration it schedules; never list mid-deletion.
+        if (pendingDeletion != null) return@LaunchedEffect
         state = BrowseState.Loading
         val nextState =
             when (librarySource) {
@@ -698,6 +712,44 @@ internal fun MediaBrowseScreen(
                     it.contentKind == MediaContentKind.PLAYABLE_PROXY
                 }
         }
+    }
+
+    // Runs one confirmed camera-card deletion after the listing effect above
+    // cancelled: delete each object on the card, then purge every local trace
+    // the list scan could resurrect an item from — cached bytes, resumable
+    // partials, the index row, and the favorite. Clearing [pendingDeletion]
+    // restarts the listing so the fresh enumeration confirms the deletions.
+    LaunchedEffect(pendingDeletion) {
+        val targets = pendingDeletion ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            targets.forEach { clip ->
+                // Protected objects are refused by the body and stay listed;
+                // their caches stay too so the row remains fully backed.
+                if (!SwiftCore.isAvailable || !SwiftCore.sessionDeleteObject(clip.handle.toInt())) {
+                    return@forEach
+                }
+                val owner = ownerCameraID(clip)
+                runCatching {
+                    cacheStore.purgeEntry(owner, MediaCacheObjectIdentity(clip))
+                }
+                libraryIndex.purgeClip(owner, clip)
+            }
+        }
+        favorites =
+            withContext(Dispatchers.IO) {
+                val ids = offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
+                ids.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+            }
+        exitSelection()
+        pendingDeletion = null
+    }
+
+    fun requestDeletion(selection: List<MediaClipRecord>) {
+        if (selection.isEmpty() || pendingDeletion != null) return
+        val catalog = (state as? BrowseState.Loaded)?.clips.orEmpty()
+        deleteConfirmTargets = null
+        viewingPhoto = null
+        pendingDeletion = cameraDeletionTargets(catalog, selection)
     }
 
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
@@ -1245,7 +1297,11 @@ internal fun MediaBrowseScreen(
                         frameioInternetHopState = internetHopState,
                         sortOrder = options.sortOrder,
                         activeFilterCount = filters.activeCount,
+                        deleteAvailable =
+                            librarySource == MediaLibrarySource.CAMERA &&
+                                effectiveCameraConnected,
                         onExitSelection = ::cancelActiveShareOrExitSelection,
+                        onDelete = { deleteConfirmTargets = selectedClips },
                         onShare = {
                             // Unified Share sheet (native + Frame.io), like iOS.
                             presentNativeDelivery()
@@ -1334,7 +1390,11 @@ internal fun MediaBrowseScreen(
                             frameioInternetHopState = internetHopState,
                             sortOrder = options.sortOrder,
                             activeFilterCount = filters.activeCount,
+                            deleteAvailable =
+                                librarySource == MediaLibrarySource.CAMERA &&
+                                    effectiveCameraConnected,
                             onExitSelection = ::cancelActiveShareOrExitSelection,
+                            onDelete = { deleteConfirmTargets = selectedClips },
                             onShare = { presentNativeDelivery() },
                             onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                             onShowFilters = { filterDialogPresented = true },
@@ -1435,6 +1495,20 @@ internal fun MediaBrowseScreen(
             )
         }
 
+        deleteConfirmTargets?.let { targets ->
+            MediaDeleteConfirmDialog(
+                message =
+                    deleteConfirmationMessage(
+                        targets,
+                        hasRawPair =
+                            targets.size == 1 &&
+                                rawSibling(loadedClips, targets.single()) != null,
+                    ),
+                onDelete = { requestDeletion(targets) },
+                onDismiss = { deleteConfirmTargets = null },
+            )
+        }
+
         playingClip?.let { clip ->
             val owner = ownerCameraID(clip)
             MediaPlaybackScreen(
@@ -1472,6 +1546,10 @@ internal fun MediaBrowseScreen(
                 clip = clip,
                 cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
+                hasRawSibling = rawSibling(loadedClips, clip) != null,
+                deleteAvailable =
+                    librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
+                onDelete = { requestDeletion(listOf(clip)) },
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
                         ownerCameraID(resolvedClip),
@@ -1827,7 +1905,9 @@ private fun MediaLibraryHeader(
     frameioInternetHopState: FrameioInternetHopState,
     sortOrder: MediaLibrarySortOrder,
     activeFilterCount: Int,
+    deleteAvailable: Boolean,
     onExitSelection: () -> Unit,
+    onDelete: () -> Unit,
     onShare: () -> Unit,
     onSortChange: (MediaLibrarySortOrder) -> Unit,
     onShowFilters: () -> Unit,
@@ -1839,7 +1919,9 @@ private fun MediaLibraryHeader(
             frameioPreparationInProgress = frameioPreparationInProgress,
             frameioDeliveryState = frameioDeliveryState,
             frameioInternetHopState = frameioInternetHopState,
+            deleteAvailable = deleteAvailable,
             onExit = onExitSelection,
+            onDelete = onDelete,
             onShare = onShare,
         )
         return
@@ -1903,13 +1985,16 @@ private fun SelectionHeader(
     frameioPreparationInProgress: Boolean,
     frameioDeliveryState: FrameioDeliveryState,
     frameioInternetHopState: FrameioInternetHopState,
+    deleteAvailable: Boolean,
     onExit: () -> Unit,
+    onDelete: () -> Unit,
     onShare: () -> Unit,
 ) {
     val rejoiningCamera = frameioInternetHopState is FrameioInternetHopState.RejoiningCamera
     val upload = frameioDeliveryState as? FrameioDeliveryState.Uploading
     val busy = shareInProgress || frameioPreparationInProgress || upload != null || rejoiningCamera
     val shareEnabled = selectedCount > 0 && !busy
+    val deleteEnabled = deleteAvailable && selectedCount > 0 && !busy
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -1943,6 +2028,29 @@ private fun SelectionHeader(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        // iOS selection-bar Delete capsule: destructive red, camera source only.
+        if (deleteAvailable) {
+            Text(
+                "Delete",
+                style = chromeStyle(14f, FontWeight.SemiBold),
+                color = if (deleteEnabled) Color(0xFFFF5A54) else LiveDesign.faint,
+                maxLines = 1,
+                modifier =
+                    Modifier.clip(CapsuleShape)
+                        .border(1.dp, LiveDesign.hairline, CapsuleShape)
+                        .semantics {
+                            contentDescription =
+                                if (deleteEnabled) {
+                                    "Delete $selectedCount selected items from the camera card"
+                                } else {
+                                    "Delete selected media"
+                                }
+                            if (deleteEnabled) role = Role.Button else disabled()
+                        }
+                        .chromeClickable(enabled = deleteEnabled, onClick = onDelete)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
         // iOS Label("Share", systemImage: "square.and.arrow.up") capsule.
         val shareLabel =
             when {

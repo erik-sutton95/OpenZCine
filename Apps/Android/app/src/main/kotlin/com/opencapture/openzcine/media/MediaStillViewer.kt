@@ -24,7 +24,10 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -33,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -94,6 +98,12 @@ internal fun MediaStillViewer(
     clip: MediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
+    /** The grid item hides a same-stem RAW behind this JPEG (delete removes both). */
+    hasRawSibling: Boolean = false,
+    /** Camera-card deletion offered only while the camera source is live. */
+    deleteAvailable: Boolean = false,
+    /** Post-confirmation deletion; the browse screen owns the card operations. */
+    onDelete: () -> Unit = {},
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ) {
@@ -137,6 +147,18 @@ internal fun MediaStillViewer(
         mutableStateOf<StillPreviewUiState>(StillPreviewStates.initial())
     }
     var closeRequested by remember { mutableStateOf(false) }
+    var deleteConfirmPresented by remember(clip.handle) { mutableStateOf(false) }
+    // Camera-read star rating; null until loaded (or unreachable — row hidden).
+    // The camera stays source of truth: seeded by read, every write confirmed
+    // by the entry point's built-in readback (the body rounds off-step down).
+    var ratingStars by remember(clip.handle) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(clip.handle, cameraTransferAvailable) {
+        if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
+        val read =
+            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
+        if (read >= 0) ratingStars = read
+    }
+    val ratingScope = rememberCoroutineScope()
 
     LaunchedEffect(coordinator, classification) {
         val requestGeneration = loadGate.begin()
@@ -233,9 +255,58 @@ internal fun MediaStillViewer(
         StillViewerChrome(
             filename = clip.filename,
             closeEnabled = !closeRequested,
+            deleteAvailable = deleteAvailable && !closeRequested,
+            onDelete = { deleteConfirmPresented = true },
             onClose = { closeRequested = true },
         )
+        // Clip star rating written to the card — hidden until the camera read
+        // lands and while the transfer status banner owns the bottom edge.
+        val stars = ratingStars
+        if (
+            stars != null &&
+            previewState !is StillPreviewUiState.Downloading &&
+            previewState != StillPreviewUiState.Preparing
+        ) {
+            Box(
+                Modifier.fillMaxSize()
+                    .windowInsetsPadding(
+                        WindowInsets.displayCutout.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                        ),
+                    )
+                    .padding(bottom = 18.dp),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                StarRatingRow(stars = stars) { target ->
+                    val previous = ratingStars
+                    ratingStars = target
+                    ratingScope.launch {
+                        val confirmed =
+                            withContext(Dispatchers.IO) {
+                                SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                            }
+                        ratingStars = if (confirmed >= 0) confirmed else previous
+                    }
+                }
+            }
+        }
         StillPreviewStatus(previewState)
+    }
+    if (deleteConfirmPresented) {
+        MediaDeleteConfirmDialog(
+            message =
+                if (hasRawSibling) {
+                    "Delete this photo from the camera card? " +
+                        "Both the RAW and JPEG files are removed."
+                } else {
+                    "Delete this photo from the camera card?"
+                },
+            onDelete = {
+                deleteConfirmPresented = false
+                onDelete()
+            },
+            onDismiss = { deleteConfirmPresented = false },
+        )
     }
 }
 
@@ -470,6 +541,8 @@ private fun StillPreviewPlaceholder(state: StillPreviewUiState) {
 private fun StillViewerChrome(
     filename: String,
     closeEnabled: Boolean,
+    deleteAvailable: Boolean,
+    onDelete: () -> Unit,
     onClose: () -> Unit,
 ) {
     Row(
@@ -496,6 +569,31 @@ private fun StillViewerChrome(
                 overflow = TextOverflow.Clip,
             )
         }
+        if (deleteAvailable) {
+            StillViewerDeleteButton(onClick = onDelete)
+        }
+    }
+}
+
+/** Trash circle (iOS viewer `deleteButton`): destructive confirmation follows. */
+@Composable
+private fun StillViewerDeleteButton(onClick: () -> Unit) {
+    Box(
+        Modifier.size(40.dp)
+            .glass(CircleShape)
+            .semantics {
+                contentDescription = "Delete photo from the camera card"
+                role = Role.Button
+            }
+            .chromeClickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Outlined.Delete,
+            contentDescription = null,
+            tint = Color(0xFFFF5A54),
+            modifier = Modifier.size(19.dp),
+        )
     }
 }
 

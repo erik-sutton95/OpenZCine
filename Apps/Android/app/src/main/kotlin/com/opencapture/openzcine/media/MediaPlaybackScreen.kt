@@ -317,6 +317,28 @@ private fun PlaybackClipSession(
     val latestDeliveryJob = rememberUpdatedState(deliveryJob)
     val actionInProgress = pendingAction != null
     var chromeVisible by remember(clip.handle) { mutableStateOf(true) }
+    // Camera-read star rating (null until read, or unreachable — row hidden).
+    // Seeded by read, confirmed by the entry point's built-in readback: the
+    // camera stays source of truth for every write.
+    var ratingStars by remember(clip.handle) { mutableStateOf<Int?>(null) }
+    val ratingScope = rememberCoroutineScope()
+    LaunchedEffect(clip.handle, cameraTransferAvailable) {
+        if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
+        val read =
+            withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
+        if (read >= 0) ratingStars = read
+    }
+    fun selectRating(target: Int) {
+        val previous = ratingStars
+        ratingStars = target
+        ratingScope.launch {
+            val confirmed =
+                withContext(Dispatchers.IO) {
+                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                }
+            ratingStars = if (confirmed >= 0) confirmed else previous
+        }
+    }
     val deliveryLut = sharedAssistState.selectedLut
     val deliveryLutLabel =
         when (deliveryLut) {
@@ -517,6 +539,8 @@ private fun PlaybackClipSession(
                     shareReady = shareState == PlaybackShareState.READY,
                     deliveryInProgress = deliveryInProgress,
                     onShare = { deliveryChooserPresented = true },
+                    ratingStars = ratingStars,
+                    onSelectRating = ::selectRating,
                 )
             MediaTransferPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
         }
@@ -664,6 +688,9 @@ private fun ProgressivePlayer(
     shareReady: Boolean = false,
     deliveryInProgress: Boolean = false,
     onShare: () -> Unit = {},
+    /** Camera-read clip star rating; null hides the row (offline/unreadable). */
+    ratingStars: Int? = null,
+    onSelectRating: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -1303,12 +1330,25 @@ private fun ProgressivePlayer(
                         WindowInsets.safeDrawing.only(
                             WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
                         ),
-                    )
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
-                    .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                // Clip star rating on its own capsule above the transport (iOS
+                // player row) — written to the card, camera source of truth.
+                if (ratingStars != null) {
+                    StarRatingRow(
+                        stars = ratingStars,
+                        modifier = Modifier.padding(bottom = 2.dp),
+                        onSelect = onSelectRating,
+                    )
+                }
+                Column(
+                    Modifier.fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                        .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
                 if (assistMode) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1464,6 +1504,7 @@ private fun ProgressivePlayer(
                             onClick = onShare,
                         )
                     }
+                }
                 }
             }
         }
