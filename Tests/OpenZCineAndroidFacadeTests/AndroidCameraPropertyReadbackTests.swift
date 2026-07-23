@@ -166,6 +166,62 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(fields["storageSlot.1.freeSpaceBytes"] == "111000000000")
     }
 
+    @Test func slotsNumberByThePhysicalSlotInTheStorageID() throws {
+        // The second body slot can be enumerated FIRST (vendor storage-list append
+        // order) — the published slots must still read SLOT 1 / SLOT 2 by the
+        // storage ID's high word, sorted, not by arrival order.
+        let slotOneID: UInt32 = 0x0001_0001
+        let slotTwoID: UInt32 = 0x0002_0001
+        var options = FakeZRServer.Options()
+        options.storageCards = [
+            FakeZRStorageCard(
+                storageID: slotTwoID,
+                totalCapacityBytes: 512_000_000_000,
+                freeSpaceBytes: 111_000_000_000),
+            FakeZRStorageCard(
+                storageID: slotOneID,
+                totalCapacityBytes: 954_000_000_000,
+                freeSpaceBytes: 242_000_000_000),
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let bootstrap = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        #expect(bootstrap.storageSlots.map(\.storageID) == [slotOneID, slotTwoID])
+        #expect(bootstrap.storageSlots.map(\.slotNumber) == [1, 2])
+        // The legacy single-card readout keeps the enumeration-first card.
+        #expect(bootstrap.storage?.totalCapacityBytes == 512_000_000_000)
+
+        let fields = wireFields(AndroidCameraPropertyReadbackWire.encode(bootstrap))
+        #expect(fields["storageSlot.0.storageId"] == String(slotOneID))
+        #expect(fields["storageSlot.0.slotNumber"] == "1")
+        #expect(fields["storageSlot.1.storageId"] == String(slotTwoID))
+        #expect(fields["storageSlot.1.slotNumber"] == "2")
+    }
+
+    @Test func loneSecondSlotCardKeepsItsPhysicalNumber() throws {
+        // A single card living in body slot 2 publishes as slot 2 — the wire's
+        // strictly-increasing contract allows the gap.
+        func le64(_ value: UInt64) -> [UInt8] {
+            (0..<8).map { UInt8((value >> ($0 * 8)) & 0xFF) }
+        }
+        let storage = try #require(
+            PTPStorageInfo([1, 0, 2, 0, 3, 0] + le64(512_000_000_000) + le64(111_000_000_000)))
+        let readback = AndroidCameraPropertyReadback(
+            result: .accepted,
+            properties: PTPCameraPropertySnapshot(),
+            storage: nil,
+            storageSlots: [
+                AndroidCameraStorageSlot(storageID: 0x0002_0001, slotNumber: 2, storage: storage)
+            ])
+        let fields = wireFields(AndroidCameraPropertyReadbackWire.encode(readback))
+        #expect(fields["storageSlotCount"] == "1")
+        #expect(fields["storageSlot.0.slotNumber"] == "2")
+    }
+
     @Test func mediaEntryClosesTheEmptyBootstrapStorageRace() throws {
         let secondStorageID: UInt32 = 0x0002_0001
         var options = FakeZRServer.Options()

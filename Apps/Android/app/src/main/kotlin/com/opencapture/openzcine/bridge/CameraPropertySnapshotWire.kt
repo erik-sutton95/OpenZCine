@@ -158,7 +158,11 @@ internal object CameraPropertySnapshotWire {
         return OptionalStorage(CameraStorageStatus(totalCapacityBytes = total, freeSpaceBytes = free))
     }
 
-    /** Strictly decodes one complete indexed slot generation or rejects it atomically. */
+    /**
+     * Strictly decodes one complete indexed slot generation or rejects it atomically.
+     * Slot numbers are the PHYSICAL body slots — strictly increasing but possibly
+     * gapped (a lone card in slot 2 arrives as slot 2), never re-derived from index.
+     */
     private fun storageSlots(value: Map<String, String>): List<CameraStorageSlotStatus>? {
         val indexedKeys = value.keys.filter { it.startsWith(STORAGE_SLOT_PREFIX) }.toSet()
         val countText = value[STORAGE_SLOT_COUNT]
@@ -181,6 +185,7 @@ internal object CameraPropertySnapshotWire {
         if (indexedKeys != expectedKeys) return null
 
         val seenStorageIds = mutableSetOf<Long>()
+        var previousSlotNumber = 0
         return (0 until count).map { index ->
             val prefix = "$STORAGE_SLOT_PREFIX$index"
             val storageId =
@@ -188,7 +193,8 @@ internal object CameraPropertySnapshotWire {
                     ?.takeIf { it in 1..MAXIMUM_USABLE_STORAGE_ID } ?: return null
             val slotNumber =
                 value["$prefix.slotNumber"]?.toIntOrNull()
-                    ?.takeIf { it == index + 1 } ?: return null
+                    ?.takeIf { it > previousSlotNumber } ?: return null
+            previousSlotNumber = slotNumber
             val total =
                 value["$prefix.totalCapacityBytes"]?.toLongOrNull()
                     ?.takeIf { it >= 0 } ?: return null

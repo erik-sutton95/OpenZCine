@@ -294,7 +294,9 @@ public enum AndroidCameraPropertyReadbackWire {
 
     /// Adds one atomic, indexed slot generation. Invalid native values omit the
     /// generation instead of publishing a partial list that Kotlin could
-    /// mistake for the camera's complete card order.
+    /// mistake for the camera's complete card order. Slot numbers are the
+    /// PHYSICAL body slots (sorted, strictly increasing, possibly gapped —
+    /// a lone card in slot 2 publishes as slot 2), not list indices.
     private static func appendStorageSlots(
         _ slots: [AndroidCameraStorageSlot],
         to fields: inout [(key: String, value: String)]
@@ -302,9 +304,10 @@ public enum AndroidCameraPropertyReadbackWire {
         guard slots.count <= maximumStorageSlotCount else { return }
         var encoded: [(key: String, value: String)] = []
         var seen = Set<UInt32>()
+        var previousSlotNumber = 0
         for (index, slot) in slots.enumerated() {
             let storage = slot.storage
-            guard slot.slotNumber == index + 1,
+            guard slot.slotNumber > previousSlotNumber,
                 slot.storageID != 0,
                 slot.storageID != UInt32.max,
                 seen.insert(slot.storageID).inserted,
@@ -312,6 +315,7 @@ public enum AndroidCameraPropertyReadbackWire {
                 let freeSpace = Int64(exactly: storage.freeSpaceBytes),
                 totalCapacity == 0 || freeSpace <= totalCapacity
             else { return }
+            previousSlotNumber = slot.slotNumber
             let prefix = "storageSlot.\(index)"
             encoded.append(("\(prefix).storageId", String(slot.storageID)))
             encoded.append(("\(prefix).slotNumber", String(slot.slotNumber)))

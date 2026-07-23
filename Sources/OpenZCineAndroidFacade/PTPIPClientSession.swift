@@ -1309,11 +1309,27 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// Refreshes every valid card at the shared core's slow storage cadence.
     private func refreshAndroidStorage() -> AndroidCameraPropertyRefreshResult {
         do {
-            let slots = try readAllStorageInfo().enumerated().map { index, slot in
-                AndroidCameraStorageSlot(
+            let enumerated = try readAllStorageInfo()
+            // The physical slot lives in the storage ID's high word (0x000X0001) — the
+            // enumerated order does NOT follow it (the second card can arrive appended
+            // via the vendor storage list), which would label slot 1's card "SLOT 2" in
+            // the media chips. Number by the physical slot and sort, falling back to
+            // list order for IDs without the slot-word pattern. [verify-on-HW]
+            var slots = enumerated.enumerated().map { index, slot in
+                let physicalSlot = Int((slot.id >> 16) & 0xFF)
+                return AndroidCameraStorageSlot(
                     storageID: slot.id,
-                    slotNumber: index + 1,
+                    slotNumber: physicalSlot > 0 ? physicalSlot : index + 1,
                     storage: slot.info)
+            }
+            .sorted { $0.slotNumber < $1.slotNumber }
+            if Set(slots.map(\.slotNumber)).count != slots.count {
+                // A duplicate physical number would fail the wire's strictly-increasing
+                // guard and drop every card — keep the old list-order numbering instead.
+                slots = enumerated.enumerated().map { index, slot in
+                    AndroidCameraStorageSlot(
+                        storageID: slot.id, slotNumber: index + 1, storage: slot.info)
+                }
             }
             guard !slots.isEmpty else {
                 androidStorageInfo = nil
@@ -1321,7 +1337,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 return .unsupported
             }
             androidStorageSlots = slots
-            androidStorageInfo = slots.first?.storage
+            // The legacy single-card readout keeps the camera's enumeration-first card,
+            // independent of the display sort.
+            androidStorageInfo = enumerated.first?.info
             androidLastStorageRefreshAt = Date()
             return .accepted
         } catch let error as PTPIPClientSessionError {

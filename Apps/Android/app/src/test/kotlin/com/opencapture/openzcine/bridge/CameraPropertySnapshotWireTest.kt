@@ -91,9 +91,23 @@ class CameraPropertySnapshotWireTest {
         assertRejected(
             validPayload().replace(
                 "storageSlot.1.slotNumber\t2",
-                "storageSlot.1.slotNumber\t3",
+                "storageSlot.1.slotNumber\t1",
             ),
         )
+    }
+
+    @Test
+    fun physicalSlotNumbersMayGapButMustIncrease() {
+        // A lone card in body slot 2 (or slots 1+3) keeps its physical number.
+        val gapped =
+            CameraPropertySnapshotWire.decode(
+                validPayload().replace(
+                    "storageSlot.1.slotNumber\t2",
+                    "storageSlot.1.slotNumber\t3",
+                ),
+            )
+        assertTrue(gapped.isValid)
+        assertEquals(listOf(1, 3), gapped.snapshot.storageSlots.map { it.slotNumber })
     }
 
     @Test
