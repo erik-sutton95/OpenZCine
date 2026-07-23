@@ -4727,6 +4727,21 @@ final class NativeAppModel {
     }
 
     private func pollNextCameraProperty(session: NativeCameraSession) async {
+        // While the EV tool is on, the indicator reads on every poll tick alongside the
+        // round-robin property — a needle visited once per full property cycle lags whole
+        // seconds behind the meter. The lit-state gate refreshes on a slow stride, and
+        // recording keeps its sparse health poll untouched.
+        if !isRecording,
+            preferences.liveViewVisibleAssistTools.contains(.evMeter),
+            session.supportsProperty(.exposureIndicateStatus)
+        {
+            evFastPollTick &+= 1
+            await readAndApplyCameraProperty(
+                session: session,
+                property: evFastPollTick.isMultiple(of: 8)
+                    ? .exposureIndicateLightup : .exposureIndicateStatus)
+            guard !Task.isCancelled, cameraSession === session else { return }
+        }
         let property = PTPPropertyCode.nextMonitorPollProperty(
             pollIndex: propertyPollIndex,
             isRecording: isRecording,
@@ -5637,6 +5652,8 @@ final class NativeAppModel {
     /// Seconds left in a running countdown (nil when idle); the shutter core renders it.
     private(set) var stillTimerRemaining: Int?
     @ObservationIgnored private var stillTimerTask: Task<Void, Never>?
+    /// Tick counter for the EV meter's per-tick indicator read (see `pollNextCameraProperty`).
+    @ObservationIgnored private var evFastPollTick = 0
 
     /// The Timer tab's display value ("Off" / "5s").
     var photoTimerLabel: String {
