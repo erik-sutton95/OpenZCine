@@ -971,18 +971,29 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Properties
 
-    /// Reads one camera property (`GetDevicePropValueEx`) and returns its raw bytes.
+    /// Reads one camera property and returns its raw bytes. Mirrors the write path:
+    /// standard 16-bit codes use `GetDevicePropValue` (0x1015) — the only property ops
+    /// gen-1/2 bodies have, and the ones the ZR expects for 2-byte codes — while the
+    /// 4-byte extended `0x0001_xxxx` codes use `GetDevicePropValueEx`.
     public func readProperty(_ property: PTPPropertyCode) throws -> Data {
-        try transactExpectingOK(
-            .getDevicePropValueEx, parameters: [property.rawValue], dataPhase: .dataIn
+        let operation: PTPOperationCode =
+            property.rawValue <= UInt32(UInt16.max)
+            ? .getDevicePropValue
+            : .getDevicePropValueEx
+        return try transactExpectingOK(
+            operation, parameters: [property.rawValue], dataPhase: .dataIn
         ).data
     }
 
-    /// Reads one Nikon extended property descriptor. Callers decode it only
-    /// through shared-core descriptor policy.
+    /// Reads one property descriptor with the same width routing as `readProperty`.
+    /// Callers decode it only through shared-core descriptor policy.
     private func readPropertyDescriptor(_ property: PTPPropertyCode) throws -> Data {
-        try transactExpectingOK(
-            .getDevicePropDescEx,
+        let operation: PTPOperationCode =
+            property.rawValue <= UInt32(UInt16.max)
+            ? .getDevicePropDesc
+            : .getDevicePropDescEx
+        return try transactExpectingOK(
+            operation,
             parameters: [property.rawValue],
             dataPhase: .dataIn
         ).data
@@ -1931,6 +1942,37 @@ public final class PTPIPClientSession: @unchecked Sendable {
             throw PTPIPClientSessionError.mediaModeActive
         }
         try transactExpectingOK(operation)
+    }
+
+    // MARK: - Still capture (photography mode)
+
+    /// Fires a still release with the media-destination capture op (AF-then-release to
+    /// the card). Activation-style: the OK response confirms the release started; poll
+    /// ``pollStillReleaseReadiness()`` between frames for completion.
+    public func initiateStillCapture() throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+        try transactExpectingOK(
+            .initiateCaptureRecInMedia, parameters: [0xFFFF_FFFE, 0x0000])
+    }
+
+    /// One `DeviceReady` poll after a still release.
+    public func pollStillReleaseReadiness() throws -> StillReleaseReadiness {
+        let result = try executeTransaction(.deviceReady)
+        return StillCapturePolicy.releaseReadiness(result.operationResponse.responseCode)
+    }
+
+    /// Ends a bulb/time exposure or stops a running burst; frames captured so far are kept.
+    public func terminateStillCapture() throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+        try transactExpectingOK(.terminateCapture, parameters: [0, 0])
     }
 
     // MARK: - Android live-view configuration

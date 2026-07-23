@@ -230,6 +230,58 @@ struct PTPIPClientSessionTests {
         #expect(operations.contains(.endMovieRec))
     }
 
+    @Test func firesStillReleaseAndTracksReadinessToCompletion() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.initiateStillCapture()
+        // AF-then-release to the card.
+        #expect(server.receivedStillCaptureRequests() == [[0xFFFF_FFFE, 0x0000]])
+
+        // The fake reports busy for the configured polls, then OK.
+        #expect(try session.pollStillReleaseReadiness() == .inProgress)
+        #expect(try session.pollStillReleaseReadiness() == .inProgress)
+        #expect(try session.pollStillReleaseReadiness() == .complete)
+    }
+
+    @Test func bulbReleaseStaysOpenUntilTerminateCapture() throws {
+        var options = FakeZRServer.Options()
+        options.stillReleaseBusyPolls = Int.max
+        options.stillReleaseBusyResponseCode = PTPResponseCode.bulbReleaseBusy.rawValue
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.initiateStillCapture()
+        #expect(try session.pollStillReleaseReadiness() == .openShutterInProgress)
+        #expect(try session.pollStillReleaseReadiness() == .openShutterInProgress)
+
+        try session.terminateStillCapture()
+        #expect(server.receivedTerminateCaptureCount() == 1)
+        #expect(try session.pollStillReleaseReadiness() == .complete)
+    }
+
+    @Test func readsTwoBytePropertiesWithStandardGetDevicePropValue() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        // The fake rejects cross-width requests like the body does, so a successful
+        // read is itself proof of correct routing; assert the op for completeness.
+        let data = try session.readProperty(.stillCaptureMode)
+        #expect(!data.isEmpty)
+        let stillModeReads = server.receivedRequests().filter {
+            $0.parameters.first == PTPPropertyCode.stillCaptureMode.rawValue
+                && ($0.operation == .getDevicePropValue || $0.operation == .getDevicePropValueEx)
+        }
+        #expect(stillModeReads.allSatisfy { $0.operation == .getDevicePropValue })
+        #expect(!stillModeReads.isEmpty)
+    }
+
     @Test func configuresOnlyPreviewPropertiesBeforeLiveViewStarts() throws {
         let server = try FakeZRServer()
         defer { server.stop() }

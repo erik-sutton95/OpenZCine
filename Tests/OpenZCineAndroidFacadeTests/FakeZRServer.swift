@@ -132,6 +132,13 @@ final class FakeZRServer: @unchecked Sendable {
         var whiteBalanceTintMinimum: UInt16 = 0
         var whiteBalanceTintMaximum: UInt16 = 1_224
         var whiteBalanceTintStep: UInt16 = 2
+        /// Response sent for the media-destination still release.
+        var stillCaptureResponseCode: UInt16 = 0x2001
+        /// How many `DeviceReady` polls after a still release report busy before OK.
+        var stillReleaseBusyPolls: Int = 2
+        /// The busy code those polls return (`Device_Busy` by default; tests use the
+        /// bulb-busy code to exercise the open-shutter flow).
+        var stillReleaseBusyResponseCode: UInt16 = 0x2019
         /// Response sent for Nikon `ChangeAfArea`.
         var changeAfAreaResponseCode: UInt16 = 0x2001
         /// Response sent for Nikon `EndTracking`.
@@ -186,6 +193,9 @@ final class FakeZRServer: @unchecked Sendable {
     private var requestLog: [FakeZRRequest] = []
     private var propertyWriteLog: [FakeZRPropertyWrite] = []
     private var propertyReadCounts: [UInt32: Int] = [:]
+    private var stillCaptureRequests: [[UInt32]] = []
+    private var stillReleaseBusyPollsRemaining = 0
+    private var terminateCaptureCount = 0
     private var descriptorReadCounts: [UInt32: Int] = [:]
     private var propertyValueOverrides: [UInt32: Data] = [:]
     private var transactionIDLog: [UInt32] = []
@@ -284,6 +294,20 @@ final class FakeZRServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return requestLog
+    }
+
+    /// Parameters of each accepted still release, in arrival order.
+    func receivedStillCaptureRequests() -> [[UInt32]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stillCaptureRequests
+    }
+
+    /// How many `TerminateCapture` requests arrived.
+    func receivedTerminateCaptureCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminateCaptureCount
     }
 
     /// Property writes received with their actual host-to-camera data payloads.
@@ -541,6 +565,30 @@ final class FakeZRServer: @unchecked Sendable {
             lock.unlock()
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .deviceReady:
+            lock.lock()
+            let busyCode: UInt16?
+            if stillReleaseBusyPollsRemaining > 0 {
+                stillReleaseBusyPollsRemaining -= 1
+                busyCode = options.stillReleaseBusyResponseCode
+            } else {
+                busyCode = nil
+            }
+            lock.unlock()
+            sendResponse(connection, code: busyCode ?? 0x2001, transactionID: transactionID)
+        case .initiateCaptureRecInMedia:
+            lock.lock()
+            let captureResponse = options.stillCaptureResponseCode
+            if captureResponse == 0x2001 {
+                stillCaptureRequests.append(parameters)
+                stillReleaseBusyPollsRemaining = options.stillReleaseBusyPolls
+            }
+            lock.unlock()
+            sendResponse(connection, code: captureResponse, transactionID: transactionID)
+        case .terminateCapture:
+            lock.lock()
+            terminateCaptureCount += 1
+            stillReleaseBusyPollsRemaining = 0
+            lock.unlock()
             sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .changeAfArea:
             guard parameters.count == 2 else {
@@ -712,8 +760,15 @@ final class FakeZRServer: @unchecked Sendable {
                 responseParameters: [
                     UInt32(truncatingIfNeeded: count), UInt32(truncatingIfNeeded: count >> 32),
                 ])
-        case .getDevicePropValueEx:
+        case .getDevicePropValue, .getDevicePropValueEx:
             let propertyCode = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
+            // The body serves 2-byte codes only through the standard op and 4-byte
+            // extended codes only through Ex; cross-width requests fail like on HW.
+            let wantsExtendedOp = propertyCode > UInt32(UInt16.max)
+            guard (operation == .getDevicePropValueEx) == wantsExtendedOp else {
+                sendResponse(connection, code: 0x2002, transactionID: transactionID)
+                return
+            }
             guard !options.unsupportedPropertyCodes.contains(propertyCode),
                 let property = PTPPropertyCode(rawValue: propertyCode),
                 let data = cameraPropertyData(for: property)
@@ -731,8 +786,13 @@ final class FakeZRServer: @unchecked Sendable {
                 connection,
                 data: sendsShortPayload ? Data() : data,
                 transactionID: transactionID)
-        case .getDevicePropDescEx:
+        case .getDevicePropDesc, .getDevicePropDescEx:
             let propertyCode = parameters.first ?? 0
+            let wantsExtendedDescOp = propertyCode > UInt32(UInt16.max)
+            guard (operation == .getDevicePropDescEx) == wantsExtendedDescOp else {
+                sendResponse(connection, code: 0x2002, transactionID: transactionID)
+                return
+            }
             guard !options.unsupportedPropertyCodes.contains(propertyCode),
                 let property = PTPPropertyCode(rawValue: propertyCode),
                 let descriptor = cameraPropertyDescriptor(for: property)
