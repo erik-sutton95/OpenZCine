@@ -2449,6 +2449,7 @@ final class NativeAppModel {
         stillReleaseIsOpenShutter = false
         isStillCapturing = false
         chainedBurstFrames = 0
+        remoteModeHeldForBurst = false
         cancelStillTimer()
         instantReviewFetchTask?.cancel()
         instantReviewFetchTask = nil
@@ -4677,26 +4678,16 @@ final class NativeAppModel {
             guard session.supportsProperty(property) else { continue }
             await readAndApplyCameraProperty(session: session, property: property)
         }
-        await raiseCommandBurstCeiling(session: session)
-    }
-
-    /// A command release fires `BurstNumber` frames in the continuous drives, and its default is
-    /// one — the single-frame-per-press symptom on a held shutter. Raise it to the maximum when
-    /// photography engages; the effective burst still clamps to the body's buffer estimate, and
-    /// finger-up terminates early. [verify-on-HW]
-    private func raiseCommandBurstCeiling(session: NativeCameraSession) async {
-        guard
-            StillCapturePolicy.prefersPhotographyChrome(
-                selector: cameraPropertySnapshot.captureSelector)
-        else { return }
-        let write = PTPCameraPropertyWrite(
-            property: .burstNumber, data: Data(ByteCoding.uint16LE(65535)))
-        do {
-            try await session.writeCameraProperty(write)
-        } catch {
-            logConnection("burst-ceiling write rejected: \(error)")
+        if StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector)
+        {
+            // A stale remote mode from an interrupted burst would keep the body's controls
+            // locked — restore the PC-camera mode defensively on every photo (re)entry.
+            // (The burst ceiling itself is written inside the hold's remote-mode bracket;
+            // outside remote mode host-set session values don't persist.)
+            try? await session.changeCameraMode(remote: false)
+            seedInstantReviewBaseline()
         }
-        seedInstantReviewBaseline()
     }
 
     /// Single-flight selector-flip burst: when the body switches photo ↔ movie mid-session, the
@@ -5565,6 +5556,15 @@ final class NativeAppModel {
     /// Frames chained in the current hold — a hard cap backstops a finger-up the system
     /// swallowed (gesture-gate timeouts strand the latch otherwise).
     @ObservationIgnored private var chainedBurstFrames = 0
+    /// Whether the remote-mode bracket is open for the current burst hold.
+    @ObservationIgnored private var remoteModeHeldForBurst = false
+
+    /// Closes the burst's remote-mode bracket, restoring the body's own controls.
+    private func exitBurstRemoteModeIfNeeded(session: NativeCameraSession) async {
+        guard remoteModeHeldForBurst else { return }
+        remoteModeHeldForBurst = false
+        try? await session.changeCameraMode(remote: false)
+    }
 
     /// App-side self-timer: countdown seconds a shutter press waits before firing (0 = off).
     /// The countdown is the app's — a remote release never runs the body's own self-timer.
@@ -6043,11 +6043,24 @@ final class NativeAppModel {
         if pendingStillCapture {
             pendingStillCapture = false
             do {
+                if shutterPressLatchedBurst, !remoteModeHeldForBurst {
+                    // A continuous hold needs the remote-mode bracket: host-set session
+                    // values (the burst ceiling) only persist while remote mode is held —
+                    // without it every release snaps back to a single frame. The body's
+                    // dials lock for the bracket's duration, so it opens on the press and
+                    // closes the moment the burst ends. [verify-on-HW]
+                    try? await session.changeCameraMode(remote: true)
+                    try? await session.writeCameraProperty(
+                        PTPCameraPropertyWrite(
+                            property: .burstNumber, data: Data(ByteCoding.uint16LE(65535))))
+                    remoteModeHeldForBurst = true
+                }
                 try await session.initiateStillCapture()
                 stillReleaseAwaitingReady = true
                 stillReleaseStartedAt = Date()
                 lastStillReadyPollAt = nil
             } catch {
+                await exitBurstRemoteModeIfNeeded(session: session)
                 finishStillRelease(
                     message:
                         "Still capture failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
@@ -6085,6 +6098,7 @@ final class NativeAppModel {
                 }
                 shutterPressLatchedBurst = false
                 chainedBurstFrames = 0
+                await exitBurstRemoteModeIfNeeded(session: session)
                 finishStillRelease(message: nil)
                 // The SHOTS pill reflects the frame immediately (a burst consumes more — the
                 // read-back right after corrects the estimate rather than waiting for the
@@ -6110,12 +6124,16 @@ final class NativeAppModel {
             case .openShutterInProgress:
                 stillReleaseIsOpenShutter = true
             case .failed(let code):
+                shutterPressLatchedBurst = false
+                chainedBurstFrames = 0
+                await exitBurstRemoteModeIfNeeded(session: session)
                 finishStillRelease(
                     message: code == .outOfFocus
                         ? "AF did not focus — still not captured."
                         : "Still capture failed (0x\(String(code.rawValue, radix: 16))).")
             }
         } catch {
+            await exitBurstRemoteModeIfNeeded(session: session)
             finishStillRelease(
                 message:
                     "Still capture status failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"

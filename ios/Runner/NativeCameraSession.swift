@@ -662,6 +662,24 @@ final class NativeCameraSession: @unchecked Sendable {
         }
     }
 
+    /// Switches between the PC-camera and remote control modes. Host-set capture-session
+    /// values (the burst ceiling) only persist while remote mode is held; the body's dials
+    /// lock during it, so callers bracket it as tightly as possible. Can be refused during
+    /// a release/AF/cleaning — callers tolerate that.
+    func changeCameraMode(remote: Bool) async throws {
+        let result = try await transact(
+            operationCode: .changeCameraMode,
+            parameters: [remote ? 1 : 0],
+            dataPhase: .noDataOrDataIn
+        )
+        guard result.operationResponse.responseCode == .ok else {
+            throw NativeCameraSessionError.operationRejected(
+                .changeCameraMode,
+                result.operationResponse.responseCode
+            )
+        }
+    }
+
     /// Starts AF driving — the half-press equivalent (no params). Completion is confirmed via
     /// DeviceReady polling (busy while driving, an out-of-focus response on failure); MF and
     /// warning states return OK immediately without driving.
