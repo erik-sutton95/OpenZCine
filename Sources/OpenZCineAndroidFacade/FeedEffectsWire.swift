@@ -38,11 +38,13 @@ public enum FeedEffectsWire {
     }
 
     /// Signal-curve ordinals, mirroring the Kotlin constants:
-    /// 0 = RED Log3G10, 1 = Nikon N-Log.
+    /// 0 = RED Log3G10, 1 = Nikon N-Log, 2 = sRGB, 3 = HLG (stills previews).
     static func curve(_ ordinal: Int) -> ExposureToneCurve? {
         switch ordinal {
         case 0: .redLog3G10
         case 1: .nikonNLog
+        case 2: .srgb
+        case 3: .hlg
         default: nil
         }
     }
@@ -53,6 +55,8 @@ public enum FeedEffectsWire {
         switch curve {
         case .redLog3G10: 0
         case .nikonNLog: 1
+        case .srgb: 2
+        case .hlg: 3
         }
     }
 

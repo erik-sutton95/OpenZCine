@@ -117,6 +117,7 @@ public enum StillCapturePolicy: Sendable {
         .captureAreaCrop,
         .compressionSetting,
         .rawCompressionType,
+        .stillToneMode,
         .exposureProgramMode,
         .userMode,
         .activePicCtrlItem,

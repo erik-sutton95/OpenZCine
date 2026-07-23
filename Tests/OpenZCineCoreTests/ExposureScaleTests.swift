@@ -267,4 +267,39 @@ struct ExposureScaleTests {
                 ExposureSignalMapping.camera(codec: "N-Log", iso: 800, baseISO: nil).clipNative
                     - 940.0 / 1023.0 * 255) < 0.001)
     }
+
+    @Test("sRGB stills curve hits the IEC 61966-2-1 reference points")
+    func srgbReferencePoints() {
+        let curve = ExposureToneCurve.srgb
+        #expect(abs(curve.encode(linearLight: 0.18) - 0.46136) < 0.0005)
+        #expect(curve.encode(linearLight: 0) == 0)
+        #expect(abs(curve.encode(linearLight: 1) - 1) < 0.0001)
+        // Display-referred: no headroom above display white.
+        #expect(abs(curve.encode(linearLight: 2) - 1) < 0.0001)
+        #expect(abs(curve.decode(encodedValue: curve.encode(linearLight: 0.5)) - 0.5) < 0.0001)
+    }
+
+    @Test("HLG stills curve places BT.2408 reflectances on the BT.2100 signal")
+    func hlgReferencePoints() {
+        let curve = ExposureToneCurve.hlg
+        #expect(abs(curve.encode(linearLight: 1) - 0.75) < 0.001)  // diffuse white
+        #expect(abs(curve.encode(linearLight: 0.18) - 0.3783) < 0.001)  // 18% grey
+        #expect(curve.encode(linearLight: 0) == 0)
+        #expect(abs(curve.decode(encodedValue: curve.encode(linearLight: 0.18)) - 0.18) < 0.0005)
+        // Signal peak decodes to ≈3.77× diffuse white — the preview's specular headroom.
+        #expect(abs(curve.decode(encodedValue: 1) - 3.774) < 0.01)
+    }
+
+    @Test("Stills mapping follows the reported tone mode and treats full code as clip")
+    func stillsMappingSelection() {
+        #expect(ExposureSignalMapping.stills(toneMode: "HLG").curve == .hlg)
+        #expect(ExposureSignalMapping.stills(toneMode: "SDR").curve == .srgb)
+        // Bodies without the property never fill the snapshot field: SDR.
+        #expect(ExposureSignalMapping.stills(toneMode: nil).curve == .srgb)
+        for mapping in [ExposureSignalMapping.stills(toneMode: nil), .stills(toneMode: "HLG")] {
+            #expect(mapping.clipNative == 255)
+            #expect(mapping.blackNative == 0)
+            #expect(mapping.monitorPercent(signalNative: 255) == 100)
+        }
+    }
 }

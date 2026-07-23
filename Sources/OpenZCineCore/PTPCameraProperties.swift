@@ -1562,7 +1562,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         imageArea: StillImageArea? = nil,
         rawCompression: String? = nil,
         userModeProgram: String? = nil,
-        pictureControl: String? = nil
+        pictureControl: String? = nil,
+        stillToneMode: String? = nil
     ) {
         self.iso = iso
         self.baseISO = baseISO
@@ -1611,6 +1612,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.rawCompression = rawCompression
         self.userModeProgram = userModeProgram
         self.pictureControl = pictureControl
+        self.stillToneMode = stillToneMode
     }
 
     // Exposure.
@@ -1693,6 +1695,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public let userModeProgram: String?
     /// The active picture control, from `ActivePicCtrlItem`.
     public let pictureControl: String?
+    /// Stills tone mode ("SDR" / "HLG") — selects the photo exposure-assist transfer curve.
+    /// Bodies without the property never fill it; `nil` reads as SDR.
+    public let stillToneMode: String?
 
     /// Command-monitor stabilisation summary (movie VR + electronic VR).
     public var stabilizationSummary: String? {
@@ -1853,6 +1858,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             return replacing(
                 pictureControl: PTPCameraPropertyDecoders.pictureControl(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
+        case .stillToneMode where bytes.count >= 1:
+            return replacing(stillToneMode: bytes[0] == 2 ? "HLG" : "SDR")
         case .exposureMeteringMode where bytes.count >= 2:
             return replacing(
                 meteringMode: PTPCameraPropertyDecoders.exposureMetering(
@@ -1948,7 +1955,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         imageArea: StillImageArea? = nil,
         rawCompression: String? = nil,
         userModeProgram: String? = nil,
-        pictureControl: String? = nil
+        pictureControl: String? = nil,
+        stillToneMode: String? = nil
     ) -> PTPCameraPropertySnapshot {
         PTPCameraPropertySnapshot(
             iso: iso ?? self.iso,
@@ -1997,7 +2005,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             imageArea: imageArea ?? self.imageArea,
             rawCompression: rawCompression ?? self.rawCompression,
             userModeProgram: userModeProgram ?? self.userModeProgram,
-            pictureControl: pictureControl ?? self.pictureControl
+            pictureControl: pictureControl ?? self.pictureControl,
+            stillToneMode: stillToneMode ?? self.stillToneMode
         )
     }
 }

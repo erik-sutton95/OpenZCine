@@ -208,6 +208,9 @@ public enum PTPPropertyCode: UInt32, Sendable {
     /// Photo image area (`CaptureAreaCrop`, UINT8) — FX/DX/1:1/16:9 sensor crop.
     case captureAreaCrop = 0xD030
     case activePicCtrlItem = 0xD200
+    /// Stills tone mode (UINT8): 0 SDR, 2 HLG. Drives the exposure-assist transfer curve in
+    /// photo mode — SDR bodies without the property simply fail the poll and stay SDR.
+    case stillToneMode = 0x0001_D01C
 }
 
 /// PTP response codes used by the app.

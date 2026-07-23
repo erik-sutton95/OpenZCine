@@ -199,12 +199,25 @@ enum FrameSampling {
 extension NativeAppModel {
     /// Transfer curve false colour should measure, derived from the active camera signal.
     var falseColorToneCurve: ExposureToneCurve {
-        ExposureToneCurve.forCameraCodec(cameraState.codec)
+        exposureSignalMapping.curve
     }
 
-    /// Shared 0–100 black-to-clip mapping used by every exposure assist. R3D NE follows Nikon's
-    /// base-circuit/metadata-ISO warning table instead of assuming a fixed 70% native endpoint.
+    /// Shared 0–100 black-to-clip mapping used by every live exposure assist. In photography
+    /// mode the live view is a display-referred preview, so the mapping follows the stills
+    /// tone mode (sRGB, or HLG when the body reports it) — the movie codec's log curve would
+    /// anchor mid grey and the clip line in the wrong places. Video keeps the codec-derived
+    /// log mapping; R3D NE follows Nikon's base-circuit/metadata-ISO warning table instead of
+    /// assuming a fixed 70% native endpoint.
     var exposureSignalMapping: ExposureSignalMapping {
+        if isPhotographyMode {
+            return .stills(toneMode: cameraPropertySnapshot.stillToneMode)
+        }
+        return videoExposureSignalMapping
+    }
+
+    /// The movie-signal mapping, independent of the active selector — playback of video clips
+    /// keeps anchoring by the recording codec even while the body sits in photo mode.
+    private var videoExposureSignalMapping: ExposureSignalMapping {
         ExposureSignalMapping.camera(
             codec: cameraState.codec,
             iso: cameraPropertySnapshot.iso,
@@ -219,7 +232,7 @@ extension NativeAppModel {
         guard isConnected || isDemoSession else {
             return ExposureSignalMapping(curve: .redLog3G10)
         }
-        return exposureSignalMapping
+        return videoExposureSignalMapping
     }
 
     /// The image effects to bake into the live frame, derived from which assist tools are on. False

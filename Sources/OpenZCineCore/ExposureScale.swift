@@ -19,6 +19,12 @@ public enum StudioSwing {
 public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifiable {
     case redLog3G10 = "RED Log3G10"
     case nikonNLog = "Nikon N-Log"
+    /// Display-referred sRGB (IEC 61966-2-1) — the stills JPEG-pipeline live-view preview in
+    /// SDR tone mode. `linearLight` is display-relative: 1.0 == display white == clipping.
+    case srgb = "sRGB"
+    /// Display-referred HLG (ITU-R BT.2100 / ARIB STD-B67) — the stills preview in HLG tone
+    /// mode. Reflectance maps per BT.2408: diffuse white at 75% signal, 18% grey at 38%.
+    case hlg = "HLG"
 
     public var id: String { rawValue }
 
@@ -73,6 +79,8 @@ public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifi
         switch self {
         case .redLog3G10: 180.0 / 2.55  // highlight zebra code ≈180 (base ISO 800) → IRE
         case .nikonNLog: 100
+        // Display-referred curves clip at full code — the preview carries no headroom above it.
+        case .srgb, .hlg: 100
         }
     }
 
@@ -81,6 +89,8 @@ public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifi
         switch self {
         case .redLog3G10: Log3G10.decode(encodedValue)
         case .nikonNLog: NLog.decode(encodedValue)
+        case .srgb: SRGB.decode(encodedValue)
+        case .hlg: HLG.decode(encodedValue)
         }
     }
 
@@ -90,6 +100,8 @@ public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifi
         switch self {
         case .redLog3G10: Log3G10.encode(linearLight)
         case .nikonNLog: NLog.encode(linearLight)
+        case .srgb: SRGB.encode(linearLight)
+        case .hlg: HLG.encode(linearLight)
         }
     }
 
@@ -103,6 +115,9 @@ public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifi
             encodedValue * 100
         case .nikonNLog:
             ((encodedValue * 1023) - 64) / (940 - 64) * 100
+        case .srgb, .hlg:
+            // The stills preview is full-range 8-bit; normalized code is directly IRE.
+            encodedValue * 100
         }
     }
 
@@ -113,6 +128,8 @@ public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifi
             signalIRE / 100
         case .nikonNLog:
             (64 + (signalIRE / 100) * (940 - 64)) / 1023
+        case .srgb, .hlg:
+            signalIRE / 100
         }
     }
 }
@@ -185,7 +202,17 @@ public struct ExposureSignalMapping: Equatable, Sendable {
                 clipNative: R3DNEHighlightWarning.nativeCode(iso: iso, baseISO: baseISO))
         case .nikonNLog:
             return Self(curve: curve, clipNative: nLogClipNative(iso: iso))
+        case .srgb, .hlg:
+            return Self(curve: curve)
         }
+    }
+
+    /// Mapping for the photography live view, which is a display-referred preview: HLG when the
+    /// body's stills tone mode reports HLG, otherwise the sRGB JPEG-pipeline rendering. RAW
+    /// on/off never changes the previewed signal — NEF headroom beyond the preview's clip is
+    /// real but not visible in the feed.
+    public static func stills(toneMode: String?) -> Self {
+        Self(curve: toneMode == "HLG" ? .hlg : .srgb)
     }
 
     /// Nikon documents reduced N-Log maximum output at the ZR's extended-low ISO settings: about
@@ -232,6 +259,7 @@ extension ExposureToneCurve {
         switch self {
         case .redLog3G10: 180
         case .nikonNLog: 940.0 / 1023.0 * 255.0
+        case .srgb, .hlg: 255
         }
     }
 }
@@ -334,5 +362,42 @@ enum NLog {
             return 650 * pow(max(0, linear + 0.0075), 1.0 / 3.0) / 1023
         }
         return (150 * log(linear) + 619) / 1023
+    }
+}
+
+/// IEC 61966-2-1 sRGB transfer function. Display-referred: linear 1.0 == display white, and
+/// values above it clip (the JPEG preview carries no highlight headroom). 18% grey encodes to
+/// ≈0.4614 (native ≈118).
+enum SRGB {
+    static func decode(_ encoded: Double) -> Double {
+        let e = min(1, max(0, encoded))
+        return e <= 0.04045 ? e / 12.92 : pow((e + 0.055) / 1.055, 2.4)
+    }
+
+    static func encode(_ linear: Double) -> Double {
+        let l = min(1, max(0, linear))
+        return l <= 0.003_130_8 ? 12.92 * l : 1.055 * pow(l, 1.0 / 2.4) - 0.055
+    }
+}
+
+/// ITU-R BT.2100 HLG OETF (ARIB STD-B67). The curve API's `linearLight` contract is scene
+/// reflectance (1.0 == diffuse white), so values are scaled onto the HLG scene-linear axis per
+/// ITU-R BT.2408: diffuse white at 75% signal (scene E ≈ 0.265), which lands 18% grey at ≈38%.
+enum HLG {
+    private static let a = 0.178_832_77
+    private static let b = 0.284_668_92
+    private static let c = 0.559_910_73
+    /// Scene-linear value of diffuse white: inverse OETF of the BT.2408 75% signal level.
+    private static let diffuseWhite = 0.264_96
+
+    static func decode(_ encoded: Double) -> Double {
+        let e = min(1, max(0, encoded))
+        let scene = e <= 0.5 ? e * e / 3 : (exp((e - c) / a) + b) / 12
+        return scene / diffuseWhite
+    }
+
+    static func encode(_ linear: Double) -> Double {
+        let scene = min(1, max(0, linear * diffuseWhite))
+        return scene <= 1.0 / 12.0 ? sqrt(3 * scene) : a * log(12 * scene - b) + c
     }
 }

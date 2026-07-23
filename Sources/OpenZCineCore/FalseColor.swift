@@ -631,6 +631,12 @@ public enum FalseColorMap {
         case .nikonNLog:
             // N-Gamut is BT.2020/D65, Nikon N-Log Specification v1.0.0.
             return (0.2627, 0.6780, 0.0593)
+        case .srgb:
+            // sRGB primaries share BT.709 luma coefficients (IEC 61966-2-1).
+            return (0.2126, 0.7152, 0.0722)
+        case .hlg:
+            // HLG stills carry BT.2100/BT.2020 primaries.
+            return (0.2627, 0.6780, 0.0593)
         }
     }
 }
