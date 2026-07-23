@@ -4816,6 +4816,7 @@ final class NativeAppModel {
         {
             lastDescriptorRefreshAt = now
             await refreshLensApertures(session: session)
+            await refreshStillShutterOptions(session: session)
             await refreshScreenModes(session: session)
             await refreshFileTypeModes(session: session)
             await refreshControlOptions(session: session)
@@ -5016,6 +5017,30 @@ final class NativeAppModel {
             }
         } catch {
             // Descriptor not supported or transiently unavailable — keep the last known list.
+        }
+    }
+
+    /// Reads the camera's enumerated stills shutter speeds so the SHUTTER drum offers exactly
+    /// what the body accepts — the set reshapes with the program, flash, and e-shutter state,
+    /// and includes the Bulb/Time sentinels only where the mode allows them. Photography only,
+    /// on the slow descriptor cadence; a failed or single-value read keeps the last list (the
+    /// hardcoded ladder is the fallback of last resort). [verify-on-HW]
+    private func refreshStillShutterOptions(session: NativeCameraSession) async {
+        guard
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector),
+            session.supportsProperty(.stillShutterSpeed)
+        else { return }
+        do {
+            let raw = try await session.describeCameraPropertyEnum(
+                .stillShutterSpeed, valueByteCount: 4)
+            let labels = raw.map { PTPCameraPropertyDecoders.stillShutterLabel($0) }
+            if labels.count > 1, cameraControlOptions[.stillShutterSpeed] != labels {
+                cameraControlOptions[.stillShutterSpeed] = labels
+                logConnection("options stillShutter: \(labels.count) speeds")
+            }
+        } catch {
+            // Not enumerable on this body or transiently unavailable — keep the fallback.
         }
     }
 
@@ -6838,6 +6863,26 @@ final class NativeAppModel {
             cameraPropertySnapshot.exposureMode ?? "")
     }
 
+    /// The stills program actually driving exposure: a U bank runs as its inner program.
+    private var effectiveStillProgram: String {
+        let mode = cameraPropertySnapshot.exposureMode ?? ""
+        if mode.hasPrefix("U") { return cameraPropertySnapshot.userModeProgram ?? mode }
+        return mode
+    }
+
+    /// Mode-aware write gates for the stills exposure tiles: the body owns shutter outside
+    /// M/S and aperture outside M/A, so their drums only collect rejections there. An
+    /// unknown program stays enabled rather than guessing a lock. [verify-on-HW]
+    var stillAllowsShutterControl: Bool {
+        let program = effectiveStillProgram
+        return program.isEmpty || program == "M" || program == "S"
+    }
+
+    var stillAllowsIrisControl: Bool {
+        let program = effectiveStillProgram
+        return program.isEmpty || program == "M" || program == "A"
+    }
+
     /// Toggles the stills Auto ISO control with an optimistic snapshot update; the queued
     /// write's readback confirms it, and a change made on the body flows back through the
     /// poll the same way.
@@ -7958,8 +8003,12 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // report resolutions, and the set reshapes with the area crop); Area stays the
             // doc-verified crop ladder.
             return mode == 1 ? .imageSize : nil
+        case .stillShutter:
+            // The body enumerates the stills speeds valid for the active program/flash
+            // state — the drum follows it, with the hardcoded ladder as fallback.
+            return .stillShutterSpeed
         case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
-            .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
+            .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
             .stillQuality, .stillPicture:
             // The remaining stills pickers keep their doc-verified hardcoded ladders.
             return nil

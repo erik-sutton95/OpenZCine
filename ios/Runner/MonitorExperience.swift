@@ -1034,8 +1034,20 @@ struct CaptureSettingButton: View {
         value.label == "ISO" && model.isISORecordingLocked
     }
 
+    /// Stills tiles the active exposure program owns outright (shutter outside M/S, aperture
+    /// outside M/A): the readout stays live but grays out and the drum doesn't open — a write
+    /// would only collect the body's rejection.
+    private var isModeReadOnly: Bool {
+        guard model.isPhotographyMode else { return false }
+        switch picker {
+        case .stillShutter: return !model.stillAllowsShutterControl
+        case .stillIris: return !model.stillAllowsIrisControl
+        default: return false
+        }
+    }
+
     private func openPicker() {
-        guard let picker else { return }
+        guard let picker, !isModeReadOnly else { return }
         if model.activePanel == nil {
             model.showPicker(picker)
         } else if model.activePanel == .picker(picker) {
@@ -1118,7 +1130,7 @@ struct CaptureSettingButton: View {
             } else {
                 Button(action: openPicker) {
                     readoutLabel
-                        .opacity(isISORecordingLocked ? 0.55 : 1.0)
+                        .opacity(isISORecordingLocked || isModeReadOnly ? 0.55 : 1.0)
                 }
                 .buttonStyle(.zcTapTarget)
             }
