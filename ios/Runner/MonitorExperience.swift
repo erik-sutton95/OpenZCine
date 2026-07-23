@@ -33,6 +33,11 @@ struct MonitorExperience: View {
 
     var body: some View {
         LiveViewShell()
+            // App self-timer tally: a white border pulse each countdown second, readable
+            // from in front of the camera alongside the beeper.
+            .overlay {
+                TimerTallyBorderOverlay()
+            }
             // Instant playback covers the whole monitor — a focused look at the captured
             // frame, above every piece of chrome.
             .overlay {
@@ -568,6 +573,45 @@ private struct LiveFeedFocusOverlay: View {
 /// chrome for the configured review duration (until tapped when ∞) — a focused look at the
 /// frame, not another chrome state. Optional overlays: the AF box the shot focused with, and a
 /// capture-settings line. A tap anywhere — or the close control — dismisses.
+/// Pulses a white screen border once per app-timer countdown second (and once on arm), so
+/// the phone reads as a tally light from in front of the lens. Purely decorative — never
+/// intercepts touches.
+struct TimerTallyBorderOverlay: View {
+    @Environment(NativeAppModel.self) private var model
+    @State private var flashOpacity: Double = 0
+
+    /// Approximate physical display corner radius by device class (safe-area heuristic — no
+    /// private display APIs): Dynamic-Island bodies ≈55pt, notch bodies ≈41.5pt, flat screens
+    /// square. Close enough that the pulse reads as the screen's own edge lighting up.
+    private var displayCornerRadius: CGFloat {
+        let insets =
+            UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .first ?? .zero
+        let maxInset = max(max(insets.top, insets.bottom), max(insets.left, insets.right))
+        if maxInset >= 59 { return 55 }
+        if maxInset >= 44 { return 41.5 }
+        return 0
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: displayCornerRadius, style: .continuous)
+            .strokeBorder(Color.white.opacity(flashOpacity), lineWidth: 5)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .onChange(of: model.stillTimerRemaining) { _, remaining in
+                guard remaining != nil else {
+                    flashOpacity = 0
+                    return
+                }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { flashOpacity = 0.95 }
+                withAnimation(.easeOut(duration: 0.55)) { flashOpacity = 0 }
+            }
+    }
+}
+
 struct InstantReviewOverlay: View {
     @Environment(NativeAppModel.self) private var model
 

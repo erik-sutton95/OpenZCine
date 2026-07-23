@@ -1,3 +1,4 @@
+import AVFAudio
 import Network
 import SwiftUI
 import UIKit
@@ -5684,6 +5685,7 @@ final class NativeAppModel {
         stillTimerTask?.cancel()
         stillTimerTask = nil
         stillTimerRemaining = nil
+        StillTimerBeeper.shared.end()
     }
 
     /// Runs the armed countdown on the shutter, ticking once a second, then fires the
@@ -5692,6 +5694,8 @@ final class NativeAppModel {
     private func startStillTimer() {
         stillTimerRemaining = photoTimerDelaySeconds
         OperatorSettingsHaptics.selection(enabled: preferences.hapticsEnabled)
+        StillTimerBeeper.shared.begin()
+        StillTimerBeeper.shared.playTick()
         stillTimerTask = Task { [weak self] in
             while let remaining = self?.stillTimerRemaining, remaining > 0, !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -5699,9 +5703,12 @@ final class NativeAppModel {
                 guard let self else { return }
                 self.stillTimerRemaining = remaining - 1
                 OperatorSettingsHaptics.selection(enabled: self.preferences.hapticsEnabled)
+                if remaining - 1 > 0 { StillTimerBeeper.shared.playTick() }
             }
             guard let self, !Task.isCancelled, self.stillTimerRemaining == 0 else { return }
             self.stillTimerRemaining = nil
+            StillTimerBeeper.shared.playFire()
+            StillTimerBeeper.shared.end()
             await self.fireTimerShots()
             self.stillTimerTask = nil
         }
@@ -5720,6 +5727,87 @@ final class NativeAppModel {
                 guard !isStillCapturing, !Task.isCancelled else { return }
             }
             captureStill()
+        }
+    }
+
+    /// Countdown feedback for the app self-timer: short generated tones played through the
+    /// `.playback` audio category, so they stay audible through the ring/silent switch and
+    /// Do Not Disturb — the same way the body's own timer beeper behaves. The session is
+    /// active only for the countdown and mixes with other audio rather than interrupting
+    /// it. [verify-on-HW: interplay with the BT-shutter volume observer]
+    @MainActor
+    final class StillTimerBeeper {
+        static let shared = StillTimerBeeper()
+        private let tick: AVAudioPlayer?
+        private let fire: AVAudioPlayer?
+
+        private init() {
+            tick = try? AVAudioPlayer(data: Self.toneWAV(frequency: 1_000, seconds: 0.07))
+            fire = try? AVAudioPlayer(data: Self.toneWAV(frequency: 1_570, seconds: 0.22))
+            tick?.prepareToPlay()
+            fire?.prepareToPlay()
+        }
+
+        func begin() {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, options: [.mixWithOthers])
+            try? session.setActive(true)
+        }
+
+        func playTick() {
+            tick?.currentTime = 0
+            tick?.play()
+        }
+
+        func playFire() {
+            fire?.currentTime = 0
+            fire?.play()
+        }
+
+        /// Gives the audio session back once the release tone has finished sounding.
+        func end() {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                try? AVAudioSession.sharedInstance().setActive(
+                    false, options: [.notifyOthersOnDeactivation])
+            }
+        }
+
+        /// A short faded sine tone as an in-memory 16-bit mono WAV — no bundled asset.
+        private static func toneWAV(
+            frequency: Double, seconds: Double, amplitude: Double = 0.85
+        ) -> Data {
+            let rate = 44_100.0
+            let count = Int(rate * seconds)
+            var data = Data(capacity: 44 + count * 2)
+            func append32(_ value: UInt32) {
+                withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+            }
+            func append16(_ value: UInt16) {
+                withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+            }
+            data.append(contentsOf: Array("RIFF".utf8))
+            append32(UInt32(36 + count * 2))
+            data.append(contentsOf: Array("WAVE".utf8))
+            data.append(contentsOf: Array("fmt ".utf8))
+            append32(16)
+            append16(1)
+            append16(1)
+            append32(UInt32(rate))
+            append32(UInt32(rate) * 2)
+            append16(2)
+            append16(16)
+            data.append(contentsOf: Array("data".utf8))
+            append32(UInt32(count * 2))
+            // A few-ms fade at each end keeps the tone click-free.
+            let fade = min(220, count / 4)
+            for index in 0..<count {
+                let envelope = min(
+                    1, min(Double(index) / Double(fade), Double(count - index) / Double(fade)))
+                let sample = sin(2 * .pi * frequency * Double(index) / rate) * amplitude * envelope
+                append16(UInt16(bitPattern: Int16(sample * 32_767)))
+            }
+            return data
         }
     }
 
