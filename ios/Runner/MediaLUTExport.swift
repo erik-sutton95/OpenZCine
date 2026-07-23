@@ -225,9 +225,10 @@ enum MediaLUT {
         let outputURL = try makeExportURL(filename: outputFilename, format: format)
         progress(0.02)
 
-        if cube == nil,
-            canPassthroughCopy(sourceURL: sourceURL, outputURL: outputURL, format: format)
-        {
+        let passthrough =
+            cube == nil
+            && canPassthroughCopy(sourceURL: sourceURL, outputURL: outputURL, format: format)
+        if passthrough {
             try FileManager.default.copyItem(at: sourceURL, to: outputURL)
             progress(0.9)
         } else {
@@ -237,6 +238,13 @@ enum MediaLUT {
         }
 
         try await ensureFileReady(at: outputURL)
+
+        if !passthrough {
+            // The export session drops the camera's tmcd track; restore it from the source so
+            // Frame.io and NLEs keep the R3D NE / N-RAW master's start timecode.
+            await MediaTimecode.copySourceTimecodeTrack(
+                from: sourceURL, to: outputURL, as: format.avFileType)
+        }
 
         let metadataURL = try writeMetadataSidecar(metadata, nextTo: outputURL)
         progress(1.0)
