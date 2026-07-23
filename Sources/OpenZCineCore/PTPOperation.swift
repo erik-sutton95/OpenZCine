@@ -113,6 +113,8 @@ public enum PTPPropertyCode: UInt32, Sendable {
     case movieFileType = 0xD0AF
 
     // Exposure.
+    /// Stills ISO write (UINT32). Read confirmation arrives via `isoControlSensitivity`.
+    case exposureIndexEx = 0xD0B4
     case isoControlSensitivity = 0xD0B5
     /// Movie ISO auto/manual control (libgphoto2 `PTP_DPC_NIKON_MovISOAutoControl`).
     /// UINT8 On/Off — independent of exposure-program Auto (0x500E). MAID: MovieISOControl bool.

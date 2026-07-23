@@ -827,9 +827,12 @@ struct CaptureSettingButton: View {
     /// Uniform readout scale (R9): portrait-fill passes 0.8 so all 5 settings fit the strip
     /// width with no horizontal scroll. Landscape's default of 1 is unaffected.
     var scale: CGFloat = 1
-    /// Replaces the `CameraPicker` tap routing — the photography strip reuses this tile with
-    /// its own (stub) control handlers until stills pickers exist.
-    var overrideAction: (() -> Void)? = nil
+
+    /// Resolves this tile's picker for the active chrome: the movie set normally, the stills set
+    /// while the body reports photo mode (the two strips reuse labels like ISO/SHUTTER).
+    private var picker: CameraPicker? {
+        CameraPicker.forValueLabel(value.label, photography: model.isPhotographyMode)
+    }
 
     /// True while this setting's picker is the active panel.
     private var isActive: Bool {
@@ -882,14 +885,14 @@ struct CaptureSettingButton: View {
 
     /// Whether the camera's Control lock is holding this setting (it rejected a write to it).
     private var isControlLocked: Bool {
-        guard let picker = CameraPicker.forValueLabel(value.label)
-        else { return false }
+        guard let picker else { return false }
         return model.lockedControls.contains(picker)
     }
 
-    /// Shutter readout locked via `MovieTVLockSetting` or a rejected shutter write.
+    /// Cinema-only: the movie shutter readout locked via `MovieTVLockSetting` or a rejected
+    /// shutter write (the stills SHUTTER tile has no camera-side lock gesture).
     private var isShutterLocked: Bool {
-        value.label == "SHUTTER" && model.lockedControls.contains(.shutter)
+        picker == .shutter && model.lockedControls.contains(.shutter)
     }
 
     /// ISO readout locked while recording in R3D NE.
@@ -898,8 +901,7 @@ struct CaptureSettingButton: View {
     }
 
     private func openPicker() {
-        guard let picker = CameraPicker.forValueLabel(value.label)
-        else { return }
+        guard let picker else { return }
         if model.activePanel == nil {
             model.showPicker(picker)
         } else if model.activePanel == .picker(picker) {
@@ -954,12 +956,7 @@ struct CaptureSettingButton: View {
 
     var body: some View {
         Group {
-            if let overrideAction {
-                Button(action: overrideAction) {
-                    readoutLabel
-                }
-                .buttonStyle(.zcTapTarget)
-            } else if value.label == "SHUTTER" {
+            if picker == .shutter {
                 readoutLabel
                     .opacity(isShutterLocked ? 0.55 : 1.0)
                     .minTapTarget()

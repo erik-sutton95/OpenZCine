@@ -2036,7 +2036,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     /// Source-compatible entry for the portable shared-core control model.
     public func applyControl(_ control: PTPCameraControl, label: String) throws {
-        try applyAndroidControl(AndroidCameraControl(control), label: label)
+        guard let androidControl = AndroidCameraControl(control) else {
+            throw PTPIPClientSessionError.operationRejected(
+                .setDevicePropValue, .unknown)
+        }
+        try applyAndroidControl(androidControl, label: label)
     }
 
     /// Applies one semantic Android selection using either the shared core's

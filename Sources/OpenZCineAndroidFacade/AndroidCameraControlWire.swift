@@ -81,8 +81,9 @@ enum AndroidCameraControl: Hashable, Sendable {
     }
 
     /// Maps the established shared-core control model into this Android-only
-    /// superset for source-compatible facade tests and callers.
-    init(_ control: PTPCameraControl) {
+    /// superset for source-compatible facade tests and callers. Nil for the
+    /// stills controls the Android shell has not adopted yet.
+    init?(_ control: PTPCameraControl) {
         switch control {
         case .iso: self = .iso
         case .isoAuto: self = .isoAuto
@@ -100,6 +101,9 @@ enum AndroidCameraControl: Hashable, Sendable {
         case .windFilter: self = .windFilter
         case .attenuator: self = .attenuator
         case .audio32BitFloat: self = .audio32BitFloat
+        case .stillISO, .stillShutter, .stillIris, .stillDrive, .stillFocus,
+            .stillFlash, .stillMeter, .stillImageSize:
+            return nil
         }
     }
 }

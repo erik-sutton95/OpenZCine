@@ -84,52 +84,15 @@ struct MonitorInfoBar: View {
             .fixedSize(horizontal: false, vertical: true)
         }
 
-        @State private var isImageAreaPopupPresented = false
-
-        /// The size pill in photo mode: shows "FX · L" and drops the image-area options
-        /// (FX / DX / 1:1 / 16:9) so the crop is settable where its readout lives. The
-        /// feed frame reshapes with the selection.
+        /// The size pill in photo mode: shows "FX · L" and drops the SIZE drum picker down
+        /// (Area / Size tabs) exactly like the cinema resolution/codec pills — same anchoring,
+        /// same blend/dismiss semantics. The feed frame reshapes with the area selection.
         private var imageAreaButton: some View {
-            Button {
-                isImageAreaPopupPresented.toggle()
-            } label: {
-                inlineReadout(
-                    icon: "photo",
-                    value: model.cameraPropertySnapshot.stillSizeAreaLabel ?? "—",
-                    isActive: isImageAreaPopupPresented)
-            }
-            .buttonStyle(.zcTapTarget)
+            readoutButton(
+                .stillSize, icon: "photo",
+                value: model.cameraPropertySnapshot.stillSizeAreaLabel ?? "—"
+            )
             .accessibilityLabel("Image area and size")
-            .popover(isPresented: $isImageAreaPopupPresented, arrowEdge: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(StillImageArea.allCases, id: \.rawValue) { area in
-                        Button {
-                            model.setStillImageArea(area)
-                            isImageAreaPopupPresented = false
-                        } label: {
-                            HStack {
-                                Text(area.label)
-                                    .font(
-                                        .system(size: 15, weight: .semibold, design: .monospaced))
-                                Spacer(minLength: 16)
-                                if model.cameraPropertySnapshot.imageArea == area {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundStyle(LiveDesign.accent)
-                                }
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.vertical, 6)
-                .frame(minWidth: 128)
-                .presentationCompactAdaptation(.popover)
-                .preferredColorScheme(.dark)
-            }
         }
 
         /// Frames left on the card, in the timecode slot's typography. Counts above four
@@ -385,13 +348,6 @@ struct MonitorCaptureStrip: View {
             : model.cameraState.values
     }
 
-    /// Stills pickers are still stubs, and the cinema pickers write movie properties — so
-    /// photography tiles route to the model's stub handler instead of `CameraPicker`.
-    private func photographyAction(for item: CameraValue) -> (() -> Void)? {
-        guard isPhotography else { return nil }
-        return { model.presentPhotographyControl(label: item.label) }
-    }
-
     // MARK: - fitsWidth: true (former `BottomCaptureSettingsModule`)
 
     private var landscapeBody: some View {
@@ -400,9 +356,7 @@ struct MonitorCaptureStrip: View {
         ) {
             HStack(spacing: 8) {
                 ForEach(stripValues) { item in
-                    CaptureSettingButton(
-                        value: item, scale: landscapeTileScale,
-                        overrideAction: photographyAction(for: item))
+                    CaptureSettingButton(value: item, scale: landscapeTileScale)
                 }
             }
             // Fill the bar height so both bottom bars render at the same height (GlassPanel
@@ -484,8 +438,7 @@ struct MonitorCaptureStrip: View {
                 : 0
             HStack(spacing: spacing) {
                 ForEach(values) { item in
-                    CaptureSettingButton(
-                        value: item, scale: scale, overrideAction: photographyAction(for: item))
+                    CaptureSettingButton(value: item, scale: scale)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)

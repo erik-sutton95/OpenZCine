@@ -5476,6 +5476,23 @@ final class NativeAppModel {
         pendingImageAreaWrite = area
     }
 
+    /// Queues the photo image-size write ("Size L" / "Size M" / "Size S", a PTP string) with an
+    /// optimistic snapshot update so the pill reflects the pick immediately; the poll confirms it.
+    private func applyStillImageSize(_ value: String) {
+        guard let write = PTPCameraPropertyWrite.request(control: .stillImageSize, label: value)
+        else { return }
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: write.property, data: write.data)
+        publishCameraDisplayState()
+        guard !isDemoSession else { return }
+        enqueueCameraWrite(PendingCameraWrite(picker: .stillSize, value: value, write: write))
+        connectionMessage =
+            isMonitorPresented
+            ? "Queued Image Size \(value) for the next live-view safe point."
+            : "Queued Image Size \(value)."
+        drainPendingWritesIfIdle()
+    }
+
     /// Queued still release, consumed at the next live-view/command safe point.
     @ObservationIgnored private var pendingStillCapture = false
     /// Queued bulb/time termination, consumed at the next safe point.
@@ -5581,10 +5598,11 @@ final class NativeAppModel {
         if let message { connectionMessage = message }
     }
 
-    /// Scaffold: stills pickers land as tiles become settable with descriptor-backed
-    /// options. Until then a strip tap surfaces a short operator message.
-    func presentPhotographyControl(label: String) {
-        connectionMessage = "\(label.capitalized) control — coming next in photography mode."
+    /// True while the body reports photo mode — the strips and pickers then resolve the stills
+    /// set (`CameraPicker.forValueLabel(_:photography:)`) instead of the movie one.
+    var isPhotographyMode: Bool {
+        StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector)
     }
 
     func confirmRecordToggle() {
@@ -5844,12 +5862,21 @@ final class NativeAppModel {
         return pendingCameraWrites.contains { $0.write.property == .movieBaseISO }
     }
 
-    /// The picker's current camera readout value.
+    /// The picker's current camera readout value. The stills pickers read the property snapshot
+    /// directly (full labels — the strip compacts some of them, e.g. "Continuous H" → "CH").
     func cameraValue(for picker: CameraPicker) -> String {
         switch picker {
         case .resolution: cameraState.resolutionFrameRate
         case .codec: cameraState.codec
-        case .mode: commandExposureMode
+        case .mode, .stillMode: commandExposureMode
+        case .stillISO: cameraPropertySnapshot.iso.map(String.init) ?? ""
+        case .stillShutter: cameraPropertySnapshot.shutterSpeed ?? ""
+        case .stillIris: cameraPropertySnapshot.fNumber ?? ""
+        case .stillDrive: cameraPropertySnapshot.stillCaptureMode ?? ""
+        case .stillFocus: cameraPropertySnapshot.focusMode ?? ""
+        case .stillFlash: cameraPropertySnapshot.flashMode ?? ""
+        case .stillMeter: cameraPropertySnapshot.meteringMode ?? ""
+        case .stillSize: cameraPropertySnapshot.stillSizeAreaLabel ?? ""
         default: cameraState.values.first(where: { $0.label == picker.valueLabel })?.value ?? ""
         }
     }
@@ -5905,6 +5932,14 @@ final class NativeAppModel {
             default: break
             }
         }
+        if picker == .stillSize {
+            // The Area / Size tabs are independent settings with their own stored values.
+            switch mode {
+            case 0: return cameraPropertySnapshot.imageArea?.label ?? modes[0].base
+            case 1: return cameraPropertySnapshot.imageSize ?? modes[1].base
+            default: break
+            }
+        }
         let pickerMode = modes[mode]
         let live = cameraValue(for: picker)
         if pickerMode.options.contains(live) { return live }
@@ -5915,6 +5950,17 @@ final class NativeAppModel {
     /// tabs and the AUDIO tabs route to their own settings, everything else to the shared camera
     /// write.
     func applyPicker(_ picker: CameraPicker, mode: Int, value: String) {
+        if picker == .stillSize {
+            // SIZE is two independent stills settings chosen by tab: the sensor-crop image area
+            // (existing safe-point path, reshapes the feed frame) and the image-size string.
+            if mode == 0 {
+                guard let area = StillImageArea.area(forLabel: value) else { return }
+                setStillImageArea(area)
+            } else {
+                applyStillImageSize(value)
+            }
+            return
+        }
         if picker == .audio {
             // AUDIO is five independent camera settings chosen by tab — each its own PTP property.
             let control: PTPCameraControl? =
@@ -6406,7 +6452,8 @@ final class NativeAppModel {
             if let match = captureSettingFrames.first(where: {
                 $0.value.insetBy(dx: -10, dy: -8).contains(location)
             }),
-                let picker = CameraPicker.forValueLabel(match.key),
+                let picker = CameraPicker.forValueLabel(
+                    match.key, photography: isPhotographyMode),
                 picker != current
             {
                 switchPicker(to: picker)
@@ -6698,6 +6745,18 @@ final class NativeAppModel {
     }
 
     private func applyLocalPickerValue(_ value: String, for picker: CameraPicker) {
+        if picker.isStillPicker {
+            // The stills strip reads the property snapshot (not `cameraState.values`), so the
+            // demo applies the encoded write optimistically — the exact bytes a live body would
+            // round-trip.
+            guard let control = picker.cameraControl,
+                let write = PTPCameraPropertyWrite.request(control: control, label: value)
+            else { return }
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: write.property, data: write.data)
+            publishCameraDisplayState()
+            return
+        }
         let updated = cameraState.values.map { item in
             item.label == picker.valueLabel
                 ? CameraValue(label: item.label, value: value, isSettable: item.isSettable)
@@ -6755,8 +6814,30 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     case stabilization
     case mode
     case audio
+    // Photography (stills) pickers — same drum popups, stills PTP properties. The movie pickers
+    // above write movie properties and stay untouched in photo mode.
+    case stillMode
+    case stillISO
+    case stillShutter
+    case stillIris
+    case stillDrive
+    case stillFocus
+    case stillFlash
+    case stillMeter
+    case stillSize
 
     var id: String { rawValue }
+
+    /// Whether this is one of the photography (stills) pickers.
+    var isStillPicker: Bool {
+        switch self {
+        case .stillMode, .stillISO, .stillShutter, .stillIris, .stillDrive, .stillFocus,
+            .stillFlash, .stillMeter, .stillSize:
+            true
+        default:
+            false
+        }
+    }
 
     var title: String {
         switch self {
@@ -6770,6 +6851,15 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stabilization: "Stabilization"
         case .mode: "Mode"
         case .audio: "Audio"
+        case .stillMode: "Mode"
+        case .stillISO: "ISO"
+        case .stillShutter: "Shutter"
+        case .stillIris: "Iris"
+        case .stillDrive: "Drive"
+        case .stillFocus: "Focus"
+        case .stillFlash: "Flash"
+        case .stillMeter: "Metering"
+        case .stillSize: "Image Size"
         }
     }
 
@@ -6785,41 +6875,61 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stabilization: "VR · electronic VR"
         case .mode: "Exposure program"
         case .audio: "Sensitivity · input · wind · attenuator"
+        case .stillMode: "Exposure program"
+        case .stillISO: "Sensitivity"
+        case .stillShutter: "Speed"
+        case .stillIris: "Aperture"
+        case .stillDrive: "Release mode"
+        case .stillFocus: "AF mode"
+        case .stillFlash: "Flash mode"
+        case .stillMeter: "Metering pattern"
+        case .stillSize: "Area · size"
         }
     }
 
     var valueLabel: String {
         switch self {
-        case .iso: "ISO"
-        case .shutter: "SHUTTER"
-        case .iris: "IRIS"
+        case .iso, .stillISO: "ISO"
+        case .shutter, .stillShutter: "SHUTTER"
+        case .iris, .stillIris: "IRIS"
         case .whiteBalance: "WB"
-        case .focus: "FOCUS"
+        case .focus, .stillFocus: "FOCUS"
         case .resolution: "RESOLUTION"
         case .codec: "CODEC"
         case .stabilization: "STAB"
-        case .mode: "MODE"
+        case .mode, .stillMode: "MODE"
         case .audio: "AUDIO"
+        case .stillDrive: "DRIVE"
+        case .stillFlash: "FLASH"
+        case .stillMeter: "METER"
+        case .stillSize: "SIZE"
         }
     }
 
-    /// Reverse lookup from a `valueLabel` (capture-bar / top-deck cell label) to its picker, built
-    /// once — the capture bar re-evaluates per frame, so a per-cell linear scan is too hot.
+    /// Reverse lookups from a `valueLabel` (capture-bar / top-deck cell label) to its picker, built
+    /// once — the capture bar re-evaluates per frame, so a per-cell linear scan is too hot. The
+    /// movie and stills strips reuse labels (ISO/SHUTTER/IRIS/FOCUS/MODE), so each chrome has its
+    /// own map.
     private static let byValueLabel: [String: CameraPicker] =
-        Dictionary(uniqueKeysWithValues: allCases.map { ($0.valueLabel, $0) })
+        Dictionary(
+            uniqueKeysWithValues: allCases.filter { !$0.isStillPicker }.map { ($0.valueLabel, $0) })
+    private static let byStillValueLabel: [String: CameraPicker] =
+        Dictionary(
+            uniqueKeysWithValues: allCases.filter(\.isStillPicker).map { ($0.valueLabel, $0) })
 
-    /// The picker whose `valueLabel` equals `label`, or nil.
-    static func forValueLabel(_ label: String) -> CameraPicker? {
-        byValueLabel[label]
+    /// The picker whose `valueLabel` equals `label`, or nil. `photography` selects the stills
+    /// pickers for the photo-mode strip; the movie map stays the default.
+    static func forValueLabel(_ label: String, photography: Bool = false) -> CameraPicker? {
+        photography ? byStillValueLabel[label] : byValueLabel[label]
     }
 
     /// Whether this picker is presented from the *top* information deck (dropping down) rather than
-    /// the bottom capture bar (rising up). Resolution and codec live in the top deck; everything
-    /// else is a bottom-bar exposure setting. Both use the identical `PickerPanel` drum — only the
-    /// anchor and slide direction differ.
+    /// the bottom capture bar (rising up). Resolution and codec live in the top deck, as does the
+    /// photo SIZE pill; everything else is a bottom-bar exposure setting. Both use the identical
+    /// `PickerPanel` drum — only the anchor and slide direction differ.
     var isTopBar: Bool {
         switch self {
-        case .resolution, .codec: true
+        case .resolution, .codec, .stillSize: true
         default: false
         }
     }
@@ -6850,6 +6960,27 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // Five independent camera settings chosen by tab — routed per mode in `applyPicker`,
             // like FOCUS.
             nil
+        case .stillMode:
+            // Same shared `ExposureProgramMode` (0x500E) property the command MODE tile writes.
+            .exposureMode
+        case .stillISO:
+            .stillISO
+        case .stillShutter:
+            .stillShutter
+        case .stillIris:
+            .stillIris
+        case .stillDrive:
+            .stillDrive
+        case .stillFocus:
+            .stillFocus
+        case .stillFlash:
+            .stillFlash
+        case .stillMeter:
+            .stillMeter
+        case .stillSize:
+            // Two independent camera settings chosen by tab (area crop / size string) — routed
+            // per mode in `applyPicker`, like FOCUS.
+            nil
         }
     }
 
@@ -6868,6 +6999,34 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stabilization: []
         case .mode: ["Auto", "P", "A", "S", "M", "U1", "U2", "U3"]
         case .audio: ["Auto"] + (1...20).map(String.init)
+        case .stillMode: ["M", "P", "A", "S"]
+        case .stillISO:
+            [
+                "100", "125", "160", "200", "250", "320", "400", "500", "640", "800", "1000",
+                "1250", "1600", "2000", "2500", "3200", "4000", "5000", "6400", "8000", "10000",
+                "12800", "16000", "20000", "25600", "32000", "40000", "51200",
+            ]
+        case .stillShutter:
+            [
+                "30s", "15s", "8s", "4s", "2s", "1s", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60",
+                "1/125", "1/200", "1/250", "1/500", "1/1000", "1/2000", "1/4000", "1/8000", "Bulb",
+            ]
+        case .stillIris:
+            // One decimal place throughout, matching the `irisFNumber` readout so the drum centres
+            // on the live aperture.
+            [
+                "f/1.2", "f/1.4", "f/1.8", "f/2.0", "f/2.2", "f/2.5", "f/2.8", "f/3.2", "f/3.5",
+                "f/4.0", "f/4.5", "f/5.0", "f/5.6", "f/6.3", "f/7.1", "f/8.0", "f/9.0", "f/10.0",
+                "f/11.0", "f/13.0", "f/14.0", "f/16.0", "f/18.0", "f/20.0", "f/22.0",
+            ]
+        // The label union across the lineup minus the dial-only Quick position; a body that lacks
+        // one rejects the write and the queue's rejection surface handles it.
+        case .stillDrive: StillDriveMode.allCases.filter { $0 != .quickSetting }.map(\.label)
+        case .stillFocus: ["AF-S", "AF-C", "AF-A", "MF"]
+        case .stillFlash: ["Off", "Red-eye", "Fill", "Slow", "Rear", "Red-eye slow"]
+        case .stillMeter: ["Matrix", "Center", "Spot", "Highlight"]
+        // SIZE is modes-driven (Area | Size tabs).
+        case .stillSize: []
         }
     }
 
@@ -6953,7 +7112,16 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(title: "Atten", options: ["OFF", "ON"], base: "OFF"),
                 PickerMode(title: "Float", options: ["OFF", "ON"], base: "OFF"),
             ]
-        case .iris, .resolution, .codec, .stabilization, .mode:
+        case .stillSize:
+            // Two independent stills settings chosen by tab: the sensor-crop image area and the
+            // pixel-count image size.
+            [
+                PickerMode(
+                    title: "Area", options: StillImageArea.allCases.map(\.label), base: "FX"),
+                PickerMode(title: "Size", options: ["Size L", "Size M", "Size S"], base: "Size L"),
+            ]
+        case .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
+            .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter:
             []
         }
     }
@@ -6989,7 +7157,10 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             case 4: return .movie32BitFloatAudioRecording
             default: return nil
             }
-        case .iso, .iris, .resolution, .codec, .stabilization, .mode:
+        case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
+            .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
+            .stillSize:
+            // Stills pickers keep their doc-verified hardcoded ladders — no descriptor enum path.
             return nil
         }
     }

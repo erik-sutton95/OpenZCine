@@ -24,6 +24,15 @@ public enum PTPCameraControl: Equatable, Sendable {
     case windFilter
     case attenuator
     case audio32BitFloat
+    // Stills / photo-mode controls (photography pickers; the movie controls above stay untouched).
+    case stillISO
+    case stillShutter
+    case stillIris
+    case stillDrive
+    case stillFocus
+    case stillFlash
+    case stillMeter
+    case stillImageSize
 }
 
 extension PTPPropertyCode {
@@ -269,6 +278,59 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
             guard let code = PTPCameraPropertyDecoders.onOffCode(for: label) else { return nil }
             return PTPCameraPropertyWrite(
                 property: .movie32BitFloatAudioRecording, data: Data([code]))
+        case .stillISO:
+            // Stills ISO (`0xD0B4`, UINT32). Poll readback confirms via `isoControlSensitivity`.
+            guard let iso = UInt32(label.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(
+                property: .exposureIndexEx, data: Data(ByteCoding.uint32LE(iso)))
+        case .stillShutter:
+            // Fraction-packed `ShutterSpeed` (0xD100) plus the Bulb sentinel — the same encoding
+            // `stillShutterLabel` decodes.
+            guard let raw = PTPCameraPropertyDecoders.stillShutterRaw(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(
+                property: .stillShutterSpeed, data: Data(ByteCoding.uint32LE(raw)))
+        case .stillIris:
+            // Stills aperture (`FNumber` 0x5007, UINT16 = f-number × 100).
+            guard let fNumber = scaledDouble(label: label, prefix: "f/") else { return nil }
+            return PTPCameraPropertyWrite(
+                property: .fNumber,
+                data: Data(ByteCoding.uint16LE(UInt16((fNumber * 100).rounded())))
+            )
+        case .stillDrive:
+            // Release/drive mode (`StillCaptureMode` 0x5013, UINT16). A body that lacks the mode
+            // rejects the write; the queue's rejection surface handles it.
+            guard let mode = StillDriveMode.allCases.first(where: { $0.label == label }) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(
+                property: .stillCaptureMode, data: Data(ByteCoding.uint16LE(mode.rawValue)))
+        case .stillFocus:
+            // `StillFocusMode` (0xD061, UINT8) — the settable stills AF space.
+            guard let code = PTPCameraPropertyDecoders.stillFocusModeD061Code(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(property: .stillFocusMode, data: Data([code]))
+        case .stillFlash:
+            guard let code = PTPCameraPropertyDecoders.flashModeCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(
+                property: .flashMode, data: Data(ByteCoding.uint16LE(code)))
+        case .stillMeter:
+            guard let code = PTPCameraPropertyDecoders.exposureMeteringCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(
+                property: .exposureMeteringMode, data: Data(ByteCoding.uint16LE(code)))
+        case .stillImageSize:
+            // `ImageSize` (0x5003) is a PTP string ("Size L") — count-prefixed UTF-16LE with a
+            // null terminator, the exact form the body reports back.
+            return PTPCameraPropertyWrite(
+                property: .imageSize, data: PTPCameraPropertyDecoders.ptpStringData(label))
         case .codec, .resolution:
             // Label-based encoding is intentionally unsupported: the picker writes the camera's
             // exact advertised raw value directly via `screenSize(raw:)` / `fileType(raw:)`
@@ -568,6 +630,25 @@ public enum PTPCameraPropertyDecoders {
         case 0xFFFF_FFFD: "Time"
         default: shutterSpeed(raw)
         }
+    }
+
+    /// Inverse of `stillShutterLabel` for the SHUTTER picker's writable forms: `"Bulb"`, whole
+    /// seconds (`"30s"` → 30 « 16 | 1), and fractions (`"1/250"` → 1 « 16 | 250).
+    public static func stillShutterRaw(for label: String) -> UInt32? {
+        if label == "Bulb" { return 0xFFFF_FFFF }
+        if label.hasSuffix("s"), let seconds = UInt32(label.dropLast()),
+            seconds <= UInt32(UInt16.max)
+        {
+            return seconds << 16 | 1
+        }
+        let parts = label.split(separator: "/")
+        guard parts.count == 2,
+            let numerator = UInt32(parts[0]),
+            let denominator = UInt32(parts[1]),
+            numerator <= UInt32(UInt16.max),
+            denominator <= UInt32(UInt16.max)
+        else { return nil }
+        return numerator << 16 | denominator
     }
 
     /// Decodes shutter angle from raw value.
@@ -888,6 +969,17 @@ public enum PTPCameraPropertyDecoders {
         }
     }
 
+    /// Inverse of `exposureMetering`, for encoding a METER picker selection.
+    public static func exposureMeteringCode(for label: String) -> UInt16? {
+        switch label {
+        case "Matrix": 0x0003
+        case "Center": 0x0002
+        case "Spot": 0x0004
+        case "Highlight": 0x8010
+        default: nil
+        }
+    }
+
     /// `FlashMode` (0x500C, UINT16) raw → label. 0x8010 is plain fill flash. [VERIFY-ON-HW]
     public static func flashMode(_ raw: UInt16) -> String {
         switch raw {
@@ -898,6 +990,19 @@ public enum PTPCameraPropertyDecoders {
         case 0x8012: "Rear"
         case 0x8013: "Red-eye slow"
         default: hex(UInt32(raw))
+        }
+    }
+
+    /// Inverse of `flashMode`, for encoding a FLASH picker selection.
+    public static func flashModeCode(for label: String) -> UInt16? {
+        switch label {
+        case "Off": 0x0002
+        case "Red-eye": 0x0004
+        case "Fill": 0x8010
+        case "Slow": 0x8011
+        case "Rear": 0x8012
+        case "Red-eye slow": 0x8013
+        default: nil
         }
     }
 
@@ -918,6 +1023,17 @@ public enum PTPCameraPropertyDecoders {
     /// mode plus AF-A; kept separate from the UINT16 0x500A space above.
     public static func stillFocusModeD061(_ raw: UInt8) -> String {
         raw == 5 ? "AF-A" : movieFocusMode(raw)
+    }
+
+    /// Inverse of `stillFocusModeD061`, for encoding a stills FOCUS picker selection.
+    public static func stillFocusModeD061Code(for label: String) -> UInt8? {
+        switch label {
+        case "AF-S": 0
+        case "AF-C": 1
+        case "AF-A": 5
+        case "MF": 4
+        default: nil
+        }
     }
 
     /// `StillFocusMeteringMode` (0xD05D, UINT16) — the stills AF-area mode. Extends the shared
@@ -966,6 +1082,17 @@ public enum PTPCameraPropertyDecoders {
             scalars.append(unit)
         }
         return String(utf16CodeUnits: scalars, count: scalars.count).nilIfEmpty
+    }
+
+    /// Encodes a PTP string property value (inverse of `stringFromPTPStringData`):
+    /// count-prefixed UTF-16LE code units including a null terminator.
+    public static func ptpStringData(_ string: String) -> Data {
+        let scalars = Array(string.utf16) + [0]
+        var bytes: [UInt8] = [UInt8(scalars.count)]
+        for unit in scalars {
+            bytes += [UInt8(unit & 0xFF), UInt8(unit >> 8)]
+        }
+        return Data(bytes)
     }
 }
 
@@ -1386,6 +1513,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         case .isoControlSensitivity where bytes.count >= 4:
             // `ISOControlSensitivity` 0xD0B5 — effective/working ISO the body is applying
             // (manual or Auto). Authoritative readout for the ISO tile and Auto On display.
+            return replacing(iso: ByteCoding.readUInt32LE(bytes, at: 0))
+        case .exposureIndexEx where bytes.count >= 4:
+            // Stills ISO write path (0xD0B4, UINT32) — optimistic update; the 0xD0B5 poll confirms.
             return replacing(iso: ByteCoding.readUInt32LE(bytes, at: 0))
         case .movieISOSensitivity where bytes.count >= 4:
             // Dual-base R3D circuit ISO (0x0001_D09E). On non-R3D codecs this often sticks
