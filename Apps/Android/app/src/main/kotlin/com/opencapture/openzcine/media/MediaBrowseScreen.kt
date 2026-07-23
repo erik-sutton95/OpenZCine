@@ -451,6 +451,12 @@ internal fun MediaBrowseScreen(
      */
     offlineCameraIDs: List<String> = emptyList(),
     cameraStorageSlots: List<CameraStorageSlotStatus> = emptyList(),
+    /**
+     * Sidebar tab matched to the active capture side at open — Videos from
+     * cinema, Photos from photography (iOS `openMediaBrowser`). Null restores
+     * the persisted tab; manual tab switches persist as before.
+     */
+    initialCategory: MediaLibraryCategory? = null,
     liveAssistState: AssistState,
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
@@ -517,7 +523,12 @@ internal fun MediaBrowseScreen(
     var options by
         remember(cameraID) {
             val restored = libraryIndex.viewOptions(MediaLibrarySource.CAMERA)
-            mutableStateOf(restored.copy(source = librarySource))
+            mutableStateOf(
+                restored.copy(
+                    source = librarySource,
+                    category = initialCategory ?: restored.category,
+                ),
+            )
         }
     LaunchedEffect(librarySource) {
         if (options.source != librarySource) {

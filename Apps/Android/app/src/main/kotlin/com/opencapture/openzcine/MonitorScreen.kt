@@ -1964,7 +1964,13 @@ internal fun MonitorScreen(
                             onOpenMedia()
                         },
                     ) { glyphModifier, tint ->
-                        PhotoGlyph(tint, glyphModifier)
+                        // Photo glyph reads better as "media" on the stills side;
+                        // cinema keeps the film-roll glyph (iOS `mediaButton`).
+                        if (prefersPhotographyChrome(cameraProperties)) {
+                            PhotoGlyph(tint, glyphModifier)
+                        } else {
+                            MediaStackGlyph(tint, glyphModifier)
+                        }
                     }
                     if (prefersPhotographyChrome(cameraProperties)) {
                         PhotographyShutterButton(
@@ -2742,7 +2748,11 @@ private fun PortraitChrome(
         }
         Spacer(Modifier.weight(1f))
         AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
-            PhotoGlyph(tint, glyphModifier)
+            if (isPhotography) {
+                PhotoGlyph(tint, glyphModifier)
+            } else {
+                MediaStackGlyph(tint, glyphModifier)
+            }
         }
         Spacer(Modifier.weight(1f))
         AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->

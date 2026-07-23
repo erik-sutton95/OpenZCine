@@ -80,6 +80,7 @@ import com.opencapture.openzcine.media.MediaDeliveryCompletionToast
 import com.opencapture.openzcine.media.MediaDeliveryCoordinator
 import com.opencapture.openzcine.media.MediaDeliveryProgressOverlay
 import com.opencapture.openzcine.media.MediaLibraryCameraBucket
+import com.opencapture.openzcine.media.MediaLibraryCategory
 import com.opencapture.openzcine.media.MediaLibraryIndex
 import com.opencapture.openzcine.media.SharedPreferencesMediaLibraryPreferences
 import androidx.compose.foundation.layout.WindowInsets
@@ -737,6 +738,14 @@ class MainActivity : ComponentActivity() {
                                         savedCameraID = activeSavedCamera?.id,
                                         cameraDisplayName = activeSavedCamera?.displayTitle,
                                         cameraStorageSlots = currentCameraProperties.storageSlots,
+                                        // Sidebar opens on the active capture side's
+                                        // media (iOS `openMediaBrowser`).
+                                        initialCategory =
+                                            if (prefersPhotographyChrome(currentCameraProperties)) {
+                                                MediaLibraryCategory.PHOTOS
+                                            } else {
+                                                MediaLibraryCategory.VIDEOS
+                                            },
                                         liveAssistState = assist,
                                         exposureAssistCameraInput = playbackExposureAssistCameraInput,
                                         operatorSettings = operatorSettings,
