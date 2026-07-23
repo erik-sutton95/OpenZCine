@@ -48,10 +48,16 @@ public enum ScopeFrameWire {
     /// three RGB channel records.
     public static let trafficTrailerFloatCount = 2 + 3 * trafficChannelStride
 
-    /// `ExposureToneCurve` for a wire ordinal: 0 = RED Log3G10 (the ZR live-view
-    /// default and the iOS fallback), 1 = Nikon N-Log.
+    /// `ExposureToneCurve` for a wire ordinal, mirroring `FeedEffectsWire.curve`:
+    /// 0 = RED Log3G10 (the ZR live-view default and the iOS fallback),
+    /// 1 = Nikon N-Log, 2 = sRGB and 3 = HLG (the stills previews).
     static func curve(ordinal: Int) -> ExposureToneCurve {
-        ordinal == 1 ? .nikonNLog : .redLog3G10
+        switch ordinal {
+        case 1: .nikonNLog
+        case 2: .srgb
+        case 3: .hlg
+        default: .redLog3G10
+        }
     }
 
     /// Decodes Android's persisted raw compensation selector with the same

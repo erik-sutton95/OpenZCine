@@ -119,6 +119,43 @@ struct FeedEffectsWireTests {
         #expect(Array(render[9...11]) == [Float(blue.0), Float(blue.1), Float(blue.2)])
     }
 
+    @Test("Photo selector swaps the movie log mapping for the display-referred stills one")
+    func stillsToneModeOverridesTheMovieCodecMapping() throws {
+        // The movie codec would resolve R3D NE → Log3G10; an active photo selector wins.
+        let sdr = FeedEffectsWire.cameraMappingPayload(
+            codec: "R3D NE", iso: 800, baseISO: nil, stillsToneMode: "SDR")
+        let srgb = ExposureSignalMapping.stills(toneMode: "SDR")
+        #expect(
+            sdr == [
+                2, Float(srgb.blackNative), Float(srgb.middleGrayNative), Float(srgb.clipNative),
+            ])
+
+        let hlg = FeedEffectsWire.cameraMappingPayload(
+            codec: "R3D NE", iso: 800, baseISO: nil, stillsToneMode: "HLG")
+        #expect(hlg[0] == 3)
+
+        // Photo selector active before the tone-mode read lands → the sRGB default.
+        let unreported = FeedEffectsWire.cameraMappingPayload(
+            codec: "R3D NE", iso: 800, baseISO: nil, stillsToneMode: "")
+        #expect(unreported[0] == 2)
+
+        // Movie mode (nil) keeps the codec-derived log mapping untouched.
+        let movie = FeedEffectsWire.cameraMappingPayload(
+            codec: "R3D NE", iso: 800, baseISO: nil, stillsToneMode: nil)
+        #expect(movie[0] == 0)
+
+        let render = try #require(
+            FeedEffectsWire.renderConfiguration(
+                codec: "R3D NE", iso: 800, baseISO: nil, stillsToneMode: "HLG",
+                peakingSensitivityOrdinal: 1, peakingColorOrdinal: 0,
+                highlightEnabled: true, highlightIRE: 96, highlightColorOrdinal: 0,
+                midtoneEnabled: false, midtoneIRE: 42, midtoneColorOrdinal: 0))
+        #expect(render[0] == 3)
+        let hlgMapping = ExposureSignalMapping.stills(toneMode: "HLG")
+        #expect(render[1] == Float(hlgMapping.clipNative))
+        #expect(render[13] == Float(hlgMapping.signalNative(monitorPercent: 96) / 255))
+    }
+
     @Test("Limits cubes preserve a separate paint and mask while reference bands stay core-owned")
     func limitsPayloadsAreAvailable() throws {
         let paint = try #require(

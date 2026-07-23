@@ -405,6 +405,8 @@ public data class CameraPropertySnapshot(
     val captureSelector: String? = null,
     /** Still release/drive mode label (`StillCaptureMode`), such as `Single` or `C30`. */
     val stillCaptureMode: String? = null,
+    /** Stills tone mode label (`SDR` or `HLG`) — the photo live-view preview rendering. */
+    val stillToneMode: String? = null,
     /** Still image size label. */
     val imageSize: String? = null,
     /** Still compression / quality label. */

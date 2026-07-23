@@ -474,18 +474,22 @@
         return javaByteArray(env, bytes)
     }
 
-    /// `SwiftCore.exposureAssistMapping(codec, iso, baseIso): FloatArray` —
-    /// camera-aware curve and code-value anchors. Kotlin forwards camera
-    /// metadata but never selects a curve or clip endpoint itself.
+    /// `SwiftCore.exposureAssistMapping(codec, iso, baseIso, stillsToneMode): FloatArray`
+    /// — camera-aware curve and code-value anchors. Kotlin forwards camera
+    /// metadata but never selects a curve or clip endpoint itself; a non-null
+    /// stills tone mode marks the photo selector active and swaps the movie
+    /// codec's log mapping for the display-referred stills one.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_exposureAssistMapping")
     public func swiftCoreExposureAssistMapping(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
-        baseISO: jstring?
+        baseISO: jstring?, stillsToneMode: jstring?
     ) -> jfloatArray? {
         javaFloatArray(
             env,
             FeedEffectsWire.cameraMappingPayload(
-                codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO))
+                codec: swiftString(env, codec), iso: Int64(iso),
+                baseISO: swiftString(env, baseISO),
+                stillsToneMode: swiftString(env, stillsToneMode))
         )
     }
 
@@ -495,10 +499,11 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraEditorValue")
     public func swiftCoreZebraEditorValue(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
-        baseISO: jstring?, unitOrdinal: jint, monitorPercent: jfloat
+        baseISO: jstring?, stillsToneMode: jstring?, unitOrdinal: jint, monitorPercent: jfloat
     ) -> jfloat {
         FeedEffectsWire.zebraEditorValue(
             codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
+            stillsToneMode: swiftString(env, stillsToneMode),
             unitOrdinal: Int(unitOrdinal), monitorPercent: Double(monitorPercent)) ?? .nan
     }
 
@@ -507,10 +512,11 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraMonitorPercent")
     public func swiftCoreZebraMonitorPercent(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
-        baseISO: jstring?, unitOrdinal: jint, editorValue: jfloat
+        baseISO: jstring?, stillsToneMode: jstring?, unitOrdinal: jint, editorValue: jfloat
     ) -> jfloat {
         FeedEffectsWire.zebraMonitorPercent(
             codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
+            stillsToneMode: swiftString(env, stillsToneMode),
             unitOrdinal: Int(unitOrdinal), value: Double(editorValue)) ?? .nan
     }
 
@@ -520,13 +526,14 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_feedEffectsConfiguration")
     public func swiftCoreFeedEffectsConfiguration(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
-        baseISO: jstring?, peakingSensitivity: jint, peakingColor: jint,
+        baseISO: jstring?, stillsToneMode: jstring?, peakingSensitivity: jint, peakingColor: jint,
         highlightEnabled: jboolean, highlightIRE: jfloat, highlightColor: jint,
         midtoneEnabled: jboolean, midtoneIRE: jfloat, midtoneColor: jint
     ) -> jfloatArray? {
         guard
             let values = FeedEffectsWire.renderConfiguration(
                 codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
+                stillsToneMode: swiftString(env, stillsToneMode),
                 peakingSensitivityOrdinal: Int(peakingSensitivity),
                 peakingColorOrdinal: Int(peakingColor),
                 highlightEnabled: highlightEnabled != 0, highlightIRE: Double(highlightIRE),

@@ -21,7 +21,9 @@ data class ExposureAssistMapping(
             require(values.size == FIELD_COUNT) { "exposure mapping length ${values.size}" }
             require(values.all(Float::isFinite)) { "non-finite exposure mapping" }
             val curve = values[0].toInt()
-            require(values[0] == curve.toFloat() && curve in 0..1) { "invalid exposure curve ${values[0]}" }
+            require(values[0] == curve.toFloat() && curve in ExposureCurveOrdinals.range) {
+                "invalid exposure curve ${values[0]}"
+            }
             require(values[1] in 0f..255f) { "invalid exposure black ${values[1]}" }
             require(values[3] in values[1]..255f) { "invalid exposure clip ${values[3]}" }
             require(values[2] in values[1]..values[3]) {
@@ -60,7 +62,7 @@ data class FeedEffectsRenderConfiguration(
             require(values.size == FIELD_COUNT) { "feed effects configuration length ${values.size}" }
             require(values.all(Float::isFinite)) { "non-finite feed effects configuration" }
             val curveOrdinal = values[0].toInt()
-            require(values[0] == curveOrdinal.toFloat() && curveOrdinal in 0..1) {
+            require(values[0] == curveOrdinal.toFloat() && curveOrdinal in ExposureCurveOrdinals.range) {
                 "invalid feed effects curve ${values[0]}"
             }
             require(values[1] in 0f..255f) { "invalid feed effects clip ${values[1]}" }
@@ -148,7 +150,9 @@ data class FeedFalseColorReference(
             val segmentCount = values[2].toInt()
             val markerCount = values[3].toInt()
             require(values[0] == version.toFloat() && version == VERSION) { "invalid false-color version" }
-            require(values[1] == curve.toFloat() && curve in 0..1) { "invalid false-color curve" }
+            require(values[1] == curve.toFloat() && curve in ExposureCurveOrdinals.range) {
+                "invalid false-color curve"
+            }
             require(curve == expectedCurveOrdinal) { "mismatched false-color curve" }
             val expectedSegmentCount =
                 when (scale) {
@@ -199,7 +203,12 @@ fun resolveExposureAssistMapping(input: ExposureAssistCameraInput): ExposureAssi
     if (!SwiftCore.isAvailable) return null
     return runCatching {
         ExposureAssistMapping.parse(
-            SwiftCore.exposureAssistMapping(input.codec, input.isoWireValue, input.baseIso),
+            SwiftCore.exposureAssistMapping(
+                input.codec,
+                input.isoWireValue,
+                input.baseIso,
+                input.stillsToneMode,
+            ),
         )
     }.getOrNull()
 }
@@ -230,6 +239,7 @@ fun zebraEditorValue(
         input.codec,
         input.isoWireValue,
         input.baseIso,
+        input.stillsToneMode,
         unit.wireOrdinal,
         monitorPercent,
     )
@@ -248,6 +258,7 @@ fun zebraMonitorPercent(
         input.codec,
         input.isoWireValue,
         input.baseIso,
+        input.stillsToneMode,
         unit.wireOrdinal,
         editorValue,
     ).takeIf { it.isFinite() && it in 0f..100f }

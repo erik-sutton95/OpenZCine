@@ -104,6 +104,7 @@ import com.opencapture.openzcine.FeedZebraStripeColor
 import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.LiveViewGuideController
+import com.opencapture.openzcine.prefersPhotographyChrome
 import com.opencapture.openzcine.zebraEditorValue
 import com.opencapture.openzcine.zebraMonitorPercent
 import com.opencapture.openzcine.chromeStyle
@@ -212,11 +213,25 @@ internal fun OperatorSettingsScreen(
     val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
     val cameraInput =
-        remember(cameraProperties?.codec, cameraProperties?.iso, cameraProperties?.baseIso) {
+        remember(
+            cameraProperties?.codec,
+            cameraProperties?.iso,
+            cameraProperties?.baseIso,
+            cameraProperties?.captureSelector,
+            cameraProperties?.stillToneMode,
+        ) {
             ExposureAssistCameraInput(
                 codec = cameraProperties?.codec,
                 iso = cameraProperties?.iso,
                 baseIso = cameraProperties?.baseIso,
+                // Match the live monitor: while the photo selector is active the zebra
+                // editor converts against the display-referred stills mapping.
+                stillsToneMode =
+                    if (cameraProperties != null && prefersPhotographyChrome(cameraProperties)) {
+                        cameraProperties.stillToneMode.orEmpty()
+                    } else {
+                        null
+                    },
             )
         }
     val feedbackView = LocalView.current

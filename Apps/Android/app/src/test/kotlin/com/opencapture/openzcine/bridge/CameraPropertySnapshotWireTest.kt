@@ -28,6 +28,7 @@ class CameraPropertySnapshotWireTest {
             listOf(242_000_000_000L, 111_000_000_000L),
             decoded.snapshot.storageSlots.map { it.freeSpaceBytes },
         )
+        assertEquals("HLG", decoded.snapshot.stillToneMode)
     }
 
     @Test
@@ -143,6 +144,7 @@ class CameraPropertySnapshotWireTest {
     private fun validPayload(): String =
         listOf(
             "result\taccepted",
+            "stillToneMode\tHLG",
             "storageTotalCapacityBytes\t954000000000",
             "storageFreeSpaceBytes\t242000000000",
             "storageSlotCount\t2",

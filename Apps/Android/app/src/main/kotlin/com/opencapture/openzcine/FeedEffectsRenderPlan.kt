@@ -146,6 +146,7 @@ internal object FeedEffectsRenderPlanFactory {
                 cameraInput.codec,
                 cameraInput.isoWireValue,
                 cameraInput.baseIso,
+                cameraInput.stillsToneMode,
                 configuration.peakingSensitivity.wireOrdinal,
                 configuration.peakingColor.wireOrdinal,
                 configuration.zebraHighlightEnabled,

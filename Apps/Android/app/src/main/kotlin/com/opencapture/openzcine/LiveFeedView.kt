@@ -1036,7 +1036,13 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorRefer
         paint.textSize = 7.5.dp.toPx()
         paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
         paint.textAlign = android.graphics.Paint.Align.RIGHT
-        val curve = if (reference.curveOrdinal == 0) "L3G10" else "N-Log"
+        val curve =
+            when (reference.curveOrdinal) {
+                ExposureCurveOrdinals.SRGB -> "sRGB"
+                ExposureCurveOrdinals.HLG -> "HLG"
+                ExposureCurveOrdinals.NIKON_NLOG -> "N-Log"
+                else -> "L3G10"
+            }
         canvas.nativeCanvas.drawText("${copy.scale} · $curve", left + panelWidth - padding, top + 13.dp.toPx(), paint)
 
         paint.textSize = 5.5.dp.toPx()

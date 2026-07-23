@@ -64,9 +64,18 @@ public enum FeedEffectsWire {
     /// retains Android's previous Log3G10 fallback instead of treating absence
     /// as a positive N-Log report. Once a codec arrives, `ExposureSignalMapping`
     /// owns the R3D/N-Log and ISO-dependent warning policy.
+    ///
+    /// A non-nil `stillsToneMode` wins outright: the photography live view is a
+    /// display-referred stills preview, so the assists anchor on the stills
+    /// tone mode (sRGB, or HLG when the body reports it) instead of the movie
+    /// codec's log curve. Empty means "photo selector active, tone unreported"
+    /// and resolves to the sRGB default like iOS's `.stills(toneMode: nil)`.
     static func cameraMapping(
-        codec: String?, iso: Int64, baseISO: String?
+        codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil
     ) -> ExposureSignalMapping {
+        if let stillsToneMode {
+            return .stills(toneMode: stillsToneMode.isEmpty ? nil : stillsToneMode)
+        }
         let normalizedCodec = codec?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let normalizedCodec, !normalizedCodec.isEmpty else {
             return ExposureSignalMapping(curve: .redLog3G10)
@@ -81,9 +90,11 @@ public enum FeedEffectsWire {
     /// and zebra editor: `[curveOrdinal, blackNative, middleGrayNative,
     /// clipNative]`. Every value is resolved in Swift; Kotlin never infers a
     /// tone curve or a camera clip endpoint.
-    public static func cameraMappingPayload(codec: String?, iso: Int64, baseISO: String?) -> [Float]
-    {
-        let mapping = cameraMapping(codec: codec, iso: iso, baseISO: baseISO)
+    public static func cameraMappingPayload(
+        codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil
+    ) -> [Float] {
+        let mapping = cameraMapping(
+            codec: codec, iso: iso, baseISO: baseISO, stillsToneMode: stillsToneMode)
         return [
             Float(curveOrdinal(mapping.curve)),
             Float(mapping.blackNative),
@@ -95,10 +106,11 @@ public enum FeedEffectsWire {
     /// Converts a canonical monitor-percent zebra threshold into the current
     /// editor unit (`0 = native code`, `1 = monitor IRE`).
     public static func zebraEditorValue(
-        codec: String?, iso: Int64, baseISO: String?, unitOrdinal: Int,
-        monitorPercent: Double
+        codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil,
+        unitOrdinal: Int, monitorPercent: Double
     ) -> Float? {
-        let mapping = cameraMapping(codec: codec, iso: iso, baseISO: baseISO)
+        let mapping = cameraMapping(
+            codec: codec, iso: iso, baseISO: baseISO, stillsToneMode: stillsToneMode)
         let clamped = min(max(monitorPercent, 0), 100)
         switch unitOrdinal {
         case 0: return Float(mapping.signalNative(monitorPercent: clamped))
@@ -111,9 +123,11 @@ public enum FeedEffectsWire {
     /// This keeps unit conversion at the Swift mapping seam rather than in the
     /// Android preference or Compose layers.
     public static func zebraMonitorPercent(
-        codec: String?, iso: Int64, baseISO: String?, unitOrdinal: Int, value: Double
+        codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil,
+        unitOrdinal: Int, value: Double
     ) -> Float? {
-        let mapping = cameraMapping(codec: codec, iso: iso, baseISO: baseISO)
+        let mapping = cameraMapping(
+            codec: codec, iso: iso, baseISO: baseISO, stillsToneMode: stillsToneMode)
         switch unitOrdinal {
         case 0: return Float(mapping.monitorPercent(signalNative: value))
         case 1: return Float(min(max(value, 0), 100))
@@ -278,17 +292,18 @@ public enum FeedEffectsWire {
     /// midtoneG, midtoneB]`. The five de-log values are the same quarter-axis
     /// tone-curve samples used by iOS's peaking compositor.
     public static func renderConfiguration(
-        codec: String?, iso: Int64, baseISO: String?, peakingSensitivityOrdinal: Int,
-        peakingColorOrdinal: Int, highlightEnabled: Bool, highlightIRE: Double,
-        highlightColorOrdinal: Int, midtoneEnabled: Bool, midtoneIRE: Double,
-        midtoneColorOrdinal: Int
+        codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil,
+        peakingSensitivityOrdinal: Int, peakingColorOrdinal: Int, highlightEnabled: Bool,
+        highlightIRE: Double, highlightColorOrdinal: Int, midtoneEnabled: Bool,
+        midtoneIRE: Double, midtoneColorOrdinal: Int
     ) -> [Float]? {
         guard let sensitivity = peakingSensitivity(peakingSensitivityOrdinal),
             let peakingColor = peakingColor(peakingColorOrdinal),
             let highlightColor = zebraColor(highlightColorOrdinal),
             let midtoneColor = zebraColor(midtoneColorOrdinal)
         else { return nil }
-        let mapping = cameraMapping(codec: codec, iso: iso, baseISO: baseISO)
+        let mapping = cameraMapping(
+            codec: codec, iso: iso, baseISO: baseISO, stillsToneMode: stillsToneMode)
         let highlightCode =
             mapping.signalNative(monitorPercent: min(max(highlightIRE, 0), 100)) / 255
         let midtoneCode = mapping.signalNative(monitorPercent: min(max(midtoneIRE, 0), 100)) / 255

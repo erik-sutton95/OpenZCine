@@ -345,11 +345,26 @@ internal fun MonitorScreen(
     val cameraReadouts = remember(cameraProperties) { monitorCameraReadouts(cameraProperties) }
     val phoneBatteryReadout = rememberPhoneBatteryReadout()
     val exposureAssistCameraInput =
-        remember(cameraProperties.codec, cameraProperties.iso, cameraProperties.baseIso) {
+        remember(
+            cameraProperties.codec,
+            cameraProperties.iso,
+            cameraProperties.baseIso,
+            cameraProperties.captureSelector,
+            cameraProperties.stillToneMode,
+        ) {
             ExposureAssistCameraInput(
                 codec = cameraProperties.codec,
                 iso = cameraProperties.iso,
                 baseIso = cameraProperties.baseIso,
+                // Photography live view is a display-referred stills preview, so the
+                // assists anchor on the stills tone mode instead of the movie codec's
+                // log curve (iOS `exposureSignalMapping`). Swift owns the curve choice.
+                stillsToneMode =
+                    if (prefersPhotographyChrome(cameraProperties)) {
+                        cameraProperties.stillToneMode.orEmpty()
+                    } else {
+                        null
+                    },
             )
         }
     val thermalTier = rememberAndroidThermalTier()

@@ -250,6 +250,7 @@ public enum AndroidCameraPropertyReadbackWire {
         append("cameraGrid", value: properties.gridDisplay, to: &fields)
         append("captureSelector", value: properties.captureSelector?.rawValue, to: &fields)
         append("stillCaptureMode", value: properties.stillCaptureMode, to: &fields)
+        append("stillToneMode", value: properties.stillToneMode, to: &fields)
         append("imageSize", value: properties.imageSize, to: &fields)
         append("compression", value: properties.compression, to: &fields)
         append("meteringMode", value: properties.meteringMode, to: &fields)

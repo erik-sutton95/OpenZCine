@@ -255,8 +255,16 @@ object SwiftCore {
      * Resolves the active camera signal mapping in Swift: `[curveOrdinal,
      * blackNative, middleGrayNative, clipNative]`. Kotlin forwards raw
      * camera metadata only; it never selects a curve or derives a clip code.
+     * A non-null [stillsToneMode] marks the photo selector active — Swift
+     * then anchors on the display-referred stills preview (sRGB/HLG) instead
+     * of the movie codec's log curve.
      */
-    external fun exposureAssistMapping(codec: String?, iso: Long, baseIso: String?): FloatArray
+    external fun exposureAssistMapping(
+        codec: String?,
+        iso: Long,
+        baseIso: String?,
+        stillsToneMode: String?,
+    ): FloatArray
 
     /**
      * Converts a canonical monitor-percent zebra threshold into an editor
@@ -267,6 +275,7 @@ object SwiftCore {
         codec: String?,
         iso: Long,
         baseIso: String?,
+        stillsToneMode: String?,
         unitOrdinal: Int,
         monitorPercent: Float,
     ): Float
@@ -279,6 +288,7 @@ object SwiftCore {
         codec: String?,
         iso: Long,
         baseIso: String?,
+        stillsToneMode: String?,
         unitOrdinal: Int,
         editorValue: Float,
     ): Float
@@ -293,6 +303,7 @@ object SwiftCore {
         codec: String?,
         iso: Long,
         baseIso: String?,
+        stillsToneMode: String?,
         peakingSensitivity: Int,
         peakingColor: Int,
         highlightEnabled: Boolean,

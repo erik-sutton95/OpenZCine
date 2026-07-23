@@ -51,12 +51,21 @@ class ExposureAssistWireTest {
     }
 
     @Test
+    fun `camera mapping accepts the display-referred stills curves`() {
+        // sRGB / HLG (photo selector active): full-range 0…255 with a mid anchor.
+        val srgb = ExposureAssistMapping.parse(floatArrayOf(2f, 0f, 124f, 255f))
+        assertEquals(ExposureCurveOrdinals.SRGB, srgb.curveOrdinal)
+        val hlg = ExposureAssistMapping.parse(floatArrayOf(3f, 0f, 108f, 255f))
+        assertEquals(ExposureCurveOrdinals.HLG, hlg.curveOrdinal)
+    }
+
+    @Test
     fun `camera mapping rejects malformed or nonfinite Swift payloads`() {
         assertFailsWith<IllegalArgumentException> {
             ExposureAssistMapping.parse(floatArrayOf(0f, 0f, 85f))
         }
         assertFailsWith<IllegalArgumentException> {
-            ExposureAssistMapping.parse(floatArrayOf(3f, 0f, 85f, 180f))
+            ExposureAssistMapping.parse(floatArrayOf(4f, 0f, 85f, 180f))
         }
         assertFailsWith<IllegalArgumentException> {
             ExposureAssistMapping.parse(floatArrayOf(0f, 0f, Float.NaN, 180f))

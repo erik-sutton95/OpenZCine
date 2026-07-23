@@ -56,10 +56,28 @@ data class ExposureAssistCameraInput(
     val codec: String? = null,
     val iso: Long? = null,
     val baseIso: String? = null,
+    /**
+     * Non-null while the body's photo selector is active: the camera-reported
+     * stills tone mode (`SDR`/`HLG`), or empty when it has not been read yet.
+     * Swift then anchors the assists on the display-referred stills preview
+     * instead of the movie codec's log curve (iOS `exposureSignalMapping`).
+     */
+    val stillsToneMode: String? = null,
 ) {
     /** JNI sentinel for a camera that has not reported ISO yet. */
     val isoWireValue: Long
         get() = iso ?: -1L
+}
+
+/** Signal-curve wire ordinals owned by the Swift facade (`FeedEffectsWire.curve`). */
+internal object ExposureCurveOrdinals {
+    const val RED_LOG3G10 = 0
+    const val NIKON_NLOG = 1
+    const val SRGB = 2
+    const val HLG = 3
+
+    /** Every ordinal the Swift facade can emit; parsers refuse anything else. */
+    val range = RED_LOG3G10..HLG
 }
 
 /** iOS `Peaking.Sensitivity`, with ordinals owned by the Swift facade. */

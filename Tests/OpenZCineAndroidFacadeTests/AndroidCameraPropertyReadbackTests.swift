@@ -246,6 +246,16 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(mediaBusy.properties.batteryPercent == 80)
     }
 
+    @Test func wireCarriesThePhotoModeStillsToneMode() {
+        let readback = AndroidCameraPropertyReadback(
+            result: .accepted,
+            properties: PTPCameraPropertySnapshot(captureSelector: .photo, stillToneMode: "HLG"),
+            storage: nil)
+        let fields = wireFields(AndroidCameraPropertyReadbackWire.encode(readback))
+        #expect(fields["captureSelector"] == "photo")
+        #expect(fields["stillToneMode"] == "HLG")
+    }
+
     @Test func browseFailureCleanupReleasesOnlyItsOwnershipGeneration() throws {
         let server = try FakeZRServer()
         defer { server.stop() }
