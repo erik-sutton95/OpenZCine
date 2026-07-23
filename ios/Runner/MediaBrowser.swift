@@ -2000,7 +2000,11 @@ struct MediaPhotoViewer: View {
                         let previous = ratingStars
                         ratingStars = target
                         Task {
-                            if await !model.setMediaStarRating(target, for: clip) {
+                            // The camera stays source of truth: confirm the write with a
+                            // readback (the body rounds off-step values down).
+                            if await model.setMediaStarRating(target, for: clip) {
+                                ratingStars = await model.mediaStarRating(for: clip) ?? target
+                            } else {
                                 ratingStars = previous
                             }
                         }
@@ -2404,6 +2408,8 @@ struct MediaPlayerView: View {
     /// Invalidates detached scope derivations whenever polling is restarted or stopped.
     @State private var playbackScopePollingGeneration = 0
     @State private var zoom = AnchoredPinchZoom()
+    /// Camera-read star rating for the active clip; nil until loaded (or unreachable).
+    @State private var playerRatingStars: Int?
     /// The letterboxed video frame's size, captured where the gestures attach so the pinch
     /// anchor maps into the same space the zoom transform runs in.
     @State private var zoomContainerSize: CGSize = .zero
@@ -2585,6 +2591,24 @@ struct MediaPlayerView: View {
                 if chromeVisible { topBar }
                 Spacer()
                 if chromeVisible, let toastMessage { toastView(toastMessage) }
+                if chromeVisible, let stars = playerRatingStars {
+                    // Clip star rating, written to the card — the camera stays source of
+                    // truth (seeded by read, confirmed by readback after every write).
+                    StarRatingRow(stars: stars) { target in
+                        let previous = playerRatingStars
+                        playerRatingStars = target
+                        let clip = activeClip
+                        Task {
+                            if await model.setMediaStarRating(target, for: clip) {
+                                playerRatingStars =
+                                    await model.mediaStarRating(for: clip) ?? target
+                            } else {
+                                playerRatingStars = previous
+                            }
+                        }
+                    }
+                    .padding(.bottom, 2)
+                }
                 if chromeVisible { bottomBar }
             }
             .padding(.horizontal, 16)
@@ -2592,6 +2616,9 @@ struct MediaPlayerView: View {
             .allowsHitTesting(true)
             .zIndex(2)
             .animation(.spring(duration: 0.32), value: chromeVisible)
+            .task(id: activeClip.id) {
+                playerRatingStars = await model.mediaStarRating(for: activeClip)
+            }
 
             if let deliveryContext = deliveryPresentation {
                 MediaDeliveryPopupOverlay(

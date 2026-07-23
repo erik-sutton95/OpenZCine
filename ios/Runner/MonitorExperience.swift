@@ -614,8 +614,8 @@ struct TimerTallyBorderOverlay: View {
 
 struct InstantReviewOverlay: View {
     @Environment(NativeAppModel.self) private var model
-    /// Freshly captured shots start unrated; resets per review.
-    @State private var reviewStars = 0
+    /// Freshly captured shots start unfavourited; resets per review.
+    @State private var reviewFavorited = false
 
     var body: some View {
         if let review = model.instantReview {
@@ -669,17 +669,28 @@ struct InstantReviewOverlay: View {
                 VStack(spacing: 10) {
                     Spacer()
                     if review.handle != nil {
-                        // Rate the shot right here — the culling decision lands on the card
-                        // before the next frame.
-                        StarRatingRow(stars: reviewStars) { target in
-                            let previous = reviewStars
-                            reviewStars = target
+                        // Single-tap favourite (a one-star flag on the card) — the between-
+                        // shots keep/toss call. The full 1-5 rating lives in playback.
+                        Button {
+                            let previous = reviewFavorited
+                            reviewFavorited.toggle()
+                            let target = reviewFavorited ? 1 : 0
                             Task {
                                 if await !model.rateInstantReview(stars: target) {
-                                    reviewStars = previous
+                                    reviewFavorited = previous
                                 }
                             }
+                        } label: {
+                            Image(systemName: reviewFavorited ? "star.fill" : "star")
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundStyle(
+                                    reviewFavorited
+                                        ? LiveDesign.accent : LiveDesign.text.opacity(0.85)
+                                )
+                                .frame(width: 42, height: 42)
+                                .liquidGlass(in: Circle(), interactive: true)
                         }
+                        .buttonStyle(.zcTapTarget)
                     }
                     if model.assistConfiguration.instantReviewShowsCaptureInfo,
                         let info = review.infoLine
@@ -698,8 +709,8 @@ struct InstantReviewOverlay: View {
                     .padding(14)
             }
             .animation(.easeInOut(duration: 0.4), value: review.isFullResolution)
-            .onChange(of: review.handle) { _, _ in reviewStars = 0 }
-            .onAppear { reviewStars = 0 }
+            .onChange(of: review.handle) { _, _ in reviewFavorited = false }
+            .onAppear { reviewFavorited = false }
             .contentShape(Rectangle())
             .onTapGesture { model.dismissInstantReview() }
             .transition(.opacity)
