@@ -4875,6 +4875,19 @@ final class NativeAppModel {
             cameraControlOptions[.imageSize] = options
             logConnection("options imageSize: \(options.joined(separator: ", "))")
         }
+        // The stills WB preset enum feeds the photo WB popup (the popup itself is the movie
+        // one). Colour temperature belongs to the Kelvin tab, mirroring the movie filter.
+        if StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector),
+            session.supportsProperty(.whiteBalance),
+            let raw = try? await session.controlOptions(for: .whiteBalance, valueByteCount: 2)
+        {
+            let options = raw.filter { $0 != "Color temp" }
+            if options.count > 1, cameraControlOptions[.whiteBalance] != options {
+                cameraControlOptions[.whiteBalance] = options
+                logConnection("options stillWB: \(options.joined(separator: ", "))")
+            }
+        }
     }
 
     /// Re-reads one moded control's `GetDevicePropDescEx` enum and caches the picker labels.
@@ -6864,9 +6877,12 @@ final class NativeAppModel {
     var whiteBalanceTintGM = 0
     @ObservationIgnored private var lastCommittedTint: (ab: Int, gm: Int)?
 
-    /// Whether the active WB mode has a mapped movie tune property (Preset slots and Flash don't).
+    /// Whether the active WB mode has a mapped tune property for the active selector
+    /// (Preset slots don't; movie additionally has no Flash tune).
     var whiteBalanceTintAvailable: Bool {
-        WhiteBalanceTint.tuneProperty(forWBModeLabel: cameraPropertySnapshot.wbMode ?? "Auto")
+        WhiteBalanceTint.tuneProperty(
+            forWBModeLabel: cameraPropertySnapshot.wbMode ?? "Auto",
+            photography: isPhotographyMode)
             != nil
     }
 
@@ -6887,7 +6903,8 @@ final class NativeAppModel {
             let write = WhiteBalanceTint.write(
                 wbModeLabel: cameraPropertySnapshot.wbMode ?? "Auto",
                 amberBlueCell: ab,
-                greenMagentaCell: gm
+                greenMagentaCell: gm,
+                photography: isPhotographyMode
             )
         else { return }
         lastCommittedTint = (ab, gm)
@@ -6907,7 +6924,8 @@ final class NativeAppModel {
         guard let session = cameraSession, !isDemoSession else { return }
         guard
             let property = WhiteBalanceTint.tuneProperty(
-                forWBModeLabel: cameraPropertySnapshot.wbMode ?? "Auto")
+                forWBModeLabel: cameraPropertySnapshot.wbMode ?? "Auto",
+                photography: isPhotographyMode)
         else { return }
         Task { [weak self] in
             guard let data = try? await session.readCameraProperty(property), data.count >= 2
@@ -7781,9 +7799,13 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             uniqueKeysWithValues: allCases.filter(\.isStillPicker).map { ($0.valueLabel, $0) })
 
     /// The picker whose `valueLabel` equals `label`, or nil. `photography` selects the stills
-    /// pickers for the photo-mode strip; the movie map stays the default.
+    /// pickers for the photo-mode strip; the movie map stays the default. WB deliberately
+    /// reuses the movie picker in photography — identical popup, with the writes routed to
+    /// the stills WB properties by the snapshot's selector.
     static func forValueLabel(_ label: String, photography: Bool = false) -> CameraPicker? {
-        photography ? byStillValueLabel[label] : byValueLabel[label]
+        guard photography else { return byValueLabel[label] }
+        if label == "WB" { return .whiteBalance }
+        return byStillValueLabel[label]
     }
 
     /// Whether this picker is presented from the *top* information deck (dropping down) rather than

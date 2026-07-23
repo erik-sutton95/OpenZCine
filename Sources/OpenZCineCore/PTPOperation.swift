@@ -208,6 +208,18 @@ public enum PTPPropertyCode: UInt32, Sendable {
     /// Photo image area (`CaptureAreaCrop`, UINT8) — FX/DX/1:1/16:9 sensor crop.
     case captureAreaCrop = 0xD030
     case activePicCtrlItem = 0xD200
+    // Stills WB colour temperature + per-mode fine-tune pads (photo WB popup parity with
+    // the movie popup; same 13×13 tune-grid encoding). [verify-on-HW]
+    case wbTuneAuto = 0xD017
+    case wbTuneIncandescent = 0xD018
+    case wbTuneFluorescent = 0xD019
+    case wbTuneSunny = 0xD01A
+    case wbTuneFlash = 0xD01B
+    case wbTuneCloudy = 0xD01C
+    case wbTuneShade = 0xD01D
+    case wbColorTemp = 0xD01E
+    case wbTuneColorTemp = 0xD150
+    case wbTuneNatural = 0xD15E
     /// Stills tone mode (UINT8): 0 SDR, 2 HLG. Drives the exposure-assist transfer curve in
     /// photo mode — SDR bodies without the property simply fail the poll and stay SDR.
     case stillToneMode = 0x0001_D01C

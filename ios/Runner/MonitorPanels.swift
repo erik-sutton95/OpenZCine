@@ -1365,10 +1365,15 @@ struct PickerPanel: View {
         // take precedence over the hardcoded list. Read live from the model — the ZR refreshes the
         // speed enum only after switching to speed mode, so a one-shot capture on appear would stick
         // on the single placeholder value advertised while in angle mode.
-        if let property = picker.optionProperty(forMode: selectedMode),
-            let cameraMode = model.cameraControlOptions[property], cameraMode.count > 1
-        {
-            return cameraMode
+        if var property = picker.optionProperty(forMode: selectedMode) {
+            // The photography WB popup reuses the movie picker — its preset enum comes from
+            // the stills WB property instead.
+            if property == .movieWhiteBalance, model.isPhotographyMode {
+                property = .whiteBalance
+            }
+            if let cameraMode = model.cameraControlOptions[property], cameraMode.count > 1 {
+                return cameraMode
+            }
         }
         guard !activePickerModes.isEmpty else { return picker.options }
         let hardcoded = activePickerModes[selectedMode].options

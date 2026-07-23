@@ -133,6 +133,7 @@ public enum StillCapturePolicy: Sendable {
         .stillFocusMeteringMode,
         .afSubjectDetection,
         .whiteBalance,
+        .wbColorTemp,
         .exposureRemaining,
         .batteryLevel,
         .acPower,
@@ -289,7 +290,7 @@ extension PTPCameraPropertySnapshot {
             CameraValue(label: "IRIS", value: fNumber ?? "—"),
             CameraValue(label: "DRIVE", value: compactDriveLabel ?? "—"),
             CameraValue(label: "FOCUS", value: focusMode ?? "—"),
-            CameraValue(label: "FLASH", value: compactFlashLabel ?? "—"),
+            CameraValue(label: "WB", value: stillWhiteBalanceValue),
             CameraValue(label: "METER", value: meteringMode ?? "—"),
             CameraValue(label: "PROFILE", value: compactPictureControlLabel ?? "—"),
         ]
@@ -366,6 +367,13 @@ extension PTPCameraPropertySnapshot {
         case "Red-eye slow": "Red+S"
         case let other: other
         }
+    }
+
+    /// WB tile readout: the Kelvin figure while in colour-temperature mode, else the preset
+    /// name (presets render as icons in the strip, like the movie tile).
+    private var stillWhiteBalanceValue: String {
+        if wbMode == "Color temp", let kelvin = wbKelvin { return "\(kelvin)K" }
+        return wbMode ?? "—"
     }
 
     /// Drive-mode label compacted to strip width ("Continuous H" → "CH").

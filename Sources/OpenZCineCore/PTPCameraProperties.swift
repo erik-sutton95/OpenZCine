@@ -413,6 +413,10 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
         label: String,
         snapshot: PTPCameraPropertySnapshot
     ) -> [PTPCameraPropertyWrite] {
+        // The stills WB family mirrors the movie one: mode 0x5005, temperature WbColorTemp.
+        // Value tables are shared with the movie decoders. [verify-on-HW]
+        let photography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: snapshot.captureSelector)
         if control == .whiteBalanceKelvin {
             let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
             if let kelvin = UInt16(trimmed.replacingOccurrences(of: "K", with: "")),
@@ -420,10 +424,18 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
             {
                 return [
                     PTPCameraPropertyWrite(
-                        property: .movieWhiteBalance,
+                        property: photography ? .whiteBalance : .movieWhiteBalance,
                         data: Data(ByteCoding.uint16LE(colorTempMode))),
                     PTPCameraPropertyWrite(
-                        property: .movieWBColorTemp, data: Data(ByteCoding.uint16LE(kelvin))),
+                        property: photography ? .wbColorTemp : .movieWBColorTemp,
+                        data: Data(ByteCoding.uint16LE(kelvin))),
+                ]
+            }
+            // A named preset falls through to the single-write builder below.
+            if let code = PTPCameraPropertyDecoders.wbModeCode(for: trimmed), photography {
+                return [
+                    PTPCameraPropertyWrite(
+                        property: .whiteBalance, data: Data(ByteCoding.uint16LE(code)))
                 ]
             }
         }
@@ -1863,6 +1875,10 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                     ByteCoding.readUInt16LE(bytes, at: 0)))
         case .stillToneMode where bytes.count >= 1:
             return replacing(stillToneMode: bytes[0] == 2 ? "HLG" : "SDR")
+        case .wbColorTemp where bytes.count >= 2:
+            // Stills colour temperature shares the movie Kelvin field — the active selector
+            // decides which property the poll fills it from.
+            return replacing(wbKelvin: ByteCoding.readUInt16LE(bytes, at: 0))
         case .exposureMeteringMode where bytes.count >= 2:
             return replacing(
                 meteringMode: PTPCameraPropertyDecoders.exposureMetering(
@@ -2124,17 +2140,35 @@ public enum WhiteBalanceTint {
     /// The tune property that fine-tunes the given WB mode label (as decoded by
     /// ``PTPCameraPropertyDecoders/whiteBalanceMode(_:)``). Nil for modes with no mapped tune
     /// property — "Preset" slots (per-slot props not wired) and "Flash" (no movie tune code).
-    public static func tuneProperty(forWBModeLabel label: String) -> PTPPropertyCode? {
+    public static func tuneProperty(
+        forWBModeLabel label: String, photography: Bool = false
+    ) -> PTPPropertyCode? {
+        if photography {
+            // The stills pads mirror the movie set one-for-one, and stills additionally
+            // tune Flash. [verify-on-HW]
+            switch label {
+            case "Auto": return .wbTuneAuto
+            case "Natural auto": return .wbTuneNatural
+            case "Sunny": return .wbTuneSunny
+            case "Cloudy": return .wbTuneCloudy
+            case "Shade": return .wbTuneShade
+            case "Incandescent": return .wbTuneIncandescent
+            case "Fluorescent": return .wbTuneFluorescent
+            case "Color temp": return .wbTuneColorTemp
+            case "Flash": return .wbTuneFlash
+            default: return nil
+            }
+        }
         switch label {
-        case "Auto": .movieWbTuneAuto
-        case "Natural auto": .movieWbTuneNatural
-        case "Sunny": .movieWbTuneSunny
-        case "Cloudy": .movieWbTuneCloudy
-        case "Shade": .movieWbTuneShade
-        case "Incandescent": .movieWbTuneIncandescent
-        case "Fluorescent": .movieWbTuneFluorescent
-        case "Color temp": .movieWbTuneColorTemp
-        default: nil
+        case "Auto": return .movieWbTuneAuto
+        case "Natural auto": return .movieWbTuneNatural
+        case "Sunny": return .movieWbTuneSunny
+        case "Cloudy": return .movieWbTuneCloudy
+        case "Shade": return .movieWbTuneShade
+        case "Incandescent": return .movieWbTuneIncandescent
+        case "Fluorescent": return .movieWbTuneFluorescent
+        case "Color temp": return .movieWbTuneColorTemp
+        default: return nil
         }
     }
 
@@ -2161,9 +2195,12 @@ public enum WhiteBalanceTint {
     public static func write(
         wbModeLabel: String,
         amberBlueCell: Int,
-        greenMagentaCell: Int
+        greenMagentaCell: Int,
+        photography: Bool = false
     ) -> PTPCameraPropertyWrite? {
-        guard let property = tuneProperty(forWBModeLabel: wbModeLabel) else { return nil }
+        guard
+            let property = tuneProperty(forWBModeLabel: wbModeLabel, photography: photography)
+        else { return nil }
         let value = propertyValue(
             amberBlueCell: amberBlueCell, greenMagentaCell: greenMagentaCell)
         return PTPCameraPropertyWrite(property: property, data: Data(ByteCoding.uint16LE(value)))
