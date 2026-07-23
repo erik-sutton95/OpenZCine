@@ -750,8 +750,10 @@ struct MonitorSystemCluster: View {
     /// Absolute (landscape) or column-relative (portrait) frames for the five controls.
     var slots: MonitorSystemSlotFrames
     var axis: MonitorZoneStyle
-    /// Visual press feedback for the press-tracked photo shutter (no Button style there).
-    @State private var shutterPressed = false
+    /// Press tracking for the photo shutter. `@GestureState` (not `@State`): the system can
+    /// swallow a finger-up (gesture-gate timeouts), and gesture state resets even then — a
+    /// stranded latch once chained an endless burst.
+    @GestureState private var shutterHeld = false
 
     var body: some View {
         switch axis {
@@ -928,23 +930,22 @@ struct MonitorSystemCluster: View {
                 countdown: model.stillTimerRemaining,
                 timerArmed: model.photoTimerDelaySeconds > 0
             )
-            .scaleEffect(shutterPressed ? 0.93 : 1)
-            .animation(.easeOut(duration: 0.12), value: shutterPressed)
+            .scaleEffect(shutterHeld ? 0.93 : 1)
+            .animation(.easeOut(duration: 0.12), value: shutterHeld)
             .contentShape(Circle())
             // Zero-distance drag, not a zero-duration long-press: the latter recognizes
             // instantly and never reports `onPressingChanged(true)`, swallowing the press.
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !shutterPressed else { return }
-                        shutterPressed = true
-                        model.shutterButtonPressed()
-                    }
-                    .onEnded { _ in
-                        shutterPressed = false
-                        model.shutterButtonReleased()
-                    }
+                    .updating($shutterHeld) { _, held, _ in held = true }
             )
+            .onChange(of: shutterHeld) { _, held in
+                if held {
+                    model.shutterButtonPressed()
+                } else {
+                    model.shutterButtonReleased()
+                }
+            }
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { model.captureStill() }
             .accessibilityLabel(

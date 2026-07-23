@@ -983,6 +983,11 @@ struct PickerPanel: View {
                     // reliably; re-identifying re-runs onAppear to land centred on the new value.
                     .id(selectedMode)
                 }
+                if picker == .stillDrive, selectedMode == 1 || selectedMode == 2 {
+                    // The timers' shared shot count rides inside both timer tabs — fired by
+                    // the app after the countdown (the body's own count is menu-only).
+                    timerShotsRow
+                }
                 if !activePickerModes.isEmpty {
                     modeBar
                 }
@@ -1136,6 +1141,56 @@ struct PickerPanel: View {
         PickerHeader(label: picker.valueLabel, subtitle: model.pickerSubtitle(for: picker)) {
             model.dismissActivePanel()
         }
+    }
+
+    /// `[−] n [+]` stepper for the timers' shot count, dimmed with its tab's gating.
+    private var timerShotsRow: some View {
+        let disabled = model.pickerModeDisabled(picker, mode: selectedMode)
+        return HStack(spacing: 12) {
+            Text("Shots")
+                .font(.system(size: 12, weight: .semibold))
+                .kerning(1)
+                .textCase(.uppercase)
+                .foregroundStyle(LiveDesign.muted)
+            Spacer(minLength: 8)
+            timerShotsStepButton("minus", enabled: model.photoTimerShotCount > 1) {
+                model.adjustPhotoTimerShots(by: -1)
+            }
+            Text("\(model.photoTimerShotCount)")
+                .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                .foregroundStyle(LiveDesign.text)
+                .frame(minWidth: 28)
+                .contentTransition(.numericText())
+            timerShotsStepButton("plus", enabled: model.photoTimerShotCount < 9) {
+                model.adjustPhotoTimerShots(by: 1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            LiveDesign.background.opacity(0.28),
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        }
+        .opacity(disabled ? 0.35 : 1)
+        .disabled(disabled)
+    }
+
+    private func timerShotsStepButton(
+        _ symbol: String, enabled: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
+                .frame(width: 32, height: 32)
+                .liquidGlass(in: Circle())
+        }
+        .buttonStyle(.zcTapTarget)
+        .disabled(!enabled)
     }
 
     /// Segmented tabs (e.g. ANGLE / SPEED) beneath the wheel; the active tab is gold-outlined.

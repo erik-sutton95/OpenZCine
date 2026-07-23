@@ -2439,6 +2439,19 @@ final class NativeAppModel {
         pendingFocusPoint = nil
         focusResetStep = nil
         cameraApertures = []
+        // Still-capture state must never survive a stream (re)start — a stale chained
+        // release re-firing after a reconnect loops the whole connection.
+        shutterPressLatchedBurst = false
+        pendingStillCapture = false
+        pendingStillTerminate = false
+        pendingStillTerminateQuiet = false
+        stillReleaseAwaitingReady = false
+        stillReleaseIsOpenShutter = false
+        isStillCapturing = false
+        chainedBurstFrames = 0
+        cancelStillTimer()
+        instantReviewFetchTask?.cancel()
+        instantReviewFetchTask = nil
     }
 
     private func refreshSavedCameras() {
@@ -5549,6 +5562,9 @@ final class NativeAppModel {
 
     /// Whether the current shutter press latched a continuous burst that finger-up must end.
     @ObservationIgnored private var shutterPressLatchedBurst = false
+    /// Frames chained in the current hold — a hard cap backstops a finger-up the system
+    /// swallowed (gesture-gate timeouts strand the latch otherwise).
+    @ObservationIgnored private var chainedBurstFrames = 0
 
     /// App-side self-timer: countdown seconds a shutter press waits before firing (0 = off).
     /// The countdown is the app's — a remote release never runs the body's own self-timer.
@@ -5585,10 +5601,15 @@ final class NativeAppModel {
         let builtInOn =
             cameraPropertySnapshot.stillCaptureMode == StillDriveMode.selfTimer.label
         switch mode {
-        case 0, 2, 3: return builtInOn
+        case 0, 2: return builtInOn
         case 1: return photoTimerDelaySeconds > 0
         default: return false
         }
+    }
+
+    /// Steps the timers' shared shot count (1…9); the stepper renders in both timer tabs.
+    func adjustPhotoTimerShots(by delta: Int) {
+        photoTimerShotCount = min(9, max(1, photoTimerShotCount + delta))
     }
 
     /// The drive that was active before the Built-in timer engaged, restored on Off.
@@ -5671,11 +5692,23 @@ final class NativeAppModel {
             startStillTimer()
             return
         }
+        if photoTimerShotCount > 1, !isStillCapturing,
+            cameraPropertySnapshot.stillCaptureMode == StillDriveMode.selfTimer.label
+        {
+            // Built-in timer engaged: its countdown never runs for command releases, so the
+            // shots field drives a straight run from the press.
+            stillTimerTask = Task { [weak self] in
+                await self?.fireTimerShots()
+                self?.stillTimerTask = nil
+            }
+            return
+        }
         let wasCapturing = isStillCapturing
         captureStill()
         guard !wasCapturing, isStillCapturing, !isDemoSession else { return }
         let drive = cameraPropertySnapshot.stillCaptureMode.flatMap(StillDriveMode.mode(forLabel:))
         shutterPressLatchedBurst = drive?.isContinuous == true
+        chainedBurstFrames = 0
     }
 
     /// Finger-up: ends a latched continuous burst — cancelling a chained-but-unsent release,
@@ -5683,6 +5716,7 @@ final class NativeAppModel {
     func shutterButtonReleased() {
         guard shutterPressLatchedBurst else { return }
         shutterPressLatchedBurst = false
+        chainedBurstFrames = 0
         if pendingStillCapture {
             pendingStillCapture = false
             finishStillRelease(message: nil)
@@ -6039,14 +6073,18 @@ final class NativeAppModel {
         do {
             switch try await session.pollStillReleaseReadiness() {
             case .complete:
-                if shutterPressLatchedBurst, !pendingStillTerminate {
+                if shutterPressLatchedBurst, !pendingStillTerminate, chainedBurstFrames < 30 {
                     // Finger still down in a continuous drive: chain the next release right
                     // away — one command release delivers a bounded run of frames no matter
-                    // the ceiling, so the hold itself drives the burst. [verify-on-HW]
+                    // the ceiling, so the hold itself drives the burst. The frame cap
+                    // backstops a swallowed finger-up. [verify-on-HW]
+                    chainedBurstFrames += 1
                     pendingStillCapture = true
                     stillReleaseAwaitingReady = false
                     return
                 }
+                shutterPressLatchedBurst = false
+                chainedBurstFrames = 0
                 finishStillRelease(message: nil)
                 // The SHOTS pill reflects the frame immediately (a burst consumes more — the
                 // read-back right after corrects the estimate rather than waiting for the
@@ -6461,7 +6499,6 @@ final class NativeAppModel {
                 return cameraPropertySnapshot.stillCaptureMode == StillDriveMode.selfTimer.label
                     ? "On" : "Off"
             case 2: return photoTimerLabel
-            case 3: return String(photoTimerShotCount)
             default: break
             }
         }
@@ -6495,12 +6532,12 @@ final class NativeAppModel {
             return
         }
         if picker == .stillDrive, mode > 0 {
-            // Built-in engages/releases the body's self-timer drive; App and Shots are the
-            // in-app countdown settings, never camera writes.
-            switch mode {
-            case 1: setBuiltInTimer(on: value == "On")
-            case 2: setPhotoTimer(label: value)
-            default: photoTimerShotCount = Int(value) ?? 1
+            // Built-in engages/releases the body's self-timer drive; App is the in-app
+            // countdown, never a camera write. (The shots stepper lives inside both tabs.)
+            if mode == 1 {
+                setBuiltInTimer(on: value == "On")
+            } else {
+                setPhotoTimer(label: value)
             }
             return
         }
@@ -7716,9 +7753,6 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                     title: "App", detail: "app countdown",
                     options: ["Off", "1s", "2s", "3s", "5s", "10s", "20s", "30s", "60s"],
                     base: "Off"),
-                PickerMode(
-                    title: "Shots", detail: "after countdown",
-                    options: (1...9).map(String.init), base: "1"),
             ]
         case .stillFocus:
             // AF mode, AF-area, and subject detection — three independent stills settings by
