@@ -164,19 +164,6 @@ struct MediaBrowserView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             LiveDesign.background
-                .overlay(alignment: .bottom) {
-                    if let masterNotice {
-                        Text(masterNotice)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(LiveDesign.text)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .liquidGlass(in: Capsule())
-                            .padding(.bottom, 24)
-                            .transition(.opacity)
-                    }
-                }
-                .zIndex(1)
 
             GeometryReader { proxy in
                 let portrait = proxy.size.height > proxy.size.width
@@ -258,6 +245,18 @@ struct MediaBrowserView: View {
                 .padding(.top, max(CGFloat(safeArea.top) + 6, 22))
         }
         .ignoresSafeArea()
+        .overlay(alignment: .bottom) {
+            if let masterNotice {
+                Text(masterNotice)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(LiveDesign.text)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .liquidGlass(in: Capsule())
+                    .padding(.bottom, 24)
+                    .transition(.opacity)
+            }
+        }
         .onAppear {
             model.refreshMediaClips()
             if let resumeClips = model.pendingHopShareResumeClips {
