@@ -3359,7 +3359,7 @@ final class NativeAppModel {
         }
     }
 
-    private func startLiveView(session: NativeCameraSession) {
+    private func startLiveView(session: NativeCameraSession, skipPropertyBootstrap: Bool = false) {
         liveViewTask?.cancel()
         resetCameraPropertyState()
         liveViewTask = Task {
@@ -3367,10 +3367,14 @@ final class NativeAppModel {
             // StartLiveView so AF mode / lens / subject land immediately and the
             // command channel is not shared with GetLiveViewImageEx during fill-in.
             // A brief semi-stable (or held) feed for 1–3 s is preferred to 20–30 s of
-            // drip-fed one-property-per-frame polls.
-            connectionMessage = "Reading camera settings…"
-            await bootstrapCameraProperties(session: session)
-            guard !Task.isCancelled, cameraSession === session else { return }
+            // drip-fed one-property-per-frame polls. A stream-quality-only restart
+            // (record/thermal step-down) skips it — the snapshot is warm, and re-running
+            // the multi-second burst is what used to freeze the feed at record start.
+            if !skipPropertyBootstrap {
+                connectionMessage = "Reading camera settings…"
+                await bootstrapCameraProperties(session: session)
+                guard !Task.isCancelled, cameraSession === session else { return }
+            }
             connectionMessage = "Opening live view…"
 
             // Jittered exponential backoff (≈1s → cap 8s) so repeated stalls against a flaky AP don't
@@ -7434,7 +7438,13 @@ final class NativeAppModel {
         guard !isDemoSession, isMonitorPresented, !shouldPauseLiveFeed,
             let session = cameraSession
         else { return }
-        startLiveView(session: session)
+        // Single-flight: clear the applied size BEFORE restarting so the step-down checker
+        // no-ops until the new stream configures and stamps its real size. Leaving the stale
+        // size in place let any checker call mid-restart (the warning-status apply inside the
+        // bootstrap, the record safe point, the thermal timer) cancel the restart and kick
+        // another — an endless burst loop that froze the feed the moment recording began.
+        lastAppliedStreamImageSize = nil
+        startLiveView(session: session, skipPropertyBootstrap: true)
     }
 
     func applyPickerValue(_ value: String, for picker: CameraPicker) {
