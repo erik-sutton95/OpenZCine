@@ -547,6 +547,20 @@ internal fun MonitorScreen(
             activeAssistOptions = null
         }
     }
+    // The other side's panels/popups make no sense after a photo ↔ movie flip —
+    // close whatever is open rather than leaving a stale drum floating (iOS
+    // dismissActivePanel-on-flip). The nil→first read is the bootstrap's own
+    // selector read, not a flip.
+    var lastCaptureSelector by remember { mutableStateOf(cameraProperties.captureSelector) }
+    LaunchedEffect(cameraProperties.captureSelector) {
+        val previous = lastCaptureSelector
+        lastCaptureSelector = cameraProperties.captureSelector
+        if (previous != null && cameraProperties.captureSelector != previous) {
+            activeCommandControl = null
+            activeMonitorPickerKind = null
+            activeAssistOptions = null
+        }
+    }
     val analysisPanelPlacementStore =
         remember(appContext) { MonitorAnalysisPanelPlacementStore(appContext) }
     var analysisPanelPlacementRevision by remember { mutableIntStateOf(0) }
