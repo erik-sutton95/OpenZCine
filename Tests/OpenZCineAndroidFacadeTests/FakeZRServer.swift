@@ -918,6 +918,33 @@ final class FakeZRServer: @unchecked Sendable {
             .movieWbTuneSunny, .movieWbTuneCloudy, .movieWbTuneShade,
             .movieWbTuneColorTemp, .movieWbTuneNatural:
             return Data(ByteCoding.uint16LE(612))
+        case .liveViewSelector:
+            // 1 = video (cinema monitor default for facade tests).
+            return Data([1])
+        case .stillCaptureMode:
+            return Data(ByteCoding.uint16LE(0x0001))  // Single
+        case .stillShutterSpeed:
+            return Data(ByteCoding.uint32LE(0x0001_0032))  // 1/50, fraction-packed
+        case .fNumber:
+            return Data(ByteCoding.uint16LE(280))  // f/2.8
+        case .focusMode:
+            return Data(ByteCoding.uint16LE(0x8010))  // AF-S in the 0x500A space
+        case .stillFocusMode:
+            return Data([0])  // AF-S in the 0xD061 UINT8 space
+        case .flashMode:
+            return Data(ByteCoding.uint16LE(0x0002))  // Off
+        case .exposureMeteringMode:
+            return Data(ByteCoding.uint16LE(0x0003))  // Matrix
+        case .stillFocusMeteringMode:
+            return Data(ByteCoding.uint16LE(0x8010))  // Single-point
+        case .compressionSetting, .imageSize:
+            return Data([0])
+        case .stillISOAutoControl:
+            return Data([0])
+        case .exposureBiasCompensation:
+            return Data(ByteCoding.uint16LE(0))
+        case .whiteBalance:
+            return Data(ByteCoding.uint16LE(0x0002))
         default:
             return nil
         }

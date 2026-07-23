@@ -28,15 +28,18 @@ public enum CameraCaptureSelector: String, Equatable, Sendable, CaseIterable {
 
 /// Release / drive mode for still capture (`StillCaptureMode` 0x5013).
 ///
-/// Values follow the shared enumeration used across Z-series bodies. Some
-/// high-speed Cxx modes are body-dependent and may return Access_Denied when
-/// unsupported. [VERIFY-ON-HW]
+/// This is the label union across the Z lineup; each body advertises its own
+/// valid subset through the property descriptor (the Cxx high-speed modes and
+/// the extended-continuous mode are body-dependent). Bodies with a release-mode
+/// dial report `quickSetting` when the dial sits on the quick position and move
+/// the effective mode to `StillCaptureModeQuick` (0xD0F6).
 public enum StillDriveMode: UInt16, Equatable, Sendable, CaseIterable {
     case single = 0x0001
     case continuousHigh = 0x0002
     case continuousLow = 0x8010
     case selfTimer = 0x8011
     case continuousHighExtended = 0x8019
+    case quickSetting = 0x8100
     case highSpeedFrameC15 = 0x810F
     case highSpeedFrameC30 = 0x811E
     case highSpeedFrameC60 = 0x813C
@@ -49,6 +52,7 @@ public enum StillDriveMode: UInt16, Equatable, Sendable, CaseIterable {
         case .continuousLow: return "Continuous L"
         case .selfTimer: return "Self-timer"
         case .continuousHighExtended: return "Continuous H+"
+        case .quickSetting: return "Quick"
         case .highSpeedFrameC15: return "C15"
         case .highSpeedFrameC30: return "C30"
         case .highSpeedFrameC60: return "C60"
@@ -86,18 +90,16 @@ public enum StillCapturePolicy: Sendable {
     }
 
     /// Properties polled while the body is in photo mode (in addition to shared health).
+    /// ExposureTime (0x500D) and ExposureIndex (0x500F) are deliberately absent: the
+    /// fraction-packed ShutterSpeed and the 32-bit controlled-ISO readout supersede both.
     public static let photoMonitorPollOrder: [PTPPropertyCode] = [
         .liveViewSelector,
         .stillCaptureMode,
-        .burstNumber,
         .imageSize,
         .compressionSetting,
-        .rawCompressionType,
         .exposureProgramMode,
-        .exposureIndex,
         .stillISOAutoControl,
         .isoControlSensitivity,
-        .exposureTime,
         .stillShutterSpeed,
         .fNumber,
         .exposureBiasCompensation,
@@ -107,7 +109,6 @@ public enum StillCapturePolicy: Sendable {
         .stillFocusMode,
         .stillFocusMeteringMode,
         .whiteBalance,
-        .movieWBColorTemp,
         .batteryLevel,
         .acPower,
         .warningStatus,

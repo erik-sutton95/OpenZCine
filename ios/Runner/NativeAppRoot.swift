@@ -2154,11 +2154,46 @@ final class NativeAppModel {
                 if demoUIMode { demoSeedFocusPair() }
             } else if !hasCommand, normalized == "8", isDemoSession {
                 demoToggleEyeBox()
+            } else if !hasCommand, normalized == "p", isDemoSession {
+                demoTogglePhotographyMode()
             } else if !hasCommand, isDemoSession, let number = Int(normalized), number >= 1,
                 number <= demoFeedImagePaths.count
             {
                 demoSelectFeedImage(number)
             }
+        }
+
+        /// Toggles cinema ↔ photography chrome for simulator layout checks (`p` in demo).
+        func demoTogglePhotographyMode() {
+            let toPhoto = cameraPropertySnapshot.captureSelector != .photo
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: .liveViewSelector, data: Data([toPhoto ? 0 : 1]))
+            if toPhoto {
+                // Representative stills readouts so the compact photo strip has real labels.
+                cameraPropertySnapshot =
+                    cameraPropertySnapshot
+                    .applying(
+                        property: .isoControlSensitivity, data: Data(ByteCoding.uint32LE(6400))
+                    )
+                    .applying(property: .exposureProgramMode, data: Data(ByteCoding.uint16LE(1)))
+                    .applying(property: .stillCaptureMode, data: Data(ByteCoding.uint16LE(0x0001)))
+                    .applying(property: .fNumber, data: Data(ByteCoding.uint16LE(280)))
+                    .applying(
+                        property: .stillShutterSpeed, data: Data(ByteCoding.uint32LE(0x0001_00C8))
+                    )
+                    .applying(property: .stillFocusMode, data: Data([0]))
+                    .applying(property: .flashMode, data: Data(ByteCoding.uint16LE(2)))
+                    .applying(
+                        property: .exposureMeteringMode, data: Data(ByteCoding.uint16LE(3))
+                    )
+                    .applying(property: .compressionSetting, data: Data([7]))
+                    .applying(property: .imageSize, data: Data([0]))
+            }
+            publishCameraDisplayState()
+            connectionMessage =
+                toPhoto
+                ? "Demo photography mode (press P for cinema)."
+                : "Demo cinema mode (press P for photo)."
         }
 
         /// Simulator marketing entry point for ⌘O. It is intentionally accepted only while the
@@ -4540,12 +4575,11 @@ final class NativeAppModel {
     }
 
     private func pollNextCameraProperty(session: NativeCameraSession) async {
-        let pollOrder = PTPPropertyCode.monitorPollOrder(
+        let property = PTPPropertyCode.nextMonitorPollProperty(
+            pollIndex: propertyPollIndex,
             isRecording: isRecording,
             captureSelector: cameraPropertySnapshot.captureSelector)
-        guard !pollOrder.isEmpty else { return }
-        let property = pollOrder[propertyPollIndex % pollOrder.count]
-        propertyPollIndex = (propertyPollIndex + 1) % pollOrder.count
+        propertyPollIndex &+= 1
         if property == .movieShutterMode, shouldSuppressShutterModePoll() {
             // A mode switch is queued or optimistic — don't let stale camera readback undo the bar.
         } else if property == .movieTVLockSetting, shouldSuppressShutterLockPoll() {

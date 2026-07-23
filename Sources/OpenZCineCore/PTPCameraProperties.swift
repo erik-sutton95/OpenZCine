@@ -91,6 +91,29 @@ extension PTPPropertyCode {
         }
         return liveMonitorPollOrder
     }
+
+    /// Next property for one steady-state poll tick, with high-priority mode-selector interleave.
+    ///
+    /// Round-robin alone puts `LiveViewSelector` once per full cycle (~30 properties ≈ 5–10 s at
+    /// typical frame-gated cadences). Even ticks always re-read the photo/video selector so chrome
+    /// switches within ~0.5–1 s; odd ticks advance the regular order (selector slots skipped so it
+    /// is not double-counted).
+    ///
+    /// - Parameter order: Optional custom poll set (e.g. Android’s codec-before-frame-size order).
+    ///   When `nil`, uses ``monitorPollOrder(isRecording:captureSelector:)``.
+    public static func nextMonitorPollProperty(
+        pollIndex: Int,
+        isRecording: Bool,
+        captureSelector: CameraCaptureSelector? = nil,
+        order: [PTPPropertyCode]? = nil
+    ) -> PTPPropertyCode {
+        CameraMonitorPollPolicy.nextProperty(
+            pollIndex: pollIndex,
+            isRecording: isRecording,
+            captureSelector: captureSelector,
+            order: order
+        )
+    }
 }
 
 /// Cadence rules for non-frame monitor traffic. Keeping these pure and portable lets every shell
@@ -104,6 +127,9 @@ public enum CameraMonitorPollPolicy {
     public static let descriptorRefreshInterval: TimeInterval = 60
     /// Maximum rate for one of the compact health-property reads during a take.
     public static let recordingPropertyPollInterval: TimeInterval = 2
+    /// How often (in poll ticks) to force a `LiveViewSelector` read while not recording.
+    /// `2` = every other tick — snappy photo/video chrome without starving exposure health.
+    public static let modeSelectorPollEveryNTicks: Int = 2
 
     /// True if no refresh has run yet or the given interval has elapsed.
     public static func isDue(
@@ -113,6 +139,40 @@ public enum CameraMonitorPollPolicy {
     ) -> Bool {
         guard let lastRefreshAt else { return true }
         return now.timeIntervalSince(lastRefreshAt) >= interval
+    }
+
+    /// Picks the property for poll tick `pollIndex` (monotonically increasing).
+    ///
+    /// While recording, uses the compact health set only. Otherwise, every Nth tick is exclusively
+    /// `liveViewSelector` so the shells can flip cinema ↔ photography chrome without waiting a
+    /// full round-robin cycle.
+    ///
+    /// - Parameter order: Optional override poll set. When `nil`, uses
+    ///   ``PTPPropertyCode/monitorPollOrder(isRecording:captureSelector:)``.
+    public static func nextProperty(
+        pollIndex: Int,
+        isRecording: Bool,
+        captureSelector: CameraCaptureSelector? = nil,
+        order: [PTPPropertyCode]? = nil
+    ) -> PTPPropertyCode {
+        let resolved =
+            order
+            ?? PTPPropertyCode.monitorPollOrder(
+                isRecording: isRecording, captureSelector: captureSelector)
+        guard !resolved.isEmpty else { return .batteryLevel }
+        if isRecording {
+            return resolved[pollIndex % resolved.count]
+        }
+        let n = max(2, modeSelectorPollEveryNTicks)
+        if pollIndex.isMultiple(of: n) {
+            return .liveViewSelector
+        }
+        let regular = resolved.filter { $0 != .liveViewSelector }
+        guard !regular.isEmpty else { return .liveViewSelector }
+        // Map non-selector ticks onto the remaining properties without double-counting selector.
+        let regularIndex = pollIndex - (pollIndex / n) - 1
+        let safeIndex = regularIndex >= 0 ? regularIndex : 0
+        return regular[safeIndex % regular.count]
     }
 }
 
@@ -499,6 +559,16 @@ public enum PTPCameraPropertyDecoders {
         return "\(numerator)/\(denominator)"
     }
 
+    /// `ShutterSpeed` (0xD100) label: fraction-packed like `shutterSpeed`, plus the
+    /// open-shutter sentinels that appear in mode M.
+    public static func stillShutterLabel(_ raw: UInt32) -> String {
+        switch raw {
+        case 0xFFFF_FFFF: "Bulb"
+        case 0xFFFF_FFFD: "Time"
+        default: shutterSpeed(raw)
+        }
+    }
+
     /// Decodes shutter angle from raw value.
     public static func shutterAngle(_ raw: Int32) -> String {
         "\(trimmedDecimal(Double(raw) / 100))°"
@@ -782,45 +852,53 @@ public enum PTPCameraPropertyDecoders {
         raw == 0 ? "OFF" : "ON"
     }
 
-    /// Still compression setting (0x5004) — coarse labels; body enum may be richer. [VERIFY-ON-HW]
+    /// `CompressionSetting` (0x5004, UINT8) raw → label. Star variants are the size-priority
+    /// JPEGs; 6 is unassigned on the bodies checked. [VERIFY-ON-HW]
     public static func compressionSetting(_ raw: UInt8) -> String {
         switch raw {
         case 0: "JPEG Basic"
-        case 1: "JPEG Normal"
-        case 2: "JPEG Fine"
-        case 3: "TIFF"
-        case 4: "RAW"
-        case 5: "RAW+JPEG"
+        case 1: "JPEG Basic★"
+        case 2: "JPEG Normal"
+        case 3: "JPEG Normal★"
+        case 4: "JPEG Fine"
+        case 5: "JPEG Fine★"
+        case 7: "RAW"
+        case 8: "RAW+JPEG Basic"
+        case 9: "RAW+JPEG Basic★"
+        case 10: "RAW+JPEG Normal"
+        case 11: "RAW+JPEG Normal★"
+        case 12: "RAW+JPEG Fine"
+        case 13: "RAW+JPEG Fine★"
         default: hex(UInt32(raw))
         }
     }
 
-    /// Exposure metering (0x500B). Prefer stills path; movie has a separate prop.
+    /// `ExposureMeteringMode` (0x500B, UINT16) raw → label. Movie mode has a separate prop.
     public static func exposureMetering(_ raw: UInt16) -> String {
         switch raw {
-        case 0x0001: "Average"
         case 0x0002: "Center"
         case 0x0003: "Matrix"
         case 0x0004: "Spot"
-        case 0x8001: "Highlight"
+        case 0x8010: "Highlight"
         default: hex(UInt32(raw))
         }
     }
 
-    /// Flash mode (0x500C). [VERIFY-ON-HW]
+    /// `FlashMode` (0x500C, UINT16) raw → label. 0x8010 is plain fill flash. [VERIFY-ON-HW]
     public static func flashMode(_ raw: UInt16) -> String {
         switch raw {
-        case 0x0001: "Auto"
         case 0x0002: "Off"
-        case 0x0003: "Fill"
         case 0x0004: "Red-eye"
-        case 0x8001: "Slow"
-        case 0x8002: "Rear"
+        case 0x8010: "Fill"
+        case 0x8011: "Slow"
+        case 0x8012: "Rear"
+        case 0x8013: "Red-eye slow"
         default: hex(UInt32(raw))
         }
     }
 
-    /// Still focus mode (0xD061 / 0x500A-family values).
+    /// `FocusMode` (0x500A, UINT16) raw → label. Get-only mirror of the body's stills
+    /// focus mode; the settable path is `StillFocusMode` (0xD061), a different value space.
     public static func stillFocusMode(_ raw: UInt16) -> String {
         switch raw {
         case 0x0001: "MF"
@@ -832,9 +910,23 @@ public enum PTPCameraPropertyDecoders {
         }
     }
 
-    /// Still AF-area mode (0xD05D). [VERIFY-ON-HW]
+    /// `StillFocusMode` (0xD061, UINT8) raw → label. Same 0/1/4 family as the movie focus
+    /// mode plus AF-A; kept separate from the UINT16 0x500A space above.
+    public static func stillFocusModeD061(_ raw: UInt8) -> String {
+        raw == 5 ? "AF-A" : movieFocusMode(raw)
+    }
+
+    /// `StillFocusMeteringMode` (0xD05D, UINT16) — the stills AF-area mode. Extends the shared
+    /// movie area table with the stills-only dynamic/tracking areas. [VERIFY-ON-HW]
     public static func stillFocusArea(_ raw: UInt16) -> String {
-        movieFocusArea(raw)
+        switch raw {
+        case 0x0002: "Dyn-S"
+        case 0x8012: "3D"
+        case 0x8013: "Dyn-M"
+        case 0x8014: "Dyn-L"
+        case 0x8017: "Pin"
+        default: movieFocusArea(raw)
+        }
     }
 
     /// Exposure bias as ±EV from INT16 thousandths-of-EV when that packing is used.
@@ -873,8 +965,8 @@ public enum PTPCameraPropertyDecoders {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+extension String {
+    fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 extension PTPCameraPropertyDecoders {
@@ -1393,9 +1485,12 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             return replacing(captureSelector: CameraCaptureSelector.decode(raw: bytes[0]))
         case .stillCaptureMode where bytes.count >= 2:
             let raw = ByteCoding.readUInt16LE(bytes, at: 0)
-            return replacing(stillCaptureMode: StillDriveMode.decode(raw: raw)?.label ?? "0x\(String(raw, radix: 16))")
+            return replacing(
+                stillCaptureMode: StillDriveMode.decode(raw: raw)?.label
+                    ?? "0x\(String(raw, radix: 16))")
         case .imageSize where bytes.count >= 1:
-            return replacing(imageSize: PTPCameraPropertyDecoders.stringFromPTPStringData(data) ?? "—")
+            return replacing(
+                imageSize: PTPCameraPropertyDecoders.stringFromPTPStringData(data) ?? "—")
         case .compressionSetting where bytes.count >= 1:
             return replacing(compression: PTPCameraPropertyDecoders.compressionSetting(bytes[0]))
         case .exposureMeteringMode where bytes.count >= 2:
@@ -1406,32 +1501,25 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             return replacing(
                 flashMode: PTPCameraPropertyDecoders.flashMode(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
-        case .exposureTime where bytes.count >= 4:
-            return replacing(
-                shutterSpeed: PTPCameraPropertyDecoders.shutterSpeed(
-                    ByteCoding.readUInt32LE(bytes, at: 0)))
         case .stillShutterSpeed where bytes.count >= 4:
-            return replacing(
-                shutterSpeed: PTPCameraPropertyDecoders.shutterSpeed(
-                    ByteCoding.readUInt32LE(bytes, at: 0)))
+            // Fraction-packed UINT32 (numerator high, denominator low) with sentinel values
+            // for the open-shutter modes. ExposureTime (0x500D) is 1/10000 s units and less
+            // precise, so it is intentionally not decoded.
+            let raw = ByteCoding.readUInt32LE(bytes, at: 0)
+            return replacing(shutterSpeed: PTPCameraPropertyDecoders.stillShutterLabel(raw))
         case .fNumber where bytes.count >= 2:
             return replacing(
                 fNumber: PTPCameraPropertyDecoders.irisFNumber(
                     ByteCoding.readUInt16LE(bytes, at: 0)))
-        case .exposureIndex where bytes.count >= 2:
-            return replacing(iso: UInt32(ByteCoding.readUInt16LE(bytes, at: 0)))
         case .exposureBiasCompensation where bytes.count >= 2:
             return replacing(
                 exposureBias: PTPCameraPropertyDecoders.exposureBias(
                     Int16(bitPattern: ByteCoding.readUInt16LE(bytes, at: 0))))
         case .stillISOAutoControl where bytes.count >= 1:
             return replacing(isoAuto: bytes[0] != 0)
-        case .stillFocusMode where bytes.count >= 2:
-            return replacing(
-                focusMode: PTPCameraPropertyDecoders.stillFocusMode(
-                    ByteCoding.readUInt16LE(bytes, at: 0)))
         case .stillFocusMode where bytes.count >= 1:
-            return replacing(focusMode: PTPCameraPropertyDecoders.stillFocusMode(UInt16(bytes[0])))
+            // UINT8 space (0 AF-S / 1 AF-C / 4 MF / 5 AF-A) — not the 0x500A UINT16 codes.
+            return replacing(focusMode: PTPCameraPropertyDecoders.stillFocusModeD061(bytes[0]))
         case .stillFocusMeteringMode where bytes.count >= 2:
             return replacing(
                 focusArea: PTPCameraPropertyDecoders.stillFocusArea(
