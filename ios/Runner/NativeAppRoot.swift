@@ -4605,11 +4605,14 @@ final class NativeAppModel {
     /// Full live-order property + storage + descriptor burst (Android bootstrap parity).
     /// Call once after connect / before the first `StartLiveView`.
     private func bootstrapCameraProperties(session: NativeCameraSession) async {
-        logConnection("property-bootstrap: starting full live-order burst")
-        for property in PTPPropertyCode.liveMonitorPollOrder {
-            guard !Task.isCancelled, cameraSession === session else { return }
-            await readAndApplyCameraProperty(session: session, property: property)
-        }
+        // The selector decides which property set matters (photo vs movie chrome), so read it
+        // first and burst the matching order — a movie-order burst against a body sitting in
+        // photo mode would leave the entire stills strip to drip-fill one property per frame gap.
+        await readAndApplyCameraProperty(session: session, property: .liveViewSelector)
+        logConnection(
+            "property-bootstrap: starting \(cameraPropertySnapshot.captureSelector == .photo ? "photo" : "movie")-order burst"
+        )
+        await burstMonitorProperties(session: session)
         propertyPollIndex = 0
         guard !Task.isCancelled, cameraSession === session else { return }
         // Force the slow maintenance groups immediately (don't wait for 60 s cadence).
@@ -4627,6 +4630,39 @@ final class NativeAppModel {
         syncFocusFromSnapshot()
         syncShutterLockFromSnapshot()
         logConnection("property-bootstrap: complete")
+    }
+
+    /// Reads the active selector's whole monitor property set back-to-back (skipping properties
+    /// the body doesn't advertise, like the steady-state poll does) so the chrome fills in one
+    /// pass instead of one property per frame gap.
+    private func burstMonitorProperties(session: NativeCameraSession) async {
+        let order = PTPPropertyCode.monitorPollOrder(
+            isRecording: false, captureSelector: cameraPropertySnapshot.captureSelector)
+        for property in order where property != .liveViewSelector {
+            guard !Task.isCancelled, cameraSession === session else { return }
+            guard session.supportsProperty(property) else { continue }
+            await readAndApplyCameraProperty(session: session, property: property)
+        }
+    }
+
+    /// Single-flight selector-flip burst: when the body switches photo ↔ movie mid-session, the
+    /// freshly relevant property set bursts immediately (frames briefly share the channel) rather
+    /// than trickling in through the interleaved poll.
+    @ObservationIgnored private var selectorFlipBurstTask: Task<Void, Never>?
+
+    private func burstPropertiesAfterSelectorFlip(session: NativeCameraSession) {
+        guard selectorFlipBurstTask == nil else { return }
+        logConnection(
+            "selector flip → \(cameraPropertySnapshot.captureSelector == .photo ? "photo" : "movie")-order burst"
+        )
+        selectorFlipBurstTask = Task { [weak self] in
+            await self?.burstMonitorProperties(session: session)
+            // The flipped side's descriptor domains (image-size enum on the photo side) should
+            // land promptly too — let the next maintenance tick run them instead of waiting out
+            // the slow cadence.
+            self?.lastDescriptorRefreshAt = nil
+            self?.selectorFlipBurstTask = nil
+        }
     }
 
     private func pollNextCameraProperty(session: NativeCameraSession) async {
@@ -4663,11 +4699,21 @@ final class NativeAppModel {
                 let hex = data.map { String(format: "%02x", $0) }.joined()
                 logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
             }
+            let previousSelector = cameraPropertySnapshot.captureSelector
             cameraPropertySnapshot = cameraPropertySnapshot.applying(
                 property: property, data: data)
             publishCameraDisplayState()
             syncFocusFromSnapshot()
             syncShutterLockFromSnapshot()
+            if property == .liveViewSelector,
+                let previousSelector,
+                cameraPropertySnapshot.captureSelector != previousSelector
+            {
+                // A photo ↔ movie flip mid-session: the freshly relevant set bursts rather than
+                // trickling through the interleaved poll. (The nil→first read is the bootstrap's
+                // own selector read — its loop already covers the right order.)
+                burstPropertiesAfterSelectorFlip(session: session)
+            }
             if property == .warningStatus {
                 applyThermalStreamStepDownIfNeeded()
             }
