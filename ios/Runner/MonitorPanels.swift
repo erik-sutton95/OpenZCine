@@ -1019,6 +1019,12 @@ struct PickerPanel: View {
                 selectedMode = model.stillISOPickerModeIndex
             } else if picker == .shutter {
                 selectedMode = model.shutterPickerModeIndex
+            } else if picker == .whiteBalance {
+                // The body's WB mode picks the opening tab: a named preset opens PRESET;
+                // colour temperature (or an unknown mode) opens KELVIN. The camera stays
+                // source of truth — never a remembered tab.
+                let mode = model.cameraPropertySnapshot.wbMode
+                selectedMode = (mode == nil || mode == "Color temp") ? 0 : 1
             } else if selection.isEmpty {
                 if let initial = model.pickerInitialMode {
                     selectedMode = initial
