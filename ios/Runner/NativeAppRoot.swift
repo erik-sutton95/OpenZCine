@@ -8393,15 +8393,22 @@ extension NativeAppModel {
         let slots = await session.readAllStorageInfo()
         let cameraName = cameraState.cameraName
         mediaStorageSlots = slots.enumerated().map { index, slot in
-            MediaStorageSlotDisplay(
+            // The physical slot lives in the storage ID's high word (0x000X0001) — the
+            // enumerated order does NOT follow it (the second card can arrive via the vendor
+            // storage list and get appended), which used to label slot 1's card "SLOT 2" and
+            // made its NEFs appear to belong to the JPEG-backup card. Fall back to list
+            // order only when an ID doesn't carry the slot-word pattern.
+            let physicalSlot = Int((slot.id >> 16) & 0xFF)
+            return MediaStorageSlotDisplay(
                 storageID: slot.id,
-                slotNumber: index + 1,
+                slotNumber: physicalSlot > 0 ? physicalSlot : index + 1,
                 cameraName: cameraName,
                 usedGigabytes: slot.info.gigabytesUsed,
                 freeGigabytes: slot.info.gigabytesFree,
                 totalGigabytes: slot.info.gigabytesTotal
             )
         }
+        .sorted { $0.slotNumber < $1.slotNumber }
     }
 
     /// Reloads the library list from the on-disk cache + index for the active browser bucket.
