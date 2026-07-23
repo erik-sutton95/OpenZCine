@@ -849,12 +849,9 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
             notchBottom + padding + indicatorHeight / 2 - slack
         )
 
-        // Dynamic-Island rails collapse the pair into one two-row pill above the island,
-        // clamped below the lock clearance.
-        let pillCenterY = max(
-            max(0, phoneTopClearance) + pillHeight / 2,
-            notchTop - pillGap - pillHeight / 2
-        )
+        // Dynamic-Island rails collapse the pair into one two-row pill seated directly
+        // under the lock button (its clearance already carries the gap below the lock).
+        let pillCenterY = max(0, phoneTopClearance) + pillHeight / 2
         return MonitorBatteryRailLayout(
             phoneCenterX: indicatorCenterX,
             phoneCenterY: phoneCenterY,
