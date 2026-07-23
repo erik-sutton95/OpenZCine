@@ -89,6 +89,19 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     val hasConfiguration: Boolean
         get() = this != AUDIO
 
+    /**
+     * Assist tools that apply to still photography (iOS `appliesToPhotography`):
+     * the exposure aids plus the composition aids photographers actually use.
+     * Everything else is cinema-only, keeping the photo toolbar deliberately
+     * shorter so the stills strip gets the bar width.
+     */
+    val appliesToPhotography: Boolean
+        get() =
+            when (this) {
+                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL -> true
+                else -> false
+            }
+
     companion object {
         /** Local framing tools rendered from [OperatorSettings], never camera state. */
         val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, DESQ)

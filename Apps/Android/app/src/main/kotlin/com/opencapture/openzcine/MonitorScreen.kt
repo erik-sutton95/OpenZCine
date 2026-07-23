@@ -1772,6 +1772,9 @@ internal fun MonitorScreen(
                             ).alpha(if (locked) 0.4f else 1f),
                     )
                 } else {
+                    // Photography swaps the movie readouts for stills ones in
+                    // the same chrome (iOS `isPhotography`).
+                    val isPhotography = prefersPhotographyChrome(cameraProperties)
                     // Top info pill, centered in the deck band; compact in clean
                     // mode. The deck is feed-anchored and the synthesized island
                     // lane (see monitorLeadingInsetDp) starts the feed right of
@@ -1785,6 +1788,10 @@ internal fun MonitorScreen(
                                     recording = recording,
                                     timecodeRetention = timecodeRetention,
                                     sessionState = sessionState,
+                                    isPhotography = isPhotography,
+                                    shotsRemaining = cameraProperties.shotsRemaining,
+                                    stillSize = cameraProperties.stillSizeCompactLabel(),
+                                    stillQuality = cameraProperties.stillQualityCompactLabel(),
                                     recReadoutVisible = operatorSettings.recReadoutVisible.value,
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
@@ -1825,15 +1832,18 @@ internal fun MonitorScreen(
                     // assist toolbar at its zone, and the capture strip whose
                     // glass hugs its readouts against the band's trailing edge
                     // like the iOS content-hugging strip.
-                    // Photography mode hides View Assist (cinema tools).
-                    val isPhotography = prefersPhotographyChrome(cameraProperties)
+                    // Photography keeps the toolbar but narrows it to the
+                    // stills-relevant tools (iOS `appliesToPhotography`).
                     if (!isClean) {
-                        if (assistToolbarVisible && !isPhotography) {
+                        if (assistToolbarVisible) {
                             zones.assistStrip?.let { strip ->
                                 AssistToolbar(
                                     assist,
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
-                                    visibleTools = operatorSettings.visibleAssistToolbarTools,
+                                    visibleTools =
+                                        operatorSettings.visibleAssistToolbarTools.filter {
+                                            !isPhotography || it.appliesToPhotography
+                                        },
                                     framingConfiguration = localFraming,
                                     onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
@@ -1851,16 +1861,16 @@ internal fun MonitorScreen(
                                     if (isPhotography) {
                                         PhotographyCaptureStrip(
                                             properties = cameraProperties,
-                                            onSelectDrive = {},
-                                            onSelectMode = {},
-                                            onSelectIso = {},
-                                            onSelectShutter = {},
-                                            onSelectIris = {},
-                                            onSelectMetering = {},
-                                            onSelectFlash = {},
-                                            onSelectQuality = {},
-                                            onSelectFocus = {},
+                                            onOpenControl = { label ->
+                                                Toast.makeText(
+                                                        appContext,
+                                                        photographyControlStubMessage(label),
+                                                        Toast.LENGTH_SHORT,
+                                                    )
+                                                    .show()
+                                            },
                                             onInstantPlayback = onOpenMedia,
+                                            maxContentWidth = strip.width.dp,
                                         )
                                     } else {
                                         MonitorCaptureStrip(
@@ -2365,6 +2375,10 @@ private fun InfoPill(
     codec: String,
     media: String,
     fps: String,
+    isPhotography: Boolean = false,
+    shotsRemaining: Int? = null,
+    stillSize: String? = null,
+    stillQuality: String? = null,
     activePicker: MonitorPickerKind? = null,
     resolutionPickerAvailable: Boolean = false,
     codecPickerAvailable: Boolean = false,
@@ -2377,6 +2391,31 @@ private fun InfoPill(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Photography swaps the movie readouts for stills ones in the same
+        // pill (iOS InfoPillContent): shots remaining takes the timecode slot,
+        // image size and quality take resolution and codec, as plain pills.
+        if (isPhotography) {
+            ShotsRemainingReadout(shotsRemaining)
+            if (!compact) {
+                ReadoutPill(stillSize ?: "—") { tint ->
+                    PhotoGlyph(tint, Modifier.size(14.dp, 11.dp))
+                }
+                if (codecReadoutVisible) {
+                    ReadoutPill(stillQuality ?: "—") { tint ->
+                        ApertureGlyph(tint, Modifier.size(12.dp))
+                    }
+                }
+                if (mediaReadoutVisible) {
+                    ReadoutPill(media, onClick = onToggleMediaReadout) { tint ->
+                        SdCardGlyph(tint)
+                    }
+                }
+            }
+            if (fpsReadoutVisible) {
+                FpsChip(signalBars, fps)
+            }
+            return@Row
+        }
         if (recReadoutVisible) RecordChip(recording)
         RetainedCameraTimecodeReadout(
             retention = timecodeRetention,
@@ -2525,15 +2564,20 @@ private fun PortraitChrome(
 
     // Fit-mode horizontal assist toolbar between the scopes zone and the tile
     // grid (live only — the map emits the zone). 12/4dp insets float the
-    // glass pill off the screen edges, like iOS. Hidden in photography mode.
-    if (!isCommand && !isPhotography && operatorSettings.assistToolbarVisible.value) {
+    // glass pill off the screen edges, like iOS. Photography narrows the
+    // tool list to the stills set (iOS `appliesToPhotography`).
+    val photographyAssistTools =
+        operatorSettings.visibleAssistToolbarTools.filter {
+            !isPhotography || it.appliesToPhotography
+        }
+    if (!isCommand && operatorSettings.assistToolbarVisible.value) {
         zones.assistStrip?.let { strip ->
             AssistToolbar(
                 assist,
                 Modifier.zone(
                     ZoneFrame(strip.x + 12f, strip.y + 4f, strip.width - 24f, strip.height - 8f),
                 ).alpha(if (locked) 0.4f else 1f),
-                visibleTools = operatorSettings.visibleAssistToolbarTools,
+                visibleTools = photographyAssistTools,
                 framingConfiguration = operatorSettings.localFramingAssistConfiguration,
                 onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                 hapticsEnabled = operatorSettings.hapticsEnabled.value,
@@ -2604,16 +2648,16 @@ private fun PortraitChrome(
                 if (isPhotography) {
                     PhotographyCaptureStrip(
                         properties = cameraProperties,
-                        onSelectDrive = {},
-                        onSelectMode = {},
-                        onSelectIso = {},
-                        onSelectShutter = {},
-                        onSelectIris = {},
-                        onSelectMetering = {},
-                        onSelectFlash = {},
-                        onSelectQuality = {},
-                        onSelectFocus = {},
+                        onOpenControl = { label ->
+                            Toast.makeText(
+                                    context,
+                                    photographyControlStubMessage(label),
+                                    Toast.LENGTH_SHORT,
+                                )
+                                .show()
+                        },
                         onInstantPlayback = onOpenMedia,
+                        maxContentWidth = strip.width.dp,
                     )
                 } else {
                     MonitorCaptureStrip(
@@ -2631,7 +2675,7 @@ private fun PortraitChrome(
         }
     }
 
-    if (!isCommand && isFill && !isPhotography && operatorSettings.assistToolbarVisible.value) {
+    if (!isCommand && isFill && operatorSettings.assistToolbarVisible.value) {
         val railFrame =
             portraitFillAssistRailFrame(
                 feed = zones.feed,
@@ -2645,7 +2689,7 @@ private fun PortraitChrome(
             expanded = railExpanded,
             onExpandedChange = { railExpanded = it },
             modifier = Modifier.zone(railFrame).alpha(if (locked) 0.4f else 1f),
-            visibleTools = operatorSettings.visibleAssistToolbarTools,
+            visibleTools = photographyAssistTools,
             framingConfiguration = operatorSettings.localFramingAssistConfiguration,
             onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
             hapticsEnabled = operatorSettings.hapticsEnabled.value,

@@ -415,6 +415,8 @@ public data class CameraPropertySnapshot(
     val flashMode: String? = null,
     /** Exposure-compensation label. */
     val exposureBias: String? = null,
+    /** Frames remaining on the active card in photo mode. */
+    val shotsRemaining: Int? = null,
     /** Current descriptor-dependent camera-control capabilities. */
     val controlCapabilities: CameraControlCapabilities = CameraControlCapabilities(),
 )

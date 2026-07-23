@@ -116,6 +116,7 @@ internal object CameraPropertySnapshotWire {
             meteringMode = value.optionalString("meteringMode"),
             flashMode = value.optionalString("flashMode"),
             exposureBias = value.optionalString("exposureBias"),
+            shotsRemaining = value.optionalInt("shotsRemaining"),
             controlCapabilities =
                 CameraControlCapabilities(
                     isoValues = value.options("options.iso"),

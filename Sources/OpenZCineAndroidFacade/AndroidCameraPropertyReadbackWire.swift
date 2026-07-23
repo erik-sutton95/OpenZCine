@@ -255,6 +255,7 @@ public enum AndroidCameraPropertyReadbackWire {
         append("meteringMode", value: properties.meteringMode, to: &fields)
         append("flashMode", value: properties.flashMode, to: &fields)
         append("exposureBias", value: properties.exposureBias, to: &fields)
+        append("shotsRemaining", value: properties.shotsRemaining.map(String.init), to: &fields)
         let controls = readback.controls
         append("resolutionFrameRate", value: controls.resolutionFrameRate, to: &fields)
         append("codecSelection", value: controls.codec, to: &fields)
