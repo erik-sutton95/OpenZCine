@@ -852,8 +852,10 @@ struct BatteryRailModule: View {
 
             ZStack {
                 if layout.usesBatteryPill {
+                    // Centred in the rail zone's own width — the zone ends short of the feed
+                    // frame, which keeps the gauges off the image.
                     batteryPill
-                        .position(x: CGFloat(layout.pillCenterX), y: CGFloat(layout.pillCenterY))
+                        .position(x: proxy.size.width / 2, y: CGFloat(layout.pillCenterY))
                 } else {
                     phoneBatteryIndicator(compact: layout.phoneIndicatorHeight < 40)
                         .position(
@@ -867,26 +869,25 @@ struct BatteryRailModule: View {
         }
     }
 
-    /// The combined two-row battery pill (Dynamic-Island rails): one glass unit above the
-    /// island, a row per device — icon, glyph, number.
+    /// The combined battery gauges (Dynamic-Island rails): two bare rows above the island,
+    /// each a device icon beside a battery-shaped outline with the number inside — narrow
+    /// enough to sit inside the rail lane without touching the feed.
     private var batteryPill: some View {
-        GlassPanel(padding: EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9)) {
-            VStack(alignment: .leading, spacing: 4) {
-                BatteryIndicator(
-                    percent: model.cameraState.phoneBatteryPercent,
-                    deviceSystemName: "iphone",
-                    isCamera: false,
-                    isCharging: model.phoneBatteryCharging,
-                    layout: .pillRow
-                )
-                BatteryIndicator(
-                    percent: model.cameraState.cameraBatteryPercent,
-                    deviceSystemName: "camera",
-                    isCamera: true,
-                    isCharging: model.cameraBatteryCharging,
-                    layout: .pillRow
-                )
-            }
+        VStack(alignment: .leading, spacing: 5) {
+            BatteryIndicator(
+                percent: model.cameraState.phoneBatteryPercent,
+                deviceSystemName: "iphone",
+                isCamera: false,
+                isCharging: model.phoneBatteryCharging,
+                layout: .pillRow
+            )
+            BatteryIndicator(
+                percent: model.cameraState.cameraBatteryPercent,
+                deviceSystemName: "camera",
+                isCamera: true,
+                isCharging: model.cameraBatteryCharging,
+                layout: .pillRow
+            )
         }
     }
 
@@ -1406,22 +1407,37 @@ struct BatteryIndicator: View {
         }
     }
 
-    /// One compact pill row: device icon, tinted glyph, bare number (the pill's tight width
-    /// drops the % sign — the context is unambiguous).
+    /// One compact gauge row: device icon beside a battery-shaped outline with the bare
+    /// number inside (the tight lane drops the % sign — the context is unambiguous). The
+    /// outline's stroke carries the state tint; a bolt precedes the number while charging.
     private var pillRowBody: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             Image(systemName: deviceSystemName)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(LiveDesign.muted)
-                .frame(width: 12)
-            Image(systemName: batterySymbol)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(batteryTint)
-                .overlay { chargingOverlay }
-            Text("\(percent)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text.opacity(0.72))
-                .frame(minWidth: 22, alignment: .trailing)
+                .frame(width: 10)
+            HStack(spacing: 1) {
+                if isCharging {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(batteryTint)
+                }
+                Text("\(percent)")
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(batteryTint)
+            }
+            .frame(width: 26, height: 15)
+            .overlay {
+                RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                    .strokeBorder(batteryTint.opacity(0.85), lineWidth: 1.2)
+            }
+            // The battery cap nub, completing the glyph shape.
+            .overlay(alignment: .trailing) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(batteryTint.opacity(0.85))
+                    .frame(width: 1.6, height: 6)
+                    .offset(x: 3)
+            }
         }
     }
 

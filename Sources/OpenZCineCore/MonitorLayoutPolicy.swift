@@ -764,18 +764,19 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// the island itself.
     public static let indicatorFrameSlack = 8.0
 
-    /// The combined two-row battery pill (device icon · glyph · number per row) shown above
-    /// the island on Dynamic-Island rails; classic-notch rails keep the split layout — their
-    /// taller notch leaves no lane between the lock button and the reservation.
-    public static let pillWidth = 86.0
-    public static let pillHeight = 48.0
-    /// Clearance between the pill and the lock button above / the island below.
-    public static let pillGap = 4.0
-    /// The pill's leading inset from the screen edge.
-    public static let pillLeading = 6.0
+    /// The combined battery gauges (device icon · number-in-outline per row) shown above the
+    /// island on Dynamic-Island rails — narrow enough to live inside the rail lane without
+    /// touching the feed frame. Classic-notch rails keep the split layout; their taller notch
+    /// leaves no lane between the lock button and the reservation.
+    public static let pillWidth = 48.0
+    public static let pillHeight = 40.0
+    /// Clearance between the gauges and the lock button above / the island below.
+    public static let pillGap = 6.0
+    /// The gauges' leading inset from the screen edge.
+    public static let pillLeading = 8.0
 
-    /// The pill's trailing edge — chrome beside the rail (the photo assist rail) clears this.
-    /// Zero on classic-notch rails, which keep the split indicators inside the narrow lane.
+    /// The gauges' trailing edge. Sized to stay inside the rail lane, so neighbouring chrome
+    /// needs no clearance beyond the lock button's — kept as the shared reference point.
     public static func batteryPillTrailing(safeArea: MonitorEdgeInsets) -> Double {
         usesClassicSideNotch(safeArea: safeArea) ? 0 : pillLeading + pillWidth
     }
