@@ -755,11 +755,14 @@ struct PanelHost: View {
         .ignoresSafeArea()
     }
 
-    /// The bottom-bar picker's contents: every setting shares the `PickerPanel` drum except
-    /// Stabilization, whose VR / e-VR pair is two independent on/off toggles, not a value wheel.
+    /// The picker's contents: every setting shares the `PickerPanel` drum except Stabilization
+    /// (two independent on/off toggles, not a value wheel) and the photo Quality pair (two
+    /// side-by-side drums with per-half sub-options).
     @ViewBuilder
     private func pickerBodyContent(_ picker: CameraPicker) -> some View {
-        if picker == .stabilization {
+        if picker == .stillQuality {
+            QualityPickerPanel()
+        } else if picker == .stabilization {
             GlassPanel(
                 padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)
             ) {
@@ -788,7 +791,8 @@ struct PanelHost: View {
             // codec popup dead-centre like the other command pickers instead of the top-left corner.
             let isCommandCenter = !isPortrait && model.displayMode == .command
             let gap: CGFloat = 8
-            let width: CGFloat = 340
+            // The quality pair needs room for two drums side by side.
+            let width: CGFloat = picker == .stillQuality ? 400 : 340
             // Centre the popup on the cell, clamped so it never runs off either screen edge.
             let rawLeading = cell.midX - width / 2
             let leading =
@@ -797,13 +801,19 @@ struct PanelHost: View {
                 : (hasCell
                     ? min(max(rawLeading, host.minX + 8), host.maxX - width - 8)
                     : host.minX + 8)
-            // Top edge sits a hair below the cell; the hidden state parks it fully above the screen.
+            // Top edge sits a hair below the cell; the hidden state parks it fully above the
+            // screen. A panel taller than the space below the cell (the two-drum quality pair)
+            // slides up over the deck rather than clipping at the screen bottom.
             let top =
                 isCommandCenter
                 ? host.midY - pickerHeight / 2
-                : (hasCell ? (cell.maxY + gap) : (host.minY + chromeInsets.top + 8))
+                : (hasCell
+                    ? max(
+                        min(cell.maxY + gap, host.maxY - pickerHeight - 8),
+                        host.minY + chromeInsets.top + 8)
+                    : (host.minY + chromeInsets.top + 8))
             let slide = (top - host.minY) + pickerHeight + 40
-            PickerPanel(picker: picker)
+            pickerBodyContent(picker)
                 .environment(model)
                 .id(picker)
                 .transition(.opacity)
@@ -1364,6 +1374,165 @@ struct DrumSideAdjust {
     var plusEnabled: Bool
     var onMinus: () -> Void
     var onPlus: () -> Void
+}
+
+/// The photo Quality picker: two side-by-side drums — RAW on/off and the JPEG/HEIF tier —
+/// each with its sub-option beneath (NEF compression under RAW, the ★ optimal-quality toggle
+/// under the tier). The pair composes one image-quality write; NEF compression writes its own
+/// property. There is no nothing-selected quality on the body, so turning the last active half
+/// off bounces the other half back on, and each half's sub-option dims while that half is off.
+struct QualityPickerPanel: View {
+    @Environment(NativeAppModel.self) private var model
+    /// The composed pair, seeded from the camera once on appear (never re-read in `body` —
+    /// the wheels would jog mid-spin like every other drum).
+    @State private var config = StillQualityConfiguration(
+        rawEnabled: true, tier: .fine, starred: false)
+    @State private var rawSelection = ""
+    @State private var tierSelection = ""
+    /// Last composed label written, so bounces and re-seeds don't fire redundant writes.
+    @State private var lastApplied = ""
+
+    private static let rawOptions = ["On", "Off"]
+    private static let tierOptions = StillQualityConfiguration.Tier.allCases.map(\.rawValue)
+    private static let nefOptions = [
+        "High efficiency", "High efficiency★", "Lossless compression",
+    ]
+
+    var body: some View {
+        GlassPanel(
+            padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                PickerHeader(label: "QUALITY", subtitle: CameraPicker.stillQuality.subtitle) {
+                    model.dismissActivePanel()
+                }
+                HStack(alignment: .top, spacing: 16) {
+                    column(caption: "RAW") {
+                        AccentDrumWheel(
+                            options: Self.rawOptions, selection: $rawSelection, wheelHeight: 112)
+                        nefRows
+                    }
+                    column(caption: "JPEG · HEIF") {
+                        AccentDrumWheel(
+                            options: Self.tierOptions, selection: $tierSelection, wheelHeight: 112)
+                        starToggle
+                    }
+                }
+            }
+        }
+        .onAppear(perform: seed)
+        .onChange(of: rawSelection) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            let enabled = newValue == "On"
+            guard enabled != config.rawEnabled else { return }
+            config.rawEnabled = enabled
+            if !enabled, config.tier == .off {
+                // Dropping RAW with the tier off would select nothing — bounce the tier on.
+                config.tier = .fine
+                tierSelection = config.tier.rawValue
+            }
+            applyIfChanged()
+        }
+        .onChange(of: tierSelection) { _, newValue in
+            guard let tier = StillQualityConfiguration.Tier(rawValue: newValue),
+                tier != config.tier
+            else { return }
+            config.tier = tier
+            if tier == .off {
+                config.starred = false
+                if !config.rawEnabled {
+                    // Tier off with RAW off would select nothing — bounce RAW on.
+                    config.rawEnabled = true
+                    rawSelection = "On"
+                }
+            }
+            applyIfChanged()
+        }
+    }
+
+    /// A captioned drum column, equal-width so the two wheels split the panel evenly.
+    private func column(
+        caption: String, @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(caption)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .kerning(1.5)
+                .foregroundStyle(LiveDesign.faint)
+                .frame(maxWidth: .infinity, alignment: .center)
+            content()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The NEF (RAW) recording compression rows — a RAW setting, parked while RAW is off.
+    private var nefRows: some View {
+        let enabled = config.rawEnabled
+        let current = model.cameraPropertySnapshot.rawCompression
+        return VStack(spacing: 6) {
+            ForEach(Self.nefOptions, id: \.self) { option in
+                optionChip(option, active: current == option, enabled: enabled) {
+                    model.applyStillRawCompression(option)
+                }
+            }
+        }
+        .opacity(enabled ? 1 : 0.35)
+        .disabled(!enabled)
+    }
+
+    /// The ★ optimal-quality toggle — meaningless with the tier off, so it dims there.
+    private var starToggle: some View {
+        let enabled = config.tier != .off
+        return optionChip("★ Optimal quality", active: config.starred, enabled: enabled) {
+            config.starred.toggle()
+            applyIfChanged()
+        }
+        .opacity(enabled ? 1 : 0.35)
+        .disabled(!enabled)
+    }
+
+    /// A compact selectable row in the mode-bar chip style.
+    private func optionChip(
+        _ label: String, active: Bool, enabled: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .foregroundStyle(active ? LiveDesign.accent : LiveDesign.muted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(
+                    active ? LiveDesign.accentDim : LiveDesign.background.opacity(0.28),
+                    in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                        .stroke(active ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.zcTapTarget)
+    }
+
+    private func seed() {
+        guard rawSelection.isEmpty else { return }
+        if let label = model.cameraPropertySnapshot.compression,
+            let code = PTPCameraPropertyDecoders.compressionSettingCode(for: label),
+            let decoded = StillQualityConfiguration.decode(compressionCode: code)
+        {
+            config = decoded
+        }
+        rawSelection = config.rawEnabled ? "On" : "Off"
+        tierSelection = config.tier.rawValue
+        lastApplied = config.compressionLabel ?? ""
+    }
+
+    private func applyIfChanged() {
+        guard let label = config.compressionLabel, label != lastApplied else { return }
+        lastApplied = label
+        model.applyPicker(.stillQuality, mode: 0, value: label)
+    }
 }
 
 struct AccentDrumWheel: View {
@@ -2151,7 +2320,15 @@ private struct AssistOptionsPopupAnchor {
 
         if hasToolbar {
             topInset = topSafeArea + 4
-            let trailingX = toolbar.maxX
+            // Right edge tracks the toolbar, but never so tightly that the panel drops below its
+            // preferred width — the photography band hands most of the row to the capture strip,
+            // leaving an assist scroller far narrower than any panel, and a toolbar-capped box
+            // would crush the panel with it. When the toolbar can't host the panel, grow the
+            // trailing edge over the feed instead (still inside the chrome margin).
+            let preferredTrailing = minLeadingX + preferredPanelWidth
+            let chromeTrailingLimit = host.maxX - chromeInsets.trailing
+            let trailingX = min(
+                max(toolbar.maxX, preferredTrailing), max(toolbar.maxX, chromeTrailingLimit))
             // Box spans host leading → toolbar trailing; `.bottomTrailing` parks the popup there.
             boxWidth = max(0, trailingX - host.minX)
             let maxPanelWidth = max(0, trailingX - minLeadingX)

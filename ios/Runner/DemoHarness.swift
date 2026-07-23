@@ -91,6 +91,13 @@ enum DemoHarness {
                     model.showPicker(
                         picker, mode: env["ZC_DEMO_PICKER_MODE"].flatMap(Int.init) ?? 0)
                 }
+                if let raw = env["ZC_DEMO_ASSIST_OPTIONS"],
+                    let tool = MonitorAssistTool(rawValue: raw)
+                {
+                    // Opens a view-assist options popup (falseColor/zebra/…) for headless
+                    // popup-layout captures.
+                    model.presentAssistOptions(tool)
+                }
                 if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
                     // Demo/screenshot affordance: launch straight into a DISP mode (live/clean/
                     // command) for headless mode-state captures.
@@ -105,6 +112,13 @@ enum DemoHarness {
                 if env["ZC_DEMO_PHOTO"] == "1" {
                     // Stage photography chrome (compact stills strip + rail shutter, no assist).
                     model.demoTogglePhotographyMode()
+                }
+                if let label = env["ZC_DEMO_PHOTO_AREA"],
+                    let area = StillImageArea.area(forLabel: label)
+                {
+                    // Demo/screenshot affordance: stage a photo image area ("FX"/"DX"/"1:1"/
+                    // "16:9") so aspect-dependent chrome states capture headlessly.
+                    model.setStillImageArea(area)
                 }
                 if let raw = env["ZC_DEMO_LUT"] {
                     // Demo/screenshot affordance: seed a LUT and switch the tool on. `custom:<file>`

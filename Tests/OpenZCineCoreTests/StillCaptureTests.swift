@@ -121,4 +121,53 @@ struct StillCaptureTests {
             StillCapturePolicy.photoMonitorPollOrder.filter { $0 != .liveViewSelector }
                 .contains(photoOdd))
     }
+
+    @Test func stringEnumDescriptorParsesAndRanksSizeClasses() {
+        // A String-typed descriptor dataset: code, type 0xFFFF, get/set, default + current
+        // strings, enum form with three resolution strings.
+        var bytes: [UInt8] = [0x03, 0x50, 0xFF, 0xFF, 0x01]
+        let sizes = ["6048x4032", "4528x3016", "3024x2016"]
+        bytes += Array(PTPCameraPropertyDecoders.ptpStringData(sizes[0]))  // factory default
+        bytes += Array(PTPCameraPropertyDecoders.ptpStringData(sizes[0]))  // current
+        bytes += [0x02, 0x03, 0x00]
+        for size in sizes {
+            bytes += Array(PTPCameraPropertyDecoders.ptpStringData(size))
+        }
+        let options = PTPCameraPropertyDecoders.devicePropDescStringEnumValues(data: Data(bytes))
+        #expect(options == sizes)
+
+        // Rank order comes from pixel count, not list order.
+        var snap = PTPCameraPropertySnapshot()
+        snap = snap.applying(
+            property: .imageSize, data: PTPCameraPropertyDecoders.ptpStringData("4528x3016"))
+        #expect(snap.stillSizeClassLabel(options: sizes.shuffled()) == "M")
+        snap = snap.applying(property: .captureAreaCrop, data: Data([5]))
+        #expect(snap.stillSizeAreaLabel(sizeOptions: sizes) == "16:9 · M")
+
+        // Unknown domain or off-domain value never leaks a raw resolution into the pill.
+        #expect(snap.stillSizeClassLabel(options: []) == nil)
+        #expect(snap.stillSizeAreaLabel(sizeOptions: []) == "16:9")
+    }
+
+    @Test func qualityConfigurationRoundTripsEveryCompressionCode() {
+        // Every writable code decomposes into the drum pair and composes back to itself.
+        let writable: [UInt8] = Array(0...5) + [7] + Array(8...13)
+        for code in writable {
+            let config = StillQualityConfiguration.decode(compressionCode: code)
+            #expect(config?.compressionCode == code)
+        }
+        // TIFF is unrepresentable in the pair.
+        #expect(StillQualityConfiguration.decode(compressionCode: 6) == nil)
+        // Both halves off is unwritable.
+        #expect(
+            StillQualityConfiguration(rawEnabled: false, tier: .off, starred: false)
+                .compressionCode == nil)
+        // Spot-check the doc ladder: RAW+Normal★ and JPEG Fine.
+        #expect(
+            StillQualityConfiguration(rawEnabled: true, tier: .normal, starred: true)
+                .compressionLabel == "RAW+JPEG Normal★")
+        #expect(
+            StillQualityConfiguration(rawEnabled: false, tier: .fine, starred: false)
+                .compressionLabel == "JPEG Fine")
+    }
 }

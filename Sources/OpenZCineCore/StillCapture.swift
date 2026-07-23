@@ -98,6 +98,7 @@ public enum StillCapturePolicy: Sendable {
         .imageSize,
         .captureAreaCrop,
         .compressionSetting,
+        .rawCompressionType,
         .exposureProgramMode,
         .stillISOAutoControl,
         .isoControlSensitivity,
@@ -196,6 +197,64 @@ public enum StillImageArea: UInt8, Equatable, Sendable, CaseIterable {
     }
 }
 
+/// The Image-quality drum pair decomposed from / composed into a `CompressionSetting` code:
+/// a RAW half and a JPEG/HEIF tier half (the body labels the tier JPEG or HEIF by its tone
+/// mode; the codes are the same). The ★ flag is the optimal-quality variant of the tier.
+public struct StillQualityConfiguration: Equatable, Sendable {
+    public enum Tier: String, CaseIterable, Sendable {
+        case off = "Off"
+        case basic = "Basic"
+        case normal = "Normal"
+        case fine = "Fine"
+    }
+
+    public var rawEnabled: Bool
+    public var tier: Tier
+    public var starred: Bool
+
+    public init(rawEnabled: Bool, tier: Tier, starred: Bool) {
+        self.rawEnabled = rawEnabled
+        self.tier = tier
+        self.starred = starred
+    }
+
+    private static let tierLadder: [Tier] = [.basic, .normal, .fine]
+
+    /// Decodes a `CompressionSetting` code (0–5 JPEG±★, 7 RAW, 8–13 RAW+JPEG±★). TIFF and
+    /// unknown codes return nil — the panel seeds its defaults instead.
+    public static func decode(compressionCode code: UInt8) -> StillQualityConfiguration? {
+        switch code {
+        case 0...5:
+            return StillQualityConfiguration(
+                rawEnabled: false, tier: tierLadder[Int(code) / 2], starred: code % 2 == 1)
+        case 7:
+            return StillQualityConfiguration(rawEnabled: true, tier: .off, starred: false)
+        case 8...13:
+            return StillQualityConfiguration(
+                rawEnabled: true, tier: tierLadder[Int(code - 8) / 2], starred: (code - 8) % 2 == 1
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// The `CompressionSetting` code for this pair; nil for the unwritable both-off state.
+    public var compressionCode: UInt8? {
+        let tierIndex = Self.tierLadder.firstIndex(of: tier)
+        switch (rawEnabled, tierIndex) {
+        case (true, nil): return 7
+        case (true, let index?): return UInt8(8 + index * 2 + (starred ? 1 : 0))
+        case (false, let index?): return UInt8(index * 2 + (starred ? 1 : 0))
+        case (false, nil): return nil
+        }
+    }
+
+    /// The decoded quality label for this pair (the write path's label form), nil when unwritable.
+    public var compressionLabel: String? {
+        compressionCode.map(PTPCameraPropertyDecoders.compressionSetting)
+    }
+}
+
 extension PTPCameraPropertySnapshot {
     /// The photography capture strip, in the same `CameraValue` shape the cinema strip
     /// renders — same tiles, same bar, different readouts. Quality and image size live
@@ -213,10 +272,11 @@ extension PTPCameraPropertySnapshot {
         ]
     }
 
-    /// Top-bar size readout: image area + size ("FX · L"). Falls back to whichever half
-    /// the camera has reported so far.
-    public var stillSizeAreaLabel: String? {
-        let size = stillSizeCompactLabel
+    /// Top-bar size readout: image area + size class ("FX · L"). Bodies report ImageSize as a
+    /// resolution string, so the class letter is ranked against the camera's enumerated sizes —
+    /// never shown raw (a "6048x3400" pill is dead weight). Falls back to whichever half is known.
+    public func stillSizeAreaLabel(sizeOptions: [String]) -> String? {
+        let size = stillSizeClassLabel(options: sizeOptions)
         let area = imageArea?.label
         switch (area, size) {
         case (let area?, let size?): return "\(area) · \(size)"
@@ -224,6 +284,31 @@ extension PTPCameraPropertySnapshot {
         case (nil, let size?): return size
         case (nil, nil): return nil
         }
+    }
+
+    /// Ranks the current image-size string among the camera's enumerated sizes: largest pixel
+    /// count = L, then M, then S. Bodies that report "Size L"-form strings pass through directly.
+    /// Nil when the domain is unknown or the current value isn't in it.
+    public func stillSizeClassLabel(options: [String]) -> String? {
+        guard imageSize != nil else { return nil }
+        let letters = ["L", "M", "S"]
+        if let compact = stillSizeCompactLabel, letters.contains(compact) { return compact }
+        let ranked =
+            options
+            .compactMap { option in Self.pixelCount(option).map { (option, $0) } }
+            .sorted { $0.1 > $1.1 }
+        guard let index = ranked.firstIndex(where: { $0.0 == imageSize }), index < letters.count
+        else { return nil }
+        return letters[index]
+    }
+
+    /// "6048x4032" → 24_385_536; nil for strings that aren't a WxH resolution.
+    private static func pixelCount(_ size: String) -> Int? {
+        let parts = size.lowercased().split(separator: "x")
+        guard parts.count == 2, let width = Int(parts[0]), let height = Int(parts[1]) else {
+            return nil
+        }
+        return width * height
     }
 
     /// The live-view frame aspect for the current photo image area (3:2 default).

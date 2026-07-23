@@ -734,6 +734,21 @@ final class NativeCameraSession: @unchecked Sendable {
         return PTPCameraPropertyDecoders.optionLabels(for: property, rawValues: values)
     }
 
+    /// Reads a standard-space string property's descriptor enum (ImageSize) via plain
+    /// GetDevicePropDesc — 2-byte codes never route through the extended describe op.
+    func stringEnumOptions(for property: PTPPropertyCode) async throws -> [String] {
+        let result = try await transact(
+            operationCode: .getDevicePropDesc,
+            parameters: [property.rawValue],
+            dataPhase: .dataIn
+        )
+        guard result.operationResponse.responseCode == .ok else {
+            throw NativeCameraSessionError.operationRejected(
+                .getDevicePropDesc, result.operationResponse.responseCode)
+        }
+        return PTPCameraPropertyDecoders.devicePropDescStringEnumValues(data: result.data)
+    }
+
     func describeCameraPropertyEnum(
         _ property: PTPPropertyCode,
         valueByteCount: Int

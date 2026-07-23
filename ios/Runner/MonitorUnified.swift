@@ -53,9 +53,8 @@ struct MonitorInfoBar: View {
                                 )
                                 .accessibilityLabel("Image quality")
                             }
-                            if chrome.mediaReadoutVisible {
-                                mediaCell
-                            }
+                            // No MEDIA cell in photo mode — the SHOTS readout tap-toggles to the
+                            // storage form instead.
                         }
                     } else {
                         if chrome.recReadoutVisible {
@@ -92,25 +91,44 @@ struct MonitorInfoBar: View {
         private var imageAreaButton: some View {
             readoutButton(
                 .stillSize, icon: "photo",
-                value: model.cameraPropertySnapshot.stillSizeAreaLabel ?? "—"
+                value: model.stillSizeAreaDisplay ?? "—"
             )
             .accessibilityLabel("Image area and size")
         }
 
-        /// Frames left on the card, in the timecode slot's typography. Counts above four
-        /// digits compact to "12.3k" the way camera bodies do.
+        /// Frames left on the card, in the timecode slot's typography — a tap flips it to the
+        /// remaining-storage readout (GB + percent), standing in for the MEDIA cell photo mode
+        /// drops. Counts above four digits compact to "12.3k" the way camera bodies do.
         private struct ShotsRemainingReadout: View {
             @Environment(NativeAppModel.self) private var model
             var body: some View {
+                Button {
+                    model.photoPillShowsStorage.toggle()
+                } label: {
+                    readout
+                        .font(.system(size: 20, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.zcTapTarget)
+                // Pin the cell's geometry so the width change when the readout flips can't
+                // relayout the cell out from under an in-flight tap (same trap as the MEDIA cell).
+                .geometryGroup()
+            }
+
+            private var readout: Text {
+                if model.photoPillShowsStorage, let status = model.cameraState.mediaStatus {
+                    return Text("\(status.gigabytesFree) GB").foregroundStyle(LiveDesign.text)
+                        + Text(" \(status.percentFree)%")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LiveDesign.muted)
+                }
                 let remaining = model.cameraPropertySnapshot.shotsRemaining
-                let label = remaining.map(Self.compactCount) ?? "—"
-                return
-                    (Text(label).foregroundStyle(LiveDesign.text)
+                return Text(remaining.map(Self.compactCount) ?? "—")
+                    .foregroundStyle(LiveDesign.text)
                     + Text(" SHOTS").font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(LiveDesign.muted))
-                    .font(.system(size: 20, weight: .medium, design: .monospaced))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .foregroundStyle(LiveDesign.muted)
             }
 
             private static func compactCount(_ count: Int) -> String {
@@ -804,16 +822,26 @@ struct MonitorSystemCluster: View {
 
     private var mediaButton: some View {
         let size = CGFloat(MonitorSideRailControlLayout.auxiliaryButtonSize)
+        let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: model.cameraPropertySnapshot.captureSelector)
         return Button {
-            model.activePanel = .media
+            model.openMediaBrowser()
         } label: {
-            // The photo-stack glyph (formerly the strip's instant-playback icon) reads
-            // better as "media" than the old filmstrip asset.
-            Image(systemName: "photo.on.rectangle")
-                .font(.system(size: size * 0.36, weight: .medium))
-                .foregroundStyle(LiveDesign.text.opacity(0.86))
-                .frame(width: size, height: size)
-                .liquidGlass(in: Circle())
+            if isPhotography {
+                // The photo-stack glyph (formerly the strip's instant-playback icon) reads
+                // better as "media" on the stills side; cinema keeps the film-roll asset.
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: size * 0.36, weight: .medium))
+                    .foregroundStyle(LiveDesign.text.opacity(0.86))
+                    .frame(width: size, height: size)
+                    .liquidGlass(in: Circle())
+            } else {
+                AssetCircleButton(
+                    assetName: "IconMedia",
+                    systemName: "rectangle.stack",
+                    size: size
+                )
+            }
         }
         .buttonStyle(.zcTapTarget)
         .accessibilityLabel("Open Media")

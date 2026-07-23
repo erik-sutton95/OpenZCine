@@ -34,6 +34,7 @@ public enum PTPCameraControl: Equatable, Sendable {
     case stillMeter
     case stillImageSize
     case stillQuality
+    case stillRawCompression
 }
 
 extension PTPPropertyCode {
@@ -338,6 +339,14 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
                 return nil
             }
             return PTPCameraPropertyWrite(property: .compressionSetting, data: Data([code]))
+        case .stillRawCompression:
+            // `RawCompression` (0xD016, UINT8) — the NEF (RAW) recording menu. [verify-on-HW:
+            // first-generation bodies use the Compressed/Uncompressed value set and reject the
+            // modern trio; the queue's rejection surface handles it.]
+            guard let code = PTPCameraPropertyDecoders.rawCompressionCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(property: .rawCompressionType, data: Data([code]))
         case .codec, .resolution:
             // Label-based encoding is intentionally unsupported: the picker writes the camera's
             // exact advertised raw value directly via `screenSize(raw:)` / `fileType(raw:)`
@@ -943,8 +952,8 @@ public enum PTPCameraPropertyDecoders {
         raw == 0 ? "OFF" : "ON"
     }
 
-    /// `CompressionSetting` (0x5004, UINT8) raw → label. Star variants are the size-priority
-    /// JPEGs; 6 is unassigned on the bodies checked. [VERIFY-ON-HW]
+    /// `CompressionSetting` (0x5004, UINT8) raw → label. Star variants are the optimal-quality
+    /// JPEGs (fixed compression ratio); plain tiers are size-priority. [VERIFY-ON-HW]
     public static func compressionSetting(_ raw: UInt8) -> String {
         switch raw {
         case 0: "JPEG Basic"
@@ -969,6 +978,25 @@ public enum PTPCameraPropertyDecoders {
     public static func compressionSettingCode(for label: String) -> UInt8? {
         // ponytail: derived by scanning the forward decoder so the two can never drift.
         (UInt8(0)...13).first { compressionSetting($0) == label }
+    }
+
+    /// `RawCompressionType` (0xD016, UINT8) raw → label: the NEF (RAW) recording menu. The value
+    /// set is the union across generations — first-generation bodies use 1/2, current bodies
+    /// 0/3/4. [verify-on-HW]
+    public static func rawCompression(_ raw: UInt8) -> String {
+        switch raw {
+        case 0: "Lossless compression"
+        case 1: "Compressed"
+        case 2: "Uncompressed"
+        case 3: "High efficiency★"
+        case 4: "High efficiency"
+        default: hex(UInt32(raw))
+        }
+    }
+
+    /// Inverse of `rawCompression`, for encoding the quality panel's NEF selection.
+    public static func rawCompressionCode(for label: String) -> UInt8? {
+        (UInt8(0)...4).first { rawCompression($0) == label }
     }
 
     /// `ExposureMeteringMode` (0x500B, UINT16) raw → label. Movie mode has a separate prop.
@@ -1255,6 +1283,40 @@ extension PTPCameraPropertyDecoders {
         return []
     }
 
+    /// Extracts the enumerated values of a String-typed DevicePropDesc dataset (ImageSize and
+    /// similar): after code/type/get-set, skips the factory-default and current strings — their
+    /// lengths are self-describing, so this walks a cursor instead of scanning — then reads the
+    /// enumeration's count-prefixed string list. Empty when the dataset isn't a string enumeration.
+    public static func devicePropDescStringEnumValues(data: Data) -> [String] {
+        let bytes = Array(data)
+        guard bytes.count >= 5, ByteCoding.readUInt16LE(bytes, at: 2) == 0xFFFF else { return [] }
+        var cursor = 5
+        guard skipPTPString(bytes, &cursor), skipPTPString(bytes, &cursor) else { return [] }
+        guard cursor < bytes.count, bytes[cursor] == 0x02 else { return [] }
+        cursor += 1
+        guard cursor + 2 <= bytes.count else { return [] }
+        let count = Int(ByteCoding.readUInt16LE(bytes, at: cursor))
+        cursor += 2
+        var values: [String] = []
+        for _ in 0..<count {
+            let start = cursor
+            guard skipPTPString(bytes, &cursor) else { break }
+            if let value = stringFromPTPStringData(Data(bytes[start..<cursor])) {
+                values.append(value)
+            }
+        }
+        return values
+    }
+
+    /// Advances `cursor` past one count-prefixed PTP string; false when the buffer ends short.
+    private static func skipPTPString(_ bytes: [UInt8], _ cursor: inout Int) -> Bool {
+        guard cursor < bytes.count else { return false }
+        let next = cursor + 1 + Int(bytes[cursor]) * 2
+        guard next <= bytes.count else { return false }
+        cursor = next
+        return true
+    }
+
     /// Maps a property's advertised descriptor-enum values to picker option labels, decoding each
     /// through the *same* table the live snapshot uses so the options round-trip with the writes the
     /// pickers send back. Values the decoder doesn't recognise (hex placeholders), the "no value"
@@ -1379,7 +1441,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         flashMode: String? = nil,
         exposureBias: String? = nil,
         shotsRemaining: Int? = nil,
-        imageArea: StillImageArea? = nil
+        imageArea: StillImageArea? = nil,
+        rawCompression: String? = nil
     ) {
         self.iso = iso
         self.baseISO = baseISO
@@ -1425,6 +1488,7 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.exposureBias = exposureBias
         self.shotsRemaining = shotsRemaining
         self.imageArea = imageArea
+        self.rawCompression = rawCompression
     }
 
     // Exposure.
@@ -1501,6 +1565,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public let shotsRemaining: Int?
     /// Photo image area (sensor crop) from `CaptureAreaCrop`.
     public let imageArea: StillImageArea?
+    /// NEF (RAW) recording compression from `RawCompressionType`.
+    public let rawCompression: String?
 
     /// Command-monitor stabilisation summary (movie VR + electronic VR).
     public var stabilizationSummary: String? {
@@ -1648,6 +1714,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
                 imageSize: PTPCameraPropertyDecoders.stringFromPTPStringData(data) ?? "—")
         case .compressionSetting where bytes.count >= 1:
             return replacing(compression: PTPCameraPropertyDecoders.compressionSetting(bytes[0]))
+        case .rawCompressionType where bytes.count >= 1:
+            return replacing(rawCompression: PTPCameraPropertyDecoders.rawCompression(bytes[0]))
         case .exposureMeteringMode where bytes.count >= 2:
             return replacing(
                 meteringMode: PTPCameraPropertyDecoders.exposureMetering(
@@ -1740,7 +1808,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         flashMode: String? = nil,
         exposureBias: String? = nil,
         shotsRemaining: Int? = nil,
-        imageArea: StillImageArea? = nil
+        imageArea: StillImageArea? = nil,
+        rawCompression: String? = nil
     ) -> PTPCameraPropertySnapshot {
         PTPCameraPropertySnapshot(
             iso: iso ?? self.iso,
@@ -1786,7 +1855,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             flashMode: flashMode ?? self.flashMode,
             exposureBias: exposureBias ?? self.exposureBias,
             shotsRemaining: shotsRemaining ?? self.shotsRemaining,
-            imageArea: imageArea ?? self.imageArea
+            imageArea: imageArea ?? self.imageArea,
+            rawCompression: rawCompression ?? self.rawCompression
         )
     }
 }

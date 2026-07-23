@@ -781,6 +781,8 @@ final class NativeAppModel {
     /// When non-nil, the next picker present opens on this mode tab (e.g. FOCUS Area = 1).
     var pickerInitialMode: Int?
     var prefersMediaDuration = false
+    /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
+    var photoPillShowsStorage = false
     var isRecording = false {
         didSet {
             guard oldValue != isRecording else { return }
@@ -2203,24 +2205,21 @@ final class NativeAppModel {
                     .applying(
                         property: .exposureRemaining, data: Data(ByteCoding.uint32LE(1234))
                     )
-                    .applying(property: .imageSize, data: demoSizeLString)
+                    .applying(
+                        property: .imageSize,
+                        data: PTPCameraPropertyDecoders.ptpStringData("6048x4032")
+                    )
                     .applying(property: .captureAreaCrop, data: Data([0]))
+                    .applying(property: .rawCompressionType, data: Data([4]))
+                // The camera-advertised size domain the pill ranks against ("6048x4032" → L)
+                // and the Size drum offers — mirrors what the describe path returns on a body.
+                cameraControlOptions[.imageSize] = ["6048x4032", "4528x3016", "3024x2016"]
             }
             publishCameraDisplayState()
             connectionMessage =
                 toPhoto
                 ? "Demo photography mode (press P for cinema)."
                 : "Demo cinema mode (press P for photo)."
-        }
-
-        /// PTP-string bytes for "Size L" (count-prefixed UTF-16LE with terminator).
-        private var demoSizeLString: Data {
-            let scalars = Array("Size L".utf16) + [0]
-            var bytes: [UInt8] = [UInt8(scalars.count)]
-            for unit in scalars {
-                bytes += [UInt8(unit & 0xFF), UInt8(unit >> 8)]
-            }
-            return Data(bytes)
         }
 
         /// Simulator marketing entry point for ⌘O. It is intentionally accepted only while the
@@ -4759,6 +4758,18 @@ final class NativeAppModel {
             await refreshControlOption(
                 session: session, property: property, valueByteCount: valueByteCount)
         }
+        // ImageSize is a standard-space *string* enum, so it takes the plain describe op rather
+        // than the fixed-width path above. Photography only, and re-read on this same slow
+        // cadence — its domain reshapes when the image-area crop changes.
+        if StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector),
+            session.supportsProperty(.imageSize),
+            let options = try? await session.stringEnumOptions(for: .imageSize),
+            options.count > 1, cameraControlOptions[.imageSize] != options
+        {
+            cameraControlOptions[.imageSize] = options
+            logConnection("options imageSize: \(options.joined(separator: ", "))")
+        }
     }
 
     /// Re-reads one moded control's `GetDevicePropDescEx` enum and caches the picker labels.
@@ -5476,8 +5487,9 @@ final class NativeAppModel {
         pendingImageAreaWrite = area
     }
 
-    /// Queues the photo image-size write ("Size L" / "Size M" / "Size S", a PTP string) with an
-    /// optimistic snapshot update so the pill reflects the pick immediately; the poll confirms it.
+    /// Queues the photo image-size write (the camera's own enumerated resolution string, sent
+    /// back verbatim as a PTP string) with an optimistic snapshot update so the pill reflects
+    /// the pick immediately; the poll confirms it.
     private func applyStillImageSize(_ value: String) {
         guard let write = PTPCameraPropertyWrite.request(control: .stillImageSize, label: value)
         else { return }
@@ -5490,6 +5502,24 @@ final class NativeAppModel {
             isMonitorPresented
             ? "Queued Image Size \(value) for the next live-view safe point."
             : "Queued Image Size \(value)."
+        drainPendingWritesIfIdle()
+    }
+
+    /// Queues the NEF (RAW) recording compression write from the quality panel, with an
+    /// optimistic snapshot update; the poll confirms or corrects it.
+    func applyStillRawCompression(_ value: String) {
+        guard
+            let write = PTPCameraPropertyWrite.request(control: .stillRawCompression, label: value)
+        else { return }
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: write.property, data: write.data)
+        publishCameraDisplayState()
+        guard !isDemoSession else { return }
+        enqueueCameraWrite(PendingCameraWrite(picker: .stillQuality, value: value, write: write))
+        connectionMessage =
+            isMonitorPresented
+            ? "Queued RAW recording \(value) for the next live-view safe point."
+            : "Queued RAW recording \(value)."
         drainPendingWritesIfIdle()
     }
 
@@ -5862,6 +5892,13 @@ final class NativeAppModel {
         return pendingCameraWrites.contains { $0.write.property == .movieBaseISO }
     }
 
+    /// Top-bar SIZE readout: image area + size class ("FX · L"), ranked against the camera's
+    /// enumerated ImageSize strings so the pill never shows a raw resolution.
+    var stillSizeAreaDisplay: String? {
+        cameraPropertySnapshot.stillSizeAreaLabel(
+            sizeOptions: cameraControlOptions[.imageSize] ?? [])
+    }
+
     /// The picker's current camera readout value. The stills pickers read the property snapshot
     /// directly (full labels — the strip compacts some of them, e.g. "Continuous H" → "CH").
     func cameraValue(for picker: CameraPicker) -> String {
@@ -5876,7 +5913,7 @@ final class NativeAppModel {
         case .stillFocus: cameraPropertySnapshot.focusMode ?? ""
         case .stillFlash: cameraPropertySnapshot.flashMode ?? ""
         case .stillMeter: cameraPropertySnapshot.meteringMode ?? ""
-        case .stillSize: cameraPropertySnapshot.stillSizeAreaLabel ?? ""
+        case .stillSize: stillSizeAreaDisplay ?? ""
         case .stillQuality: cameraPropertySnapshot.compression ?? ""
         default: cameraState.values.first(where: { $0.label == picker.valueLabel })?.value ?? ""
         }
@@ -6577,6 +6614,15 @@ final class NativeAppModel {
         return stored.count
     }
 
+    /// Opens the Media browser with the sidebar tab matched to the active capture side —
+    /// Videos from cinema, Photos from photography.
+    func openMediaBrowser() {
+        mediaCategoryTab =
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector) ? .photos : .videos
+        activePanel = .media
+    }
+
     /// Toggles the MEDIA cell between capacity (GB · %) and duration (Min) readouts.
     func toggleMediaReadout() {
         prefersMediaDuration.toggle()
@@ -6887,7 +6933,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillFlash: "Flash mode"
         case .stillMeter: "Metering pattern"
         case .stillSize: "Area · size"
-        case .stillQuality: "RAW · JPEG"
+        case .stillQuality: "RAW · JPEG/HEIF"
         }
     }
 
@@ -7172,10 +7218,15 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             case 4: return .movie32BitFloatAudioRecording
             default: return nil
             }
+        case .stillSize:
+            // The Size tab's strings come straight from the camera's ImageSize enum (bodies
+            // report resolutions, and the set reshapes with the area crop); Area stays the
+            // doc-verified crop ladder.
+            return mode == 1 ? .imageSize : nil
         case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
             .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
-            .stillSize, .stillQuality:
-            // Stills pickers keep their doc-verified hardcoded ladders — no descriptor enum path.
+            .stillQuality:
+            // The remaining stills pickers keep their doc-verified hardcoded ladders.
             return nil
         }
     }
