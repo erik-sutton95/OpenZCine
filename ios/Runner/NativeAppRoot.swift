@@ -7923,7 +7923,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillMeter: ["Matrix", "Center", "Spot", "Highlight"]
         // SIZE is modes-driven (Area | Size tabs).
         case .stillSize: []
-        // Doc-verified `CompressionSetting` ladder minus the ★ size-priority variants and TIFF —
+        // The `CompressionSetting` ladder minus the ★ size-priority variants and TIFF —
         // labels round-trip through `PTPCameraPropertyDecoders.compressionSetting`.
         case .stillQuality:
             [
@@ -8124,7 +8124,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillSize:
             // The Size tab's strings come straight from the camera's ImageSize enum (bodies
             // report resolutions, and the set reshapes with the area crop); Area stays the
-            // doc-verified crop ladder.
+            // fixed crop ladder.
             return mode == 1 ? .imageSize : nil
         case .stillShutter:
             // The body enumerates the stills speeds valid for the active program/flash
@@ -8133,7 +8133,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
             .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
             .stillQuality, .stillPicture:
-            // The remaining stills pickers keep their doc-verified hardcoded ladders.
+            // The remaining stills pickers keep their fixed hardcoded ladders.
             return nil
         }
     }

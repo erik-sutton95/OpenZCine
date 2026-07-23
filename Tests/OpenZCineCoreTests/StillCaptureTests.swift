@@ -183,7 +183,7 @@ struct StillCaptureTests {
         #expect(
             StillQualityConfiguration(rawEnabled: false, tier: .off, starred: false)
                 .compressionCode == nil)
-        // Spot-check the doc ladder: RAW+Normal★ and JPEG Fine.
+        // Spot-check the ladder: RAW+Normal★ and JPEG Fine.
         #expect(
             StillQualityConfiguration(rawEnabled: true, tier: .normal, starred: true)
                 .compressionLabel == "RAW+JPEG Normal★")
