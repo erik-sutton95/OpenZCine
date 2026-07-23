@@ -1904,8 +1904,7 @@ struct MediaPhotoViewer: View {
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var loadTask: Task<Void, Never>?
-    @State private var zoomScale: CGFloat = 1
-    @State private var lastZoomScale: CGFloat = 1
+    @State private var zoom = AnchoredPinchZoom()
     @State private var isSharePresented = false
     @State private var isPreparingShare = false
     /// RAW side of the JPG/RAW toggle is active (paired stills only).
@@ -1923,16 +1922,16 @@ struct MediaPhotoViewer: View {
 
             if let image {
                 GeometryReader { geo in
-                    ScrollView([.horizontal, .vertical], showsIndicators: false) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(
-                                width: geo.size.width * zoomScale,
-                                height: geo.size.height * zoomScale
-                            )
-                            .gesture(magnificationGesture)
-                    }
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .scaleEffect(zoom.scale)
+                        .offset(zoom.offset)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            SimultaneousGesture(
+                                pinchGesture(size: geo.size), panGesture(size: geo.size)))
                 }
                 .ignoresSafeArea()
             } else if isLoading {
@@ -2061,17 +2060,23 @@ struct MediaPhotoViewer: View {
         return "Preparing image…"
     }
 
-    private var magnificationGesture: some Gesture {
-        MagnificationGesture()
+    private func pinchGesture(size: CGSize) -> some Gesture {
+        MagnifyGesture()
             .onChanged { value in
-                zoomScale = min(4, max(1, lastZoomScale * value))
+                zoom.pinchChanged(
+                    magnification: value.magnification, startAnchor: value.startAnchor,
+                    size: size)
             }
             .onEnded { _ in
-                lastZoomScale = zoomScale
-                if zoomScale < 1.05 {
-                    zoomScale = 1
-                    lastZoomScale = 1
-                }
+                withAnimation(.easeOut(duration: 0.2)) { zoom.endGesture(size: size) }
+            }
+    }
+
+    private func panGesture(size: CGSize) -> some Gesture {
+        DragGesture()
+            .onChanged { value in zoom.panChanged(translation: value.translation) }
+            .onEnded { _ in
+                withAnimation(.easeOut(duration: 0.2)) { zoom.endGesture(size: size) }
             }
     }
 
@@ -2187,6 +2192,65 @@ private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
 }
 
 /// Full-screen AVPlayer with LiveDesign controls: play/pause, ±15s, mute, view-assist, favorite,
+/// Pinch/pan zoom that stays anchored under the fingers: the content point beneath the
+/// pinch centroid is held fixed as the scale changes (the system Photos feel), instead of
+/// growing from the view centre and drifting away from the gesture. The transform contract
+/// is `.scaleEffect(scale)` (centre-anchored) followed by `.offset(offset)`; a content
+/// point p renders at `p·scale + offset`, so holding centroid c means
+/// `offset' = c − (c − offset)·(scale'/scale)`.
+struct AnchoredPinchZoom {
+    static let maxScale: CGFloat = 4
+
+    private(set) var scale: CGFloat = 1
+    private(set) var offset: CGSize = .zero
+    private var committedScale: CGFloat = 1
+    private var committedOffset: CGSize = .zero
+
+    var isZoomed: Bool { scale > 1.001 }
+
+    /// One pinch update. `startAnchor` is the gesture's centroid as a UnitPoint in the
+    /// container the transform runs in; `size` is that container's size.
+    mutating func pinchChanged(magnification: CGFloat, startAnchor: UnitPoint, size: CGSize) {
+        let target = min(Self.maxScale, max(1, committedScale * magnification))
+        guard committedScale > 0 else { return }
+        let ratio = target / committedScale
+        let centroid = CGSize(
+            width: (startAnchor.x - 0.5) * size.width,
+            height: (startAnchor.y - 0.5) * size.height)
+        offset = CGSize(
+            width: centroid.width - (centroid.width - committedOffset.width) * ratio,
+            height: centroid.height - (centroid.height - committedOffset.height) * ratio)
+        scale = target
+    }
+
+    mutating func panChanged(translation: CGSize) {
+        guard isZoomed else { return }
+        offset = CGSize(
+            width: committedOffset.width + translation.width,
+            height: committedOffset.height + translation.height)
+    }
+
+    /// Commits the gesture: snaps back to 1× when nearly there, otherwise clamps the pan so
+    /// the content keeps covering the container. Call inside `withAnimation` for the snap.
+    mutating func endGesture(size: CGSize) {
+        if scale < 1.05 {
+            reset()
+            return
+        }
+        let maxX = size.width * (scale - 1) / 2
+        let maxY = size.height * (scale - 1) / 2
+        offset = CGSize(
+            width: min(maxX, max(-maxX, offset.width)),
+            height: min(maxY, max(-maxY, offset.height)))
+        committedScale = scale
+        committedOffset = offset
+    }
+
+    mutating func reset() {
+        self = AnchoredPinchZoom()
+    }
+}
+
 /// share (native or Frame.io), side arrows for clip navigation, pinch-to-zoom on the video,
 /// single-tap on the frame to play/pause (with a transient transport flash), long-press drag to
 /// scrub, and restart at end-of-clip.
@@ -2243,10 +2307,10 @@ struct MediaPlayerView: View {
     @State private var playerLoadGeneration = 0
     /// Invalidates detached scope derivations whenever polling is restarted or stopped.
     @State private var playbackScopePollingGeneration = 0
-    @State private var zoomScale: CGFloat = 1
-    @State private var lastZoomScale: CGFloat = 1
-    @State private var panOffset: CGSize = .zero
-    @State private var lastPanOffset: CGSize = .zero
+    @State private var zoom = AnchoredPinchZoom()
+    /// The letterboxed video frame's size, captured where the gestures attach so the pinch
+    /// anchor maps into the same space the zoom transform runs in.
+    @State private var zoomContainerSize: CGSize = .zero
     /// Suppresses play/pause tap recognition after pinch, pan, or frame scrub so those gestures do not toggle transport.
     @State private var suppressNextPlaybackTap = false
     /// Brief play/pause symbol shown centered on the video after a frame tap toggles transport.
@@ -2263,6 +2327,8 @@ struct MediaPlayerView: View {
         static let minScale: CGFloat = 1
         static let maxScale: CGFloat = 4
     }
+
+    // (Zoom state lives in `AnchoredPinchZoom`, shared with the photo viewer.)
 
     private enum PlaybackFlash {
         static let fadeIn: Double = 0.12
@@ -2350,8 +2416,8 @@ struct MediaPlayerView: View {
                     PlayerLayerView(player: player)
                         // Match live view: de-squeeze the raster, then apply pinch zoom.
                         .scaleEffect(desqueezeScale(playbackDesqueeze), anchor: .center)
-                        .scaleEffect(zoomScale)
-                        .offset(panOffset)
+                        .scaleEffect(zoom.scale)
+                        .offset(zoom.offset)
                 }
                 .frame(width: videoRect.width, height: videoRect.height)
                 .clipped()
@@ -2374,9 +2440,13 @@ struct MediaPlayerView: View {
                     .frame(width: videoRect.width, height: videoRect.height)
                     .position(x: videoRect.midX, y: videoRect.midY)
                     .contentShape(Rectangle())
-                    .onAppear { frameScrubVideoWidth = videoRect.width }
+                    .onAppear {
+                        frameScrubVideoWidth = videoRect.width
+                        zoomContainerSize = videoRect.size
+                    }
                     .onChange(of: videoRect.width) { _, width in
                         frameScrubVideoWidth = width
+                        zoomContainerSize = videoRect.size
                     }
                     .gesture(playbackVideoGesture)
                     .simultaneousGesture(playbackFrameTapGesture)
@@ -2577,7 +2647,7 @@ struct MediaPlayerView: View {
                 guard isClipReady, deliveryPresentation == nil, assistOptionsTool == nil else {
                     return
                 }
-                guard zoomScale <= 1.05 else { return }
+                guard !zoom.isZoomed else { return }
 
                 switch value {
                 case .first(true):
@@ -2672,19 +2742,19 @@ struct MediaPlayerView: View {
     }
 
     private var playbackMagnificationGesture: some Gesture {
-        MagnificationGesture()
+        MagnifyGesture()
             .onChanged { value in
-                if abs(value - 1) > 0.02 {
+                if abs(value.magnification - 1) > 0.02 {
                     suppressNextPlaybackTap = true
                     frameScrubPending = false
                 }
-                let proposed = lastZoomScale * value
-                zoomScale = min(PlaybackZoom.maxScale, max(PlaybackZoom.minScale, proposed))
+                zoom.pinchChanged(
+                    magnification: value.magnification, startAnchor: value.startAnchor,
+                    size: zoomContainerSize)
             }
             .onEnded { _ in
-                lastZoomScale = zoomScale
-                if zoomScale < 1.05 {
-                    resetPlaybackZoom()
+                withAnimation(.easeOut(duration: 0.2)) {
+                    zoom.endGesture(size: zoomContainerSize)
                 }
             }
     }
@@ -2692,19 +2762,18 @@ struct MediaPlayerView: View {
     private var playbackPanGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard zoomScale > 1 else { return }
+                guard zoom.isZoomed else { return }
                 if hypot(value.translation.width, value.translation.height) > 8 {
                     suppressNextPlaybackTap = true
                     frameScrubPending = false
                 }
-                panOffset = CGSize(
-                    width: lastPanOffset.width + value.translation.width,
-                    height: lastPanOffset.height + value.translation.height
-                )
+                zoom.panChanged(translation: value.translation)
             }
             .onEnded { _ in
-                guard zoomScale > 1 else { return }
-                lastPanOffset = panOffset
+                guard zoom.isZoomed else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    zoom.endGesture(size: zoomContainerSize)
+                }
             }
     }
 
@@ -2742,10 +2811,7 @@ struct MediaPlayerView: View {
     }
 
     private func resetPlaybackZoom() {
-        zoomScale = PlaybackZoom.minScale
-        lastZoomScale = PlaybackZoom.minScale
-        panOffset = .zero
-        lastPanOffset = .zero
+        zoom.reset()
     }
 
     private func goToAdjacentClip(offset: Int) {
