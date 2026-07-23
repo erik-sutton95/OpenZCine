@@ -1165,13 +1165,20 @@ struct MonitorShell: View {
         let isClean = model.displayMode == .clean
         let deck = map.infoBar.frame
 
-        // Status deck — compact in clean, full in live.
+        // Status deck — compact in clean, full in live. The zone map centers it over the
+        // native 16:9 feed; photography recenters it on the rail-anchored photo frame so
+        // the pill tracks the visible image, not the old frame's footprint.
         if chrome.statusBarVisible {
+            let isPhotographyDeck = StillCapturePolicy.prefersPhotographyChrome(
+                selector: model.cameraPropertySnapshot.captureSelector)
+            let photoFeed = isPhotographyDeck ? photographyFeedFrame() : nil
+            let deckCenterX = photoFeed.map { $0.x + $0.width / 2 } ?? deck.midX
+            let deckWidth = photoFeed.map { min(deck.width, $0.width) } ?? deck.width
             MonitorInfoBar(style: .infoPill, compact: isClean)
                 .environment(model)
                 .liveViewGuideAnchor(.infoBar)
-                .frame(maxWidth: CGFloat(deck.width))
-                .position(x: CGFloat(deck.midX), y: CGFloat(deck.midY))
+                .frame(maxWidth: CGFloat(deckWidth))
+                .position(x: CGFloat(deckCenterX), y: CGFloat(deck.midY))
         }
 
         // Bottom bars (assist + capture) — live only; clean/lock hide them. In photography
