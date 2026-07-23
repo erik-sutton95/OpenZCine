@@ -9,9 +9,9 @@ public struct PTPDeviceInfo: Equatable, Sendable {
         try reader.skip(byteCount: 2)
         try reader.skipString()
         try reader.skip(byteCount: 2)
+        operationsSupported = Set(try reader.readUInt16Array())
         try reader.skipUInt16Array()
-        try reader.skipUInt16Array()
-        try reader.skipUInt16Array()
+        propertiesSupported = Set(try reader.readUInt16Array())
         try reader.skipUInt16Array()
         try reader.skipUInt16Array()
 
@@ -25,6 +25,18 @@ public struct PTPDeviceInfo: Equatable, Sendable {
     public let model: String
     public let deviceVersion: String
     public let serialNumber: String
+
+    /// OperationCodes the body advertises. Bodies differ across the Z lineup (legacy bodies
+    /// have no Ex property ops; only some have the application-mode operation), so callers
+    /// gate op selection on this rather than on the model name.
+    public let operationsSupported: Set<UInt16>
+    /// DevicePropCodes the body advertises (standard 2-byte codes only).
+    public let propertiesSupported: Set<UInt16>
+
+    /// Whether the body advertises a PTP operation.
+    public func supports(_ operation: PTPOperationCode) -> Bool {
+        operationsSupported.contains(operation.rawValue)
+    }
 }
 
 /// Errors that can occur while parsing PTP DeviceInfo.
@@ -109,6 +121,20 @@ private struct PTPDeviceInfoReader {
     mutating func skipUInt16Array() throws {
         let count = Int(try readUInt32())
         try skip(byteCount: count * 2)
+    }
+
+    mutating func readUInt16Array() throws -> [UInt16] {
+        let count = Int(try readUInt32())
+        guard offset + count * 2 <= bytes.count else {
+            throw PTPDeviceInfoError.truncatedDataset
+        }
+        var values: [UInt16] = []
+        values.reserveCapacity(count)
+        for _ in 0..<count {
+            values.append(ByteCoding.readUInt16LE(bytes, at: offset))
+            offset += 2
+        }
+        return values
     }
 
     mutating func skipString() throws {

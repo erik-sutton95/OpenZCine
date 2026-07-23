@@ -1,85 +1,73 @@
 import Foundation
 
-/// Coarse capability tiers for Z-series bodies, used to gate stills and movie features.
+/// Operation selection for a connected Z-series body, driven by the operation codes the
+/// body advertises in `GetDeviceInfo` rather than by model-name tables.
 ///
-/// Profiles are inferred from product-line capability clusters (legacy 2-byte prop
-/// discovery vs extended vendor-code lists), not from hard-coded model strings alone.
-/// Always prefer live `GetDeviceInfo` / vendor-code enumeration when available.
-public enum ZCameraCapabilityTier: String, Equatable, Sendable, CaseIterable {
-    /// Early Z bodies using `GetVendorPropCodes` (0x90CA) and 2-byte properties.
-    case legacy
-    /// Mid generation with `ChangeApplicationMode` (0x9435) and expanded stills.
-    case gen2
-    /// Extended vendor codes, Ex property lists, open capture, HLG PicCtrl.
-    case extended
-    /// Cinema / flagship remote surface (ZR and peers with movie-first props).
-    case cinema
-}
+/// The lineup splits into three vendor-surface generations:
+/// - Gen 1 (Z 5 / Z 6 / Z 7 / Z 50): app-control mode is entered by writing the
+///   `ApplicationMode` property (0xD1F0); vendor property discovery is
+///   `GetVendorPropCodes` (0x90CA); no Ex property ops, no open-capture ops.
+/// - Gen 2 (Z 6II / Z 7II / Z fc / Z 30): adds the `ChangeApplicationMode` operation
+///   (0x9435) and drops the property path; still 0x90CA, still no Ex property ops.
+/// - Gen 3 (Z 8 / Z 9 / Z 6III / Z f / Z 5II / Z 50II / ZR): adds `GetVendorCodes`
+///   (0x9439, replacing 0x90CA), the Ex property ops (0x943A–0x943C) for 4-byte extended
+///   property codes, and the open-capture ops (0x9445–0x9447).
+///
+/// `GetLiveViewImageEx` (0x9428), `GetEventEx` (0x941C), `DeviceReady` (0x90C8),
+/// `ChangeCameraMode` (0x90C2) and `InitiateCaptureRecInMedia` (0x9207) are advertised
+/// across the whole lineup, so the app carries no fallback paths for those. The PTP-IP
+/// pairing ops are a network-transport surface and never appear in the USB op set; gate
+/// pairing on the live DeviceInfo ops list, not on generation.
+public struct ZCameraOperationPolicy: Equatable, Sendable {
+    public let operations: Set<UInt16>
 
-/// Static hints for known product lines. Runtime vendor-code lists override these.
-public enum ZCameraCapabilityProfile: Sendable {
-    /// Best-effort tier from a PTP `Model` string (e.g. from GetDeviceInfo).
-    public static func tier(forModelName model: String) -> ZCameraCapabilityTier {
-        let normalized = model.uppercased().replacingOccurrences(of: " ", with: "")
-        if normalized.contains("ZR") { return .cinema }
-        if normalized.contains("Z9") || normalized.contains("Z8") || normalized.contains("Z6III") {
-            return .extended
-        }
-        if normalized.contains("Z5II") || normalized.contains("Z50II") || normalized.contains("ZF")
-            || normalized.contains("Z6_2") || normalized.contains("Z6II")
-            || normalized.contains("Z7_2") || normalized.contains("Z7II")
-        {
-            return .gen2
-        }
-        if normalized.contains("Z30") || normalized.contains("Z50") || normalized.contains("ZFC")
-            || normalized.contains("Z5") || normalized.contains("Z6") || normalized.contains("Z7")
-        {
-            return .legacy
-        }
-        return .extended
+    public init(operations: Set<UInt16>) {
+        self.operations = operations
     }
 
-    /// Whether the body is expected to expose `LiveViewSelector` for photo/video chrome.
-    public static func supportsLiveViewSelector(tier: ZCameraCapabilityTier) -> Bool {
-        true  // Present across the Z set researched for this release.
+    public init(deviceInfo: PTPDeviceInfo) {
+        self.init(operations: deviceInfo.operationsSupported)
     }
 
-    /// Whether still capture to media (`0x9207`) is expected.
-    public static func supportsCaptureRecInMedia(tier: ZCameraCapabilityTier) -> Bool {
-        true
+    /// True when an ops list was actually delivered. An empty list means DeviceInfo was
+    /// not (yet) fetched — callers then assume the modern surface and rely on
+    /// per-operation error handling.
+    public var isKnown: Bool { !operations.isEmpty }
+
+    public func supports(_ operation: PTPOperationCode) -> Bool {
+        operations.contains(operation.rawValue)
     }
 
-    /// Whether open capture / interval tools are expected.
-    public static func supportsOpenCapture(tier: ZCameraCapabilityTier) -> Bool {
-        switch tier {
-        case .legacy: return false
-        case .gen2, .extended, .cinema: return true
-        }
+    /// Still release op: media-destination capture everywhere it is advertised, standard
+    /// `InitiateCapture` as the defensive fallback.
+    public var stillCaptureOperation: PTPOperationCode {
+        !isKnown || supports(.initiateCaptureRecInMedia)
+            ? .initiateCaptureRecInMedia : .initiateCapture
     }
 
-    /// Preferred application-mode path: operation `0x9435` vs property `0xD1F0`.
-    public static func prefersChangeApplicationModeOperation(
-        tier: ZCameraCapabilityTier
-    ) -> Bool {
-        switch tier {
-        case .legacy: return false
-        case .gen2, .extended, .cinema: return true
-        }
+    /// Whether app-control mode is entered with the `ChangeApplicationMode` operation.
+    /// Gen-1 bodies instead accept a write of 1 to the `ApplicationMode` property (0xD1F0).
+    public var appModeViaOperation: Bool {
+        !isKnown || supports(.changeApplicationMode)
     }
-}
 
-extension PTPPropertyCode {
-    /// Whether this property is primarily used by the photography chrome.
-    public var isStillsOriented: Bool {
-        switch self {
-        case .liveViewSelector, .stillCaptureMode, .burstNumber, .imageSize,
-            .compressionSetting, .rawCompressionType, .exposureTime, .fNumber,
-            .exposureIndex, .exposureBiasCompensation, .exposureMeteringMode,
-            .flashMode, .focusMode, .stillFocusMode, .stillFocusMeteringMode,
-            .stillISOAutoControl, .stillShutterSpeed, .recordingMedia, .whiteBalance:
-            return true
-        default:
-            return false
-        }
+    /// Vendor code discovery: `GetVendorCodes` (ops + props) on gen-3 bodies,
+    /// `GetVendorPropCodes` (props only) before that, nil when neither is advertised.
+    public var vendorCodeDiscoveryOperation: PTPOperationCode? {
+        if !isKnown || supports(.getVendorCodes) { return .getVendorCodes }
+        if supports(.getVendorPropCodes) { return .getVendorPropCodes }
+        return nil
+    }
+
+    /// Ex property ops exist only on gen-3 bodies. 2-byte property codes always use the
+    /// standard PIMA ops regardless of generation; the Ex ops exist solely for the 4-byte
+    /// `0x0001_xxxx` extended codes.
+    public var supportsExtendedPropertyOps: Bool {
+        !isKnown || supports(.getDevicePropValueEx)
+    }
+
+    /// Interval / focus-shift open capture (gen-3 bodies).
+    public var supportsOpenCapture: Bool {
+        isKnown && supports(.initiateOpenCaptureV)
     }
 }

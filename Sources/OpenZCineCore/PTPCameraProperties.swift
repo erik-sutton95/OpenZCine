@@ -560,10 +560,11 @@ public enum PTPCameraPropertyDecoders {
     }
 
     /// `ShutterSpeed` (0xD100) label: fraction-packed like `shutterSpeed`, plus the
-    /// open-shutter sentinels that appear in mode M.
+    /// open-shutter sentinels that appear in mode M and the flash-sync position.
     public static func stillShutterLabel(_ raw: UInt32) -> String {
         switch raw {
         case 0xFFFF_FFFF: "Bulb"
+        case 0xFFFF_FFFE: "X-sync"
         case 0xFFFF_FFFD: "Time"
         default: shutterSpeed(raw)
         }
@@ -691,10 +692,12 @@ public enum PTPCameraPropertyDecoders {
         case 0x8015: "Night"
         case 0x8016: "Night LS"
         case 0x8017: "Kids"
-        case 0x8018: "Auto (NF)"
+        case 0x8018: "Scene"
+        case 0x8019: "Effects"
         case 0x8050: "U1"
         case 0x8051: "U2"
         case 0x8052: "U3"
+        case 0x8053: "U4"
         default: hex(UInt32(raw))
         }
     }
@@ -862,6 +865,7 @@ public enum PTPCameraPropertyDecoders {
         case 3: "JPEG Normal★"
         case 4: "JPEG Fine"
         case 5: "JPEG Fine★"
+        case 6: "TIFF"
         case 7: "RAW"
         case 8: "RAW+JPEG Basic"
         case 9: "RAW+JPEG Basic★"
