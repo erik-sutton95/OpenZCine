@@ -302,6 +302,47 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(mediaBusy.properties.batteryPercent == 80)
     }
 
+    @Test func evIndicatorRequestReadsOnlyTheNeedleWithoutAdvancingTheRoundRobin() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        let first = session.refreshAndroidPropertySnapshot(.evIndicator)
+        #expect(first.result == .accepted)
+        #expect(first.properties.evIndicatorSixths == -4)
+        let fields = wireFields(AndroidCameraPropertyReadbackWire.encode(first))
+        #expect(fields["evIndicatorSixths"] == "-4")
+
+        // Fast needle reads touch only the exposure indicator (plus its slow
+        // lit-state stride) — never a round-robin monitor property.
+        let evCodes: Set<UInt32> = [
+            PTPPropertyCode.exposureIndicateStatus.rawValue,
+            PTPPropertyCode.exposureIndicateLightup.rawValue,
+        ]
+        let before = server.receivedRequests().filter {
+            $0.operation == .getDevicePropValue || $0.operation == .getDevicePropValueEx
+        }
+        for _ in 0..<8 {
+            let readback = session.refreshAndroidPropertySnapshot(.evIndicator)
+            #expect(readback.result == .accepted)
+        }
+        let after = server.receivedRequests().filter {
+            $0.operation == .getDevicePropValue || $0.operation == .getDevicePropValueEx
+        }
+        let evReads = after.dropFirst(before.count)
+        #expect(evReads.count == 8)
+        #expect(evReads.allSatisfy { evCodes.contains($0.parameters.first ?? 0) })
+        // The lit-state gate refreshed at least once across the stride, so the
+        // hidden-while-unlit rule tracks the body.
+        #expect(
+            evReads.contains {
+                $0.parameters.first == PTPPropertyCode.exposureIndicateLightup.rawValue
+            })
+        let lit = session.refreshAndroidPropertySnapshot(.evIndicator)
+        #expect(lit.properties.evIndicatorLit == true)
+    }
+
     @Test func wireCarriesThePhotoModeStillsToneMode() {
         let readback = AndroidCameraPropertyReadback(
             result: .accepted,

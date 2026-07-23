@@ -159,6 +159,27 @@ public enum StillCapturePolicy: Sendable {
         selector == .photo
     }
 
+    /// The object star-rating property's step table: index == stars
+    /// (0/1/25/50/75/100 == Off…★★★★★). Off-step values round down.
+    private static let ratingSteps: [UInt16] = [0, 1, 25, 50, 75, 100]
+
+    /// The raw rating-property value for a 0–5 star count.
+    public static func ratingValue(forStars stars: Int) -> UInt16 {
+        ratingSteps[max(0, min(5, stars))]
+    }
+
+    /// The star count for a raw rating-property value (off-step values round down).
+    public static func stars(fromRatingValue value: UInt16) -> Int {
+        switch value {
+        case 100...: 5
+        case 75...: 4
+        case 50...: 3
+        case 25...: 2
+        case 1...: 1
+        default: 0
+        }
+    }
+
     /// Classifies a `DeviceReady` response while a still release is in flight.
     public static func releaseReadiness(_ code: PTPResponseCode) -> StillReleaseReadiness {
         switch code {

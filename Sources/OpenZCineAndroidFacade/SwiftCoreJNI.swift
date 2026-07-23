@@ -1251,6 +1251,8 @@
                             storage: nil)))
             }
             refreshRequest = .propertyChanged(UInt32(propertyCode))
+        case 3:
+            refreshRequest = .evIndicator
         default:
             return javaString(
                 env,
@@ -1827,6 +1829,53 @@
                 base.assumingMemoryBound(to: jbyte.self))
         }
         return array
+    }
+
+    /// `SwiftCore.sessionDeleteObject(handle): Boolean` — deletes one object
+    /// from the camera card. Protected objects are refused by the body.
+    /// Blocking; Kotlin calls it from `Dispatchers.IO`. [verify-on-HW]
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionDeleteObject")
+    public func swiftCoreSessionDeleteObject(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+    ) -> jboolean {
+        guard let session = ActiveSessionSlot.shared.current(),
+            (try? session.deleteObject(handle: UInt32(bitPattern: handle))) != nil
+        else { return 0 }
+        return 1
+    }
+
+    /// `SwiftCore.sessionObjectRating(handle): Int` — one object's star rating
+    /// as 0–5 stars, or -1 when unreadable (RAW stills don't carry the
+    /// property). Blocking; Kotlin calls it from `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionObjectRating")
+    public func swiftCoreSessionObjectRating(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let value = try? session.objectRating(handle: UInt32(bitPattern: handle))
+        else { return -1 }
+        return jint(StillCapturePolicy.stars(fromRatingValue: value))
+    }
+
+    /// `SwiftCore.sessionSetObjectRating(handle, stars): Int` — writes a 0–5
+    /// star rating and confirms with a readback (the body rounds off-step
+    /// values down); returns the confirmed star count or -1 on failure.
+    /// Blocking; Kotlin calls it from `Dispatchers.IO`. [verify-on-HW]
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetObjectRating")
+    public func swiftCoreSessionSetObjectRating(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint, stars: jint
+    ) -> jint {
+        guard (0...5).contains(stars),
+            let session = ActiveSessionSlot.shared.current()
+        else { return -1 }
+        let objectHandle = UInt32(bitPattern: handle)
+        guard
+            (try? session.setObjectRating(
+                handle: objectHandle,
+                value: StillCapturePolicy.ratingValue(forStars: Int(stars)))) != nil,
+            let confirmed = try? session.objectRating(handle: objectHandle)
+        else { return -1 }
+        return jint(StillCapturePolicy.stars(fromRatingValue: confirmed))
     }
 
     /// `SwiftCore.sessionExitMediaMode()` — stops any payload transfer, then

@@ -13,6 +13,9 @@ public enum AndroidCameraPropertyRefreshRequest: Sendable {
     case next(isRecording: Bool)
     /// Re-read one known property after the camera announces a change.
     case propertyChanged(UInt32)
+    /// Fast needle read while the EV meter tool is visible: the body's exposure
+    /// indicator only (lit-state gate on a slow stride), no round-robin advance.
+    case evIndicator
 }
 
 /// Non-terminal result of one Android camera-property refresh.
@@ -257,6 +260,10 @@ public enum AndroidCameraPropertyReadbackWire {
         append("flashMode", value: properties.flashMode, to: &fields)
         append("exposureBias", value: properties.exposureBias, to: &fields)
         append("shotsRemaining", value: properties.shotsRemaining.map(String.init), to: &fields)
+        append("pictureControl", value: properties.pictureControl, to: &fields)
+        append(
+            "evIndicatorSixths", value: properties.evIndicatorSixths.map(String.init), to: &fields)
+        append("evIndicatorLit", value: properties.evIndicatorLit.map(String.init), to: &fields)
         let controls = readback.controls
         append("resolutionFrameRate", value: controls.resolutionFrameRate, to: &fields)
         append("codecSelection", value: controls.codec, to: &fields)

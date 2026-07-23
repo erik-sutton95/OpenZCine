@@ -338,6 +338,66 @@ struct MediaBrowseTests {
                 == "OZCMEDIA2\t0\t0\t1\n-\t2\t1\t\tC0001.MOV")
     }
 
+    @Test func deleteRemovesTheObjectFromEveryLaterListing() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        try session.deleteObject(handle: 0x1001)
+        #expect(server.deletedHandles() == [0x1001])
+
+        // A fresh enumeration no longer surfaces the deleted object.
+        let clips = try collect(session.beginMediaBrowse())
+        #expect(!clips.map(\.filename).contains("C0001.MOV"))
+        #expect(clips.count == 7)
+
+        // The card refuses a second delete of the same handle.
+        #expect(throws: PTPIPClientSessionError.self) {
+            try session.deleteObject(handle: 0x1001)
+        }
+    }
+
+    @Test func ratingRoundTripsThroughTheCameraWithRoundDown() throws {
+        let server = try FakeZRServer()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        // Unrated JPEG reads the Off step.
+        #expect(try session.objectRating(handle: 0x1008) == 0)
+
+        // Steps write through exactly; the camera stays source of truth.
+        try session.setObjectRating(handle: 0x1008, value: 75)
+        #expect(try session.objectRating(handle: 0x1008) == 75)
+        #expect(server.objectRating(handle: 0x1008) == 75)
+
+        // An off-step value rounds down to the nearest step, like the body.
+        try session.setObjectRating(handle: 0x1008, value: 60)
+        #expect(try session.objectRating(handle: 0x1008) == 50)
+    }
+
+    @Test func rawStillsRefuseTheRatingProperty() throws {
+        var options = FakeZRServer.Options()
+        options.mediaObjects = [
+            FakeZRMediaObject(
+                handle: 0x2001, filename: "DSC_0001.NEF", objectFormat: 0x3801,
+                sizeBytes: 30_000_000, captureDate: "20260714T102030",
+                pixelWidth: 8256, pixelHeight: 5504, thumbnail: FakeZRMediaCard.thumb7)
+        ]
+        let server = try FakeZRServer(options: options)
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+
+        #expect(throws: PTPIPClientSessionError.self) {
+            try session.objectRating(handle: 0x2001)
+        }
+        #expect(throws: PTPIPClientSessionError.self) {
+            try session.setObjectRating(handle: 0x2001, value: 25)
+        }
+    }
+
     /// Not a test: an opt-in dev server for the on-device end-to-end. Run
     /// `ZC_FAKE_ZR_PORT=15740 swift test --filter servesFakeZRForMediaBrowse`
     /// on the Mac, `adb reverse tcp:15740 tcp:15740`, then launch the app with

@@ -198,6 +198,8 @@ final class FakeZRServer: @unchecked Sendable {
     private var terminateCaptureCount = 0
     private var descriptorReadCounts: [UInt32: Int] = [:]
     private var propertyValueOverrides: [UInt32: Data] = [:]
+    private var deletedObjectHandles: Set<UInt32> = []
+    private var objectRatings: [UInt32: UInt16] = [:]
     private var transactionIDLog: [UInt32] = []
     private var pairingConfirmed = false
     private var stopped = false
@@ -273,6 +275,36 @@ final class FakeZRServer: @unchecked Sendable {
             close(listenDescriptor)
         }
         waitForAcceptLoopExit()
+    }
+
+    /// The object star-rating property served by `Get/SetObjectPropValue`.
+    static let ratingObjectPropCode: UInt32 = 0xDC8A
+
+    /// RAW stills don't carry the rating property; the fake refuses like a body.
+    private static func isRawStillFilename(_ filename: String) -> Bool {
+        ["nef", "nrw", "dng"].contains((filename as NSString).pathExtension.lowercased())
+    }
+
+    /// Card objects that survive scripted state — deletions remove them from
+    /// every object operation, like a real card.
+    private func activeMediaObjects() -> [FakeZRMediaObject] {
+        lock.lock()
+        defer { lock.unlock() }
+        return options.mediaObjects.filter { !deletedObjectHandles.contains($0.handle) }
+    }
+
+    /// Handles the client deleted from the card, for deletion assertions.
+    func deletedHandles() -> Set<UInt32> {
+        lock.lock()
+        defer { lock.unlock() }
+        return deletedObjectHandles
+    }
+
+    /// The stored raw rating value for one object (nil = never rated).
+    func objectRating(handle: UInt32) -> UInt16? {
+        lock.lock()
+        defer { lock.unlock() }
+        return objectRatings[handle]
     }
 
     /// Every PTP operation received, in arrival order, across all connections.
@@ -691,7 +723,7 @@ final class FakeZRServer: @unchecked Sendable {
                 sendResponse(connection, code: 0x2008, transactionID: transactionID)
                 return
             }
-            let objects = storageID == FakeZRMediaCard.storageID ? options.mediaObjects : []
+            let objects = storageID == FakeZRMediaCard.storageID ? activeMediaObjects() : []
             var payload = ByteCoding.uint32LE(UInt32(objects.count))
             for object in objects {
                 payload += ByteCoding.uint32LE(object.handle)
@@ -699,15 +731,61 @@ final class FakeZRServer: @unchecked Sendable {
             sendDataIn(connection, data: Data(payload), transactionID: transactionID)
         case .getObjectInfo:
             let handle = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
-            guard let object = options.mediaObjects.first(where: { $0.handle == handle }) else {
+            guard let object = activeMediaObjects().first(where: { $0.handle == handle }) else {
                 // Invalid_ObjectHandle.
                 sendResponse(connection, code: 0x2009, transactionID: transactionID)
                 return
             }
             sendDataIn(connection, data: objectInfoDataset(object), transactionID: transactionID)
+        case .deleteObject:
+            let handle = parameters.first ?? 0
+            guard activeMediaObjects().contains(where: { $0.handle == handle }) else {
+                // Invalid_ObjectHandle.
+                sendResponse(connection, code: 0x2009, transactionID: transactionID)
+                return
+            }
+            lock.lock()
+            deletedObjectHandles.insert(handle)
+            objectRatings.removeValue(forKey: handle)
+            lock.unlock()
+            sendResponse(connection, code: 0x2001, transactionID: transactionID)
+        case .getObjectPropValue:
+            guard parameters.count >= 2, parameters[1] == Self.ratingObjectPropCode,
+                let object = activeMediaObjects().first(where: { $0.handle == parameters[0] }),
+                !Self.isRawStillFilename(object.filename)
+            else {
+                // RAW stills don't carry the rating property; the read is refused.
+                sendResponse(connection, code: 0x2002, transactionID: transactionID)
+                return
+            }
+            lock.lock()
+            let rating = objectRatings[parameters[0]] ?? 0
+            lock.unlock()
+            sendDataIn(
+                connection, data: Data(ByteCoding.uint16LE(rating)),
+                transactionID: transactionID)
+        case .setObjectPropValue:
+            guard parameters.count >= 2, parameters[1] == Self.ratingObjectPropCode,
+                let dataOut, dataOut.count >= 2,
+                let object = activeMediaObjects().first(where: { $0.handle == parameters[0] }),
+                !Self.isRawStillFilename(object.filename)
+            else {
+                sendResponse(connection, code: 0x2002, transactionID: transactionID)
+                return
+            }
+            let requested =
+                UInt16(dataOut[dataOut.startIndex])
+                | (UInt16(dataOut[dataOut.startIndex + 1]) << 8)
+            // The body rounds off-step values down to the nearest step.
+            let steps: [UInt16] = [100, 75, 50, 25, 1, 0]
+            let stored = steps.first(where: { requested >= $0 }) ?? 0
+            lock.lock()
+            objectRatings[parameters[0]] = stored
+            lock.unlock()
+            sendResponse(connection, code: 0x2001, transactionID: transactionID)
         case .getThumb:
             let handle = bytes.count >= 14 ? ByteCoding.readUInt32LE(bytes, at: 10) : 0
-            guard let object = options.mediaObjects.first(where: { $0.handle == handle }),
+            guard let object = activeMediaObjects().first(where: { $0.handle == handle }),
                 !object.thumbnail.isEmpty
             else {
                 // No_Thumbnail_Present.
@@ -717,7 +795,7 @@ final class FakeZRServer: @unchecked Sendable {
             sendDataIn(connection, data: Data(object.thumbnail), transactionID: transactionID)
         case .getObjectSize:
             let handle = parameters.first ?? 0
-            guard let object = options.mediaObjects.first(where: { $0.handle == handle }),
+            guard let object = activeMediaObjects().first(where: { $0.handle == handle }),
                 let size = mediaObjectSize(object)
             else {
                 sendResponse(connection, code: 0x2009, transactionID: transactionID)
@@ -728,7 +806,7 @@ final class FakeZRServer: @unchecked Sendable {
                 transactionID: transactionID)
         case .getPartialObject:
             guard parameters.count >= 3,
-                let object = options.mediaObjects.first(where: { $0.handle == parameters[0] }),
+                let object = activeMediaObjects().first(where: { $0.handle == parameters[0] }),
                 let payload = mediaPayload(
                     object, offset: UInt64(parameters[1]), byteCount: UInt64(parameters[2]))
             else {
@@ -740,7 +818,7 @@ final class FakeZRServer: @unchecked Sendable {
                 responseParameters: [UInt32(payload.count)])
         case .getPartialObjectEx:
             guard parameters.count >= 5,
-                let object = options.mediaObjects.first(where: { $0.handle == parameters[0] })
+                let object = activeMediaObjects().first(where: { $0.handle == parameters[0] })
             else {
                 sendResponse(connection, code: 0x2009, transactionID: transactionID)
                 return
@@ -907,6 +985,10 @@ final class FakeZRServer: @unchecked Sendable {
             return Data([2])  // High
         case .exposureProgramMode:
             return Data(ByteCoding.uint16LE(1))  // M
+        case .exposureIndicateStatus:
+            return Data([UInt8(bitPattern: -4)])  // -4/6 EV
+        case .exposureIndicateLightup:
+            return Data([0])  // 0 = indicator lit
         case .movieShutterMode:
             return Data([2])  // angle
         case .movieTVLockSetting:

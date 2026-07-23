@@ -516,6 +516,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var androidControlCatalog = AndroidRawControlCatalog()
     private var androidWhiteBalanceTint: String?
     private var androidPropertyPollIndex = 0
+    private var androidEVIndicatorPollTick = 0
     private var androidLastStorageRefreshAt: Date?
     private var androidLastDescriptorRefreshAt: Date?
     private var nextTransactionID: UInt32 = 1
@@ -1242,6 +1243,16 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     result, refreshAndroidControlDescriptors())
             }
             return androidPropertyReadback(result: result)
+        case .evIndicator:
+            // While the EV tool is on, the needle reads on its own fast Kotlin
+            // cadence between round-robin ticks — a needle visited once per full
+            // property cycle lags the meter by minutes. The lit-state gate
+            // refreshes on a slow stride, like the iOS fast poll.
+            androidEVIndicatorPollTick &+= 1
+            return androidPropertyReadback(
+                result: refreshAndroidProperty(
+                    androidEVIndicatorPollTick.isMultiple(of: 8)
+                        ? .exposureIndicateLightup : .exposureIndicateStatus))
         case .propertyChanged(let rawCode):
             guard let property = PTPPropertyCode(rawValue: rawCode),
                 PTPPropertyCode.liveMonitorPollOrder.contains(property)
@@ -3079,6 +3090,39 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let result = try transactExpectingOK(
             .getObjectSize, parameters: [handle], dataPhase: .dataIn)
         return try PTPObjectSize(data: result.data).bytes
+    }
+
+    /// The object star-rating property (UINT16). Values 0/1/25/50/75/100 == Off…★★★★★;
+    /// anything else rounds down to the nearest step. RAW stills don't carry it — a pair's
+    /// JPEG/HEIF side does. [verify-on-HW]
+    private static let ratingObjectPropCode: UInt32 = 0xDC8A
+
+    /// Deletes one object from the card. Protected objects are refused by the body, and the
+    /// release stays locked until the deletion completes. [verify-on-HW]
+    public func deleteObject(handle: UInt32) throws {
+        try transactExpectingOK(.deleteObject, parameters: [handle])
+    }
+
+    /// Reads one object's star rating (raw property value, not stars).
+    public func objectRating(handle: UInt32) throws -> UInt16 {
+        let result = try transactExpectingOK(
+            .getObjectPropValue,
+            parameters: [handle, Self.ratingObjectPropCode],
+            dataPhase: .dataIn)
+        guard result.data.count >= 2 else {
+            throw PTPIPClientSessionError.operationRejected(.getObjectPropValue, .unknown)
+        }
+        return UInt16(result.data[result.data.startIndex])
+            | (UInt16(result.data[result.data.startIndex + 1]) << 8)
+    }
+
+    /// Writes one object's star rating (raw property value).
+    public func setObjectRating(handle: UInt32, value: UInt16) throws {
+        try transactExpectingOK(
+            .setObjectPropValue,
+            parameters: [handle, Self.ratingObjectPropCode],
+            dataPhase: .dataOut,
+            dataOut: Data([UInt8(value & 0xFF), UInt8(value >> 8)]))
     }
 
     /// Starts a progressive object transfer on one facade-owned thread.

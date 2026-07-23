@@ -191,4 +191,20 @@ struct StillCaptureTests {
             StillQualityConfiguration(rawEnabled: false, tier: .fine, starred: false)
                 .compressionLabel == "JPEG Fine")
     }
+
+    @Test func ratingStepsMapStarsBothWays() {
+        #expect(StillCapturePolicy.ratingValue(forStars: 0) == 0)
+        #expect(StillCapturePolicy.ratingValue(forStars: 1) == 1)
+        #expect(StillCapturePolicy.ratingValue(forStars: 3) == 50)
+        #expect(StillCapturePolicy.ratingValue(forStars: 5) == 100)
+        #expect(StillCapturePolicy.ratingValue(forStars: 9) == 100)  // clamps
+        for stars in 0...5 {
+            #expect(
+                StillCapturePolicy.stars(
+                    fromRatingValue: StillCapturePolicy.ratingValue(forStars: stars)) == stars)
+        }
+        // Off-step values round down, like the body.
+        #expect(StillCapturePolicy.stars(fromRatingValue: 60) == 3)
+        #expect(StillCapturePolicy.stars(fromRatingValue: 24) == 1)
+    }
 }
