@@ -1068,7 +1068,7 @@ struct MonitorShell: View {
             safeArea: context.feedSafeArea,
             horizontalDirection: context.horizontalDirection,
             aspect: model.cameraPropertySnapshot.photographyFeedAspect,
-            anchorToRailSide: true
+            centered: true
         )
     }
 
@@ -1278,11 +1278,11 @@ struct MonitorShell: View {
                     }
                 }
                 .opacity(model.interfaceLocked ? 0.4 : 1)
-                // Photography hugs the strip against the system rail (cinema keeps the
+                // Photography centres the strip under the centred feed (cinema keeps the
                 // assist-then-strip leading flow).
                 .frame(
                     width: CGFloat(width), height: CGFloat(assist.frame.height),
-                    alignment: isPhotographyBand && !assistVisible ? .trailing : .leading
+                    alignment: isPhotographyBand && !assistVisible ? .center : .leading
                 )
                 .position(
                     x: CGFloat(leftX + width / 2),

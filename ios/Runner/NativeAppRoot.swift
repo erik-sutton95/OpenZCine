@@ -5697,23 +5697,20 @@ final class NativeAppModel {
     }
 
     /// After a completed release with the PLAY tool on (and a non-burst drive — continuous
-    /// modes would thrash the card), fetch the just-captured object's preview and overlay it.
-    /// The new object is the diff against the pre-capture handle baseline (the highest handle
-    /// as a fallback when no baseline exists); enumeration can lag DeviceReady by a beat, so
-    /// short quick retries. [verify-on-HW: enumeration lag and GetThumb preview size per body]
+    /// modes would thrash the card), overlay the just-captured frame: the tiny embedded thumb
+    /// lands instantly, then the full JPEG streams in and replaces it. JPEG-gated — a RAW-only
+    /// quality has no streamable full image, so the review sits out. [verify-on-HW:
+    /// enumeration lag per body]
     private func scheduleInstantReview(session: NativeCameraSession) {
         guard preferences.liveViewVisibleAssistTools.contains(.instantReview) else { return }
+        guard cameraPropertySnapshot.compression?.contains("JPEG") == true else { return }
         let drive = cameraPropertySnapshot.stillCaptureMode.flatMap(StillDriveMode.mode(forLabel:))
         guard drive?.isContinuous != true else { return }
         instantReviewFetchTask?.cancel()
         instantReviewFetchTask = Task { [weak self] in
             for attempt in 0..<6 {
                 guard let self, !Task.isCancelled, self.cameraSession === session else { return }
-                if let image = await self.fetchNewestStillPreview(session: session) {
-                    guard !Task.isCancelled else { return }
-                    self.presentInstantReview(image)
-                    return
-                }
+                if await self.fetchAndPresentReview(session: session) { return }
                 if attempt < 5 {
                     try? await Task.sleep(for: .milliseconds(150))
                 }
@@ -5721,7 +5718,11 @@ final class NativeAppModel {
         }
     }
 
-    private func fetchNewestStillPreview(session: NativeCameraSession) async -> UIImage? {
+    /// The just-captured JPEG handle: the diff against the pre-capture baseline (a RAW+JPEG
+    /// pair adds two objects — ObjectInfo picks the JPEG/HEIF side). With a baseline but no
+    /// diff yet the caller retries; falling back to the highest handle there would show the
+    /// PREVIOUS photo, so that stands in only when no baseline was ever seeded.
+    private func resolveNewestJPEGHandle(session: NativeCameraSession) async -> UInt32? {
         let hadBaseline = !knownObjectHandles.isEmpty
         var newHandles: Set<UInt32> = []
         var maxHandle: UInt32 = 0
@@ -5733,21 +5734,70 @@ final class NativeAppModel {
             maxHandle = max(maxHandle, handles.max() ?? 0)
             knownObjectHandles[storageID] = handles
         }
-        // The diff IS the just-captured object. With a baseline but no diff yet the caller
-        // retries — falling back to the highest handle there would show the PREVIOUS photo.
-        // The highest handle stands in only when no baseline was ever seeded.
-        let target: UInt32?
-        if let newest = newHandles.max() {
-            target = newest
+        let candidates: [UInt32]
+        if !newHandles.isEmpty {
+            candidates = newHandles.sorted(by: >)
         } else if !hadBaseline, maxHandle > 0 {
-            target = maxHandle
+            candidates = [maxHandle]
         } else {
-            target = nil
-        }
-        guard let target, let data = try? await session.getThumb(handle: target) else {
             return nil
         }
+        for handle in candidates {
+            guard let info = try? await session.getObjectInfo(handle: handle) else { continue }
+            let name = info.filename.lowercased()
+            if name.hasSuffix(".jpg") || name.hasSuffix(".jpeg") || name.hasSuffix(".hif") {
+                return handle
+            }
+        }
+        return nil
+    }
+
+    private func fetchAndPresentReview(session: NativeCameraSession) async -> Bool {
+        guard let handle = await resolveNewestJPEGHandle(session: session) else { return false }
+        guard let thumbData = try? await session.getThumb(handle: handle),
+            let thumb = UIImage(data: thumbData)
+        else { return false }
+        presentInstantReview(thumb)
+        // The embedded thumb is instant but tiny — stream the full image and swap it over
+        // the presented review (abandoned if the review is dismissed meanwhile).
+        if let full = await fetchFullImage(session: session, handle: handle) {
+            upgradeInstantReview(full)
+        }
+        return true
+    }
+
+    /// Chunked full-object fetch, interleaving with live-view frames on the shared channel.
+    /// Aborts as soon as the review is dismissed so the channel isn't held hostage.
+    private func fetchFullImage(session: NativeCameraSession, handle: UInt32) async -> UIImage? {
+        guard let info = try? await session.getObjectInfo(handle: handle),
+            info.compressedSize > 0, info.compressedSize < 60_000_000
+        else { return nil }
+        var data = Data()
+        data.reserveCapacity(Int(info.compressedSize))
+        var offset: UInt32 = 0
+        let chunk: UInt32 = 1_000_000
+        while offset < info.compressedSize {
+            guard !Task.isCancelled, cameraSession === session, instantReview != nil else {
+                return nil
+            }
+            let length = min(chunk, info.compressedSize - offset)
+            guard
+                let part = try? await session.getPartialObject(
+                    handle: handle, offset: offset, length: length),
+                !part.isEmpty
+            else { return nil }
+            data.append(part)
+            offset += UInt32(part.count)
+        }
         return UIImage(data: data)
+    }
+
+    /// Swaps the streamed full-resolution image over the presented review, keeping the
+    /// captured focus state and settings line. No-op once dismissed.
+    private func upgradeInstantReview(_ image: UIImage) {
+        guard let current = instantReview else { return }
+        instantReview = InstantReviewState(
+            image: image, focus: current.focus, infoLine: current.infoLine)
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.

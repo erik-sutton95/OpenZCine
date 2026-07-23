@@ -214,43 +214,17 @@ public enum MonitorFeedLayout {
     /// Builds the feed frame, using height as the stable landscape constraint. `aspect`
     /// defaults to the native 16:9 monitor frame; photography passes the active still
     /// image area's shape (3:2, 1:1, 16:9) so the full photo frame letterboxes instead
-    /// of cropping top and bottom. `anchorToRailSide` keeps a narrower-than-16:9 frame's
-    /// rail-side edge where the native frame's would be — the operator's gap to the
-    /// record/settings rail stays constant and the slack collects on the notch side.
+    /// of cropping top and bottom. `centered` places the frame mid-viewport (clamped to
+    /// the safe-area insets) — photography's layout — instead of the cinema
+    /// leading-inset placement.
     public static func frame(
         viewportWidth: Double,
         viewportHeight: Double,
         safeArea: MonitorEdgeInsets,
         horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
         aspect: Double = aspectRatio,
-        anchorToRailSide: Bool = false
+        centered: Bool = false
     ) -> MonitorFeedFrame {
-        if anchorToRailSide, aspect < aspectRatio {
-            let base = frame(
-                viewportWidth: viewportWidth,
-                viewportHeight: viewportHeight,
-                safeArea: safeArea,
-                horizontalDirection: horizontalDirection,
-                aspect: aspect
-            )
-            let reference = frame(
-                viewportWidth: viewportWidth,
-                viewportHeight: viewportHeight,
-                safeArea: safeArea,
-                horizontalDirection: horizontalDirection
-            )
-            // Landscape full-height frames only; portrait and width-constrained mounts
-            // keep their own placement (base equals reference shape there).
-            guard viewportHeight <= viewportWidth, base.width < reference.width else {
-                return base
-            }
-            let railSideX =
-                horizontalDirection == .mirrored
-                ? reference.x
-                : reference.x + reference.width - base.width
-            return MonitorFeedFrame(
-                x: railSideX, y: base.y, width: base.width, height: base.height)
-        }
         let aspectRatio = max(0.1, aspect)
         let leadingInset = leadingInset(for: safeArea)
         let viewportWidth = max(0, viewportWidth)
@@ -283,7 +257,11 @@ public enum MonitorFeedLayout {
 
         let remainingWidth = max(0, viewportWidth - width)
         let x: Double
-        if MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) {
+        if centered {
+            // Mid-viewport, clamped so neither edge runs under a safe-area inset.
+            let maxX = max(leadingInset, remainingWidth - max(0, safeArea.trailing))
+            x = min(max(remainingWidth / 2, leadingInset), maxX)
+        } else if MonitorBatteryRailLayout.usesClassicSideNotch(safeArea: safeArea) {
             // Classic iPhones report equal horizontal safe areas even though only one side has
             // the notch. Use physical orientation to clear that side, then bias the feed slightly
             // toward the opposite control rail to close its oversized black gap.
@@ -310,7 +288,7 @@ public enum MonitorFeedLayout {
         safeArea: MonitorEdgeInsets,
         horizontalDirection: MonitorHorizontalLayoutDirection = .standard,
         aspect: Double = aspectRatio,
-        anchorToRailSide: Bool = false
+        centered: Bool = false
     ) -> MonitorFeedFrame {
         frame(
             viewportWidth: viewportWidth,
@@ -318,7 +296,7 @@ public enum MonitorFeedLayout {
             safeArea: safeArea,
             horizontalDirection: horizontalDirection,
             aspect: aspect,
-            anchorToRailSide: anchorToRailSide
+            centered: centered
         )
     }
 }
