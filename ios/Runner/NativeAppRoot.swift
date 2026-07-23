@@ -3991,6 +3991,24 @@ final class NativeAppModel {
             pendingFocusPoint = nil
             do {
                 try await session.changeAfArea(x: point.x, y: point.y)
+                // Photography: moving the point alone never focuses (video's continuous AF
+                // does that part) — drive AF like a half-press, with a short DeviceReady
+                // drain so the body isn't left mid-drive. Subject tracking latches through
+                // the same area change, exactly as in video. Out-of-focus or a still-busy
+                // timeout stays silent; the AF box state in the header tells the story.
+                // [verify-on-HW]
+                if StillCapturePolicy.prefersPhotographyChrome(
+                    selector: cameraPropertySnapshot.captureSelector)
+                {
+                    try await session.afDrive()
+                    for _ in 0..<4 {
+                        if case .inProgress = try await session.pollStillReleaseReadiness() {
+                            try await Task.sleep(nanoseconds: 120_000_000)
+                        } else {
+                            break
+                        }
+                    }
+                }
             } catch {
                 connectionMessage =
                     "Camera rejected the focus point: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
@@ -5494,6 +5512,30 @@ final class NativeAppModel {
     }
 
     // MARK: - Still capture (photography mode)
+
+    /// Whether the current shutter press latched a continuous burst that finger-up must end.
+    @ObservationIgnored private var shutterPressLatchedBurst = false
+
+    /// Finger-down on the shutter control. Single/timer presses fire one release (via
+    /// `captureStill`, which also ends an open bulb/time exposure); continuous drives latch
+    /// the release until `shutterButtonReleased`. [verify-on-HW: continuous latch-until-
+    /// terminate per body]
+    func shutterButtonPressed() {
+        let wasCapturing = isStillCapturing
+        captureStill()
+        guard !wasCapturing, isStillCapturing, !isDemoSession else { return }
+        let drive = cameraPropertySnapshot.stillCaptureMode.flatMap(StillDriveMode.mode(forLabel:))
+        shutterPressLatchedBurst = drive?.isContinuous == true
+    }
+
+    /// Finger-up: ends a latched continuous burst (no-op for single/timer/bulb presses, or
+    /// when the body already finished the burst on its own).
+    func shutterButtonReleased() {
+        guard shutterPressLatchedBurst else { return }
+        shutterPressLatchedBurst = false
+        guard isStillCapturing else { return }
+        pendingStillTerminate = true
+    }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
     /// While a bulb/time exposure is holding the shutter open, a second tap ends it.
@@ -7634,7 +7676,20 @@ extension NativeAppModel {
             clips = clips.filter { isClipDownloaded($0) }
         }
 
+        // One item per RAW+JPEG pair: the JPEG carries the still (badge + viewer toggle), the
+        // same-shot RAW never renders its own cell. Keyed on the survivors so an offline pass can
+        // still surface a cached NEF whose JPEG side was filtered away.
+        let jpegPairKeys = Set(clips.lazy.filter(\.isJPEGPhoto).map(\.rawPairKey))
+        clips = clips.filter { !($0.isRawPhoto && jpegPairKeys.contains($0.rawPairKey)) }
+
         return MediaClipSorting.sort(clips, order: mediaSortOrder)
+    }
+
+    /// The same-shot `.NEF`/`.NRW`/`.DNG` behind a JPEG's grid item (nil for unpaired stills).
+    /// Scans the unfiltered bucket list so the pair survives tab and chip filters.
+    func rawSibling(of clip: MediaClip) -> MediaClip? {
+        guard clip.isJPEGPhoto else { return nil }
+        return mediaClips.first { $0.isRawPhoto && $0.rawPairKey == clip.rawPairKey }
     }
 
     /// On-disk cache size for the active browser source bucket.

@@ -662,6 +662,23 @@ final class NativeCameraSession: @unchecked Sendable {
         }
     }
 
+    /// Starts AF driving — the half-press equivalent (no params). Completion is confirmed via
+    /// DeviceReady polling (busy while driving, an out-of-focus response on failure); MF and
+    /// warning states return OK immediately without driving.
+    func afDrive() async throws {
+        let result = try await transact(
+            operationCode: .afDrive,
+            parameters: [],
+            dataPhase: .noDataOrDataIn
+        )
+        guard result.operationResponse.responseCode == .ok else {
+            throw NativeCameraSessionError.operationRejected(
+                .afDrive,
+                result.operationResponse.responseCode
+            )
+        }
+    }
+
     func afDriveCancel() async throws {
         let result = try await transact(
             operationCode: .afDriveCancel,

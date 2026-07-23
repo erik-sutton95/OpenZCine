@@ -166,6 +166,24 @@ extension MediaClip {
     var isCapturedToday: Bool {
         MediaClipFormatting.isCapturedToday(captureDate)
     }
+
+    /// True for Nikon RAW stills (`.NEF` / `.NRW` / `.DNG`) — the tag-along side of a RAW+JPEG pair.
+    var isRawPhoto: Bool {
+        ["nef", "nrw", "dng"].contains(fileExtension)
+    }
+
+    /// True for JPEG stills — the display side of a RAW+JPEG pair (NEF has no quicklook-decodable
+    /// full preview, so the JPEG carries the grid cell and opens the viewer).
+    var isJPEGPhoto: Bool {
+        ["jpg", "jpeg", "jpe"].contains(fileExtension)
+    }
+
+    /// Same-shot pair identity: bucket + storage slot + case-insensitive stem. The slot is part of
+    /// the key on purpose — split recording writes RAW and JPEG to different cards, and those must
+    /// stay separate items.
+    var rawPairKey: String {
+        "\(cameraID)/\(storageID.map(String.init) ?? "-")/\(MediaClipFilename.stem(of: filename))"
+    }
 }
 
 /// One camera card slot surfaced in the Media browser storage row.

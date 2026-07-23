@@ -63,6 +63,24 @@ public enum StillDriveMode: UInt16, Equatable, Sendable, CaseIterable {
     public static func decode(raw: UInt16) -> StillDriveMode? {
         StillDriveMode(rawValue: raw)
     }
+
+    /// Drive modes that keep firing while the shutter stays pressed — a remote release in
+    /// these modes latches until the terminate op, so the shutter control ends the burst on
+    /// finger-up. [verify-on-HW: latch behaviour per body]
+    public var isContinuous: Bool {
+        switch self {
+        case .continuousHigh, .continuousLow, .continuousHighExtended,
+            .highSpeedFrameC15, .highSpeedFrameC30, .highSpeedFrameC60, .highSpeedFrameC120:
+            true
+        case .single, .selfTimer, .quickSetting:
+            false
+        }
+    }
+
+    /// Reverse lookup from the display label the snapshot stores.
+    public static func mode(forLabel label: String) -> StillDriveMode? {
+        allCases.first { $0.label == label }
+    }
 }
 
 /// Destination for a still capture request.

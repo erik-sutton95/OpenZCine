@@ -747,6 +747,8 @@ struct MonitorSystemCluster: View {
     /// Absolute (landscape) or column-relative (portrait) frames for the five controls.
     var slots: MonitorSystemSlotFrames
     var axis: MonitorZoneStyle
+    /// Visual press feedback for the press-tracked photo shutter (no Button style there).
+    @State private var shutterPressed = false
 
     var body: some View {
         switch axis {
@@ -914,21 +916,31 @@ struct MonitorSystemCluster: View {
 
     @ViewBuilder private var recordButton: some View {
         if isPhotographyMode {
-            Button {
-                model.captureStill()
-            } label: {
-                PhotographyShutterButton(isCapturing: model.isStillCapturing)
-            }
-            .buttonStyle(.zcTapTarget)
-            // Stays tappable while a bulb/time exposure holds the shutter open —
-            // the second tap ends the exposure; other in-flight releases ignore taps.
-            .disabled(model.isStillCapturing && !model.stillReleaseIsOpenShutter)
-            .accessibilityLabel(
-                model.stillReleaseIsOpenShutter
-                    ? "End exposure" : model.isStillCapturing ? "Capturing" : "Shutter"
-            )
-            .accessibilityIdentifier("monitor.system.shutter")
-            .liveViewGuideAnchor(.record)
+            // Press-tracked, not a Button: finger-down fires the release (or ends an open
+            // bulb/time exposure) and finger-up ends a latched continuous burst — a disabled
+            // Button would swallow exactly that finger-up. Re-press gating during an
+            // in-flight single release lives in `shutterButtonPressed`.
+            PhotographyShutterButton(isCapturing: model.isStillCapturing)
+                .scaleEffect(shutterPressed ? 0.93 : 1)
+                .animation(.easeOut(duration: 0.12), value: shutterPressed)
+                .contentShape(Circle())
+                .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {
+                } onPressingChanged: { pressing in
+                    shutterPressed = pressing
+                    if pressing {
+                        model.shutterButtonPressed()
+                    } else {
+                        model.shutterButtonReleased()
+                    }
+                }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { model.captureStill() }
+                .accessibilityLabel(
+                    model.stillReleaseIsOpenShutter
+                        ? "End exposure" : model.isStillCapturing ? "Capturing" : "Shutter"
+                )
+                .accessibilityIdentifier("monitor.system.shutter")
+                .liveViewGuideAnchor(.record)
         } else {
             Button {
                 model.toggleRecording()
@@ -1212,19 +1224,12 @@ struct MonitorShell: View {
         }
 
         // Bottom bars (assist + capture) — live only; clean/lock hide them. In photography
-        // the assist tools move to a vertical rail in the notch-side gap the 3:2 frame
-        // opens up (below), handing the whole band to the capture strip; the horizontal
-        // strip stays only when the photo frame is 16:9 and there is no gap to use.
+        // the assist tools always move to the lock-side vertical rail (below), handing the
+        // whole band to the capture strip.
         if !isClean {
             let isPhotographyBand = StillCapturePolicy.prefersPhotographyChrome(
                 selector: model.cameraPropertySnapshot.captureSelector)
-            let photoFeed = isPhotographyBand ? photographyFeedFrame() : nil
-            let photoGap =
-                photoFeed.map {
-                    $0.x - MonitorFeedLayout.leadingInset(for: context.feedSafeArea)
-                } ?? 0
-            let leftRailFits = photoGap >= Double(MonitorAssistStrip.expandedWidth + 12)
-            let assistVisible = chrome.assistToolbarVisible && !(isPhotographyBand && leftRailFits)
+            let assistVisible = chrome.assistToolbarVisible && !isPhotographyBand
             let captureVisible = chrome.cameraValuesVisible
             if let assist = map.assistStrip, let capture = map.captureStrip,
                 assistVisible || captureVisible
@@ -1275,16 +1280,16 @@ struct MonitorShell: View {
                     y: CGFloat(assist.frame.y + assist.frame.height / 2))
             }
 
-            // Photography's vertical assist rail, centered in the notch-side gap beside the
-            // rail-anchored photo frame — bounded between the top deck and the capture band
-            // so it never runs under either. Collapsible like the portrait rail.
-            if let photoFeed, leftRailFits, chrome.assistToolbarVisible, !model.interfaceLocked,
+            // Photography's vertical assist rail, top-aligned next to the lock button and
+            // expanding downward — the full tool column when the height allows (Pro Max),
+            // otherwise filling (and scrolling) until it reaches the capture band. Overlaying
+            // the feed edge is fine; the band strip is chrome over the feed too.
+            if isPhotographyBand, chrome.assistToolbarVisible, !model.interfaceLocked,
                 let band = map.assistStrip
             {
-                let deckFrame = map.infoBar.frame
-                let leadingInset = MonitorFeedLayout.leadingInset(for: context.feedSafeArea)
-                let railX = leadingInset + photoGap / 2
-                let railTop = deckFrame.y + deckFrame.height + 10
+                let lock = map.systemSlots.lock
+                let railX = lock.x + lock.width + 12 + Double(MonitorAssistStrip.expandedWidth) / 2
+                let railTop = lock.y
                 let railBottom = band.frame.y - 10
                 let railHeight = max(0, railBottom - railTop)
                 MonitorAssistStrip(
@@ -1295,7 +1300,9 @@ struct MonitorShell: View {
                 )
                 .environment(model)
                 .liveViewGuideAnchor(.viewAssist)
-                .frame(maxHeight: CGFloat(railHeight))
+                // Top-aligned in the rail lane: a tool column shorter than the lane hugs the
+                // lock row instead of centring in the leftover space.
+                .frame(maxHeight: CGFloat(railHeight), alignment: .top)
                 .position(
                     x: CGFloat(railX),
                     y: CGFloat(railTop + railHeight / 2))
@@ -1313,11 +1320,17 @@ struct MonitorShell: View {
                 let size: CGFloat = 40
                 // Inline battery (iPad) sits in the top band, so its frame no longer marks the
                 // bottom-left lane; fall back to the assist bar's leading edge plus the same
-                // clearance the rail layout produced (indicator width 38 + 24).
+                // clearance the rail layout produced (indicator width 38 + 24). Photography's
+                // lock-side assist rail owns that lane instead, so clear past it there.
+                let photographyRailTrailing =
+                    map.systemSlots.lock.x + map.systemSlots.lock.width + 12
+                    + Double(MonitorAssistStrip.expandedWidth)
                 let x =
-                    battery.style == .batteryInline
-                    ? CGFloat(assist.frame.x) + 62
-                    : CGFloat(rail.x + rail.width) + 24
+                    isPhotographyBand && chrome.assistToolbarVisible
+                    ? CGFloat(photographyRailTrailing) + 24 + size / 2
+                    : battery.style == .batteryInline
+                        ? CGFloat(assist.frame.x) + 62
+                        : CGFloat(rail.x + rail.width) + 24
                 let y = model.focusResetButtonClearY(
                     centerX: x, baseY: CGFloat(assist.frame.y) - 30, size: size)
                 Button {

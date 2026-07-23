@@ -670,6 +670,7 @@ struct MediaBrowserView: View {
                             cacheProgress: model.mediaDownloadProgress[clip.id]
                                 ?? model.clipBufferedFraction(clip),
                             isStreaming: model.isClipStreaming(clip),
+                            hasRawSibling: model.rawSibling(of: clip) != nil,
                             isSelecting: isSelecting,
                             isSelected: selectedClipIDs.contains(clip.id),
                             onOpen: { open(clip) },
@@ -701,6 +702,7 @@ struct MediaBrowserView: View {
                     cacheProgress: model.mediaDownloadProgress[clip.id]
                         ?? model.clipBufferedFraction(clip),
                     isStreaming: model.isClipStreaming(clip),
+                    hasRawSibling: model.rawSibling(of: clip) != nil,
                     isSelecting: isSelecting,
                     isSelected: selectedClipIDs.contains(clip.id),
                     onOpen: { open(clip) },
@@ -1183,6 +1185,8 @@ private struct MediaClipListRow: View {
     let thumbnailURL: URL?
     let cacheProgress: Double?
     let isStreaming: Bool
+    /// A same-stem RAW rides behind this JPEG — the row shows one item for the pair.
+    var hasRawSibling: Bool = false
     var isSelecting: Bool = false
     var isSelected: Bool = false
     let onOpen: () -> Void
@@ -1200,6 +1204,9 @@ private struct MediaClipListRow: View {
         var parts: [String] = []
         if let bucket = clip.resolutionBucket {
             parts.append(bucket.rawValue)
+        }
+        if hasRawSibling {
+            parts.append("RAW+J")
         }
         if clip.sizeBytes > 0 {
             parts.append(MediaClipFormatting.byteLabel(clip.sizeBytes))
@@ -1631,6 +1638,8 @@ private struct MediaClipCell: View {
     /// Live stream or partial on-disk cache fraction (0…1); primary download progress display.
     let cacheProgress: Double?
     let isStreaming: Bool
+    /// A same-stem RAW rides behind this JPEG — the cell shows one item for the pair.
+    var hasRawSibling: Bool = false
     var isSelecting: Bool = false
     var isSelected: Bool = false
     let onOpen: () -> Void
@@ -1670,8 +1679,9 @@ private struct MediaClipCell: View {
                     .strokeBorder(LiveDesign.hairline, lineWidth: 1)
             )
             .overlay(alignment: .bottomTrailing) {
-                if !isPhoto, let durationLabel, cacheProgress == nil, !isSelecting {
-                    Text(durationLabel)
+                let badge = isPhoto ? (hasRawSibling ? "RAW+J" : nil) : durationLabel
+                if let badge, cacheProgress == nil, !isSelecting {
+                    Text(badge)
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(LiveDesign.text)
                         .padding(.horizontal, 6)
@@ -1869,7 +1879,8 @@ private struct MediaClipCell: View {
 
 // MARK: - Photo viewer
 
-/// Full-screen still viewer for camera JPEG/RAW/HEIF — streams the object from the card when needed.
+/// Full-screen still viewer for camera JPEG/RAW/HEIF — streams the object from the card when
+/// needed. Same-stem RAW+JPEG pairs open on the JPEG with a JPG ⇄ RAW toggle beside Share.
 struct MediaPhotoViewer: View {
     let clip: MediaClip
     @Environment(NativeAppModel.self) private var model
@@ -1882,6 +1893,14 @@ struct MediaPhotoViewer: View {
     @State private var lastZoomScale: CGFloat = 1
     @State private var isSharePresented = false
     @State private var isPreparingShare = false
+    /// RAW side of the JPG/RAW toggle is active (paired stills only).
+    @State private var showingRaw = false
+
+    /// The same-stem RAW behind this JPEG's grid item (nil for unpaired stills — no toggle).
+    private var rawSibling: MediaClip? { model.rawSibling(of: clip) }
+
+    /// The file the viewer currently loads, names, and shares — the JPEG or its RAW sibling.
+    private var displayClip: MediaClip { showingRaw ? (rawSibling ?? clip) : clip }
 
     var body: some View {
         ZStack {
@@ -1919,11 +1938,14 @@ struct MediaPhotoViewer: View {
                             .contentShape(Circle())
                     }
                     .buttonStyle(.zcTapTarget)
-                    Text(clip.filename)
+                    Text(displayClip.filename)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(LiveDesign.text)
                         .lineLimit(1)
                     Spacer()
+                    if rawSibling != nil {
+                        sideToggle
+                    }
                     shareButton
                 }
                 .padding(.horizontal, 16)
@@ -1940,7 +1962,7 @@ struct MediaPhotoViewer: View {
             image = nil
         }
         .sheet(isPresented: $isSharePresented) {
-            if let url = model.clipLocalURL(clip) {
+            if let url = model.clipLocalURL(displayClip) {
                 MultiShareSheet(urls: [url], metadataText: nil) {
                     isSharePresented = false
                 }
@@ -1948,22 +1970,23 @@ struct MediaPhotoViewer: View {
         }
     }
 
-    /// Shares the original file (JPEG/HEIF/NEF alike) once its camera download completes —
-    /// the share sheet covers AirDrop, Files, and Save Image for the photo workflow.
+    /// Shares the currently-viewed side of the still (JPEG/HEIF/NEF alike) once its camera
+    /// download completes — the share sheet covers AirDrop, Files, and Save Image.
     private var shareButton: some View {
         Button {
             guard !isPreparingShare else { return }
-            if model.isClipDownloaded(clip) {
+            let target = displayClip
+            if model.isClipDownloaded(target) {
                 isSharePresented = true
             } else {
                 isPreparingShare = true
                 Task {
                     // The viewer already streams the full file; wait for it to land.
-                    while !Task.isCancelled, !model.isClipDownloaded(clip) {
+                    while !Task.isCancelled, !model.isClipDownloaded(target) {
                         try? await Task.sleep(for: .milliseconds(300))
                     }
                     isPreparingShare = false
-                    if model.isClipDownloaded(clip) { isSharePresented = true }
+                    if model.isClipDownloaded(target) { isSharePresented = true }
                 }
             }
         } label: {
@@ -1980,8 +2003,44 @@ struct MediaPhotoViewer: View {
         .accessibilityLabel("Share photo")
     }
 
+    /// Compact JPG ⇄ RAW switch for a same-stem pair — mirrors the browser pill chrome.
+    private var sideToggle: some View {
+        HStack(spacing: 2) {
+            sideSegment("JPG", isActive: !showingRaw) { showSide(raw: false) }
+            sideSegment("RAW", isActive: showingRaw) { showSide(raw: true) }
+        }
+        .padding(2)
+        .background(Color.black.opacity(0.35), in: Capsule())
+        .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
+        .accessibilityLabel("Photo format")
+        .accessibilityValue(showingRaw ? "RAW" : "JPG")
+    }
+
+    private func sideSegment(
+        _ title: String, isActive: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(isActive ? LiveDesign.accentDim : Color.clear, in: Capsule())
+        }
+        .buttonStyle(.zcTapTarget)
+    }
+
+    /// Switches the viewer to the other side of the pair and loads/streams that file.
+    private func showSide(raw: Bool) {
+        guard showingRaw != raw else { return }
+        showingRaw = raw
+        loadTask?.cancel()
+        model.cancelClipStream()
+        loadTask = Task { await loadImage() }
+    }
+
     private var loadingMessage: String {
-        if model.mediaDownloadProgress[clip.id] != nil {
+        if model.mediaDownloadProgress[displayClip.id] != nil {
             return "Loading from camera…"
         }
         return "Preparing image…"
@@ -2005,25 +2064,27 @@ struct MediaPhotoViewer: View {
         isLoading = true
         defer { isLoading = false }
 
-        if let thumbURL = model.clipThumbnailURL(clip),
+        // Pair toggle keeps the current frame up while the other side streams — the pair shares
+        // one stem thumbnail, and swapping it in would downgrade an already-decoded image.
+        if image == nil, let thumbURL = model.clipThumbnailURL(displayClip),
             let data = try? Data(contentsOf: thumbURL),
             let thumb = UIImage(data: data)
         {
             await MainActor.run { image = thumb }
         }
 
-        if model.isClipDownloaded(clip) {
+        if model.isClipDownloaded(displayClip) {
             await loadFromDisk()
             return
         }
 
-        model.startClipStream(clip)
+        model.startClipStream(displayClip)
         while !Task.isCancelled {
-            if model.isClipDownloaded(clip) {
+            if model.isClipDownloaded(displayClip) {
                 await loadFromDisk()
                 return
             }
-            guard let url = model.clipLocalURL(clip) else { return }
+            guard let url = model.clipLocalURL(displayClip) else { return }
             if FileManager.default.fileExists(atPath: url.path),
                 let partial = UIImage(contentsOfFile: url.path)
             {
@@ -2035,7 +2096,7 @@ struct MediaPhotoViewer: View {
 
     @MainActor
     private func loadFromDisk() async {
-        guard let url = model.clipLocalURL(clip) else { return }
+        guard let url = model.clipLocalURL(displayClip) else { return }
         guard let loaded = UIImage(contentsOfFile: url.path) else { return }
         image = loaded
     }
