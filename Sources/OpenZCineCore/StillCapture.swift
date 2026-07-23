@@ -118,6 +118,8 @@ public enum StillCapturePolicy: Sendable {
         .compressionSetting,
         .rawCompressionType,
         .exposureProgramMode,
+        .userMode,
+        .activePicCtrlItem,
         .stillISOAutoControl,
         .isoControlSensitivity,
         .stillShutterSpeed,
@@ -288,7 +290,27 @@ extension PTPCameraPropertySnapshot {
             CameraValue(label: "FOCUS", value: focusMode ?? "—"),
             CameraValue(label: "FLASH", value: compactFlashLabel ?? "—"),
             CameraValue(label: "METER", value: meteringMode ?? "—"),
+            CameraValue(label: "PROFILE", value: compactPictureControlLabel ?? "—"),
         ]
+    }
+
+    /// Picture-control label compacted to strip width (body-style codes for the built-ins;
+    /// Auto and the creative names are short enough to show whole).
+    private var compactPictureControlLabel: String? {
+        switch pictureControl {
+        case nil: nil
+        case "Standard": "SD"
+        case "Neutral": "NL"
+        case "Vivid": "VI"
+        case "Monochrome": "MC"
+        case "Portrait": "PT"
+        case "Landscape": "LS"
+        case "Flat": "FL"
+        case "Flat Mono": "FM"
+        case "Deep Tone Mono": "DTM"
+        case "Rich Tone Portrait": "RTP"
+        case let other: other
+        }
     }
 
     /// Top-bar size readout: image area + size class ("FX · L"). Bodies report ImageSize as a

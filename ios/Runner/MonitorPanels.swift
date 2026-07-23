@@ -900,8 +900,13 @@ struct PickerPanel: View {
         isShutterControlLocked || isISORecordingLocked
     }
 
+    /// Photo ISO's Auto tab: the drum only mirrors the body's live pick.
+    private var isStillISOAutoLocked: Bool {
+        picker == .stillISO && selectedMode == 0
+    }
+
     private var isDrumInteractionLocked: Bool {
-        isPickerInteractionLocked || isISOAutoValueLocked
+        isPickerInteractionLocked || isISOAutoValueLocked || isStillISOAutoLocked
             || model.pickerModeDisabled(picker, mode: selectedMode)
     }
 
@@ -944,7 +949,7 @@ struct PickerPanel: View {
                 if isISORecordingLocked {
                     isoRecordingLockBanner
                 }
-                if isISOAutoValueLocked {
+                if isISOAutoValueLocked || isStillISOAutoLocked {
                     isoAutoLockBanner
                 }
                 if isTintMode {
@@ -1010,6 +1015,8 @@ struct PickerPanel: View {
             // `movieShutterMode`), never via overlapping ISO steps or `showPicker`'s default mode.
             if picker == .iso {
                 selectedMode = model.isoPickerModeIndex
+            } else if picker == .stillISO {
+                selectedMode = model.stillISOPickerModeIndex
             } else if picker == .shutter {
                 selectedMode = model.shutterPickerModeIndex
             } else if selection.isEmpty {
@@ -1038,6 +1045,15 @@ struct PickerPanel: View {
             selection = value
             lastApplied = value
         }
+        // Keep the photo Auto/Manual tab aligned with the body's Auto ISO readback — the
+        // camera stays ground truth for a toggle flipped in its own menus.
+        .onChange(of: model.stillISOPickerModeIndex) { _, modeIndex in
+            guard picker == .stillISO, selectedMode != modeIndex else { return }
+            selectedMode = modeIndex
+            let value = model.pickerModeValue(picker, mode: modeIndex)
+            selection = value
+            lastApplied = value
+        }
         // Keep the LOW/HIGH base tab aligned with `movieBaseISO` readback (R3D NE only).
         .onChange(of: model.isoPickerModeIndex) { _, modeIndex in
             guard picker == .iso, model.showsDualBaseISOPicker, selectedMode != modeIndex else {
@@ -1048,9 +1064,11 @@ struct PickerPanel: View {
             selection = value
             lastApplied = value
         }
-        // Auto ISO: keep the locked drum centred on the body's effective ISO as it changes.
+        // Auto ISO: keep the locked drum centred on the body's effective ISO as it changes
+        // (movie Auto and the photo Auto tab alike).
         .onChange(of: model.cameraPropertySnapshot.iso) { _, iso in
-            guard picker == .iso, isISOAutoValueLocked, let iso, iso > 0 else { return }
+            let autoTracks = (picker == .iso && isISOAutoValueLocked) || isStillISOAutoLocked
+            guard autoTracks, let iso, iso > 0 else { return }
             let next = String(iso)
             guard next != selection else { return }
             selection = next
@@ -1220,6 +1238,11 @@ struct PickerPanel: View {
                         // Auto On: no ISO write. Auto Off: apply the drum value in manual ISO.
                         if index == 0 { return }
                     }
+                    if picker == .stillISO {
+                        model.switchStillAutoISO(enabled: index == 0)
+                        // Auto: the body owns the value. Manual: fall through and apply it.
+                        if index == 0 { return }
+                    }
                     if picker == .shutter {
                         model.switchShutterMode(speedMode: index == 1)
                     }
@@ -1231,7 +1254,7 @@ struct PickerPanel: View {
                     // is pre-set above so this write isn't duplicated by the `selection`
                     // `onChange`.
                     if picker != .focus, picker != .shutter, picker != .stillSize,
-                        picker != .stillDrive, picker != .stillFocus
+                        picker != .stillDrive, picker != .stillFocus, picker != .stillMode
                     {
                         model.applyPicker(picker, mode: index, value: value)
                     }

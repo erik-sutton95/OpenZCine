@@ -2214,6 +2214,8 @@ final class NativeAppModel {
                     )
                     .applying(property: .captureAreaCrop, data: Data([0]))
                     .applying(property: .rawCompressionType, data: Data([4]))
+                    .applying(property: .activePicCtrlItem, data: Data(ByteCoding.uint16LE(8)))
+                    .applying(property: .userMode, data: Data([19]))
                 // The camera-advertised size domain the pill ranks against ("6048x4032" → L)
                 // and the Size drum offers — mirrors what the describe path returns on a body.
                 cameraControlOptions[.imageSize] = ["6048x4032", "4528x3016", "3024x2016"]
@@ -4468,7 +4470,9 @@ final class NativeAppModel {
         let pending = pendingCameraWrites.removeFirst()
         let isShutterModeWrite = pending.write.property == .movieShutterMode
         let isBaseISOWrite = pending.write.property == .movieBaseISO
-        let isISOAutoWrite = pending.write.property == .movieISOAutoControl
+        let isISOAutoWrite =
+            pending.write.property == .movieISOAutoControl
+            || pending.write.property == .stillISOAutoControl
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
         do {
@@ -5597,6 +5601,14 @@ final class NativeAppModel {
     /// on the camera itself flows straight into which tabs are live — the camera stays ground
     /// truth.
     func pickerModeDisabled(_ picker: CameraPicker, mode: Int) -> Bool {
+        if picker == .stillISO {
+            // Mode-aware: the full-auto programs own sensitivity — Manual grays out there.
+            return mode == 1 && !stillAllowsManualISO
+        }
+        if picker == .stillMode {
+            // A bank's inner program is settable only while that bank is active.
+            return mode == 1 && !["U1", "U2", "U3"].contains(commandExposureMode)
+        }
         guard picker == .stillDrive else { return false }
         let builtInOn =
             cameraPropertySnapshot.stillCaptureMode == StillDriveMode.selfTimer.label
@@ -5963,10 +5975,12 @@ final class NativeAppModel {
         drainPendingWritesIfIdle()
     }
 
-    /// Queues a stills AF-area / subject-detection write with an optimistic snapshot update;
-    /// the poll confirms or corrects it. A body lacking the position rejects through the
-    /// queue's rejection surface.
-    private func applyStillFocusControl(_ control: PTPCameraControl, value: String) {
+    /// Queues a stills tab-setting write (AF-area, subject detection, a U bank's inner
+    /// program) with an optimistic snapshot update; the poll confirms or corrects it, and a
+    /// body that rejects the value surfaces through the queue.
+    private func applyStillControl(
+        _ control: PTPCameraControl, picker: CameraPicker, value: String
+    ) {
         guard let write = PTPCameraPropertyWrite.request(control: control, label: value) else {
             return
         }
@@ -5974,7 +5988,7 @@ final class NativeAppModel {
             property: write.property, data: write.data)
         publishCameraDisplayState()
         guard !isDemoSession else { return }
-        enqueueCameraWrite(PendingCameraWrite(picker: .stillFocus, value: value, write: write))
+        enqueueCameraWrite(PendingCameraWrite(picker: picker, value: value, write: write))
         drainPendingWritesIfIdle()
     }
 
@@ -6444,6 +6458,7 @@ final class NativeAppModel {
         case .stillMeter: cameraPropertySnapshot.meteringMode ?? ""
         case .stillSize: stillSizeAreaDisplay ?? ""
         case .stillQuality: cameraPropertySnapshot.compression ?? ""
+        case .stillPicture: cameraPropertySnapshot.pictureControl ?? ""
         default: cameraState.values.first(where: { $0.label == picker.valueLabel })?.value ?? ""
         }
     }
@@ -6527,6 +6542,15 @@ final class NativeAppModel {
             default: break
             }
         }
+        if picker == .stillISO {
+            // Both tabs centre on the body's live sensitivity (the Auto drum just tracks it).
+            let live = cameraValue(for: picker)
+            return modes[mode].options.contains(live) ? live : modes[mode].base
+        }
+        if picker == .stillMode, mode == 1 {
+            // The U banks' inner program has its own stored value.
+            return cameraPropertySnapshot.userModeProgram ?? modes[1].base
+        }
         let pickerMode = modes[mode]
         let live = cameraValue(for: picker)
         if pickerMode.options.contains(live) { return live }
@@ -6560,7 +6584,21 @@ final class NativeAppModel {
         }
         if picker == .stillFocus, mode > 0 {
             // AF-area and subject detection are their own stills properties.
-            applyStillFocusControl(mode == 1 ? .stillFocusArea : .stillFocusSubject, value: value)
+            applyStillControl(
+                mode == 1 ? .stillFocusArea : .stillFocusSubject,
+                picker: .stillFocus, value: value)
+            return
+        }
+        if picker == .stillMode, mode == 1 {
+            // The active U bank's inner program is its own property.
+            applyStillControl(.stillUserModeProgram, picker: .stillMode, value: value)
+            return
+        }
+        if picker == .stillISO {
+            // The Auto tab's drum is display-only; Manual writes only where the exposure
+            // mode allows it.
+            guard mode == 1, stillAllowsManualISO else { return }
+            applyPickerValue(value, for: picker)
             return
         }
         if picker == .audio {
@@ -6763,6 +6801,40 @@ final class NativeAppModel {
     }
 
     /// Toggles movie ISO auto (`MovISOAutoControl`) — not exposure-program Auto/M.
+    /// Photo Auto ISO tab index — camera truth (with the optimistic pending overlay).
+    var stillISOPickerModeIndex: Int {
+        (pendingISOAuto ?? cameraPropertySnapshot.isoAuto) == true ? 0 : 1
+    }
+
+    /// Mode-aware manual gate for stills: the full-auto and scene programs own sensitivity
+    /// outright, so Manual only offers itself in P/S/A/M and the user banks.
+    var stillAllowsManualISO: Bool {
+        ["P", "S", "A", "M", "U1", "U2", "U3"].contains(
+            cameraPropertySnapshot.exposureMode ?? "")
+    }
+
+    /// Toggles the stills Auto ISO control with an optimistic snapshot update; the queued
+    /// write's readback confirms it, and a change made on the body flows back through the
+    /// poll the same way.
+    func switchStillAutoISO(enabled: Bool) {
+        if !enabled, !stillAllowsManualISO { return }
+        let write = PTPCameraPropertyWrite(
+            property: .stillISOAutoControl, data: Data([enabled ? 1 : 0]))
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: write.property, data: write.data)
+        pendingISOAuto = enabled
+        publishCameraDisplayState()
+        guard !isDemoSession else { return }
+        enqueueCameraWrite(
+            PendingCameraWrite(
+                picker: .stillISO,
+                value: enabled ? "Auto On" : "Auto Off",
+                write: write
+            )
+        )
+        drainPendingWritesIfIdle()
+    }
+
     func switchAutoISO(enabled: Bool) {
         guard showsAutoISOPicker, !isISORecordingLocked else { return }
         // Auto Off / manual only in M; ignore attempts from non-M modes.
@@ -7441,6 +7513,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     case stillMeter
     case stillSize
     case stillQuality
+    case stillPicture
 
     var id: String { rawValue }
 
@@ -7448,7 +7521,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
     var isStillPicker: Bool {
         switch self {
         case .stillMode, .stillISO, .stillShutter, .stillIris, .stillDrive, .stillFocus,
-            .stillFlash, .stillMeter, .stillSize, .stillQuality:
+            .stillFlash, .stillMeter, .stillSize, .stillQuality, .stillPicture:
             true
         default:
             false
@@ -7477,6 +7550,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillMeter: "Metering"
         case .stillSize: "Image Size"
         case .stillQuality: "Image Quality"
+        case .stillPicture: "Profile"
         }
     }
 
@@ -7502,6 +7576,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillMeter: "Metering pattern"
         case .stillSize: "Area · size"
         case .stillQuality: "RAW · JPEG/HEIF"
+        case .stillPicture: "Picture control"
         }
     }
 
@@ -7522,6 +7597,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .stillMeter: "METER"
         case .stillSize: "SIZE"
         case .stillQuality: "QUAL"
+        case .stillPicture: "PROFILE"
         }
     }
 
@@ -7602,6 +7678,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             nil
         case .stillQuality:
             .stillQuality
+        case .stillPicture:
+            .stillPictureControl
         }
     }
 
@@ -7659,6 +7737,16 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 "RAW", "RAW+JPEG Fine", "RAW+JPEG Normal", "RAW+JPEG Basic", "JPEG Fine",
                 "JPEG Normal", "JPEG Basic",
             ]
+        // The full picture-control set: built-ins, the creative looks, and the custom slots
+        // (a slot with nothing registered rejects through the queue's surface).
+        case .stillPicture:
+            [
+                "Auto", "Standard", "Neutral", "Vivid", "Monochrome", "Portrait", "Landscape",
+                "Flat", "Flat Mono", "Deep Tone Mono", "Rich Tone Portrait",
+                "Dream", "Morning", "Pop", "Sunday", "Somber", "Drama", "Silence", "Bleach",
+                "Melancholic", "Pure", "Denim", "Toy", "Sepia", "Blue", "Red", "Pink",
+                "Charcoal", "Graphite", "Binary", "Carbon",
+            ] + (1...9).map { "Custom \($0)" }
         }
     }
 
@@ -7769,6 +7857,14 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                     options: ["Off", "1s", "2s", "3s", "5s", "10s", "20s", "30s", "60s"],
                     base: "Off"),
             ]
+        case .stillISO:
+            // Auto hands sensitivity to the body (the drum tracks its live pick, locked);
+            // Manual writes the stills ISO ladder — mode-aware, so the full-auto programs
+            // never offer it.
+            [
+                PickerMode(title: "Auto", options: CameraPicker.stillISO.options, base: "800"),
+                PickerMode(title: "Manual", options: CameraPicker.stillISO.options, base: "800"),
+            ]
         case .stillFocus:
             // AF mode, AF-area, and subject detection — three independent stills settings by
             // tab, mirroring the movie FOCUS picker.
@@ -7786,9 +7882,16 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                     options: ["Off", "Auto", "People", "Animal", "Vehicle", "Bird", "Airplane"],
                     base: "Auto"),
             ]
-        case .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
+        case .stillMode:
+            // The main program drum plus the U banks' inner program — settable only while a
+            // bank is active, so the tab grays otherwise.
+            [
+                PickerMode(title: "Mode", options: CameraPicker.stillMode.options, base: "P"),
+                PickerMode(title: "U Mode", options: ["P", "S", "A", "M"], base: "P"),
+            ]
+        case .iris, .resolution, .codec, .stabilization, .mode,
             .stillShutter, .stillIris, .stillFlash, .stillMeter,
-            .stillQuality:
+            .stillQuality, .stillPicture:
             []
         }
     }
@@ -7831,7 +7934,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             return mode == 1 ? .imageSize : nil
         case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
             .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
-            .stillQuality:
+            .stillQuality, .stillPicture:
             // The remaining stills pickers keep their doc-verified hardcoded ladders.
             return nil
         }

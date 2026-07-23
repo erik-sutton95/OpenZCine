@@ -37,6 +37,8 @@ public enum PTPCameraControl: Equatable, Sendable {
     case stillRawCompression
     case stillFocusArea
     case stillFocusSubject
+    case stillUserModeProgram
+    case stillPictureControl
 }
 
 extension PTPPropertyCode {
@@ -362,6 +364,20 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
                 return nil
             }
             return PTPCameraPropertyWrite(property: .afSubjectDetection, data: Data([code]))
+        case .stillUserModeProgram:
+            // The shooting mode a U bank runs as (UINT8) — the body rejects it outside a
+            // U bank; the queue's rejection surface handles that.
+            guard let code = PTPCameraPropertyDecoders.userModeProgramCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(property: .userMode, data: Data([code]))
+        case .stillPictureControl:
+            // Active picture control (UINT16); rejected while the tone mode is HLG.
+            guard let code = PTPCameraPropertyDecoders.pictureControlCode(for: label) else {
+                return nil
+            }
+            return PTPCameraPropertyWrite(
+                property: .activePicCtrlItem, data: Data(ByteCoding.uint16LE(code)))
         case .codec, .resolution:
             // Label-based encoding is intentionally unsupported: the picker writes the camera's
             // exact advertised raw value directly via `screenSize(raw:)` / `fileType(raw:)`
@@ -1027,6 +1043,80 @@ public enum PTPCameraPropertyDecoders {
         (UInt8(0)...4).first { rawCompression($0) == label }
     }
 
+    /// `ActivePicCtrlItem` (0xD200, UINT16) raw → label: the active picture control.
+    /// 1–11 are the built-in set, 101–120 the creative set, 201–209 registered customs.
+    public static func pictureControl(_ raw: UInt16) -> String {
+        switch raw {
+        case 1: "Standard"
+        case 2: "Neutral"
+        case 3: "Vivid"
+        case 4: "Monochrome"
+        case 5: "Portrait"
+        case 6: "Landscape"
+        case 7: "Flat"
+        case 8: "Auto"
+        case 9: "Flat Mono"
+        case 10: "Deep Tone Mono"
+        case 11: "Rich Tone Portrait"
+        case 101: "Dream"
+        case 102: "Morning"
+        case 103: "Pop"
+        case 104: "Sunday"
+        case 105: "Somber"
+        case 106: "Drama"
+        case 107: "Silence"
+        case 108: "Bleach"
+        case 109: "Melancholic"
+        case 110: "Pure"
+        case 111: "Denim"
+        case 112: "Toy"
+        case 113: "Sepia"
+        case 114: "Blue"
+        case 115: "Red"
+        case 116: "Pink"
+        case 117: "Charcoal"
+        case 118: "Graphite"
+        case 119: "Binary"
+        case 120: "Carbon"
+        case 201...209: "Custom \(raw - 200)"
+        default: hex(UInt32(raw))
+        }
+    }
+
+    /// Inverse of `pictureControl`, for encoding the PROFILE picker selection.
+    public static func pictureControlCode(for label: String) -> UInt16? {
+        let ranges: [ClosedRange<UInt16>] = [1...11, 101...120, 201...209]
+        for range in ranges {
+            if let hit = range.first(where: { pictureControl($0) == label }) {
+                return hit
+            }
+        }
+        return nil
+    }
+
+    /// `UserMode` (0xD0FC, UINT8) raw → label: the shooting mode a U bank runs as.
+    public static func userModeProgram(_ raw: UInt8) -> String {
+        switch raw {
+        case 19: "P"
+        case 20: "S"
+        case 21: "A"
+        case 22: "M"
+        case 23: "Auto"
+        default: hex(UInt32(raw))
+        }
+    }
+
+    /// Inverse of `userModeProgram` for the settable P/S/A/M range.
+    public static func userModeProgramCode(for label: String) -> UInt8? {
+        switch label {
+        case "P": 19
+        case "S": 20
+        case "A": 21
+        case "M": 22
+        default: nil
+        }
+    }
+
     /// `ExposureMeteringMode` (0x500B, UINT16) raw → label. Movie mode has a separate prop.
     public static func exposureMetering(_ raw: UInt16) -> String {
         switch raw {
@@ -1470,7 +1560,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         exposureBias: String? = nil,
         shotsRemaining: Int? = nil,
         imageArea: StillImageArea? = nil,
-        rawCompression: String? = nil
+        rawCompression: String? = nil,
+        userModeProgram: String? = nil,
+        pictureControl: String? = nil
     ) {
         self.iso = iso
         self.baseISO = baseISO
@@ -1517,6 +1609,8 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         self.shotsRemaining = shotsRemaining
         self.imageArea = imageArea
         self.rawCompression = rawCompression
+        self.userModeProgram = userModeProgram
+        self.pictureControl = pictureControl
     }
 
     // Exposure.
@@ -1595,6 +1689,10 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
     public let imageArea: StillImageArea?
     /// NEF (RAW) recording compression from `RawCompressionType`.
     public let rawCompression: String?
+    /// The shooting mode a U bank runs as, from `UserMode` (meaningful only in a U bank).
+    public let userModeProgram: String?
+    /// The active picture control, from `ActivePicCtrlItem`.
+    public let pictureControl: String?
 
     /// Command-monitor stabilisation summary (movie VR + electronic VR).
     public var stabilizationSummary: String? {
@@ -1748,6 +1846,13 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             return replacing(compression: PTPCameraPropertyDecoders.compressionSetting(bytes[0]))
         case .rawCompressionType where bytes.count >= 1:
             return replacing(rawCompression: PTPCameraPropertyDecoders.rawCompression(bytes[0]))
+        case .userMode where bytes.count >= 1:
+            return replacing(
+                userModeProgram: PTPCameraPropertyDecoders.userModeProgram(bytes[0]))
+        case .activePicCtrlItem where bytes.count >= 2:
+            return replacing(
+                pictureControl: PTPCameraPropertyDecoders.pictureControl(
+                    ByteCoding.readUInt16LE(bytes, at: 0)))
         case .exposureMeteringMode where bytes.count >= 2:
             return replacing(
                 meteringMode: PTPCameraPropertyDecoders.exposureMetering(
@@ -1841,7 +1946,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
         exposureBias: String? = nil,
         shotsRemaining: Int? = nil,
         imageArea: StillImageArea? = nil,
-        rawCompression: String? = nil
+        rawCompression: String? = nil,
+        userModeProgram: String? = nil,
+        pictureControl: String? = nil
     ) -> PTPCameraPropertySnapshot {
         PTPCameraPropertySnapshot(
             iso: iso ?? self.iso,
@@ -1888,7 +1995,9 @@ public struct PTPCameraPropertySnapshot: Equatable, Sendable {
             exposureBias: exposureBias ?? self.exposureBias,
             shotsRemaining: shotsRemaining ?? self.shotsRemaining,
             imageArea: imageArea ?? self.imageArea,
-            rawCompression: rawCompression ?? self.rawCompression
+            rawCompression: rawCompression ?? self.rawCompression,
+            userModeProgram: userModeProgram ?? self.userModeProgram,
+            pictureControl: pictureControl ?? self.pictureControl
         )
     }
 }
