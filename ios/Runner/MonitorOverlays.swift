@@ -1298,17 +1298,25 @@ struct FalseColorReference: View {
     let scale: FalseColorScale
     let mapping: ExposureSignalMapping
 
+    /// The measured curve's compact key label — the photo previews are display-referred.
+    private var curveKeyLabel: String {
+        switch mapping.curve {
+        case .redLog3G10: "L3G10"
+        case .nikonNLog: "N-Log"
+        case .srgb: "sRGB"
+        case .hlg: "HLG"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text("False Color")
                     .font(.system(size: 8.5, weight: .bold, design: .monospaced))
                 Spacer()
-                Text(
-                    "\(scaleLabel) · \(mapping.curve == .redLog3G10 ? "L3G10" : "N-Log")"
-                )
-                .font(.system(size: 7.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(.secondary)
+                Text("\(scaleLabel) · \(curveKeyLabel)")
+                    .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
