@@ -1,4 +1,3 @@
-import OpenZCineCore
 import SwiftUI
 
 /// First-iteration photography monitor chrome when the body reports photo mode.
