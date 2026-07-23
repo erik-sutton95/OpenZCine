@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -527,14 +528,48 @@ fun RecordButton(
     }
 }
 
-/** Battery glyph + authoritative value + device glyph column (iOS `BatteryIndicator`, `.rail`). */
+// Battery row-stack footprint, in dp: each row is a 12dp device-glyph slot,
+// a 5dp gap, and the 28dp outline — 45dp across, so the whole stack stays
+// inside the leading rail lane and never reaches the feed edge.
+internal const val BATTERY_ROW_HEIGHT_DP = 16f
+internal const val BATTERY_ROW_GAP_DP = 5f
+internal const val BATTERY_OUTLINE_WIDTH_DP = 28f
+internal const val BATTERY_STACK_WIDTH_DP = 45f
+internal const val BATTERY_STACK_HEIGHT_DP = BATTERY_ROW_HEIGHT_DP * 2 + BATTERY_ROW_GAP_DP
+
+/**
+ * Stacked phone + camera battery rows for the leading rail (iOS combined
+ * indicator): two bare rows — muted device glyph beside a battery-shaped
+ * outline carrying the percent — no glass, sized to the rail lane.
+ */
 @Composable
-fun BatteryIndicatorColumn(
-    percent: Int?,
-    isCamera: Boolean,
+fun BatteryRowStack(
+    phonePercent: Int?,
+    cameraPercent: Int?,
     modifier: Modifier = Modifier,
-    externalPower: Boolean? = null,
+    phoneExternalPower: Boolean? = null,
+    cameraExternalPower: Boolean? = null,
 ) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(BATTERY_ROW_GAP_DP.dp),
+    ) {
+        BatteryOutlineRow(
+            percent = phonePercent,
+            isCamera = false,
+            externalPower = phoneExternalPower,
+        )
+        BatteryOutlineRow(
+            percent = cameraPercent,
+            isCamera = true,
+            externalPower = cameraExternalPower,
+        )
+    }
+}
+
+/** One bare battery row: device glyph, then the readout inside the outline. */
+@Composable
+private fun BatteryOutlineRow(percent: Int?, isCamera: Boolean, externalPower: Boolean?) {
     val presentation = monitorBatteryPresentation(percent, externalPower)
     val batteryPercent = presentation.percent
     val low = batteryPercent?.let { if (isCamera) it < 10 else it <= 15 } == true
@@ -556,27 +591,88 @@ fun BatteryIndicatorColumn(
             externalPower == true -> stringResource(R.string.battery_description_external, source)
             else -> stringResource(R.string.battery_description_unavailable, source)
         }
-    Column(
-        modifier = modifier.semantics { contentDescription = description },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+    Row(
+        modifier = Modifier.semantics { contentDescription = description },
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        BatteryGlyph(
-            percent = batteryPercent,
-            tint = tint,
-            modifier = Modifier.size(22.dp, 11.dp),
-            externalPower = presentation.externalPower,
-        )
-        Text(
-            presentation.label,
-            style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
-            color = LiveDesign.text.copy(alpha = 0.72f),
-        )
-        if (isCamera) {
-            CameraGlyph(tint = LiveDesign.muted, modifier = Modifier.size(15.dp, 12.dp))
-        } else {
-            PhoneGlyph(tint = LiveDesign.muted, modifier = Modifier.size(9.dp, 14.dp))
+        Box(Modifier.width(12.dp), contentAlignment = Alignment.Center) {
+            if (isCamera) {
+                CameraGlyph(tint = LiveDesign.muted, modifier = Modifier.size(12.dp, 10.dp))
+            } else {
+                PhoneGlyph(tint = LiveDesign.muted, modifier = Modifier.size(7.dp, 11.dp))
+            }
         }
+        BatteryOutlineReadout(
+            label = presentation.label.removeSuffix("%"),
+            tint = tint,
+            charging = presentation.externalPower,
+        )
+    }
+}
+
+/**
+ * Battery-shaped outline (rounded body + trailing terminal nub) with the bare
+ * readout inside — the number is the fill. Stroke and text share the state
+ * tint; a small bolt precedes the number on external power.
+ */
+@Composable
+private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean) {
+    Box(
+        Modifier.size(BATTERY_OUTLINE_WIDTH_DP.dp, BATTERY_ROW_HEIGHT_DP.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val stroke = 1.2.dp.toPx()
+            val bodyWidth = size.width - 3.dp.toPx()
+            drawRoundRect(
+                tint.copy(alpha = 0.85f),
+                topLeft = Offset(0f, 0f),
+                size = Size(bodyWidth, size.height),
+                cornerRadius = CornerRadius(3.5.dp.toPx()),
+                style = Stroke(stroke),
+            )
+            // Terminal nub.
+            drawRoundRect(
+                tint.copy(alpha = 0.85f),
+                topLeft = Offset(bodyWidth + stroke, size.height * 0.3f),
+                size = Size(size.width - bodyWidth - stroke, size.height * 0.4f),
+                cornerRadius = CornerRadius(1.dp.toPx()),
+            )
+        }
+        Row(
+            // Center the readout in the body span, not body + nub.
+            Modifier.padding(end = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (charging) BoltGlyph(tint, Modifier.size(5.dp, 9.dp))
+            Text(
+                label,
+                style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
+                color = tint,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+    }
+}
+
+/** Solid charging bolt for the outline readout (no fill behind it to fight). */
+@Composable
+private fun BoltGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val bolt =
+            Path().apply {
+                moveTo(size.width * 0.52f, 0f)
+                lineTo(0f, size.height * 0.54f)
+                lineTo(size.width * 0.43f, size.height * 0.54f)
+                lineTo(size.width * 0.17f, size.height)
+                lineTo(size.width, size.height * 0.40f)
+                lineTo(size.width * 0.57f, size.height * 0.40f)
+                close()
+            }
+        drawPath(bolt, tint)
     }
 }
 
