@@ -32,6 +32,19 @@ actor MediaCellImageLoader {
     }
 }
 
+/// Decoded cell thumbnails shared by the grid and list cells, keyed by clip id + cell variant
+/// (grid and list decode video frames at different pixel sizes). A cell scrolling back into view
+/// reuses the decoded image instead of re-reading + re-decoding from disk; `NSCache` evicts on
+/// memory pressure by itself.
+@MainActor
+enum MediaCellThumbnailCache {
+    static let shared: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 150
+        return cache
+    }()
+}
+
 // MARK: - Browser
 
 /// Grid density for the Media browser — smaller cells show more clips per row.
@@ -1281,8 +1294,9 @@ private struct MediaClipListRow: View {
             await loadThumbnail()
             await loadDuration()
         }
+        // The `.task` cancels its in-flight load on disappear; the decoded thumbnail stays —
+        // `MediaCellThumbnailCache` bounds memory, so reappearing cells skip the disk re-decode.
         .onDisappear {
-            thumbnail = nil
             durationLabel = nil
         }
     }
@@ -1319,9 +1333,18 @@ private struct MediaClipListRow: View {
 
     private func loadThumbnail() async {
         if thumbnail != nil { return }
+        let cacheKey = "\(clip.id)#list" as NSString
+        if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
+            thumbnail = cached
+            return
+        }
+        func present(_ image: UIImage) {
+            MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
+            thumbnail = image
+        }
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
             if let image = UIImage(data: data) {
-                thumbnail = image
+                present(image)
                 return
             }
             // Self-heal: a cached thumb that doesn't decode would re-fail (and spam ImageIO
@@ -1332,7 +1355,7 @@ private struct MediaClipListRow: View {
             let image = await MediaCellImageLoader.shared.downsampled(
                 at: localURL, maxPixelSize: 640)
         {
-            thumbnail = image
+            present(image)
             return
         }
         if !isDownloaded, clip.handle != nil {
@@ -1341,7 +1364,7 @@ private struct MediaClipListRow: View {
                 let data = try? Data(contentsOf: cachedURL),
                 let image = UIImage(data: data)
             {
-                thumbnail = image
+                present(image)
             }
         }
         guard isDownloaded, !isPhoto, let localURL else { return }
@@ -1351,7 +1374,7 @@ private struct MediaClipListRow: View {
         generator.maximumSize = CGSize(width: 320, height: 320)
         let time = CMTime(seconds: 0.2, preferredTimescale: 600)
         if let cgImage = try? await generator.image(at: time).image {
-            thumbnail = UIImage(cgImage: cgImage)
+            present(UIImage(cgImage: cgImage))
         }
     }
 
@@ -1708,8 +1731,9 @@ private struct MediaClipCell: View {
             await loadThumbnail()
             await loadDuration()
         }
+        // The `.task` cancels its in-flight load on disappear; the decoded thumbnail stays —
+        // `MediaCellThumbnailCache` bounds memory, so reappearing cells skip the disk re-decode.
         .onDisappear {
-            thumbnail = nil
             durationLabel = nil
         }
     }
@@ -1787,9 +1811,18 @@ private struct MediaClipCell: View {
 
     private func loadThumbnail() async {
         if thumbnail != nil { return }
+        let cacheKey = "\(clip.id)#grid" as NSString
+        if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
+            thumbnail = cached
+            return
+        }
+        func present(_ image: UIImage) {
+            MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
+            thumbnail = image
+        }
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
             if let image = UIImage(data: data) {
-                thumbnail = image
+                present(image)
                 return
             }
             // Self-heal: a cached thumb that doesn't decode would re-fail (and spam ImageIO
@@ -1800,7 +1833,7 @@ private struct MediaClipCell: View {
             let image = await MediaCellImageLoader.shared.downsampled(
                 at: localURL, maxPixelSize: 640)
         {
-            thumbnail = image
+            present(image)
             return
         }
         if !isDownloaded, clip.handle != nil {
@@ -1809,7 +1842,7 @@ private struct MediaClipCell: View {
                 let data = try? Data(contentsOf: cachedURL),
                 let image = UIImage(data: data)
             {
-                thumbnail = image
+                present(image)
                 return
             }
         }
@@ -1820,7 +1853,7 @@ private struct MediaClipCell: View {
         generator.maximumSize = CGSize(width: 600, height: 600)
         let time = CMTime(seconds: 0.2, preferredTimescale: 600)
         if let cgImage = try? await generator.image(at: time).image {
-            thumbnail = UIImage(cgImage: cgImage)
+            present(UIImage(cgImage: cgImage))
         }
     }
 

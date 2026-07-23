@@ -853,6 +853,10 @@ final class NativeAppModel {
     @ObservationIgnored private var mediaFetchTask: Task<Void, Never>?
     /// Bumped per listing pass so a cancelled pass finishing late can't clear a successor's state.
     @ObservationIgnored private var mediaFetchGeneration = 0
+    /// Tab the last listing pass that ran to completion (not cancelled) was scoped to, nil when
+    /// none has. Lets the tab `didSet` skip redundant re-lists; cleared whenever a fresh pass is
+    /// scheduled (browser open, source correction, foreground resume) and on session teardown.
+    @ObservationIgnored private var mediaFetchCompletedTab: MediaCategoryTab?
     @ObservationIgnored private var thumbnailFetchTask: Task<Void, Never>?
     /// Bumped on every worker start/cancel so a finishing stale worker can't clear the
     /// single-flight slot of a successor (see `startThumbnailWorkerIfNeeded`).
@@ -867,11 +871,20 @@ final class NativeAppModel {
     var mediaBrowserSource: MediaBrowserSource = .camera
     var mediaCategoryTab: MediaCategoryTab = .videos {
         didSet {
-            // Re-run the delta pass so the newly selected category's still-unfetched clips jump
-            // the queue (cached clips cost nothing; only new handles hit GetObjectInfo).
             guard oldValue != mediaCategoryTab, mediaBrowserSource == .camera,
                 cameraSession != nil
             else { return }
+            // Tabs are pure filters over already-discovered clips. A pass that completed on
+            // All/Favorites enumerated every handle (`scopedHandles`), and one completed on
+            // this same tab already covered it — only a tab whose handles the previous scope
+            // may have excluded (or a cancelled/interrupted pass) needs the camera again.
+            if let completed = mediaFetchCompletedTab,
+                completed == .all || completed == .favorites || completed == mediaCategoryTab
+            {
+                return
+            }
+            // Re-run the delta pass so the newly selected category's still-unfetched clips jump
+            // the queue (cached clips cost nothing; only new handles hit GetObjectInfo).
             scheduleFetchClipsFromCamera()
         }
     }
@@ -2191,6 +2204,7 @@ final class NativeAppModel {
                         property: .exposureRemaining, data: Data(ByteCoding.uint32LE(1234))
                     )
                     .applying(property: .imageSize, data: demoSizeLString)
+                    .applying(property: .captureAreaCrop, data: Data([0]))
             }
             publishCameraDisplayState()
             connectionMessage =
@@ -3287,6 +3301,7 @@ final class NativeAppModel {
         cancelClipStream()
         mediaFetchTask?.cancel()
         mediaFetchTask = nil
+        mediaFetchCompletedTab = nil
         cancelThumbnailWork(resumingWaiters: true)
         resetLinkHealthMeasurements()
         eventDrainTask?.cancel()
@@ -5447,6 +5462,20 @@ final class NativeAppModel {
         pendingStillCapture = true
     }
 
+    /// Queued image-area (sensor crop) write, consumed at the next safe point.
+    @ObservationIgnored private var pendingImageAreaWrite: StillImageArea?
+
+    /// Sets the photo image area: the pill and feed frame flip optimistically, and the
+    /// write lands at the next safe point (poll readback confirms or corrects).
+    func setStillImageArea(_ area: StillImageArea) {
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: .captureAreaCrop, data: Data([area.rawValue]))
+        publishCameraDisplayState()
+        guard !isDemoSession else { return }
+        guard cameraSession != nil else { return }
+        pendingImageAreaWrite = area
+    }
+
     /// Queued still release, consumed at the next live-view/command safe point.
     @ObservationIgnored private var pendingStillCapture = false
     /// Queued bulb/time termination, consumed at the next safe point.
@@ -5461,6 +5490,18 @@ final class NativeAppModel {
     /// Services queued still-release work at a safe point. Returns true when it consumed
     /// the safe point (mirrors the record-toggle contract).
     private func serviceStillCaptureWork(session: NativeCameraSession) async -> Bool {
+        if let area = pendingImageAreaWrite {
+            pendingImageAreaWrite = nil
+            do {
+                try await session.writeCameraProperty(
+                    PTPCameraPropertyWrite(
+                        property: .captureAreaCrop, data: Data([area.rawValue])))
+            } catch {
+                connectionMessage =
+                    "Image area change failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            }
+            return true
+        }
         if pendingStillTerminate {
             pendingStillTerminate = false
             do {
@@ -7422,6 +7463,9 @@ extension NativeAppModel {
     /// Cancels any in-flight listing pass and starts a fresh camera discovery.
     func scheduleFetchClipsFromCamera() {
         mediaFetchTask?.cancel()
+        // Coverage re-arms only when the new pass runs to completion — until then a tab
+        // switch must fall back to scheduling (see `mediaCategoryTab.didSet`).
+        mediaFetchCompletedTab = nil
         mediaFetchGeneration += 1
         let generation = mediaFetchGeneration
         mediaFetchTask = Task { await fetchClipsFromCamera(generation: generation) }
@@ -7566,6 +7610,16 @@ extension NativeAppModel {
         }
 
         let passTab = mediaCategoryTab
+        // Learn-then-skip: a record whose fetched type doesn't match the tab (possible when
+        // the body doesn't honour format-filtered listing) is still written to the index —
+        // so it is never fetched again on any tab — but isn't listed or counted.
+        func matchesTab(_ record: MediaClip) -> Bool {
+            switch passTab {
+            case .videos: record.mediaKind == .video
+            case .photos: record.mediaKind == .photo
+            case .all, .favorites: true
+            }
+        }
         var learnedOffTab = 0
         for objectHandle in cameraHandles {
             if Task.isCancelled { break }
@@ -7587,17 +7641,8 @@ extension NativeAppModel {
                 record = builtRecord
             }
 
-            // Learn-then-skip: a record whose fetched type doesn't match the tab (possible when
-            // the body doesn't honour format-filtered listing) is still written to the index —
-            // so it is never fetched again on any tab — but isn't listed or counted here.
-            let matchesTab: Bool
-            switch passTab {
-            case .videos: matchesTab = record.mediaKind == .video
-            case .photos: matchesTab = record.mediaKind == .photo
-            case .all, .favorites: matchesTab = true
-            }
             pendingBatch.append(record)
-            if matchesTab {
+            if matchesTab(record) {
                 listedCount += 1
                 mediaLibraryLogger.debug(
                     "listed clip \(listedCount, privacy: .public): \(record.filename, privacy: .private(mask: .hash))"
@@ -7615,19 +7660,69 @@ extension NativeAppModel {
         mediaLibraryLogger.info(
             "delta sync listed \(listedCount, privacy: .public) clip(s) on this tab — card objects: \(delta.reuseHandles.count, privacy: .public) reused, \(delta.fetchHandles.count, privacy: .public) fetched (\(learnedOffTab, privacy: .public) learned off-tab), \(delta.removedHandles.count, privacy: .public) removed"
         )
+
+        /// R3D masters in this bucket with no same-stem playable proxy, plus the proxy census.
+        func unpairedR3DMasters() -> (masters: [String], proxyCount: Int) {
+            let filenames = mediaClipStore.list(cameraID: bucket).map(\.filename)
+            let proxyStems = MediaClipFilename.playableProxyStems(in: filenames)
+            let masters = filenames.filter {
+                MediaClipFilename.isR3D($0)
+                    && !proxyStems.contains(MediaClipFilename.stem(of: $0))
+            }
+            return (masters, proxyStems.count)
+        }
+
+        // Proxy-listing fallback (once per pass, only when masters are unpaired): some bodies
+        // keep the same-stem playable proxy files where the flat listing may not surface them
+        // [ZR · verify-on-HW], so one extra video-format-scoped listing recovers proxy handles
+        // the flat pass missed. Handles already processed above or already cached are skipped
+        // (dedupe by storageID+handle); ones this pass just removal-evicted are refetched — the
+        // flat listing dropping them is exactly the symptom this fallback covers.
+        var (unpairedMasters, proxyCount) = unpairedR3DMasters()
+        var fallbackProxyCount = 0
+        if !unpairedMasters.isEmpty, !Task.isCancelled,
+            let videoHandles = try? await session.listMediaObjectHandles(
+                formats: MediaObjectFormats.video)
+        {
+            let seenThisPass = Set(cameraHandles)
+            for objectHandle in videoHandles {
+                if Task.isCancelled { break }
+                guard !seenThisPass.contains(objectHandle),
+                    cachedByHandle[objectHandle.handle] == nil
+                        || delta.removedHandles.contains(objectHandle.handle)
+                else { continue }
+                guard
+                    let camera = await session.fetchMediaClip(
+                        handle: objectHandle.handle, storageID: objectHandle.storageID),
+                    let record = await buildMediaClipRecord(
+                        from: camera, bucket: bucket, r3dIndex: &r3dIndex, session: session)
+                else { continue }
+                pendingBatch.append(record)
+                if matchesTab(record) { listedCount += 1 } else { learnedOffTab += 1 }
+                if MediaClipFilename.isPlayableProxy(record.filename) { fallbackProxyCount += 1 }
+                flushPendingBatch()
+                if (listedCount + learnedOffTab) % batchSize == 0 {
+                    await Task.yield()
+                }
+            }
+            flushPendingBatch(force: true)
+            (unpairedMasters, proxyCount) = unpairedR3DMasters()
+        }
+
         // Proxy-pairing diagnostic: masters without a same-stem proxy stay visible in the
         // grid (and un-openable), so one line per pass says whether the card's proxies were
         // enumerated at all. [ZR · verify-on-HW: whether flat GetObjectHandles surfaces the
         // in-folder proxy files]
-        let filenames = mediaClips.map(\.filename)
-        let proxyStems = MediaClipFilename.playableProxyStems(in: filenames)
-        let unpairedMasters = filenames.filter {
-            MediaClipFilename.isR3D($0) && !proxyStems.contains(MediaClipFilename.stem(of: $0))
-        }
-        if !unpairedMasters.isEmpty {
+        if !unpairedMasters.isEmpty || fallbackProxyCount > 0 {
             mediaLibraryLogger.info(
-                "proxy pairing: \(unpairedMasters.count, privacy: .public) R3D master(s) with no playable proxy (\(proxyStems.count, privacy: .public) proxies enumerated)"
+                "proxy pairing: \(unpairedMasters.count, privacy: .public) R3D master(s) with no playable proxy (\(proxyCount, privacy: .public) proxies enumerated, \(fallbackProxyCount, privacy: .public) recovered by the video-scoped fallback)"
             )
+        }
+
+        // Arm the tab-switch skip only for a pass that ran to the end — a cancelled pass may
+        // have left this tab's handles unfetched.
+        if !Task.isCancelled, mediaFetchGeneration == generation {
+            mediaFetchCompletedTab = passTab
         }
     }
 
