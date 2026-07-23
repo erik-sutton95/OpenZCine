@@ -759,6 +759,11 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
     /// Tighter clearance around the Dynamic Island reservation on newer iPhones.
     public static let dynamicIslandPadding = 1.0
 
+    /// The rail indicator centres ~54pt of glyphs in its 70pt frame; pulling each frame this
+    /// far into the reservation draws the visible pair together without the glyphs reaching
+    /// the island itself.
+    public static let indicatorFrameSlack = 8.0
+
     /// Horizontal nudge that aligns the indicators with the Dynamic Island, which sits slightly
     /// inboard of the chrome's leading inset.
     public static let notchAlignmentInsetX = 3.0
@@ -810,13 +815,16 @@ public struct MonitorBatteryRailLayout: Equatable, Sendable {
             max(0, phoneTopClearance) + phoneIndicatorHeight / 2
         let minimumCameraCenterY = indicatorHeight / 2
         let maximumCenterY = max(minimumCameraCenterY, railHeight - indicatorHeight / 2)
+        // The frames may overlap the reservation by their internal slack (Dynamic Island
+        // rails only — the classic notch's compact indicator carries none).
+        let slack = usesCompactPhoneIndicator ? 0 : indicatorFrameSlack
         let phoneCenterY = max(
             minimumPhoneCenterY,
-            notchTop - padding - phoneIndicatorHeight / 2
+            notchTop - padding - phoneIndicatorHeight / 2 + slack
         )
         let cameraCenterY = min(
             maximumCenterY,
-            notchBottom + padding + indicatorHeight / 2
+            notchBottom + padding + indicatorHeight / 2 - slack
         )
 
         return MonitorBatteryRailLayout(
