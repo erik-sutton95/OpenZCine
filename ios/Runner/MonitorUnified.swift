@@ -920,27 +920,36 @@ struct MonitorSystemCluster: View {
             // bulb/time exposure) and finger-up ends a latched continuous burst — a disabled
             // Button would swallow exactly that finger-up. Re-press gating during an
             // in-flight single release lives in `shutterButtonPressed`.
-            PhotographyShutterButton(isCapturing: model.isStillCapturing)
-                .scaleEffect(shutterPressed ? 0.93 : 1)
-                .animation(.easeOut(duration: 0.12), value: shutterPressed)
-                .contentShape(Circle())
-                .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {
-                } onPressingChanged: { pressing in
-                    shutterPressed = pressing
-                    if pressing {
+            PhotographyShutterButton(
+                isCapturing: model.isStillCapturing,
+                countdown: model.stillTimerRemaining,
+                timerArmed: model.photoTimerDelaySeconds > 0
+            )
+            .scaleEffect(shutterPressed ? 0.93 : 1)
+            .animation(.easeOut(duration: 0.12), value: shutterPressed)
+            .contentShape(Circle())
+            // Zero-distance drag, not a zero-duration long-press: the latter recognizes
+            // instantly and never reports `onPressingChanged(true)`, swallowing the press.
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !shutterPressed else { return }
+                        shutterPressed = true
                         model.shutterButtonPressed()
-                    } else {
+                    }
+                    .onEnded { _ in
+                        shutterPressed = false
                         model.shutterButtonReleased()
                     }
-                }
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { model.captureStill() }
-                .accessibilityLabel(
-                    model.stillReleaseIsOpenShutter
-                        ? "End exposure" : model.isStillCapturing ? "Capturing" : "Shutter"
-                )
-                .accessibilityIdentifier("monitor.system.shutter")
-                .liveViewGuideAnchor(.record)
+            )
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model.captureStill() }
+            .accessibilityLabel(
+                model.stillReleaseIsOpenShutter
+                    ? "End exposure" : model.isStillCapturing ? "Capturing" : "Shutter"
+            )
+            .accessibilityIdentifier("monitor.system.shutter")
+            .liveViewGuideAnchor(.record)
         } else {
             Button {
                 model.toggleRecording()

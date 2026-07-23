@@ -5516,11 +5516,62 @@ final class NativeAppModel {
     /// Whether the current shutter press latched a continuous burst that finger-up must end.
     @ObservationIgnored private var shutterPressLatchedBurst = false
 
+    /// App-side self-timer: countdown seconds a shutter press waits before firing (0 = off).
+    /// The countdown is the app's — a remote release never runs the body's own self-timer.
+    var photoTimerDelaySeconds = 0
+    /// Seconds left in a running countdown (nil when idle); the shutter core renders it.
+    private(set) var stillTimerRemaining: Int?
+    @ObservationIgnored private var stillTimerTask: Task<Void, Never>?
+
+    /// The Timer tab's display value ("Off" / "5s").
+    var photoTimerLabel: String {
+        photoTimerDelaySeconds > 0 ? "\(photoTimerDelaySeconds)s" : "Off"
+    }
+
+    func setPhotoTimer(label: String) {
+        photoTimerDelaySeconds = Int(label.hasSuffix("s") ? String(label.dropLast()) : label) ?? 0
+        if photoTimerDelaySeconds == 0 { cancelStillTimer() }
+    }
+
+    private func cancelStillTimer() {
+        stillTimerTask?.cancel()
+        stillTimerTask = nil
+        stillTimerRemaining = nil
+    }
+
+    /// Runs the armed countdown on the shutter, ticking once a second, then fires the release.
+    private func startStillTimer() {
+        stillTimerRemaining = photoTimerDelaySeconds
+        OperatorSettingsHaptics.selection(enabled: preferences.hapticsEnabled)
+        stillTimerTask = Task { [weak self] in
+            while let remaining = self?.stillTimerRemaining, remaining > 0, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { return }
+                guard let self else { return }
+                self.stillTimerRemaining = remaining - 1
+                OperatorSettingsHaptics.selection(enabled: self.preferences.hapticsEnabled)
+            }
+            guard let self, !Task.isCancelled, self.stillTimerRemaining == 0 else { return }
+            self.stillTimerRemaining = nil
+            self.stillTimerTask = nil
+            self.captureStill()
+        }
+    }
+
     /// Finger-down on the shutter control. Single/timer presses fire one release (via
     /// `captureStill`, which also ends an open bulb/time exposure); continuous drives latch
     /// the release until `shutterButtonReleased`. [verify-on-HW: continuous latch-until-
     /// terminate per body]
     func shutterButtonPressed() {
+        if stillTimerRemaining != nil {
+            // Second press cancels a running countdown, matching body behaviour.
+            cancelStillTimer()
+            return
+        }
+        if photoTimerDelaySeconds > 0, !isStillCapturing {
+            startStillTimer()
+            return
+        }
         let wasCapturing = isStillCapturing
         captureStill()
         guard !wasCapturing, isStillCapturing, !isDemoSession else { return }
@@ -6066,6 +6117,14 @@ final class NativeAppModel {
             default: break
             }
         }
+        if picker == .stillDrive {
+            // Drive is camera state; Timer is the app-side countdown setting.
+            switch mode {
+            case 0: return cameraPropertySnapshot.stillCaptureMode ?? modes[0].base
+            case 1: return photoTimerLabel
+            default: break
+            }
+        }
         let pickerMode = modes[mode]
         let live = cameraValue(for: picker)
         if pickerMode.options.contains(live) { return live }
@@ -6085,6 +6144,11 @@ final class NativeAppModel {
             } else {
                 applyStillImageSize(value)
             }
+            return
+        }
+        if picker == .stillDrive, mode == 1 {
+            // The Timer tab is the app-side countdown, never a camera write.
+            setPhotoTimer(label: value)
             return
         }
         if picker == .audio {
@@ -7160,9 +7224,11 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 "f/4.0", "f/4.5", "f/5.0", "f/5.6", "f/6.3", "f/7.1", "f/8.0", "f/9.0", "f/10.0",
                 "f/11.0", "f/13.0", "f/14.0", "f/16.0", "f/18.0", "f/20.0", "f/22.0",
             ]
-        // The label union across the lineup minus the dial-only Quick position; a body that lacks
-        // one rejects the write and the queue's rejection surface handles it.
-        case .stillDrive: StillDriveMode.allCases.filter { $0 != .quickSetting }.map(\.label)
+        // The label union across the lineup minus the dial-only Quick position and the on-body
+        // Self-timer (the app-side Timer tab owns countdowns — a remote release never runs the
+        // body's); a body that lacks one rejects the write and the rejection surface handles it.
+        case .stillDrive:
+            StillDriveMode.allCases.filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label)
         case .stillFocus: ["AF-S", "AF-C", "AF-A", "MF"]
         case .stillFlash: ["Off", "Red-eye", "Fill", "Slow", "Rear", "Red-eye slow"]
         case .stillMeter: ["Matrix", "Center", "Spot", "Highlight"]
@@ -7268,8 +7334,22 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                     title: "Area", options: StillImageArea.allCases.map(\.label), base: "FX"),
                 PickerMode(title: "Size", options: ["Size L", "Size M", "Size S"], base: "Size L"),
             ]
+        case .stillDrive:
+            // Release mode plus the app-side timer as its own tab — a remote release never runs
+            // the body's own self-timer countdown, so the countdown lives in the app and the
+            // drive drum drops the on-body Self-timer position.
+            [
+                PickerMode(
+                    title: "Drive",
+                    options: StillDriveMode.allCases
+                        .filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label),
+                    base: "Single"),
+                PickerMode(
+                    title: "Timer", detail: "app countdown",
+                    options: ["Off", "2s", "5s", "10s", "20s"], base: "Off"),
+            ]
         case .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
-            .stillShutter, .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
+            .stillShutter, .stillIris, .stillFocus, .stillFlash, .stillMeter,
             .stillQuality:
             []
         }

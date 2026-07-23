@@ -1164,10 +1164,13 @@ struct PickerPanel: View {
                     // Switching a circuit is itself a camera change, so confirm the mode's value
                     // right away — no drum nudge needed. Exceptions: shutter ANGLE/SPEED only
                     // selects the active stored circuit (`movieShutterMode`; a value write here
-                    // can fail and falsely engage lock), and FOCUS / photo SIZE tabs are
-                    // independent settings, so switching writes nothing. `lastApplied` is pre-set
-                    // above so this write isn't duplicated by the `selection` `onChange`.
-                    if picker != .focus, picker != .shutter, picker != .stillSize {
+                    // can fail and falsely engage lock), and FOCUS / photo SIZE / photo DRIVE
+                    // tabs are independent settings, so switching writes nothing. `lastApplied`
+                    // is pre-set above so this write isn't duplicated by the `selection`
+                    // `onChange`.
+                    if picker != .focus, picker != .shutter, picker != .stillSize,
+                        picker != .stillDrive
+                    {
                         model.applyPicker(picker, mode: index, value: value)
                     }
                 } label: {
