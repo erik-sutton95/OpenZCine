@@ -1002,7 +1002,7 @@ struct PickerPanel: View {
         // reading it per render would re-render the drum mid-spin and break its momentum. Open on the
         // mode the current value lives in (e.g. ISO 800 → Low Base, focus AF-C → AF Mode).
         .onAppear {
-            if picker == .iris {
+            if picker == .iris || picker == .stillIris {
                 lensApertures = model.irisApertures
             }
             if picker == .resolution {
@@ -1338,7 +1338,9 @@ struct PickerPanel: View {
     /// apertures; moded settings (ISO circuits, shutter angle/speed) swap the wheel per mode; the
     /// rest fall back to the flat picker list.
     private var currentOptions: [String] {
-        if picker == .iris, !lensApertures.isEmpty { return lensApertures }
+        if picker == .iris || picker == .stillIris, !lensApertures.isEmpty {
+            return lensApertures
+        }
         if picker == .resolution, !screenModes.isEmpty { return screenModes }
         if picker == .codec, !codecModes.isEmpty { return codecModes }
         if picker == .iso {

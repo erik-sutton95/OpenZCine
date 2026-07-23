@@ -5000,11 +5000,16 @@ final class NativeAppModel {
     /// Reads the camera's enumerated f-numbers for the mounted lens (via `GetDevicePropDesc`) and
     /// caches them as the authoritative IRIS option list; re-read on the slow descriptor cadence
     /// so a lens swap is reflected. Unverified against real hardware; on rejection or an empty
-    /// list the last known apertures (or the lens-derived fallback) are retained.
+    /// list the last known apertures (or the lens-derived fallback) are retained. Photo mode
+    /// describes the standard aperture property — the movie enum is not authoritative there.
     private func refreshLensApertures(session: NativeCameraSession) async {
         do {
+            let property: PTPPropertyCode =
+                StillCapturePolicy.prefersPhotographyChrome(
+                    selector: cameraPropertySnapshot.captureSelector)
+                ? .fNumber : .movieFNumber
             let raw = try await session.describeCameraPropertyEnum(
-                .movieFNumber, valueByteCount: 2)
+                property, valueByteCount: 2)
             let apertures = PTPCameraPropertyDecoders.apertureList(fromEnum: raw)
             if !apertures.isEmpty {
                 cameraApertures = apertures
@@ -7737,8 +7742,9 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 "RAW", "RAW+JPEG Fine", "RAW+JPEG Normal", "RAW+JPEG Basic", "JPEG Fine",
                 "JPEG Normal", "JPEG Basic",
             ]
-        // The full picture-control set: built-ins, the creative looks, and the custom slots
-        // (a slot with nothing registered rejects through the queue's surface).
+        // The full picture-control set: built-ins, the creative looks, and the custom and
+        // downloaded cloud slots (a slot with nothing registered rejects through the
+        // queue's surface).
         case .stillPicture:
             [
                 "Auto", "Standard", "Neutral", "Vivid", "Monochrome", "Portrait", "Landscape",
