@@ -638,9 +638,7 @@ struct MonitorAssistStrip: View {
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
                 && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
         }
-        // Photography leads with instant playback — the tool touched between every shot.
-        guard isPhotographyToolset else { return regular }
-        return regular.filter { $0 == .instantReview } + regular.filter { $0 != .instantReview }
+        return MonitorAssistStrip.frontPinned(regular, photography: isPhotographyToolset)
     }
 
     private var audioMetersButtonVisible: Bool {
@@ -662,6 +660,23 @@ struct MonitorAssistStrip: View {
     static let expandedWidth: CGFloat = 60
     /// Collapsed-pill diameter, exposed so the photo rail can centre the pill on the lock row.
     static let collapsedPillSize: CGFloat = 44
+
+    /// Front-pins the between-shots tools: photography leads with instant playback then the
+    /// EV meter; video keeps its leading tool and seats the EV meter second.
+    static func frontPinned(
+        _ tools: [MonitorAssistTool], photography: Bool
+    ) -> [MonitorAssistTool] {
+        var rest = tools
+        if photography {
+            let pins = [MonitorAssistTool.instantReview, .evMeter].filter { rest.contains($0) }
+            rest.removeAll { pins.contains($0) }
+            return pins + rest
+        }
+        guard let evIndex = rest.firstIndex(of: .evMeter), evIndex > 1 else { return rest }
+        let ev = rest.remove(at: evIndex)
+        rest.insert(ev, at: 1)
+        return rest
+    }
     /// Height of the bottom scroll-fade so the last tool row never hard-clips mid-glyph.
     private static let bottomFadeHeight: CGFloat = 40
 
@@ -672,11 +687,7 @@ struct MonitorAssistStrip: View {
             $0 != .audioMeters && model.preferences.isAssistToolbarButtonVisible($0)
                 && (isPhotographyToolset ? $0.appliesToPhotography : !$0.isPhotographyOnly)
         }
-        // Photography leads with instant playback — the tool touched between every shot.
-        let ordered =
-            isPhotographyToolset
-            ? regular.filter { $0 == .instantReview } + regular.filter { $0 != .instantReview }
-            : regular
+        let ordered = MonitorAssistStrip.frontPinned(regular, photography: isPhotographyToolset)
         return ordered + (audioMetersButtonVisible ? [.audioMeters] : [])
     }
 
@@ -1368,9 +1379,10 @@ struct MonitorShell: View {
             // centre or subject tracking is latched (reset ends tracking, so it must stay visible
             // while a tracked box drifts through centre). Live-only, hidden while locked;
             // battery-rail-relative x, scope-panel-clearance y (`focusResetButtonClearY`).
+            // Deliberately survives DISP 2 — the clean map has no assist strip, so the y
+            // falls back to the viewport bottom with the same clearance.
             if model.isFocusResetAvailable, !model.interfaceLocked,
-                let battery = map.batteryCluster,
-                let assist = map.assistStrip
+                let battery = map.batteryCluster
             {
                 let rail = battery.frame
                 let size: CGFloat = 40
@@ -1384,14 +1396,17 @@ struct MonitorShell: View {
                         MonitorBatteryRailLayout.batteryPillTrailing(
                             safeArea: context.feedSafeArea)
                     ) + 12 + Double(MonitorAssistStrip.expandedWidth)
+                let assistLeadingX = map.assistStrip.map { CGFloat($0.frame.x) } ?? 96
                 let x =
                     isPhotographyBand && chrome.assistToolbarVisible
                     ? CGFloat(photographyRailTrailing) + 24 + size / 2
                     : battery.style == .batteryInline
-                        ? CGFloat(assist.frame.x) + 62
+                        ? assistLeadingX + 62
                         : CGFloat(rail.x + rail.width) + 24
-                let y = model.focusResetButtonClearY(
-                    centerX: x, baseY: CGFloat(assist.frame.y) - 30, size: size)
+                let baseY =
+                    map.assistStrip.map { CGFloat($0.frame.y) - 30 }
+                    ?? CGFloat(context.viewportHeight) - 40
+                let y = model.focusResetButtonClearY(centerX: x, baseY: baseY, size: size)
                 Button {
                     model.resetFocusPoint()
                 } label: {

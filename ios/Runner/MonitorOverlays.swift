@@ -767,19 +767,22 @@ struct FeedAlignedAssists: View {
                     AspectGuideFrameView(
                         configuration: model.assistConfiguration.guides, feed: feed)
                 }
+                // The EV meter survives clean mode (DISP 2): exposure truth is exactly what
+                // a stripped-down operator view still needs, like the framing guides.
+                if visible.contains(.evMeter),
+                    let sixths = model.cameraPropertySnapshot.evIndicatorSixths,
+                    model.cameraPropertySnapshot.evIndicatorLit != false
+                {
+                    // Camera-fed exposure needle, seated bottom-centre of the feed. With the
+                    // capture bar present it lifts above the band's lane; clean mode (DISP 2)
+                    // has the bottom free, so it drops to the feed's edge.
+                    EVMeterView(sixths: sixths)
+                        .position(x: feed.midX, y: feed.maxY - (clean ? 28 : 92))
+                        .allowsHitTesting(false)
+                }
                 if !clean {
                     if visible.contains(.grid) {
                         FeedGridView(grid: model.assistConfiguration.grid, feed: feed)
-                    }
-                    if visible.contains(.evMeter),
-                        let sixths = model.cameraPropertySnapshot.evIndicatorSixths,
-                        model.cameraPropertySnapshot.evIndicatorLit != false
-                    {
-                        // Camera-fed exposure needle, seated bottom-centre of the feed but
-                        // above the capture bar's lane so the band glass never covers it.
-                        EVMeterView(sixths: sixths)
-                            .position(x: feed.midX, y: feed.maxY - 92)
-                            .allowsHitTesting(false)
                     }
                     if visible.contains(.crosshair) {
                         FeedCrosshairView(feed: feed)
