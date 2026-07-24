@@ -46,6 +46,20 @@ struct AndroidCameraControlWireTests {
         #expect(AndroidCameraControlWire.control(selector: 37) == nil)
     }
 
+    @Test func photoModeSeedsAndPollsTheStillsPropertySet() {
+        // Connect-in-photo (and every photo flip) must burst the stills set —
+        // aperture, metering, shots remaining — not the movie order the body
+        // leaves empty in photo mode.
+        let photoOrder = PTPIPClientSession.androidBootstrapPollOrder(captureSelector: .photo)
+        #expect(photoOrder == StillCapturePolicy.photoMonitorPollOrder)
+        #expect(photoOrder.contains(.fNumber))
+        #expect(photoOrder.contains(.exposureMeteringMode))
+        #expect(photoOrder.contains(.exposureRemaining))
+        #expect(
+            PTPIPClientSession.androidBootstrapPollOrder(captureSelector: .video)
+                == PTPIPClientSession.androidMonitorPollOrder(isRecording: false))
+    }
+
     @Test func stillControlsSkipCapabilityValidationAndMapSharedEncoders() {
         for control in [
             AndroidCameraControl.stillISO, .stillISOAuto, .stillShutter, .stillIris,

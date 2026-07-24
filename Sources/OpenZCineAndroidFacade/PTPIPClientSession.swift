@@ -1197,10 +1197,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
         switch request {
         case .bootstrap:
-            var result: AndroidCameraPropertyRefreshResult = .accepted
-            // Full live order — same set as steady-state poll, read back-to-back
+            // Read the photo/video selector FIRST so a body connected in photo
+            // mode seeds the stills set (aperture, metering, shots remaining,
+            // quality…) instead of the movie properties it doesn't fill there.
+            var result = refreshAndroidProperty(.liveViewSelector)
+            let order = Self.androidBootstrapPollOrder(
+                captureSelector: androidPropertySnapshot.captureSelector)
+            // Full order — same set as steady-state poll, read back-to-back
             // so the operator does not wait ~30s for focus/lens/subject.
-            for property in Self.androidLiveMonitorPollOrder {
+            for property in order where property != .liveViewSelector {
                 result = mergedAndroidPropertyRefreshResult(
                     result, refreshAndroidProperty(property))
                 if result == .transportFailed { break }
@@ -1233,7 +1238,24 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     captureSelector: androidPropertySnapshot.captureSelector))
             androidPropertyPollIndex &+= 1
             let previousFileType = androidPropertySnapshot.fileType
+            let previousSelector = androidPropertySnapshot.captureSelector
             var result = refreshAndroidProperty(property)
+            if property == .liveViewSelector,
+                result == .accepted,
+                androidPropertySnapshot.captureSelector != previousSelector
+            {
+                // Photo ↔ video flip: burst the new mode's full property set
+                // back-to-back so the strip fills in seconds instead of
+                // trickling one property per poll tick (~90 s for a full
+                // photo cycle). One visible live-view hitch, same as connect.
+                for extra in Self.androidBootstrapPollOrder(
+                    captureSelector: androidPropertySnapshot.captureSelector)
+                where extra != .liveViewSelector {
+                    result = mergedAndroidPropertyRefreshResult(
+                        result, refreshAndroidProperty(extra))
+                    if result == .transportFailed { break }
+                }
+            }
             if property == .movieFileType,
                 result == .accepted,
                 androidPropertySnapshot.fileType != previousFileType
@@ -2007,6 +2029,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
             return StillCapturePolicy.photoMonitorPollOrder
         }
         return androidLiveMonitorPollOrder
+    }
+
+    /// The back-to-back seed order for connect and photo↔video flips: the
+    /// selector's own full monitor set.
+    static func androidBootstrapPollOrder(
+        captureSelector: CameraCaptureSelector? = nil
+    ) -> [PTPPropertyCode] {
+        androidMonitorPollOrder(isRecording: false, captureSelector: captureSelector)
     }
 
     /// Full live-monitor property set used for both the post-connect bootstrap
