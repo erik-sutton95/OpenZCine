@@ -949,3 +949,121 @@ extension RunnerTests {
         XCTAssertIdentical(BluetoothShutterMonitor.firstSlider(in: volumeView), slider)
     }
 }
+
+// MARK: - Media favorite / rating sync
+
+extension RunnerTests {
+    private func mediaRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    }
+
+    private func mediaClip(
+        _ filename: String, stars: Int? = nil, favorite: Bool = false, captureDate: String = ""
+    ) -> MediaClip {
+        var clip = MediaClip(
+            cameraID: "cam", filename: filename, handle: nil, storageID: nil,
+            sizeBytes: 0, captureDate: captureDate)
+        clip.starRating = stars
+        clip.isFavorite = favorite
+        return clip
+    }
+
+    /// A shot favorited during a shoot must count under Favorites whether the signal is the
+    /// local heart or a camera star — this is exactly the tab's filter predicate.
+    func testIsFavoritedCountsLocalHeartOrAnyCameraStar() {
+        XCTAssertTrue(mediaClip("A.JPG", favorite: true).isFavorited)
+        XCTAssertTrue(mediaClip("B.JPG", stars: 1).isFavorited)
+        XCTAssertTrue(mediaClip("C.JPG", stars: 5).isFavorited)
+        XCTAssertFalse(mediaClip("D.JPG").isFavorited)
+        XCTAssertFalse(mediaClip("E.JPG", stars: 0).isFavorited)
+
+        let clips = [
+            mediaClip("A.JPG", favorite: true), mediaClip("B.JPG", stars: 2), mediaClip("D.JPG"),
+        ]
+        XCTAssertEqual(clips.filter(\.isFavorited).map(\.filename), ["A.JPG", "B.JPG"])
+    }
+
+    /// The write-through a rating write performs (`mirrorRatingIntoIndex` → `store.update`)
+    /// persists both the star and the derived favorite flag, offline (no camera in this test).
+    func testMediaIndexUpdateWritesStarRatingAndFavoriteThrough() throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        store.upsertBatch([mediaClip("DSC_0001.JPG")], cameraID: "cam")
+
+        store.update(cameraID: "cam", filename: "DSC_0001.JPG") {
+            $0.starRating = 3
+            $0.isFavorite = true
+        }
+
+        let row = try XCTUnwrap(
+            store.list(cameraID: "cam").first { $0.filename == "DSC_0001.JPG" })
+        XCTAssertEqual(row.starRating, 3)
+        XCTAssertTrue(row.isFavorite)
+        XCTAssertTrue(row.isFavorited)
+    }
+
+    /// Instant playback rates a raw handle the index has never seen — the mirror must upsert.
+    func testMediaIndexUpdateUpsertsRowWhenClipNotYetIndexed() throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+
+        store.update(cameraID: "cam", filename: "DSC_0009.JPG") {
+            $0.starRating = 5
+            $0.isFavorite = true
+        }
+
+        let row = try XCTUnwrap(
+            store.list(cameraID: "cam").first { $0.filename == "DSC_0009.JPG" })
+        XCTAssertEqual(row.starRating, 5)
+        XCTAssertTrue(row.isFavorited)
+    }
+
+    /// A RAW+JPEG pair mirrors onto the JPEG row the grid renders; the RAW sibling stays untouched.
+    func testMediaRatingMirrorsOntoJPEGRowLeavingRawSiblingUntouched() throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        store.upsertBatch([mediaClip("DSC_0001.JPG"), mediaClip("DSC_0001.NEF")], cameraID: "cam")
+
+        store.update(cameraID: "cam", filename: "DSC_0001.JPG") {
+            $0.starRating = 4
+            $0.isFavorite = true
+        }
+
+        let rows = store.list(cameraID: "cam")
+        let jpeg = try XCTUnwrap(rows.first { $0.filename == "DSC_0001.JPG" })
+        let nef = try XCTUnwrap(rows.first { $0.filename == "DSC_0001.NEF" })
+        XCTAssertEqual(jpeg.starRating, 4)
+        XCTAssertTrue(jpeg.isFavorited)
+        XCTAssertNil(nef.starRating)
+        XCTAssertFalse(nef.isFavorited)
+    }
+
+    /// Index rows written before `starRating` existed decode to nil (additive Codable) — an
+    /// unrated legacy row is not silently promoted into Favorites.
+    func testMediaClipDecodesLegacyIndexRowWithoutStarRatingAsNil() throws {
+        let legacy = """
+            {"cameraID":"cam","filename":"DSC_0001.JPG","sizeBytes":100,\
+            "captureDate":"20260724T101500","isFavorite":false,\
+            "frameioStatus":"notUploaded","exportStatus":"none"}
+            """
+        let clip = try JSONDecoder().decode(MediaClip.self, from: Data(legacy.utf8))
+        XCTAssertNil(clip.starRating)
+        XCTAssertFalse(clip.isFavorited)
+    }
+
+    /// Rating-descending sort clusters the highest-starred shots at the top for culling.
+    func testRatingSortClustersHighestStarsFirst() {
+        let clips = [
+            mediaClip("A.JPG", stars: 0), mediaClip("B.JPG", stars: 5),
+            mediaClip("C.JPG", stars: 2), mediaClip("D.JPG"),
+        ]
+        let sorted = MediaClipSorting.sort(clips, order: .rating).map(\.filename)
+        XCTAssertEqual(sorted.first, "B.JPG")
+        XCTAssertEqual(sorted[1], "C.JPG")
+        XCTAssertEqual(Set(sorted.suffix(2)), ["A.JPG", "D.JPG"])
+    }
+}

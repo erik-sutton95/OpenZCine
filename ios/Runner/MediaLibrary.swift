@@ -42,6 +42,10 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
     /// On-card R3D filename paired with this proxy by stem (nil when unlinked).
     var linkedR3DFilename: String? = nil
     var isFavorite: Bool = false
+    /// Cached camera star rating (0–5), mirrored from the body on every rating write so the
+    /// Favorites filter agrees with the shots starred during a shoot. Additive/Codable —
+    /// decodes nil on index rows written before this field existed. Camera is source of truth.
+    var starRating: Int? = nil
     var frameioStatus: FrameioStatus = .notUploaded
     /// Remote Frame.io file id after a successful upload (prevents duplicate uploads).
     var frameioFileID: String?
@@ -115,12 +119,15 @@ enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
     case newest
     case oldest
     case name
+    /// Highest camera star first — clusters favorited/rated shots at the top for culling.
+    case rating
 
     var menuLabel: String {
         switch self {
         case .newest: "Newest"
         case .oldest: "Oldest"
         case .name: "Name"
+        case .rating: "Rating"
         }
     }
 
@@ -130,7 +137,8 @@ enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
         switch self {
         case .newest: .oldest
         case .oldest: .name
-        case .name: .newest
+        case .name: .rating
+        case .rating: .newest
         }
     }
 }
@@ -176,6 +184,13 @@ extension MediaClip {
     /// full preview, so the JPEG carries the grid cell and opens the viewer).
     var isJPEGPhoto: Bool {
         ["jpg", "jpeg", "jpe"].contains(fileExtension)
+    }
+
+    /// Favorited for the Media page: the local heart OR any camera star (≥1). Rating writes
+    /// (viewer + instant playback) mirror the body's star into `starRating`, so a shot starred
+    /// during the shoot lands under the Favorites tab without a per-cell camera round-trip.
+    var isFavorited: Bool {
+        isFavorite || (starRating ?? 0) >= 1
     }
 
     /// Same-shot pair identity: bucket + storage slot + case-insensitive stem. The slot is part of
@@ -274,6 +289,18 @@ enum MediaClipSorting {
         case .name:
             return clips.sorted {
                 $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending
+            }
+        case .rating:
+            // Rating desc, newest as tiebreak so equal-star shots keep the familiar order.
+            return clips.sorted { lhs, rhs in
+                let ls = lhs.starRating ?? 0
+                let rs = rhs.starRating ?? 0
+                if ls != rs { return ls > rs }
+                let lk = sortKey(lhs)
+                let rk = sortKey(rhs)
+                if lk != rk { return lk > rk }
+                return lhs.filename.localizedCaseInsensitiveCompare(rhs.filename)
+                    == .orderedDescending
             }
         }
     }

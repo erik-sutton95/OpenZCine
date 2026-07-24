@@ -6233,9 +6233,17 @@ final class NativeAppModel {
         guard let handle = instantReview?.handle, let session = cameraSession else {
             return false
         }
-        return
+        guard
             (try? await session.setObjectRating(
                 handle: handle, value: StillCapturePolicy.ratingValue(forStars: stars))) != nil
+        else { return false }
+        // Instant playback holds a raw object handle, not a MediaClip — resolve the JPEG's
+        // filename so the write mirrors into the media index (the review already fetched this
+        // ObjectInfo once; a second lookup here is off the hot capture path).
+        if let info = try? await session.getObjectInfo(handle: handle) {
+            mirrorRatingIntoIndex(cameraID: mediaBucketID, filename: info.filename, stars: stars)
+        }
+        return true
     }
 
     // MARK: - Media delete + star rating
@@ -6277,11 +6285,14 @@ final class NativeAppModel {
     }
 
     /// The clip's star rating from the camera (0–5); nil when unreachable (offline or a
-    /// local-only clip).
+    /// local-only clip). Mirrors what it reads back into the index so the Favorites cache
+    /// self-corrects against the body (truth) on viewer open — no per-cell round-trip needed.
     func mediaStarRating(for clip: MediaClip) async -> Int? {
         guard let handle = clip.handle, let session = cameraSession else { return nil }
         guard let value = try? await session.objectRating(handle: handle) else { return nil }
-        return StillCapturePolicy.stars(fromRatingValue: value)
+        let stars = StillCapturePolicy.stars(fromRatingValue: value)
+        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars)
+        return stars
     }
 
     /// Writes a 0–5 star rating to the clip; a RAW+JPEG pair writes both sides, tolerating
@@ -6295,7 +6306,21 @@ final class NativeAppModel {
         if let raw = rawSibling(of: clip), let rawHandle = raw.handle {
             _ = try? await session.setObjectRating(handle: rawHandle, value: value)
         }
+        // Mirror onto the JPEG-side row the grid renders so the Favorites filter agrees.
+        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars)
         return true
+    }
+
+    /// Mirrors a camera star write (viewer or instant playback) into the media index: caches
+    /// the star and derives the local favorite flag (`isFavorite = stars ≥ 1`), upserting a row
+    /// if the clip isn't indexed yet. The body stays source of truth; this keeps the Media
+    /// page's local Favorites filter — which reads the index, not the camera — in agreement.
+    func mirrorRatingIntoIndex(cameraID: String, filename: String, stars: Int) {
+        mediaClipStore.update(cameraID: cameraID, filename: filename) {
+            $0.starRating = stars
+            $0.isFavorite = stars >= 1
+        }
+        refreshMediaClips()
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
@@ -8700,7 +8725,8 @@ extension NativeAppModel {
         case .photos:
             clips = clips.filter { MediaClipFilename.isPhoto($0.filename) }
         case .favorites:
-            clips = clips.filter(\.isFavorite)
+            // Local heart OR any camera star — shots rated during the shoot count as favorites.
+            clips = clips.filter(\.isFavorited)
         }
 
         if !mediaFormatFilters.isEmpty {
@@ -9518,12 +9544,21 @@ extension NativeAppModel {
         return isClipDownloaded(clip)
     }
 
-    /// Toggles a clip's favorite flag and persists it.
+    /// Toggles a clip's favorite flag and persists it. The heart and the camera star are one
+    /// signal here (Favorites reads `isFavorite || starRating ≥ 1`): favoriting sets ≥1 star,
+    /// un-favoriting clears it, and — when connected — writes the matching rating to the body so
+    /// the two agree. Best-effort: an offline clip just keeps the local flag until next sync.
     func toggleClipFavorite(_ clip: MediaClip) {
+        var stars = 0
         mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
             $0.isFavorite.toggle()
+            stars = $0.isFavorite ? max($0.starRating ?? 0, 1) : 0
+            $0.starRating = stars
         }
         refreshMediaClips()
+        if clip.handle != nil {
+            Task { _ = await setMediaStarRating(stars, for: clip) }
+        }
     }
 
     /// Resolves the operator's currently selected LUT to a colour cube, for baking onto media
