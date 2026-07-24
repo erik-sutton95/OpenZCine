@@ -1500,6 +1500,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let previousTint = androidWhiteBalanceTint
         androidControlCatalog = AndroidRawControlCatalog()
         androidWhiteBalanceTint = nil
+        // Descriptors relevant to the connected mode: a rejection here is a real capability
+        // gap and counts toward the aggregate result.
         let refreshers: [() throws -> Void] = [
             refreshAndroidScreenSizeDescriptor,
             refreshAndroidFileTypeDescriptor,
@@ -1522,8 +1524,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
             refreshAndroidWhiteBalanceTintDescriptor,
             refreshAndroidVibrationReductionDescriptor,
             refreshAndroidElectronicVRDescriptor,
-            // Photo-mode enums (stills shutter / photo WB presets / image sizes).
-            // Bodies reject them in movie mode; the walk continues past that.
+        ]
+        // Photo-mode enums (stills shutter / photo WB presets / image sizes). The body rejects
+        // these whenever it is in movie mode — an EXPECTED, mode-dependent omission, not a
+        // capability gap. Their rejection must NOT make the whole snapshot report `.unsupported`
+        // (on a real ZR in movie mode it otherwise always would, since these are always rejected
+        // there); the catalog fields simply stay empty until a photo-mode refresh fills them.
+        // Only a dead transport / media contention during them is still terminal.
+        let crossModeOptionalRefreshers: [() throws -> Void] = [
             refreshAndroidStillShutterDescriptor,
             refreshAndroidStillWhiteBalanceDescriptor,
             refreshAndroidImageSizeDescriptor,
@@ -1541,6 +1549,21 @@ public final class PTPIPClientSession: @unchecked Sendable {
             // Keep walking independent descriptors after unsupported/rejected forms so one
             // body-specific omission cannot hide the rest. Only a dead transport aborts early.
             if result == .transportFailed || result == .mediaBusy { break }
+        }
+        for refresh in crossModeOptionalRefreshers
+        where result != .transportFailed && result != .mediaBusy {
+            do {
+                try refresh()
+            } catch let error as PTPIPClientSessionError {
+                // An expected movie-mode rejection of a photo-only enum does not downgrade the
+                // result; only a dead transport / media contention is terminal here.
+                let optional = androidDescriptorResult(for: error)
+                if optional == .transportFailed || optional == .mediaBusy {
+                    result = mergedAndroidPropertyRefreshResult(result, optional)
+                }
+            } catch {
+                result = .transportFailed
+            }
         }
         if result == .transportFailed || result == .mediaBusy {
             // Prefer the last complete catalog over a blank generation so open pickers keep working
