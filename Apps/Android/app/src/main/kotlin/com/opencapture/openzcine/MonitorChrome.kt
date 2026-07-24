@@ -22,6 +22,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import com.opencapture.openzcine.bridge.ZoneFrame
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -231,8 +235,11 @@ fun ReadoutPill(
     value: String,
     active: Boolean = false,
     onClick: (() -> Unit)? = null,
+    /** Publishes this pill's root bounds in dp (iOS `topBarPickerFrames`). */
+    onBoundsInRoot: ((ZoneFrame) -> Unit)? = null,
     icon: @Composable (Color) -> Unit,
 ) {
+    val density = LocalDensity.current
     // Active = the iOS readout-button treatment: accent-dim capsule + an
     // accent-dim border (iOS strokes with accentDim, not full accent) with
     // glyph and value going gold while its picker is open.
@@ -246,6 +253,25 @@ fun ReadoutPill(
     Row(
         modifier =
             surface
+                .then(
+                    if (onBoundsInRoot != null) {
+                        Modifier.onGloballyPositioned { coords ->
+                            val b = coords.boundsInRoot()
+                            with(density) {
+                                onBoundsInRoot(
+                                    ZoneFrame(
+                                        x = b.left.toDp().value,
+                                        y = b.top.toDp().value,
+                                        width = b.width.toDp().value,
+                                        height = b.height.toDp().value,
+                                    ),
+                                )
+                            }
+                        }
+                    } else {
+                        Modifier
+                    },
+                )
                 .then(
                     // iOS readout buttons always press like buttons; disabled
                     // handlers no-op silently rather than losing button feel.

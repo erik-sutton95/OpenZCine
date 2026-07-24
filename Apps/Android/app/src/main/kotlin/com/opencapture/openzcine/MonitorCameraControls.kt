@@ -1035,15 +1035,14 @@ internal fun monitorPickerFrame(
     // tabs) is never forced under ~300dp of panel height. Drum pickers fill
     // leftover space.
     val height = min(if (isPortrait) 320f else 360f, availableHeight)
-    // iOS hasBar: width = bar.width, trailing edge = bar.maxX (no feed clamp that
-    // shifts the panel left of the glass pill).
+    // iOS `bottomPickerBody` hasBar: cap at the top-popup width and CENTRE the
+    // panel over the capture bar — a bar-wide drum panel reads as a
+    // full-screen sheet (width = min(bar.width, 420), centred on bar.midX).
     val width =
         if (isPortrait) {
             max(0f, viewport.width - outerMargin * 2f)
         } else if (anchorFrame != null) {
-            // Prefer exact bar / strip width (iOS). Cap at 420 only as a fallback
-            // when the zone is missing and we would otherwise use the full feed.
-            max(0f, anchorFrame.width)
+            min(420f, max(0f, anchorFrame.width))
         } else {
             min(420f, max(0f, zones.feed.width))
         }
@@ -1051,28 +1050,19 @@ internal fun monitorPickerFrame(
         if (isPortrait) {
             viewport.x + outerMargin
         } else if (anchorFrame != null) {
-            // Trailing-align to the bar (iOS .bottomTrailing on bar.maxX).
-            anchorFrame.x + anchorFrame.width - width
+            anchorFrame.x + anchorFrame.width / 2f - width / 2f
         } else {
             zones.feed.x + zones.feed.width - outerMargin - width
         }
-    // Keep the panel on-screen without shifting its trailing edge left of the
-    // capture bar when the bar itself is already inside the viewport.
+    // Keep the panel on-screen (iOS clamps its trailing edge to host − 8).
     val minX = viewport.x + outerMargin
     val maxX =
         max(
             minX,
             viewport.x + viewport.width - width - outerMargin,
         )
-    val x =
-        if (!isPortrait && anchorFrame != null) {
-            // Prefer exact trailing alignment; only nudge if the left edge clips.
-            max(minX, rawX)
-        } else {
-            rawX.coerceIn(minX, maxX)
-        }
     return ZoneFrame(
-        x = x,
+        x = rawX.coerceIn(minX, maxX),
         y = max(topLimit, bottomLimit - height),
         width = width,
         height = height,
@@ -1080,34 +1070,46 @@ internal fun monitorPickerFrame(
 }
 
 /**
- * iOS landscape top-deck res/codec popdown: width 340, centered on the info
- * bar (cell midX), dropped just below the bar. Command mode centres the
- * panel in the viewport.
+ * iOS landscape top-deck popdown (`topPickerBody`): width 340 (the two-drum
+ * quality pair 400), centred on the tapped pill's cell (info-bar mid as the
+ * fallback), dropped just below it. Height fills the space under the anchor —
+ * the quality pair's NEF chips and star toggle must never fold under a fixed
+ * cap. Command mode centres the panel in the viewport.
  */
 internal fun monitorTopBarPickerFrame(
     viewport: ZoneFrame,
     zones: MonitorZones,
     isCommandCenter: Boolean = false,
+    kind: MonitorPickerKind? = null,
+    anchorPill: ZoneFrame? = null,
 ): ZoneFrame {
     val outerMargin = 8f
-    val width = min(340f, max(0f, viewport.width - outerMargin * 2f))
-    val height = min(300f, max(120f, viewport.height * 0.55f))
+    val preferredWidth = if (kind == MonitorPickerKind.QUALITY) 400f else 340f
+    val width = min(preferredWidth, max(0f, viewport.width - outerMargin * 2f))
+    if (isCommandCenter) {
+        val height = min(300f, max(120f, viewport.height * 0.55f))
+        return ZoneFrame(
+            x = viewport.x + (viewport.width - width) / 2f,
+            y = viewport.y + (viewport.height - height) / 2f,
+            width = width,
+            height = height,
+        )
+    }
+    val anchorMid =
+        anchorPill?.let { it.x + it.width / 2f }
+            ?: (zones.infoBar.x + zones.infoBar.width / 2f)
+    val anchorBottom =
+        anchorPill?.let { it.y + it.height }
+            ?: (zones.infoBar.y + zones.infoBar.height)
     val x =
-        if (isCommandCenter) {
-            viewport.x + (viewport.width - width) / 2f
-        } else {
-            val mid = zones.infoBar.x + zones.infoBar.width / 2f
-            (mid - width / 2f).coerceIn(
-                viewport.x + outerMargin,
-                viewport.x + viewport.width - width - outerMargin,
-            )
-        }
-    val y =
-        if (isCommandCenter) {
-            viewport.y + (viewport.height - height) / 2f
-        } else {
-            zones.infoBar.y + zones.infoBar.height + 8f
-        }
+        (anchorMid - width / 2f).coerceIn(
+            viewport.x + outerMargin,
+            max(viewport.x + outerMargin, viewport.x + viewport.width - width - outerMargin),
+        )
+    val y = anchorBottom + 8f
+    val maxHeight = if (kind == MonitorPickerKind.QUALITY) 380f else 300f
+    val height =
+        min(maxHeight, max(120f, viewport.y + viewport.height - y - outerMargin))
     return ZoneFrame(x = x, y = y, width = width, height = height)
 }
 

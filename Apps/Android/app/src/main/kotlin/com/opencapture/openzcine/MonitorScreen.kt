@@ -614,6 +614,9 @@ internal fun MonitorScreen(
     // iOS `captureBarFrame`: measured glass pill so the exposure picker
     // trailing-aligns to the content-hugging bar (not the wider zone slot).
     var measuredCaptureBar by remember { mutableStateOf<ZoneFrame?>(null) }
+    // iOS `topBarPickerFrames`: measured deck pills so a popdown centres under
+    // its own cell rather than the info bar's midpoint.
+    val measuredTopPills = remember { mutableStateMapOf<MonitorPickerKind, ZoneFrame>() }
     LaunchedEffect(effectiveDisplayMode) {
         if (displayMode != effectiveDisplayMode) displayMode = effectiveDisplayMode
     }
@@ -2063,6 +2066,9 @@ internal fun MonitorScreen(
                                     onTogglePhotoPill = {
                                         photoPillShowsStorage = !photoPillShowsStorage
                                     },
+                                    onPillBounds = { kind, frame ->
+                                        measuredTopPills[kind] = frame
+                                    },
                                     recReadoutVisible = operatorSettings.recReadoutVisible.value,
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
@@ -2462,6 +2468,8 @@ internal fun MonitorScreen(
                             viewport = physicalViewport,
                             zones = zones,
                             isCommandCenter = false,
+                            kind = picker.kind,
+                            anchorPill = measuredTopPills[picker.kind],
                         )
                     } else {
                         val anchor =
@@ -2746,6 +2754,8 @@ private fun InfoPill(
     pickersEnabled: Boolean = false,
     onOpenPicker: (MonitorPickerKind) -> Unit = {},
     onToggleMediaReadout: (() -> Unit)? = null,
+    /** Publishes each picker pill's root bounds so its popdown can centre under it. */
+    onPillBounds: ((MonitorPickerKind, ZoneFrame) -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -2771,6 +2781,10 @@ private fun InfoPill(
                     onClick = {
                         if (pickersEnabled) onOpenPicker(MonitorPickerKind.SIZE)
                     },
+                    onBoundsInRoot =
+                        onPillBounds?.let { report ->
+                            { frame -> report(MonitorPickerKind.SIZE, frame) }
+                        },
                 ) { tint ->
                     PhotoGlyph(tint, Modifier.size(14.dp, 11.dp))
                 }
@@ -2781,6 +2795,10 @@ private fun InfoPill(
                         onClick = {
                             if (pickersEnabled) onOpenPicker(MonitorPickerKind.QUALITY)
                         },
+                        onBoundsInRoot =
+                            onPillBounds?.let { report ->
+                                { frame -> report(MonitorPickerKind.QUALITY, frame) }
+                            },
                     ) { tint ->
                         ApertureGlyph(tint, Modifier.size(12.dp))
                     }
@@ -2812,6 +2830,10 @@ private fun InfoPill(
                 onClick = {
                     if (pickersEnabled) onOpenPicker(MonitorPickerKind.RESOLUTION)
                 },
+                onBoundsInRoot =
+                    onPillBounds?.let { report ->
+                        { frame -> report(MonitorPickerKind.RESOLUTION, frame) }
+                    },
             ) { tint ->
                 VideoGlyph(tint)
             }
@@ -2822,6 +2844,10 @@ private fun InfoPill(
                     onClick = {
                         if (pickersEnabled) onOpenPicker(MonitorPickerKind.CODEC)
                     },
+                    onBoundsInRoot =
+                        onPillBounds?.let { report ->
+                            { frame -> report(MonitorPickerKind.CODEC, frame) }
+                        },
                 ) { tint ->
                     FilmGlyph(tint)
                 }
