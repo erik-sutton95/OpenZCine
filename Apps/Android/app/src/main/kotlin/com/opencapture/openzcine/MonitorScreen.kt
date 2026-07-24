@@ -446,6 +446,8 @@ internal fun MonitorScreen(
     val effectiveDisplayMode =
         displayMode.takeIf(displayModeOrder::contains) ?: displayModeOrder.first()
     var locked by remember { mutableStateOf(false) }
+    // Photography's lock-side vertical assist rail (iOS `photoRailExpanded`).
+    var photoRailExpanded by remember { mutableStateOf(true) }
     var focusPointLocked by remember(session) { mutableStateOf(false) }
     var focusLockHolding by remember(session) { mutableStateOf(false) }
     var focusMoveRequestsInFlight by remember(session) { mutableStateOf(0) }
@@ -1894,20 +1896,65 @@ internal fun MonitorScreen(
                     // Photography keeps the toolbar but narrows it to the
                     // stills-relevant tools (iOS `appliesToPhotography`).
                     if (!isClean) {
-                        if (assistToolbarVisible) {
+                        // Photography moves the assist tools to the lock-side
+                        // vertical rail (below), handing the whole band to the
+                        // capture strip (iOS `assistVisible = … && !isPhotographyBand`).
+                        if (assistToolbarVisible && !isPhotography) {
                             zones.assistStrip?.let { strip ->
                                 AssistToolbar(
                                     assist,
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     visibleTools =
                                         frontPinnedAssistTools(
-                                            operatorSettings.visibleAssistToolbarTools.filter {
-                                                !isPhotography || it.appliesToPhotography
-                                            },
-                                            photography = isPhotography,
+                                            operatorSettings.visibleAssistToolbarTools,
+                                            photography = false,
                                         ),
                                     framingConfiguration = localFraming,
                                     onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
+                                    hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                                    enabled = !locked,
+                                    onLongPressToolAnchored = openAssistOptions,
+                                )
+                            }
+                        }
+                        // Photography's collapsible vertical assist rail,
+                        // top-aligned next to the lock button and expanding
+                        // downward until it reaches the capture band (iOS
+                        // photo-rail placement in `MonitorUnified`).
+                        if (assistToolbarVisible && isPhotography && !locked) {
+                            zones.assistStrip?.let { band ->
+                                val batteryTrailing =
+                                    zones.batteryPhone?.let { anchor ->
+                                        val stack =
+                                            batteryRowStackFrame(
+                                                anchor = anchor,
+                                                lock = zones.lock,
+                                            )
+                                        stack.x + stack.width
+                                    }
+                                val railFrame =
+                                    photographyAssistRailFrame(
+                                        lock = zones.lock,
+                                        batteryTrailing = batteryTrailing,
+                                        assistBand = band,
+                                        measuredCaptureBar = measuredCaptureBar,
+                                        expanded = photoRailExpanded,
+                                    )
+                                PortraitFillAssistRail(
+                                    state = assist,
+                                    expanded = photoRailExpanded,
+                                    onExpandedChange = { photoRailExpanded = it },
+                                    modifier = Modifier.zone(railFrame),
+                                    visibleTools =
+                                        frontPinnedAssistTools(
+                                            operatorSettings.visibleAssistToolbarTools.filter {
+                                                it.appliesToPhotography
+                                            },
+                                            photography = true,
+                                        ),
+                                    framingConfiguration = localFraming,
+                                    onToggleFramingTool =
+                                        operatorSettings::toggleLocalFramingTool,
                                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
                                     enabled = !locked,
                                     onLongPressToolAnchored = openAssistOptions,
@@ -1932,6 +1979,7 @@ internal fun MonitorScreen(
                                                     .show()
                                             },
                                             maxContentWidth = strip.width.dp,
+                                            onBarBoundsInRoot = { measuredCaptureBar = it },
                                         )
                                     } else {
                                         MonitorCaptureStrip(

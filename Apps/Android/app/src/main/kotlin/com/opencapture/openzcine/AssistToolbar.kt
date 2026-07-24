@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -55,8 +56,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 
 /**
@@ -140,6 +142,59 @@ internal fun frontPinnedAssistTools(
     rest.removeAt(evIndex)
     rest.add(1, AssistTool.EV)
     return rest
+}
+
+/** iOS `MonitorAssistStrip.expandedWidth`: the vertical rail's column width. */
+internal const val ASSIST_RAIL_EXPANDED_WIDTH_DP = 60f
+
+/** iOS `MonitorAssistStrip.collapsedPillSize`: the collapsed pill's diameter. */
+internal const val ASSIST_RAIL_COLLAPSED_PILL_DP = 44f
+
+/** iOS `MonitorAssistStrip.bottomFadeHeight`: the expanded rail's scroll fade. */
+internal const val ASSIST_RAIL_BOTTOM_FADE_DP = 40f
+
+/**
+ * Seats photography's collapsible vertical assist rail beside the lock/battery
+ * lane (iOS `MonitorUnified` photo-rail placement): the rail clears whichever
+ * left-edge chrome reaches furthest (lock button or battery stack) plus 12dp,
+ * hugs the lock row while expanded, centre-aligns the collapsed pill on the
+ * lock button, and runs down to the assist band's bottom edge unless the
+ * measured capture strip actually enters the rail's lane — then it stops 10dp
+ * above the band.
+ */
+internal fun photographyAssistRailFrame(
+    lock: ZoneFrame,
+    batteryTrailing: Float?,
+    assistBand: ZoneFrame,
+    measuredCaptureBar: ZoneFrame?,
+    expanded: Boolean,
+): ZoneFrame {
+    val leftChromeTrailing = maxOf(lock.x + lock.width, batteryTrailing ?: 0f)
+    val laneLeading = leftChromeTrailing + 12f
+    val laneTrailing = laneLeading + ASSIST_RAIL_EXPANDED_WIDTH_DP
+    if (!expanded) {
+        val railCenterX = laneLeading + ASSIST_RAIL_EXPANDED_WIDTH_DP / 2f
+        return ZoneFrame(
+            x = railCenterX - ASSIST_RAIL_COLLAPSED_PILL_DP / 2f,
+            y = lock.y + (lock.height - ASSIST_RAIL_COLLAPSED_PILL_DP) / 2f,
+            width = ASSIST_RAIL_COLLAPSED_PILL_DP,
+            height = ASSIST_RAIL_COLLAPSED_PILL_DP,
+        )
+    }
+    // "Fill until it hits the bottom bar": a trailing-aligned strip on a wide
+    // body never reaches the rail's lane, so the rail runs to the band bottom.
+    val stripEntersLane =
+        measuredCaptureBar != null &&
+            measuredCaptureBar.width > 1f &&
+            measuredCaptureBar.x < laneTrailing + 16f
+    val railBottom =
+        if (stripEntersLane) assistBand.y - 10f else assistBand.y + assistBand.height
+    return ZoneFrame(
+        x = laneLeading,
+        y = lock.y,
+        width = ASSIST_RAIL_EXPANDED_WIDTH_DP,
+        height = maxOf(0f, railBottom - lock.y),
+    )
 }
 
 @StringRes
@@ -782,31 +837,85 @@ internal fun PortraitFillAssistRail(
             visibleTools.filterNot { it in imageEffectTools }
         }
     val scroll = rememberScrollState()
-    val view = LocalView.current
-    Column(
+    Box(
         modifier
+            // Rows must never draw outside the rail's rounded silhouette —
+            // the scroll column clips to rectangular bounds otherwise (iOS
+            // clipShape on the expanded rail).
+            .clip(ChromeShape)
             .glass(ChromeShape)
-            .fillMaxSize()
-            .verticalScroll(scroll)
-            .padding(horizontal = 4.dp, vertical = 6.dp)
             .semantics {
                 contentDescription = railDescription
                 stateDescription = expandedDescription
             },
-        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scroll)
+                .padding(horizontal = 4.dp)
+                // The last row must be able to scroll fully clear of the
+                // bottom fade — without this it parks half-faded against the
+                // rail's rounded end (iOS bottomFadeHeight + 10 padding).
+                .padding(top = 6.dp, bottom = ASSIST_RAIL_BOTTOM_FADE_DP.dp + 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .chromeClickable(enabled) { onExpandedChange(false) }
+                    .semantics { contentDescription = closeDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                // iOS collapse handle is a chevron, not a text label.
+                ChevronCollapseGlyph(LiveDesign.accent, Modifier.size(13.dp))
+            }
+            AssistRailToolCells(
+                supportedTools = supportedTools,
+                state = state,
+                framingConfiguration = framingConfiguration,
+                onToggleFramingTool = onToggleFramingTool,
+                hapticsEnabled = hapticsEnabled,
+                enabled = enabled,
+                onLongPressTool = onLongPressTool,
+                onLongPressToolAnchored = onLongPressToolAnchored,
+            )
+        }
+        // Rows scroll UNDER a bottom gradient so the last tool never
+        // hard-clips mid-glyph against the rail's rounded edge — the fade
+        // itself is the scroll affordance, reaching near-opaque well before
+        // the rail's end (iOS bottom fade).
         Box(
             Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(38.dp)
-                .chromeClickable(enabled) { onExpandedChange(false) }
-                .semantics { contentDescription = closeDescription },
-            contentAlignment = Alignment.Center,
-        ) {
-            // iOS collapse handle is a chevron, not a text label.
-            ChevronCollapseGlyph(LiveDesign.accent, Modifier.size(13.dp))
-        }
-        supportedTools.forEach { tool ->
+                .height(ASSIST_RAIL_BOTTOM_FADE_DP.dp)
+                .background(
+                    Brush.verticalGradient(
+                        0f to LiveDesign.background.copy(alpha = 0f),
+                        0.55f to LiveDesign.background.copy(alpha = 0.85f),
+                        1f to LiveDesign.background.copy(alpha = 0.98f),
+                    ),
+                ),
+        )
+    }
+}
+
+/** The vertical rail's tool cells, shared by the expanded-rail scroll column. */
+@Composable
+private fun AssistRailToolCells(
+    supportedTools: List<AssistTool>,
+    state: AssistState,
+    framingConfiguration: LocalFramingAssistConfiguration?,
+    onToggleFramingTool: (AssistTool) -> Unit,
+    hapticsEnabled: Boolean,
+    enabled: Boolean,
+    onLongPressTool: ((AssistTool) -> Unit)?,
+    onLongPressToolAnchored: ((AssistTool, Rect) -> Unit)?,
+) {
+    val view = LocalView.current
+    supportedTools.forEach { tool ->
             val isFramingTool = tool in AssistTool.framingTools
             val isOn =
                 if (isFramingTool) {
@@ -842,7 +951,6 @@ internal fun PortraitFillAssistRail(
                     view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                 }
             }
-        }
     }
 }
 
