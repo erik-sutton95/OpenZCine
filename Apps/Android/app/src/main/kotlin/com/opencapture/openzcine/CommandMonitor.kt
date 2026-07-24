@@ -1039,7 +1039,7 @@ internal fun cameraPropertyConfirmsSelection(
  * operator just picked set to [label], so the monitor tile reflects the pick immediately while the
  * authoritative write + readback confirm lands in the background. Each branch mirrors the matching
  * [cameraPropertyConfirmsSelection] branch one-for-one, so a synthesized value round-trips as
- * confirmed. Anything that can't be cleanly synthesized (an unparseable ISO, a shutter value with
+ * confirmed. Anything that can't be cleanly synthesized (an unparsable ISO, a shutter value with
  * no known display circuit) is left untouched — the confirmed refresh still reconciles it.
  */
 internal fun CameraPropertySnapshot.withOptimisticControlValue(
