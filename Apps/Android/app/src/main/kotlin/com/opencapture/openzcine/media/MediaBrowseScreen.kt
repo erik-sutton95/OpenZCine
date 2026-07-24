@@ -59,6 +59,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -554,6 +555,9 @@ internal fun MediaBrowseScreen(
     // Camera-card deletion in flight: the listing effect stays cancelled while
     // non-null so an already-enumerated page cannot re-add the deleted rows.
     var pendingDeletion by remember(cameraID) { mutableStateOf<List<MediaClipRecord>?>(null) }
+    // Deletion progress (completed, total) while a batch delete runs — drives the progress bar
+    // and keeps the grid steady until the run finishes (the listing restarts once, at the end).
+    var deletionProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var deleteConfirmTargets by remember { mutableStateOf<List<MediaClipRecord>?>(null) }
     var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
     var viewingPhoto by remember { mutableStateOf<MediaClipRecord?>(null) }
@@ -730,24 +734,29 @@ internal fun MediaBrowseScreen(
     // restarts the listing so the fresh enumeration confirms the deletions.
     LaunchedEffect(pendingDeletion) {
         val targets = pendingDeletion ?: return@LaunchedEffect
+        // A still viewer closed by this deletion may leave its transfer draining; the blocking
+        // stop joins the pump so the card never sees a delete interleaved with reads of the same
+        // object. The grid holds steady (the listing stays cancelled) — one progress bar covers
+        // the run and it refreshes once at the end.
         withContext(Dispatchers.IO) {
-            // A still viewer closed by this deletion may leave its transfer
-            // draining; the blocking stop joins the pump so the card never
-            // sees a delete interleaved with reads of the same object.
             if (SwiftCore.isAvailable) SwiftCore.sessionStopMediaTransfer()
-            targets.forEach { clip ->
-                // Protected objects are refused by the body and stay listed;
-                // their caches stay too so the row remains fully backed.
-                if (!SwiftCore.isAvailable || !SwiftCore.sessionDeleteObject(clip.handle.toInt())) {
-                    return@forEach
-                }
-                val owner = ownerCameraID(clip)
-                runCatching {
-                    cacheStore.purgeEntry(owner, MediaCacheObjectIdentity(clip))
-                }
-                libraryIndex.purgeClip(owner, clip)
-            }
         }
+        deletionProgress = 0 to targets.size
+        targets.forEachIndexed { index, clip ->
+            withContext(Dispatchers.IO) {
+                // Protected objects are refused by the body and stay listed; their caches stay
+                // too so the row remains fully backed.
+                if (SwiftCore.isAvailable && SwiftCore.sessionDeleteObject(clip.handle.toInt())) {
+                    val owner = ownerCameraID(clip)
+                    runCatching {
+                        cacheStore.purgeEntry(owner, MediaCacheObjectIdentity(clip))
+                    }
+                    libraryIndex.purgeClip(owner, clip)
+                }
+            }
+            deletionProgress = (index + 1) to targets.size
+        }
+        deletionProgress = null
         favorites =
             withContext(Dispatchers.IO) {
                 val ids = offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
@@ -1712,6 +1721,35 @@ internal fun MediaBrowseScreen(
                     reloadKey += 1
                 },
             )
+        }
+
+        // Batch-delete progress: the grid holds steady behind this until the run finishes.
+        deletionProgress?.let { (done, total) ->
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .chromeClickable(onClick = {}),  // swallow taps mid-delete
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    Modifier
+                        .glass(RoundedCornerShape(16.dp))
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        "Deleting $done of $total…",
+                        style = chromeStyle(14f, FontWeight.SemiBold),
+                        color = LiveDesign.text,
+                    )
+                    LinearProgressIndicator(
+                        progress = { if (total > 0) done.toFloat() / total else 0f },
+                        modifier = Modifier.width(220.dp),
+                    )
+                }
+            }
         }
     }
 }
