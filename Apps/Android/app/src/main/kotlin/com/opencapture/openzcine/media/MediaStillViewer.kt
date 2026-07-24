@@ -107,6 +107,8 @@ internal fun MediaStillViewer(
     deleteAvailable: Boolean = false,
     /** Post-confirmation deletion; the browse screen owns the card operations. */
     onDelete: () -> Unit = {},
+    /** Mirrors a camera star (seed-read or write) into the local favorite index. */
+    onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ) {
@@ -172,7 +174,12 @@ internal fun MediaStillViewer(
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
         val read =
             withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
-        if (read >= 0) ratingStars = read
+        if (read >= 0) {
+            ratingStars = read
+            // Self-correct the local favorite cache against the body (truth) on open — this is
+            // also how a shot starred in instant playback lands under Favorites once opened.
+            onRatingMirrored(clip, read)
+        }
     }
     val viewerScope = rememberCoroutineScope()
 
@@ -360,6 +367,8 @@ internal fun MediaStillViewer(
                                 written
                             }
                         ratingStars = if (confirmed >= 0) confirmed else previous
+                        // Mirror the confirmed star onto the JPEG-identity row the grid renders.
+                        if (confirmed >= 0) onRatingMirrored(clip, confirmed)
                     }
                 }
             }

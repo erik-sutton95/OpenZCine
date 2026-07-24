@@ -432,6 +432,57 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `setFavorite mirrors a camera star into the favorite set and clears it at zero`() {
+        val preferences = MemoryPreferences()
+        val index = MediaLibraryIndex(preferences)
+        val shot = clip(handle = 7, filename = "DSC_0007.JPG", kind = MediaContentKind.STILL_PHOTO)
+
+        // A >= 1-star write favorites the shot; a 0-star write clears it. Offline path — only
+        // the local set is touched, no camera involved.
+        val starred = index.setFavorite("camera-a", shot, favorite = true)
+        assertTrue(shot.libraryKey("camera-a") in starred)
+        assertTrue(shot.libraryKey("camera-a") in MediaLibraryIndex(preferences).favoriteIDs("camera-a"))
+
+        val cleared = index.setFavorite("camera-a", shot, favorite = false)
+        assertFalse(shot.libraryKey("camera-a") in cleared)
+        assertTrue(MediaLibraryIndex(preferences).favoriteIDs("camera-a").isEmpty())
+    }
+
+    @Test
+    fun `a shot favorited by a rating write surfaces under the Favorites filter`() {
+        val cameraID = "camera"
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val rated = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val other = clip(handle = 2, filename = "DSC_0002.JPG", kind = MediaContentKind.STILL_PHOTO)
+
+        val favorites = index.setFavorite(cameraID, rated, favorite = true)
+
+        assertEquals(
+            listOf(rated),
+            MediaLibraryFiltering.displayed(
+                listOf(rated, other),
+                MediaLibraryCategory.FAVORITES,
+                favorites,
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+            ),
+        )
+    }
+
+    @Test
+    fun `rating a pair favorites the jpeg row and leaves the raw sibling untouched`() {
+        val cameraID = "camera"
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+
+        val favorites = index.setFavorite(cameraID, jpeg, favorite = true)
+
+        assertTrue(jpeg.libraryKey(cameraID) in favorites)
+        assertFalse(raw.libraryKey(cameraID) in favorites)
+    }
+
+    @Test
     fun `categories and sort consume shared core actions instead of extensions`() {
         val cameraID = "camera"
         val proxy = clip(handle = 1, filename = "PHOTO.NEF", kind = MediaContentKind.PLAYABLE_PROXY)

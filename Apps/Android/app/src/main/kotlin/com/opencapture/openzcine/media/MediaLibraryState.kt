@@ -312,6 +312,25 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         return updated
     }
 
+    /**
+     * Sets one favorite explicitly (add when [favorite], remove otherwise) and returns the
+     * complete updated set. This is the mirror a camera star write performs: a shot rated
+     * >= 1 star becomes a favorite so the Favorites tab — which reads this set, not the camera
+     * property — agrees with shots starred during a shoot. iOS `mirrorRatingIntoIndex`.
+     */
+    fun setFavorite(cameraID: String, clip: MediaClipRecord, favorite: Boolean): Set<String> {
+        val updated = favoriteIDs(cameraID).toMutableSet()
+        val identity = clip.libraryKey(cameraID)
+        val changed = if (favorite) updated.add(identity) else updated.remove(identity)
+        if (changed) {
+            preferences.putString(
+                favoritesKey(cameraID),
+                updated.sorted().joinToString(separator = "\n").ifEmpty { null },
+            )
+        }
+        return updated
+    }
+
     /** Restores browser controls without trusting a corrupted preference value. */
     fun viewOptions(defaultSource: MediaLibrarySource): MediaLibraryViewOptions =
         MediaLibraryViewOptions(

@@ -209,6 +209,8 @@ internal fun MediaPlaybackScreen(
     frameioController: FrameioDeliveryController,
     mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
     onToggleFavorite: (MediaClipRecord) -> Unit,
+    /** Mirrors a camera star (seed-read or write) into the local favorite index. */
+    onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ): Unit {
@@ -238,6 +240,7 @@ internal fun MediaPlaybackScreen(
             frameioController = frameioController,
             mediaDeliveryCoordinator = mediaDeliveryCoordinator,
             onToggleFavorite = { onToggleFavorite(activeClip) },
+            onRatingMirrored = onRatingMirrored,
             onResolvedObjectSize = onResolvedObjectSize,
             onNavigate = { target -> activeClip = target },
             onClose = onClose,
@@ -263,6 +266,7 @@ private fun PlaybackClipSession(
     frameioController: FrameioDeliveryController,
     mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
     onToggleFavorite: () -> Unit,
+    onRatingMirrored: (MediaClipRecord, Int) -> Unit,
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit,
     onNavigate: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
@@ -326,7 +330,11 @@ private fun PlaybackClipSession(
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
         val read =
             withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
-        if (read >= 0) ratingStars = read
+        if (read >= 0) {
+            ratingStars = read
+            // Self-correct the local favorite cache against the body (truth) on open.
+            onRatingMirrored(clip, read)
+        }
     }
     fun selectRating(target: Int) {
         val previous = ratingStars
@@ -337,6 +345,7 @@ private fun PlaybackClipSession(
                     SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
                 }
             ratingStars = if (confirmed >= 0) confirmed else previous
+            if (confirmed >= 0) onRatingMirrored(clip, confirmed)
         }
     }
     val deliveryLut = sharedAssistState.selectedLut

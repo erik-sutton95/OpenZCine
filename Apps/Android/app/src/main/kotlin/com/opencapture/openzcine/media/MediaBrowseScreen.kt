@@ -835,16 +835,36 @@ internal fun MediaBrowseScreen(
             is FeedLutSelection.Stored -> lutLibrary.displayName(selectedLut.value)
         }
 
+    // Re-merge favorites across offline buckets so the star stays accurate after a change.
+    fun mergedFavorites(updated: Set<String>): Set<String> =
+        if (offlineCameraIDs.isEmpty()) {
+            updated
+        } else {
+            offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+        }
+
     fun toggleFavorite(clip: MediaClipRecord) {
         val owner = ownerCameraID(clip)
         val updated = libraryIndex.toggleFavorite(owner, clip)
-        // Re-merge favorites across offline buckets so the star stays accurate.
-        favorites =
-            if (offlineCameraIDs.isEmpty()) {
-                updated
-            } else {
-                offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+        favorites = mergedFavorites(updated)
+        // Heart and camera star are one signal (Favorites reads the set that star writes fill):
+        // agree the body's rating with the heart when connected. Best-effort — an offline clip
+        // keeps only the local flag. [verify-on-HW]
+        val nowFavorite = clip.libraryKey(owner) in updated
+        if (effectiveCameraConnected && SwiftCore.isAvailable && clip.handle != 0L) {
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), if (nowFavorite) 1 else 0)
+                }
             }
+        }
+    }
+
+    // Mirrors a camera star write (viewer/player, seed-read or set) into the local favorite set
+    // so the Favorites tab surfaces rated shots. iOS `mirrorRatingIntoIndex`.
+    fun mirrorRating(clip: MediaClipRecord, stars: Int) {
+        val owner = ownerCameraID(clip)
+        favorites = mergedFavorites(libraryIndex.setFavorite(owner, clip, stars >= 1))
     }
 
     fun open(clip: MediaClipRecord) {
@@ -1544,6 +1564,7 @@ internal fun MediaBrowseScreen(
                 frameioController = frameioController,
                 mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                 onToggleFavorite = ::toggleFavorite,
+                onRatingMirrored = ::mirrorRating,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
                         ownerCameraID(resolvedClip),
@@ -1567,6 +1588,7 @@ internal fun MediaBrowseScreen(
                 deleteAvailable =
                     librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
                 onDelete = { requestDeletion(listOf(clip)) },
+                onRatingMirrored = ::mirrorRating,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
                         ownerCameraID(resolvedClip),
