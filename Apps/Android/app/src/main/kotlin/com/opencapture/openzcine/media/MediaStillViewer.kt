@@ -26,6 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -73,6 +74,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.Locale
 import kotlin.math.max
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -153,6 +155,13 @@ internal fun MediaStillViewer(
     var previewState by remember(displayClip.handle) {
         mutableStateOf<StillPreviewUiState>(StillPreviewStates.initial())
     }
+    // The displayed side's completed cache artifact. The share button arms
+    // once the full file has landed — iOS keeps its button live and waits;
+    // the transfer banner already narrates progress here, so arming late is
+    // the same information with less machinery.
+    var shareableEntry by remember(displayClip.handle) { mutableStateOf<MediaCacheEntry?>(null) }
+    var shareInProgress by remember(displayClip.handle) { mutableStateOf(false) }
+    var shareMessage by remember(displayClip.handle) { mutableStateOf<String?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var deleteConfirmPresented by remember(clip.handle) { mutableStateOf(false) }
     // Camera-read star rating; null until loaded (or unreachable — row hidden).
@@ -201,6 +210,9 @@ internal fun MediaStillViewer(
                     },
                     clearFullPreview = {
                         if (loadGate.accepts(requestGeneration)) fullPreview = null
+                    },
+                    onCompleteEntry = { entry ->
+                        if (loadGate.accepts(requestGeneration)) shareableEntry = entry
                     },
                 )
             is MediaTransferPreparation.Failed ->
@@ -278,6 +290,36 @@ internal fun MediaStillViewer(
                 }
             },
             onDelete = { deleteConfirmPresented = true },
+            // Shares the currently-viewed side of the still (JPEG/HEIF/NEF
+            // alike) once its camera download completes (iOS `shareButton`).
+            shareEnabled = shareableEntry != null && !closeRequested,
+            shareInProgress = shareInProgress,
+            onShare = {
+                val entry = shareableEntry
+                if (entry != null && !shareInProgress) {
+                    shareInProgress = true
+                    shareMessage = null
+                    val target = displayClip
+                    viewerScope.launch {
+                        try {
+                            val staged =
+                                withContext(Dispatchers.IO) {
+                                    MediaShareStager(context.cacheDir.toPath())
+                                        .stage(entry, target)
+                                }
+                            context.startActivity(
+                                AndroidMediaShareIntent.chooserIntent(context, staged),
+                            )
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            shareMessage = error.message ?: "Couldn't share this photo."
+                        } finally {
+                            shareInProgress = false
+                        }
+                    }
+                }
+            },
             onClose = { closeRequested = true },
         )
         // Clip star rating written to the card — hidden until the camera read
@@ -322,7 +364,7 @@ internal fun MediaStillViewer(
                 }
             }
         }
-        StillPreviewStatus(previewState)
+        StillPreviewStatus(previewState, shareMessage)
     }
     if (deleteConfirmPresented) {
         MediaDeleteConfirmDialog(
@@ -351,6 +393,7 @@ private suspend fun observeStillPreview(
     showState: (StillPreviewUiState) -> Unit,
     showFullPreview: (Bitmap) -> Unit,
     clearFullPreview: () -> Unit,
+    onCompleteEntry: (MediaCacheEntry) -> Unit,
 ) {
     var lastDecodeBytes = -1L
     while (currentCoroutineContext().isActive && loadGate.accepts(requestGeneration)) {
@@ -373,6 +416,9 @@ private suspend fun observeStillPreview(
                 delay(200)
             }
             MediaCacheState.COMPLETE -> {
+                // The full file has landed whether or not it decodes — a
+                // complete NEF is shareable behind its thumbnail preview.
+                onCompleteEntry(entry)
                 val decoded = withContext(Dispatchers.IO) { decodeCacheBitmap(entry) }
                 if (!loadGate.accepts(requestGeneration)) return
                 if (decoded != null) {
@@ -578,6 +624,9 @@ private fun StillViewerChrome(
     showingRaw: Boolean?,
     onSelectSide: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    shareEnabled: Boolean,
+    shareInProgress: Boolean,
+    onShare: () -> Unit,
     onClose: () -> Unit,
 ) {
     Row(
@@ -609,6 +658,41 @@ private fun StillViewerChrome(
         }
         if (deleteAvailable) {
             StillViewerDeleteButton(onClick = onDelete)
+        }
+        StillViewerShareButton(
+            enabled = shareEnabled,
+            inProgress = shareInProgress,
+            onClick = onShare,
+        )
+    }
+}
+
+/** Share circle (iOS viewer `shareButton`): system share sheet for the viewed side. */
+@Composable
+private fun StillViewerShareButton(enabled: Boolean, inProgress: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(40.dp)
+            .glass(CircleShape)
+            .semantics {
+                contentDescription = "Share photo"
+                role = Role.Button
+            }
+            .chromeClickable(enabled && !inProgress) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (inProgress) {
+            CircularProgressIndicator(
+                color = LiveDesign.accent,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(18.dp),
+            )
+        } else {
+            Icon(
+                Icons.Filled.Share,
+                contentDescription = null,
+                tint = if (enabled) LiveDesign.text else LiveDesign.faint,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
@@ -694,18 +778,19 @@ private fun StillViewerCloseButton(enabled: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun StillPreviewStatus(state: StillPreviewUiState) {
+private fun StillPreviewStatus(state: StillPreviewUiState, shareMessage: String? = null) {
     val message =
-        when (state) {
-            StillPreviewUiState.Preparing -> "Preparing camera thumbnail…"
-            is StillPreviewUiState.Downloading ->
-                "${state.message} ${(state.progress * 100).toInt()}%"
-            is StillPreviewUiState.ThumbnailFallback -> state.message
-            is StillPreviewUiState.Failed -> state.message
-            StillPreviewUiState.FullPreview,
-            StillPreviewUiState.Closed,
-            -> return
-        }
+        shareMessage
+            ?: when (state) {
+                StillPreviewUiState.Preparing -> "Preparing camera thumbnail…"
+                is StillPreviewUiState.Downloading ->
+                    "${state.message} ${(state.progress * 100).toInt()}%"
+                is StillPreviewUiState.ThumbnailFallback -> state.message
+                is StillPreviewUiState.Failed -> state.message
+                StillPreviewUiState.FullPreview,
+                StillPreviewUiState.Closed,
+                -> return
+            }
 
     Box(
         Modifier.fillMaxSize()
