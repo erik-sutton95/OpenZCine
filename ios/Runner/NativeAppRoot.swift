@@ -407,7 +407,9 @@ final class NativeAppModel {
             case .phoneHotspot:
                 "Turn on Personal Hotspot — the camera joins your iPhone's network."
             case .usbC:
-                "Plug the camera into this iPhone with a USB-C cable."
+                DeviceUSBConnector.current == .lightning
+                    ? "Connect through Apple's Lightning to USB camera adapter — a USB-C to Lightning cable can't host the camera."
+                    : "Plug the camera into this iPhone with a USB-C cable."
             }
         }
 
@@ -956,6 +958,12 @@ final class NativeAppModel {
             connectedHost: connectedIdentity?.host,
             isIPhoneHotspotBridgeActive: isIPhoneHotspotBridgeActive
         )
+    }
+
+    /// Whether iOS has denied USB camera-control access — drives the USB empty state's
+    /// permission-recovery copy.
+    var isUSBControlAuthorizationDenied: Bool {
+        USBCameraDeviceBrowser.shared.isControlAuthorizationDenied
     }
 
     var pairingDiscoveryCandidates: [DiscoveredCamera] {

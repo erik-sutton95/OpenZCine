@@ -27,6 +27,12 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case connectionPathCameraAp = "connection.path.camera-ap"
     case connectionPathPhoneHotspot = "connection.path.phone-hotspot"
     case connectionPathUsb = "connection.path.usb"
+    // USB browser truth, so a "USB finds nothing" report shows whether the system ever
+    // surfaced a camera and whether control authorization was granted.
+    case usbAuthorizationGranted = "usb.authorization.granted"
+    case usbAuthorizationDenied = "usb.authorization.denied"
+    case usbCameraAttached = "usb.camera.attached"
+    case usbCameraDetached = "usb.camera.detached"
     case monitorPresented = "monitor.presented"
     case monitorDismissed = "monitor.dismissed"
     case liveViewStarted = "live-view.started"

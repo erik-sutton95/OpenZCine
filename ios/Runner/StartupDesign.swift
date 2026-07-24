@@ -2081,7 +2081,8 @@ struct StartupDiscoveryView: View {
             if pairingCandidates.isEmpty {
                 StartupEmptyDiscoveryCard(
                     compact: true,
-                    transport: model.discoveryTransportFilter
+                    transport: model.discoveryTransportFilter,
+                    usbAuthorizationDenied: model.isUSBControlAuthorizationDenied
                 )
                 // Indeterminate "something's happening" line in place of the status text.
                 StartupIndeterminateBar()
@@ -2210,22 +2211,45 @@ struct StartupDiscoveredCameraCard: View {
 struct StartupEmptyDiscoveryCard: View {
     var compact = false
     var transport: NativeAppModel.DiscoveryTransportFilter = .wiFi
+    /// iOS denied USB camera control — the card leads with the Settings recovery instead of
+    /// cable guidance (nothing can ever appear until it's re-allowed).
+    var usbAuthorizationDenied = false
 
     private var isUSB: Bool { transport == .usbC }
+    private var isLightning: Bool { DeviceUSBConnector.current == .lightning }
+
+    private var usbTitle: String {
+        if usbAuthorizationDenied { return "USB camera access is off" }
+        return isLightning ? "Lightning needs the camera adapter" : "Waiting for camera on USB-C"
+    }
+
+    private var usbHint: String {
+        if usbAuthorizationDenied {
+            return
+                "Allow camera connections for OpenZCine in Settings ▸ Privacy & Security, then plug the camera back in."
+        }
+        if isLightning {
+            // A USB-C-to-Lightning cable wires this phone as the device end — the camera can
+            // only enumerate through Apple's host-mode adapter.
+            return
+                "Connect the camera through Apple's Lightning to USB camera adapter — a plain USB-C to Lightning cable can't host it."
+        }
+        return compact
+            ? "Plug the camera into this device with a USB-C cable."
+            : "Plug the camera into this device with a USB-C cable — it appears here the moment it's detected."
+    }
 
     var body: some View {
         VStack(spacing: compact ? 6 : 10) {
             Image(systemName: isUSB ? "cable.connector" : "dot.radiowaves.left.and.right")
                 .font(.system(size: compact ? 18 : 24, weight: .semibold))
                 .foregroundStyle(StartupColors.accent)
-            Text(isUSB ? "Waiting for camera on USB-C" : "Looking for cameras")
+            Text(isUSB ? usbTitle : "Looking for cameras")
                 .font(.system(size: compact ? 13 : 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(StartupColors.ink)
             Text(
                 isUSB
-                    ? (compact
-                        ? "Plug the camera into this device with a USB-C cable."
-                        : "Plug the camera into this device with a USB-C cable — it appears here the moment it's detected.")
+                    ? usbHint
                     // The Wi‑Fi arm renders only on the wizard's Phone Hotspot discovery step
                     // (camera-AP pairing ends at connectNetwork) — so the hint must describe the
                     // hotspot direction: the CAMERA joins this phone, the phone joins nothing.
