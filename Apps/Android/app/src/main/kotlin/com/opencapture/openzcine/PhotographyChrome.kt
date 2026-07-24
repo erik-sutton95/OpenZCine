@@ -7,6 +7,8 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -239,11 +241,13 @@ internal fun PhotographyShutterButton(
     onPressed: () -> Unit = {},
     onReleased: () -> Unit = {},
 ) {
+    // iOS PhotographyShutterButton: a 4pt white ring at the record-button
+    // footprint with a SOLID white disc inset 17pt total (0.5 alpha while
+    // capturing). Everything scales off the caller's slot (the record zone is
+    // the shared 82.8dp module) — a fixed inner size against a bigger slot
+    // rendered as a hollow ring.
     Box(
         modifier
-            .size(54.dp)
-            .clip(CircleShape)
-            .border(3.dp, Color.White.copy(alpha = 0.92f), CircleShape)
             .pointerInput(enabled) {
                 awaitEachGesture {
                     awaitFirstDown()
@@ -267,7 +271,13 @@ internal fun PhotographyShutterButton(
     ) {
         Box(
             Modifier
-                .size(42.dp)
+                .fillMaxSize()
+                .border(4.dp, Color.White.copy(alpha = 0.92f), CircleShape),
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(8.5.dp)
                 .clip(CircleShape)
                 .background(if (isCapturing) Color.White.copy(alpha = 0.5f) else Color.White),
             contentAlignment = Alignment.Center,
@@ -275,8 +285,8 @@ internal fun PhotographyShutterButton(
             timerRemaining?.let { remaining ->
                 Text(
                     "$remaining",
-                    style = chromeStyle(20f, FontWeight.Bold, mono = true),
-                    color = Color.Black.copy(alpha = 0.82f),
+                    style = chromeStyle(30f, FontWeight.Bold),
+                    color = Color.Black,
                     maxLines = 1,
                 )
             }
