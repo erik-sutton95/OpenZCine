@@ -585,6 +585,18 @@ public sealed interface CameraSessionEvent {
     ) : CameraSessionEvent
 
     /**
+     * Standard capture-complete (`0x400D`): a still capture run finished
+     * writing (one per run/destination). Fires for body-fired and remote
+     * releases alike — the shell syncs instant playback and the shots
+     * readout from it when no app release is in flight.
+     */
+    public data class StillCaptureCompleted(
+        override val rawEventCode: Int,
+        override val transactionId: Long,
+        override val rawParameters: List<Long>,
+    ) : CameraSessionEvent
+
+    /**
      * Standard DevicePropChanged (`0x4006`). [propertyCode] is its first raw
      * UINT32 parameter when present; no property value is invented by this
      * notification alone.

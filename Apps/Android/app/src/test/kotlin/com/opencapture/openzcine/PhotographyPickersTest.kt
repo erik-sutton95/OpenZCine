@@ -266,6 +266,47 @@ class PhotographyPickersTest {
     }
 
     @Test
+    fun `body capture sync mirrors the iOS event-drain guards`() {
+        // Photo + PLAY armed + no app release: full sync.
+        assertEquals(
+            BodyCaptureSync.REVIEW_AND_SHOTS,
+            bodyCaptureSyncAction(
+                isPhotography = true,
+                instantReviewEnabled = true,
+                appReleaseInFlight = false,
+            ),
+        )
+        // PLAY off still refreshes the shots readout.
+        assertEquals(
+            BodyCaptureSync.SHOTS_ONLY,
+            bodyCaptureSyncAction(
+                isPhotography = true,
+                instantReviewEnabled = false,
+                appReleaseInFlight = false,
+            ),
+        )
+        // An app-initiated release in flight suppresses the event path — that
+        // run schedules its own review on completion.
+        assertEquals(
+            BodyCaptureSync.IGNORE,
+            bodyCaptureSyncAction(
+                isPhotography = true,
+                instantReviewEnabled = true,
+                appReleaseInFlight = true,
+            ),
+        )
+        // Movie mode never reacts.
+        assertEquals(
+            BodyCaptureSync.IGNORE,
+            bodyCaptureSyncAction(
+                isPhotography = false,
+                instantReviewEnabled = true,
+                appReleaseInFlight = false,
+            ),
+        )
+    }
+
+    @Test
     fun `photo timer labels round trip`() {
         assertEquals("Off", photoTimerLabel(0))
         assertEquals("5s", photoTimerLabel(5))

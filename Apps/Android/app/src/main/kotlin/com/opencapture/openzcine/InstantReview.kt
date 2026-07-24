@@ -30,6 +30,35 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
+/** How the shell reacts to a body-fired capture-complete event. */
+internal enum class BodyCaptureSync {
+    /** Movie mode, or an app release is in flight (that path syncs itself). */
+    IGNORE,
+
+    /** Photo mode without the PLAY tool: refresh the shots readout only. */
+    SHOTS_ONLY,
+
+    /** Photo mode with PLAY armed: instant playback plus the shots refresh. */
+    REVIEW_AND_SHOTS,
+}
+
+/**
+ * iOS event-drain guards for a body-fired shutter: react only in photo mode
+ * and never while an app-initiated release is in flight — the app path
+ * schedules its own review on completion. One review per body run
+ * (capture-complete, never per object-added).
+ */
+internal fun bodyCaptureSyncAction(
+    isPhotography: Boolean,
+    instantReviewEnabled: Boolean,
+    appReleaseInFlight: Boolean,
+): BodyCaptureSync =
+    when {
+        !isPhotography || appReleaseInFlight -> BodyCaptureSync.IGNORE
+        instantReviewEnabled -> BodyCaptureSync.REVIEW_AND_SHOTS
+        else -> BodyCaptureSync.SHOTS_ONLY
+    }
+
 /** One presented instant review (iOS `InstantReviewState`). */
 internal data class InstantReviewPresentation(
     val image: ImageBitmap,

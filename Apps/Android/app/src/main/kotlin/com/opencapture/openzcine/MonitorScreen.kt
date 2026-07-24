@@ -90,6 +90,7 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
@@ -999,6 +1000,39 @@ internal fun MonitorScreen(
     // Completion is per-run, never per-frame — a held burst schedules exactly
     // one review, of its last frame. Reassigned per composition so the hook
     // reads current mode/quality state.
+    // A press that cannot proceed must explain itself — never a silent
+    // dead shutter (body refusal, busy channel, unsupported session).
+    stillCapture.onFailure = { message ->
+        Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+    }
+    // Body-fired shutter (iOS 5e366e7): the capture-complete event syncs the
+    // app exactly as if it fired the release — instant playback against the
+    // fresh card diff plus a shots-remaining refresh — gated to photo mode
+    // and suppressed while an app release is in flight (that path schedules
+    // its own review). The diff baseline is maintained outside the shutter
+    // path, so captures the app didn't initiate resolve the same way.
+    LaunchedEffect(session) {
+        session.events.collect { event ->
+            if (event !is CameraSessionEvent.StillCaptureCompleted) return@collect
+            val snapshot = session.cameraProperties.value
+            val action =
+                bodyCaptureSyncAction(
+                    isPhotography = prefersPhotographyChrome(snapshot),
+                    instantReviewEnabled = assist.instantReviewEnabled,
+                    appReleaseInFlight = stillCapture.isCapturing.value,
+                )
+            if (action == BodyCaptureSync.IGNORE) return@collect
+            recordScope.launch { runCatching { session.refreshProperties() } }
+            if (action == BodyCaptureSync.REVIEW_AND_SHOTS) {
+                instantReview.onCaptureRunCompleted(
+                    recordScope,
+                    enabled = true,
+                    compression = snapshot.compression,
+                    infoLine = photographyReviewInfoLine(snapshot),
+                )
+            }
+        }
+    }
     stillCapture.onRunCompleted = {
         instantReview.onCaptureRunCompleted(
             recordScope,

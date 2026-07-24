@@ -1021,6 +1021,12 @@ class SwiftCoreCameraSession internal constructor(
                         parameters,
                         parameters.firstOrNull(),
                     )
+                STILL_CAPTURE_COMPLETE ->
+                    CameraSessionEvent.StillCaptureCompleted(
+                        code,
+                        transactionId and UINT32_MASK,
+                        parameters,
+                    )
                 else ->
                     CameraSessionEvent.Unknown(
                         code,
@@ -1046,6 +1052,9 @@ class SwiftCoreCameraSession internal constructor(
             is CameraSessionEvent.PropertyChanged -> {
                 scheduleEventPropertyRefresh(attempt, event.propertyCode)
             }
+            // The monitor shell owns the body-capture sync (instant playback +
+            // shots refresh) off the shared event flow.
+            is CameraSessionEvent.StillCaptureCompleted -> Unit
             is CameraSessionEvent.Unknown -> Unit
         }
     }
@@ -1379,6 +1388,7 @@ class SwiftCoreCameraSession internal constructor(
         const val EVENT_CODE_MASK: Int = 0xFFFF
         const val UINT32_MASK: Long = 0xFFFF_FFFFL
         const val DEVICE_PROPERTY_CHANGED: Int = 0x4006
+        const val STILL_CAPTURE_COMPLETE: Int = 0x400D
         const val MOVIE_RECORD_INTERRUPTED: Int = 0xC105
         const val MOVIE_RECORD_COMPLETE: Int = 0xC108
         const val MOVIE_RECORD_STARTED: Int = 0xC10A
