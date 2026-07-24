@@ -86,6 +86,14 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
 
 // MARK: - Browser filters & formatting
 
+/// Progress of an in-flight batch deletion — drives the delete progress bar and defers the grid
+/// refresh until it finishes.
+struct MediaDeletionProgress: Equatable, Sendable {
+    var completed: Int
+    var total: Int
+    var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
+}
+
 /// Clips shown from the connected camera bucket vs the on-device `local` bucket.
 enum MediaBrowserSource: String, CaseIterable, Sendable {
     case camera = "CAMERA"

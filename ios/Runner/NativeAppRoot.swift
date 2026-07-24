@@ -855,6 +855,9 @@ final class NativeAppModel {
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
     var mediaDownloadProgress: [String: Double] = [:]
     @ObservationIgnored private var mediaDownloadInFlight: Set<String> = []
+    /// Deletion progress while a batch delete runs — non-nil hides the per-item grid churn behind
+    /// one progress bar, and the grid refreshes once when it clears.
+    var mediaDeletionProgress: MediaDeletionProgress?
     /// Clips whose fetched thumbnail bytes failed to decode this session — skipped by
     /// `fetchThumbnail` so a body that serves garbage for a clip isn't re-queried every scroll.
     @ObservationIgnored private var thumblessClipIDs: Set<String> = []
@@ -6404,6 +6407,12 @@ final class NativeAppModel {
         mediaFetchTask?.cancel()
         mediaFetchTask = nil
         let targets = deletionPlan(for: clips).targets
+        // Drive a progress bar and hold the grid steady during the run: mutating the in-memory
+        // list per item made the grid jump/reflow on every delete. The store is purged as we go
+        // (so a mid-run failure still frees the card), but the visible `mediaClips` list is left
+        // untouched until the single `refreshMediaClips()` below rebuilds it from the store.
+        mediaDeletionProgress = MediaDeletionProgress(completed: 0, total: targets.count)
+        defer { mediaDeletionProgress = nil }
         var deleted = 0
         for clip in targets {
             let doomed = clip.allLocations
@@ -6416,6 +6425,7 @@ final class NativeAppModel {
                 where (try? await session.deleteObject(handle: location.handle)) == nil {
                     survivors.append(location)
                 }
+                mediaDeletionProgress?.completed += 1
                 if !survivors.isEmpty {
                     // The body refused a copy (protected object) — the row lives on with
                     // what remains instead of the app pretending the shot is gone.
@@ -6427,13 +6437,17 @@ final class NativeAppModel {
                     }
                     continue
                 }
+            } else {
+                mediaDeletionProgress?.completed += 1
             }
             // Purge every trace the list scan could resurrect an item from: cached
-            // bytes, thumbnail, and the index row.
+            // bytes, thumbnail, and the index row. The grid isn't touched yet — one
+            // refresh lands after the whole batch (below).
             mediaClipStore.purgeClip(cameraID: clip.cameraID, filename: clip.filename)
-            mediaClips.removeAll { $0.id == clip.id }
             deleted += 1
         }
+        // One grid update for the whole batch — rebuilds the visible list from the now-purged
+        // store instead of reflowing per item.
         refreshMediaClips()
         // The card's object set changed under the instant-review baseline — reseed it,
         // and re-enumerate so the fresh listing confirms the deletions.

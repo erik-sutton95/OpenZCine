@@ -284,6 +284,12 @@ struct MediaBrowserView: View {
                 filterPopupOverlay
             }
 
+            if let progress = model.mediaDeletionProgress {
+                MediaDeletionProgressOverlay(progress: progress)
+                    .transition(.opacity)
+                    .zIndex(6)
+            }
+
             if let deliveryRequest {
                 deliveryPopupOverlay(clips: deliveryRequest.clips)
             }
@@ -1735,6 +1741,32 @@ private struct MediaCellFramesKey: PreferenceKey {
 /// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
 /// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
 /// action. A series that loses frames until one remains degrades back to a normal grid cell.
+/// A centred, non-interactive progress card shown while a batch delete runs — the grid holds
+/// steady behind it and refreshes once when the deletion finishes.
+private struct MediaDeletionProgressOverlay: View {
+    let progress: MediaDeletionProgress
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 12) {
+                Text("Deleting \(progress.completed) of \(progress.total)…")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                ProgressView(value: progress.fraction)
+                    .progressViewStyle(.linear)
+                    .tint(LiveDesign.accent)
+                    .frame(width: 220)
+                    .animation(.easeInOut(duration: 0.2), value: progress.fraction)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .allowsHitTesting(true)  // swallow taps so the grid can't be interacted with mid-delete
+    }
+}
+
 private struct MediaBurstSeriesView: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
