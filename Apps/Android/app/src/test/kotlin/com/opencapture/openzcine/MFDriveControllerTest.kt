@@ -116,97 +116,50 @@ class MFDriveControllerTest {
     }
 
     @Test
-    fun `a non-drivable lens surfaces once and clears pending`() = runTest {
+    fun `a definitive refusal latches the lens undrivable and surfaces the code`() = runTest {
         val session = FakeSession()
-        val controller = MFDriveController(session)
+        val controller = MFDriveController(session, busyRetryDelayMillis = 1)
         val messages = mutableListOf<String>()
         controller.onNonDrivableLens = { messages += it }
         session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x201F))
-        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x201F))
 
         controller.drive(this, 200)
         advanceUntilIdle()
-        controller.drive(this, 200)
-        advanceUntilIdle()
 
-        // Both refusals ended their runs; only the FIRST surfaced.
-        assertEquals(2, session.drives.size)
+        assertTrue(controller.lensUndrivable.value)
         assertEquals(1, messages.size)
         assertTrue(messages.single().contains("0x201F"))
-    }
 
-    @Test
-    fun `probe proves a by-wire lens and restores the complete nudge`() = runTest {
-        val session = FakeSession()
-        val controller = MFDriveController(session)
-        // A drivable lens that actually moved: complete → 1 pulse back.
-        session.outcomes.add(MFDriveOutcome.Complete)
-        session.outcomes.add(MFDriveOutcome.Complete)
-
-        controller.probeIfNeeded(this, "NIKKOR Z 50mm")
-        advanceUntilIdle()
-
-        assertEquals(listOf(true to 1, false to 1), session.drives)
-        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
-
-        // Same lens: the cached proof never re-probes.
-        controller.probeIfNeeded(this, "NIKKOR Z 50mm")
-        advanceUntilIdle()
-        assertEquals(2, session.drives.size)
-    }
-
-    @Test
-    fun `probe accepts amount-too-small without a restore drive`() = runTest {
-        val session = FakeSession()
-        val controller = MFDriveController(session)
-        session.outcomes.add(MFDriveOutcome.StepTooSmall)
-
-        controller.probeIfNeeded(this, "lens-a")
-        advanceUntilIdle()
-
-        assertEquals(listOf(true to 1), session.drives)
-        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
-    }
-
-    @Test
-    fun `probe hides the strip for a mechanical ring and re-probes on lens change`() = runTest {
-        val session = FakeSession()
-        val controller = MFDriveController(session)
-        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x201F))
-
-        controller.probeIfNeeded(this, "mechanical")
-        advanceUntilIdle()
-        assertEquals(MFDriveLensState.UNDRIVABLE, controller.lensState.value)
-
-        // The verdict is cached for this lens…
-        controller.probeIfNeeded(this, "mechanical")
+        // Latched: further gestures never reach the wire (the strip is hidden,
+        // and even a stray call is inert).
+        controller.drive(this, 200)
         advanceUntilIdle()
         assertEquals(1, session.drives.size)
-
-        // …and a lens swap re-probes from scratch.
-        session.outcomes.add(MFDriveOutcome.StepTooSmall)
-        controller.probeIfNeeded(this, "by-wire")
-        advanceUntilIdle()
-        assertEquals(2, session.drives.size)
-        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
     }
 
     @Test
-    fun `busy probe leaves the gate unknown and the next tick retries`() = runTest {
+    fun `a lens identity change re-arms the undrivable latch`() = runTest {
         val session = FakeSession()
-        val controller = MFDriveController(session)
-        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+        val controller = MFDriveController(session, busyRetryDelayMillis = 1)
+        // Connect-time initial identity — not a change — must arm cleanly.
+        controller.noteLensChanged("mechanical 50mm")
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x201F))
 
-        controller.probeIfNeeded(this, "lens-a")
+        controller.drive(this, 100)
         advanceUntilIdle()
-        assertEquals(MFDriveLensState.UNKNOWN, controller.lensState.value)
+        assertTrue(controller.lensUndrivable.value)
 
-        // The next poll tick re-probes the same lens and proves it.
-        session.outcomes.add(MFDriveOutcome.StepTooSmall)
-        controller.probeIfNeeded(this, "lens-a")
+        // The same identity keeps the latch…
+        controller.noteLensChanged("mechanical 50mm")
+        assertTrue(controller.lensUndrivable.value)
+
+        // …and different glass re-arms it: the strip returns and drives flow.
+        controller.noteLensChanged("by-wire 35mm")
+        assertTrue(!controller.lensUndrivable.value)
+        session.outcomes.add(MFDriveOutcome.Complete)
+        controller.drive(this, 60)
         advanceUntilIdle()
         assertEquals(2, session.drives.size)
-        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
     }
 
     @Test

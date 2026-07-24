@@ -44,6 +44,12 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     RATING_WRITE_CONFIRMED("rating.write.confirmed"),
     RATING_WRITE_REFUSED("error.rating.write.refused"),
     RATING_WRITE_REFUSED_ACCESS_DENIED("error.rating.write.refused.access-denied"),
+
+    // Manual-focus drives (focus-by-wire scrub). Success stays off the log (a
+    // scrub is dozens of drives); only the two actionable failures leave a
+    // trace — the wire code rides the user-facing toast.
+    MF_DRIVE_BUSY_EXHAUSTED("error.mf.drive.busy-exhausted"),
+    MF_DRIVE_REFUSED("error.mf.drive.refused"),
     ;
 
     companion object {

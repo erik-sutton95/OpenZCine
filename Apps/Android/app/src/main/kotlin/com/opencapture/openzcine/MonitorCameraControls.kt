@@ -2042,6 +2042,8 @@ internal fun MFDriveStrip(
     enabled: Boolean,
     onDrive: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** Debug-build caption: cumulative acknowledged·busy drive counters. */
+    driveStats: Pair<Int, Int> = 0 to 0,
 ) {
     // Drag feedback (iOS MFDriveVerticalScrub isDragging): the strip must
     // visibly react to touch even before the lens moves — a scrub against a
@@ -2059,8 +2061,13 @@ internal fun MFDriveStrip(
                 ) { change, dragAmount ->
                     change.consume()
                     // Screen-up is negative y; up drives toward infinity (+).
+                    // Ring-like speed response: a slow drag steps finely, a
+                    // flick multiplies travel (up to ×6) — iOS speedFactor.
+                    val deltaDp = -dragAmount.y.toDp().value
+                    val speedFactor =
+                        (1f + kotlin.math.abs(deltaDp) / 3f).coerceAtMost(6f)
                     val pulses =
-                        (-dragAmount.y.toDp().value * MF_DRIVE_PULSES_PER_DP).toInt()
+                        (deltaDp * MF_DRIVE_PULSES_PER_DP * speedFactor).toInt()
                     if (pulses != 0) onDrive(pulses)
                 }
             }
@@ -2112,6 +2119,18 @@ internal fun MFDriveStrip(
                 maxLines = 1,
                 softWrap = false,
             )
+            // Live drive telemetry (acknowledged·busy) — the on-device
+            // discriminator for "strip moves but the glass doesn't" vs
+            // "drives never land". Debug builds only.
+            if (BuildConfig.DEBUG && driveStats.first + driveStats.second > 0) {
+                Text(
+                    "${driveStats.first}·${driveStats.second}",
+                    style = chromeStyle(7f, FontWeight.Normal, mono = true),
+                    color = LiveDesign.faint,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
     }
 }

@@ -11,26 +11,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-/** Drivability of the attached lens for focus-by-wire, proven by a probe. */
-internal enum class MFDriveLensState {
-    /** Not yet probed (or a busy/transport answer left it unproven). */
-    UNKNOWN,
-
-    /** The lens classified a 1-pulse drive — the strip shows. */
-    DRIVABLE,
-
-    /** Mechanical/incompatible ring — the strip stays hidden. */
-    UNDRIVABLE,
-}
-
 /**
  * Focus-by-wire drive queue (iOS `driveManualFocus`): signed pulses
  * (+ toward infinity, − toward near) accumulate while a single in-flight
  * drive drains them, so gesture speed never floods the command channel.
- * Travel ends feed the scrub UI (−1 near / +1 infinity); a busy channel
- * retries silently on the next gesture; a lens the body cannot drive
- * (mechanical ring) surfaces ONCE with the body's answer.
- * [verify-on-HW: per-lens pulse feel]
+ *
+ * There is NO pre-probe: the FIRST real drive is the drivability verdict — a
+ * probe whose 1-pulse drive answered busy used to wedge the strip off-screen
+ * forever, and connecting with MF already engaged never probed at all. A
+ * definitive (non-busy) refusal latches the lens undrivable (hides the strip,
+ * surfaces the mechanical-ring toast with the wire code); busy activations
+ * requeue and retry, bounded. The latch belongs to one lens identity and
+ * re-arms on a swap. [verify-on-HW: per-lens pulse feel and refusal codes]
  */
 internal class MFDriveController(
     private val session: CameraSession,
@@ -42,73 +34,44 @@ internal class MFDriveController(
     /** Travel-end feedback: −1 near limit, +1 infinity limit, null moving. */
     val atEnd: StateFlow<Int?> = _atEnd
 
-    /** Fired once per session for a non-drivable lens, with the body's code. */
+    private val _lensUndrivable = MutableStateFlow(false)
+
+    /** Latched once this lens definitively refused a drive (strip hides). */
+    val lensUndrivable: StateFlow<Boolean> = _lensUndrivable
+
+    private val _driveStats = MutableStateFlow(0 to 0)
+
+    /** Debug caption counters: drives acknowledged vs busy-refused. */
+    val driveStats: StateFlow<Pair<Int, Int>> = _driveStats
+
+    /** Fired on the definitive refusal that latched the lens, with the code. */
     var onNonDrivableLens: ((String) -> Unit)? = null
 
     /** Fired once per exhausted busy-retry run (the body kept refusing). */
     var onBusyExhausted: ((String) -> Unit)? = null
 
-    private val _lensState = MutableStateFlow(MFDriveLensState.UNKNOWN)
-
-    /** Whether the attached lens is PROVEN focus-by-wire (gates the strip). */
-    val lensState: StateFlow<MFDriveLensState> = _lensState
-
     private var pendingPulses = 0
     private var driveJob: Job? = null
-    private var probeJob: Job? = null
-    private var probedLens: String? = null
-    private var refusalSurfaced = false
+    private var knownLens: String? = null
     private var busyRetries = 0
 
     /**
-     * Proves drivability once per lens identity when MF engages: a single
-     * 1-pulse drive — a drivable lens answers complete (then 1 pulse back
-     * restores the nudge) or amount-too-small, with no perceptible motion; a
-     * mechanical/incompatible lens answers the invalid-status class and the
-     * strip hides. Busy answers leave the gate unknown and the next poll tick
-     * re-probes. [verify-on-HW: probe answers per lens]
+     * Re-arms drivability when the mounted lens changes: an undrivable latch
+     * belongs to one lens identity — swap the glass and the strip returns
+     * until the new lens proves otherwise. Callers invoke this with the
+     * CURRENT identity on first composition too, so connecting with MF
+     * already engaged is covered, not only changes.
      */
-    fun probeIfNeeded(scope: CoroutineScope, lensIdentity: String?) {
-        if (lensIdentity != probedLens) {
-            // A lens swap invalidates the cached proof (and the end flash).
-            probedLens = lensIdentity
-            _lensState.value = MFDriveLensState.UNKNOWN
-            _atEnd.value = null
-        }
-        if (_lensState.value != MFDriveLensState.UNKNOWN) return
-        if (probeJob?.isActive == true || driveJob?.isActive == true) return
-        probeJob = scope.launch {
-            val outcome =
-                runCatching { session.mfDrive(towardNear = true, pulses = 1) }
-                    .getOrElse { MFDriveOutcome.Refused(DEVICE_BUSY_RESPONSE) }
-            _lensState.value =
-                when (outcome) {
-                    MFDriveOutcome.Complete -> {
-                        // The pulse moved the lens imperceptibly — restore it.
-                        runCatching { session.mfDrive(towardNear = false, pulses = 1) }
-                        MFDriveLensState.DRIVABLE
-                    }
-                    // The lens classified the drive — it is by-wire (an end
-                    // answer means it sits parked at a limit). [verify-on-HW]
-                    MFDriveOutcome.StepTooSmall,
-                    MFDriveOutcome.EndOfTravel,
-                    -> MFDriveLensState.DRIVABLE
-                    is MFDriveOutcome.Refused ->
-                        if (outcome.rawResponseCode == DEVICE_BUSY_RESPONSE ||
-                            outcome.rawResponseCode == 0
-                        ) {
-                            // Busy/transport: unknown — the next tick retries.
-                            MFDriveLensState.UNKNOWN
-                        } else {
-                            MFDriveLensState.UNDRIVABLE
-                        }
-                }
-        }
+    fun noteLensChanged(lensIdentity: String?) {
+        if (knownLens == lensIdentity) return
+        knownLens = lensIdentity
+        _lensUndrivable.value = false
+        _atEnd.value = null
     }
 
     /** Queues a relative drive; coalesces while one is in flight. */
     fun drive(scope: CoroutineScope, pulses: Int) {
-        if (pulses == 0) return
+        if (pulses == 0 || _lensUndrivable.value) return
         pendingPulses += pulses
         _atEnd.value = null
         if (driveJob?.isActive == true) return
@@ -125,26 +88,28 @@ internal class MFDriveController(
                         towardNear = pending < 0,
                         pulses = min(abs(pending), MAX_PULSES),
                     )
-                }.getOrElse { MFDriveOutcome.Refused(rawResponseCode = 0) }
+                }.getOrElse { MFDriveOutcome.Refused(DEVICE_BUSY_RESPONSE) }
             when (outcome) {
                 MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> {
                     busyRetries = 0
+                    _driveStats.value = _driveStats.value.let { (ok, busy) -> ok + 1 to busy }
                     continue
                 }
                 MFDriveOutcome.EndOfTravel -> {
                     // The reached limit lights its side; queued pulses toward
                     // it are moot.
                     busyRetries = 0
+                    _driveStats.value = _driveStats.value.let { (ok, busy) -> ok + 1 to busy }
                     _atEnd.value = if (pending < 0) -1 else 1
                     pendingPulses = 0
                 }
                 is MFDriveOutcome.Refused -> {
                     if (outcome.rawResponseCode == DEVICE_BUSY_RESPONSE) {
                         // The body answers busy at ACTIVATION while its
-                        // acquisition is mid-frame internally — continuous
-                        // scrubbing against a live feed hits this nearly every
-                        // time, so a silent drop made the strip totally inert.
-                        // Requeue the batch and retry shortly, bounded.
+                        // acquisition is mid-frame internally — requeue the
+                        // batch and retry shortly, bounded.
+                        _driveStats.value =
+                            _driveStats.value.let { (ok, busy) -> ok to busy + 1 }
                         if (busyRetries < MAX_BUSY_RETRIES) {
                             busyRetries += 1
                             pendingPulses += pending
@@ -158,15 +123,16 @@ internal class MFDriveController(
                         )
                         continue
                     }
+                    // A definitive refusal IS the drivability verdict: latch
+                    // this lens undrivable instead of pre-probing at mount
+                    // time. [verify-on-HW: which code a mechanical ring answers]
                     busyRetries = 0
                     pendingPulses = 0
-                    if (!refusalSurfaced) {
-                        refusalSurfaced = true
-                        onNonDrivableLens?.invoke(
-                            "The camera can't drive this lens's focus — its ring may be " +
-                                "mechanical (0x%04X).".format(outcome.rawResponseCode),
-                        )
-                    }
+                    _lensUndrivable.value = true
+                    onNonDrivableLens?.invoke(
+                        "The camera can't drive this lens's focus — its ring may be " +
+                            "mechanical (0x%04X).".format(outcome.rawResponseCode),
+                    )
                 }
             }
         }

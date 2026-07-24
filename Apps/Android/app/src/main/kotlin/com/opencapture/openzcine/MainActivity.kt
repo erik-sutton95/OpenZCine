@@ -693,6 +693,7 @@ class MainActivity : ComponentActivity() {
                                     mediaRemoteShutter.disarm()
                                     overlay = MonitorOverlay.MEDIA
                                 },
+                                onDriveDiagnostic = diagnostics::record,
                             )
                             when (overlay) {
                                 MonitorOverlay.NONE -> Unit

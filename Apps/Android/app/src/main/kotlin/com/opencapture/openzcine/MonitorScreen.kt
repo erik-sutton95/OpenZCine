@@ -92,6 +92,7 @@ import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraStorageStatus
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
@@ -317,6 +318,8 @@ internal fun MonitorScreen(
     liveViewGuideController: LiveViewGuideController? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
+    /** Closed diagnostics breadcrumbs for the MF drive failure surfaces. */
+    onDriveDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -341,17 +344,13 @@ internal fun MonitorScreen(
     // MF focus-by-wire drive (on-feed vertical strip beside the system rail).
     val mfDrive = remember(session) { MFDriveController(session) }
     val mfDriveAtEnd by mfDrive.atEnd.collectAsState()
-    val mfLensState by mfDrive.lensState.collectAsState()
-    // Prove drivability when MF engages, re-prove on a lens change, and let a
-    // busy-left-unknown probe retry on each poll tick (the snapshot key).
-    LaunchedEffect(cameraProperties, sessionState) {
-        if (
-            sessionState is CameraSessionState.Connected &&
-            !isDemoSession &&
-            cameraProperties.focusMode == "MF"
-        ) {
-            mfDrive.probeIfNeeded(this, cameraProperties.lens)
-        }
+    val mfLensUndrivable by mfDrive.lensUndrivable.collectAsState()
+    val mfDriveStats by mfDrive.driveStats.collectAsState()
+    // A lens swap re-arms drivability (an undrivable latch belongs to one
+    // lens). LaunchedEffect runs on FIRST composition with the current value,
+    // so connecting with MF already engaged is covered, not only changes.
+    LaunchedEffect(cameraProperties.lens) {
+        mfDrive.noteLensChanged(cameraProperties.lens)
     }
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
@@ -1022,10 +1021,12 @@ internal fun MonitorScreen(
     }
     // A lens the body cannot drive surfaces once with the body's answer.
     mfDrive.onNonDrivableLens = { message ->
+        onDriveDiagnostic(AndroidDiagnosticEvent.MF_DRIVE_REFUSED)
         Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
     }
     // An exhausted busy-retry run explains itself once per run.
     mfDrive.onBusyExhausted = { message ->
+        onDriveDiagnostic(AndroidDiagnosticEvent.MF_DRIVE_BUSY_EXHAUSTED)
         Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
     }
     // Travel end: a firm tick as NEAR / ∞ lights (iOS impact haptic).
@@ -2386,12 +2387,15 @@ internal fun MonitorScreen(
                 }
 
                 // MF focus-by-wire strip: on the live view just left of the
-                // right system rail, only while the focus mode is MF AND the
-                // attached lens is proven by-wire (the probe gate).
+                // right system rail whenever MF is active on a live session —
+                // the FIRST real drive is the drivability verdict, and only a
+                // latched undrivable lens hides it (no pre-probe).
                 if (
                     !isClean && !locked &&
+                    sessionState is CameraSessionState.Connected &&
+                    !isDemoSession &&
                     cameraProperties.focusMode == "MF" &&
-                    mfLensState == MFDriveLensState.DRIVABLE
+                    !mfLensUndrivable
                 ) {
                     val rightRailLeading =
                         minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)
@@ -2403,6 +2407,7 @@ internal fun MonitorScreen(
                             Modifier.zone(
                                 mfDriveStripFrame(physicalViewport, rightRailLeading),
                             ),
+                        driveStats = mfDriveStats,
                     )
                 }
 
