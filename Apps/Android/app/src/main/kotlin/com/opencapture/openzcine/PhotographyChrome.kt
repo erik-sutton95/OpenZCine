@@ -34,6 +34,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraStorageStatus
 import java.util.Locale
@@ -286,6 +287,76 @@ internal fun PhotographyShutterButton(
 /** Whether the shell should show photography chrome for this snapshot. */
 internal fun prefersPhotographyChrome(properties: CameraPropertySnapshot): Boolean =
     properties.captureSelector.equals("photo", ignoreCase = true)
+
+/** The live-view frame aspect for a photo image-area label (iOS `photographyFeedAspect`). */
+internal fun photographyFeedAspect(imageArea: String?): Float =
+    when (imageArea) {
+        "1:1" -> 1f
+        "16:9" -> 16f / 9f
+        // FX / DX / unknown: the 3:2 stills frame.
+        else -> 3f / 2f
+    }
+
+/**
+ * Photography's landscape feed frame (iOS `MonitorFeedLayout.frame(centered:)`
+ * + Erik's reserved-lane hard requirement): the still image area's shape,
+ * centred in the clear box between the lock/battery/rail lane, the right
+ * system rail, and above the bottom capture band — so the vertical assist rail
+ * and the capture strip never overlap the image. A 16:9 photo frame takes the
+ * cinema feed placement exactly like iOS.
+ */
+// ponytail: the aspect-fit runs Kotlin-side because the no-overlap lanes are
+// Android chrome frames the shared core map doesn't model; the core
+// `centered:` math is this fit's no-lane degenerate case.
+internal fun photographyFeedFrame(
+    cinemaFeed: ZoneFrame,
+    viewport: ZoneFrame,
+    imageArea: String?,
+    leadingLaneTrailing: Float,
+    trailingLaneLeading: Float,
+    bottomBandTop: Float,
+): ZoneFrame {
+    val aspect = photographyFeedAspect(imageArea)
+    if (aspect >= 16f / 9f - 0.001f) return cinemaFeed
+    val boxLeft = maxOf(viewport.x, leadingLaneTrailing)
+    val boxRight = minOf(viewport.x + viewport.width, trailingLaneLeading)
+    val boxTop = viewport.y
+    val boxBottom = minOf(viewport.y + viewport.height, bottomBandTop)
+    val boxWidth = maxOf(0f, boxRight - boxLeft)
+    val boxHeight = maxOf(0f, boxBottom - boxTop)
+    var height = boxHeight
+    var width = height * aspect
+    if (width > boxWidth) {
+        width = boxWidth
+        height = width / aspect
+    }
+    return ZoneFrame(
+        x = boxLeft + (boxWidth - width) / 2f,
+        y = boxTop + (boxHeight - height) / 2f,
+        width = width,
+        height = height,
+    )
+}
+
+/**
+ * Hosts the photo capture strip in a band slice symmetric about the feed's
+ * centre, so `Alignment.Center` lands the strip centred under the centred
+ * feed exactly as iOS centres it (never the screen midpoint).
+ */
+internal fun photographyStripHostFrame(
+    band: ZoneFrame,
+    feedCenterX: Float,
+): ZoneFrame {
+    val halfSpan =
+        minOf(feedCenterX - band.x, band.x + band.width - feedCenterX)
+            .coerceAtLeast(0f)
+    return ZoneFrame(
+        x = feedCenterX - halfSpan,
+        y = band.y,
+        width = halfSpan * 2f,
+        height = band.height,
+    )
+}
 
 /** SF `photo` stand-in: rounded frame, sun dot, mountain line. */
 @Composable

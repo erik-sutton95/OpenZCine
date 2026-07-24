@@ -1560,6 +1560,41 @@ internal fun MonitorScreen(
                 recordConfirmationPending = pendingRecordTarget != null,
             )
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
+        // Photography's landscape feed: the still image-area's shape centred in
+        // the clear box between the chrome lanes — the rail and capture band
+        // never overlap the image (iOS centered letterbox + reserved lanes).
+        val landscapePhotoFeed =
+            if (!isPortrait && isPhotographyMode && !isCommand) {
+                val batteryTrailing =
+                    zones.batteryPhone?.let { anchor ->
+                        val stack = batteryRowStackFrame(anchor = anchor, lock = zones.lock)
+                        stack.x + stack.width
+                    }
+                val leftChromeTrailing =
+                    maxOf(zones.lock.x + zones.lock.width, batteryTrailing ?: 0f)
+                val railLaneTrailing =
+                    if (assistToolbarVisible) {
+                        leftChromeTrailing + 12f + ASSIST_RAIL_EXPANDED_WIDTH_DP + 8f
+                    } else {
+                        leftChromeTrailing + 8f
+                    }
+                val rightRailLeading =
+                    minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x) - 8f
+                val bandTop =
+                    listOfNotNull(zones.assistStrip?.y, zones.captureStrip?.y).minOrNull()
+                        ?: (viewportHeight - safeBottom)
+                photographyFeedFrame(
+                    cinemaFeed = zones.feed,
+                    viewport = physicalViewport,
+                    imageArea = cameraProperties.imageArea,
+                    leadingLaneTrailing = railLaneTrailing,
+                    trailingLaneLeading = rightRailLeading,
+                    bottomBandTop = bandTop,
+                )
+            } else {
+                null
+            }
+        val effectiveFeed = landscapePhotoFeed ?: zones.feed
         val analysisChromeMounts =
             remember(
                 isPortrait,
@@ -1773,7 +1808,7 @@ internal fun MonitorScreen(
         Box(Modifier.fillMaxSize().then(sceneLayer)) {
         if (!isCommand) {
             Box(
-                Modifier.zone(zones.feed)
+                Modifier.zone(effectiveFeed)
                     // Feed-only recording for bar/chip glass (over the video).
                     .then(
                         if (glass.tier == GlassTier.FULL && glass.layerBackdrop != null) {
@@ -2180,9 +2215,42 @@ internal fun MonitorScreen(
                         }
                         if (cameraValuesVisible) {
                             zones.captureStrip?.let { strip ->
+                                // Photography owns the whole band (assist lives
+                                // on the rail) and centres the strip under the
+                                // centred FEED, not the screen (iOS photo band
+                                // alignment .center).
+                                val stripHost =
+                                    if (isPhotography) {
+                                        val bandLeft =
+                                            minOf(zones.assistStrip?.x ?: strip.x, strip.x)
+                                        val bandRight =
+                                            maxOf(
+                                                (zones.assistStrip?.let { it.x + it.width })
+                                                    ?: (strip.x + strip.width),
+                                                strip.x + strip.width,
+                                            )
+                                        photographyStripHostFrame(
+                                            band =
+                                                ZoneFrame(
+                                                    bandLeft,
+                                                    strip.y,
+                                                    bandRight - bandLeft,
+                                                    strip.height,
+                                                ),
+                                            feedCenterX =
+                                                effectiveFeed.x + effectiveFeed.width / 2f,
+                                        )
+                                    } else {
+                                        strip
+                                    }
                                 Box(
-                                    Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
-                                    contentAlignment = Alignment.CenterEnd,
+                                    Modifier.zone(stripHost).alpha(if (locked) 0.4f else 1f),
+                                    contentAlignment =
+                                        if (isPhotography) {
+                                            Alignment.Center
+                                        } else {
+                                            Alignment.CenterEnd
+                                        },
                                 ) {
                                     if (isPhotography) {
                                         // The stills strip is the SAME shared
@@ -2209,7 +2277,7 @@ internal fun MonitorScreen(
                                             },
                                             onShutterLongPress = null,
                                             onBarBoundsInRoot = { measuredCaptureBar = it },
-                                            maxContentWidth = strip.width.dp,
+                                            maxContentWidth = stripHost.width.dp,
                                         )
                                     } else {
                                         MonitorCaptureStrip(

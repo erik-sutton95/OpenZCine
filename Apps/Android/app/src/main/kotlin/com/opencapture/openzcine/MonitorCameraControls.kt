@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1265,12 +1266,9 @@ private fun CaptureStripCells(
             // iOS stroke uses accentDim (same as fill), not full accent.
             val cellModifier =
                 Modifier
-                    .background(if (active) LiveDesign.accentDim else Color.Transparent, ChromeShape)
-                    .border(
-                        1.dp,
-                        if (active) LiveDesign.accentDim else Color.Transparent,
-                        ChromeShape,
-                    )
+                    // iOS `.minTapTarget()`: the hit area meets a 44dp floor
+                    // even though the visible cell hugs its readout.
+                    .defaultMinSize(minHeight = 44.dp)
                     .semantics(mergeDescendants = true) {
                         contentDescription = summary
                         if (!enabled) disabled()
@@ -1303,7 +1301,19 @@ private fun CaptureStripCells(
                             else -> 1f
                         },
                     )
-            Box(cellModifier) {
+            Box(cellModifier, contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .background(
+                            if (active) LiveDesign.accentDim else Color.Transparent,
+                            ChromeShape,
+                        )
+                        .border(
+                            1.dp,
+                            if (active) LiveDesign.accentDim else Color.Transparent,
+                            ChromeShape,
+                        ),
+                ) {
                 CaptureSettingCell(
                     label = setting.label,
                     value = setting.value,
@@ -1317,6 +1327,7 @@ private fun CaptureStripCells(
                             null
                         },
                 )
+                }
             }
         }
     }
