@@ -770,14 +770,24 @@ struct FeedAlignedAssists: View {
                 // The EV meter survives clean mode (DISP 2): exposure truth is exactly what
                 // a stripped-down operator view still needs, like the framing guides.
                 if visible.contains(.evMeter),
+                    // Photography-only: a persisted visibility set from an older build may
+                    // still carry the tool, so the render guards the mode as well.
+                    model.isPhotographyMode,
                     let sixths = model.cameraPropertySnapshot.evIndicatorSixths,
                     model.cameraPropertySnapshot.evIndicatorLit != false
                 {
-                    // Camera-fed exposure needle, seated bottom-centre of the feed. With the
-                    // capture bar present it lifts above the band's lane; clean mode (DISP 2)
-                    // has the bottom free, so it drops to the feed's edge.
+                    // Camera-fed exposure needle, seated bottom-centre of the feed. It lifts
+                    // above the capture bar's lane only where a bar actually overlays the feed
+                    // (landscape live, portrait fill); clean mode and portrait fit keep the
+                    // feed bottom free, so it drops to the edge.
+                    let feedBottomFree =
+                        model.monitorIsPortrait
+                        && (model.isPhotographyMode
+                            || model.preferences.portraitFeedAspect != .fill)
                     EVMeterView(sixths: sixths)
-                        .position(x: feed.midX, y: feed.maxY - (clean ? 28 : 92))
+                        .position(
+                            x: feed.midX, y: feed.maxY - (clean || feedBottomFree ? 28 : 92)
+                        )
                         .allowsHitTesting(false)
                 }
                 if !clean {
