@@ -6122,6 +6122,52 @@ final class NativeAppModel {
 
     // MARK: - Manual focus drive (focus-by-wire scrub)
 
+    /// Whether the mounted lens has proven itself drivable. Probed per lens identity.
+    enum MFDriveLensSupport {
+        case unknown, drivable, undrivable
+    }
+
+    private(set) var mfDriveLensSupport: MFDriveLensSupport = .unknown
+    @ObservationIgnored private var mfProbeTask: Task<Void, Never>?
+    @ObservationIgnored private var mfProbedLensIdentity: String?
+
+    /// The live-view MF scrub shows only with MF active on a proven focus-by-wire lens.
+    var showsMFDriveScrub: Bool {
+        cameraPropertySnapshot.focusMode == "MF" && mfDriveLensSupport == .drivable
+            && isConnected && !isDemoSession
+    }
+
+    /// Probes the mounted lens's drivability when MF engages (and again when the lens
+    /// changes): a 1-pulse drive answers amount-too-small or completes on a drivable lens
+    /// (any completed pulse is driven straight back), and refuses on a mechanical ring.
+    /// Busy answers leave the gate unknown for the next trigger. [verify-on-HW]
+    func refreshMFDriveLensSupport() {
+        guard !isDemoSession, let session = cameraSession,
+            cameraPropertySnapshot.focusMode == "MF"
+        else { return }
+        let identity = cameraPropertySnapshot.lens ?? "?"
+        if mfProbedLensIdentity == identity, mfDriveLensSupport != .unknown { return }
+        guard mfProbeTask == nil else { return }
+        mfProbeTask = Task { [weak self] in
+            defer { self?.mfProbeTask = nil }
+            guard let self else { return }
+            let outcome = await session.mfDrive(towardNear: true, pulses: 1)
+            switch outcome {
+            case .stepTooSmall, .endOfTravel:
+                self.mfDriveLensSupport = .drivable
+                self.mfProbedLensIdentity = identity
+            case .complete:
+                _ = await session.mfDrive(towardNear: false, pulses: 1)
+                self.mfDriveLensSupport = .drivable
+                self.mfProbedLensIdentity = identity
+            case .refused(let code):
+                if code == .deviceBusy { return }
+                self.mfDriveLensSupport = .undrivable
+                self.mfProbedLensIdentity = identity
+            }
+        }
+    }
+
     @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
     /// Signed pulses awaiting dispatch (+ toward infinity, − toward near). Scrub gestures
     /// accumulate here; a single in-flight drive drains it so gesture speed never floods
@@ -6727,13 +6773,6 @@ final class NativeAppModel {
 
     /// Segmented mode tabs for a picker (ISO layout follows the active codec + mode).
     func pickerModes(for picker: CameraPicker) -> [PickerMode] {
-        // In MF the FOCUS pickers gain a Drive tab — the focus-by-wire scrub. The lens's
-        // actual drivability only shows on the first drive attempt. [verify-on-HW]
-        if picker == .focus || picker == .stillFocus,
-            cameraPropertySnapshot.focusMode == "MF"
-        {
-            return picker.modes + [PickerMode(title: "Drive")]
-        }
         guard picker == .iso else { return picker.modes }
         return ISOPickerPolicy.pickerModes(
             codec: cameraState.codec, exposureMode: commandExposureMode

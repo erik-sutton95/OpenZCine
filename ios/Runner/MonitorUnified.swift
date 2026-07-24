@@ -1122,6 +1122,13 @@ struct MonitorShell: View {
         }
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
+        // The MF scrub's lens-drivability probe re-runs when MF engages or the lens changes.
+        .onChange(of: model.cameraPropertySnapshot.focusMode) { _, _ in
+            model.refreshMFDriveLensSupport()
+        }
+        .onChange(of: model.cameraPropertySnapshot.lens) { _, _ in
+            model.refreshMFDriveLensSupport()
+        }
         // Scope the fit-mode 2-scope cap to the portrait tree; `initial: true` covers launch.
         .onChange(of: context.isPortrait, initial: true) { _, isPortrait in
             model.monitorIsPortrait = isPortrait
@@ -1421,6 +1428,19 @@ struct MonitorShell: View {
                 .position(x: x, y: y)
                 .animation(.easeOut(duration: 0.2), value: y)
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+
+            // MF focus-by-wire scrub: beside the right system rail while MF is active on a
+            // proven drivable lens (probe-gated; see `refreshMFDriveLensSupport`).
+            if model.showsMFDriveScrub {
+                MFDriveVerticalScrub()
+                    .environment(model)
+                    .frame(height: min(280, CGFloat(context.viewportHeight) * 0.55))
+                    .position(
+                        x: CGFloat(map.systemSlots.record.x) - 34,
+                        y: CGFloat(context.viewportHeight) / 2
+                    )
+                    .transition(.opacity)
             }
         }
     }
