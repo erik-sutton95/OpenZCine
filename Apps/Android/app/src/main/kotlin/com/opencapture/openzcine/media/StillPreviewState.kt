@@ -38,8 +38,10 @@ internal object StillPreviewStates {
                     "Loading full ${classification.formatLabel} preview…"
                 StillPreviewStrategy.COMPLETE_FILE ->
                     "Downloading ${classification.formatLabel} image…"
+                // The RAW side of a pair transfers for sharing even though it
+                // never claims a decoded full preview.
                 StillPreviewStrategy.THUMBNAIL_ONLY ->
-                    "Preparing camera thumbnail…"
+                    "Downloading ${classification.formatLabel} file…"
             }
         return StillPreviewUiState.Downloading(progress.coerceIn(0.0, 1.0), message)
     }

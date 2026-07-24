@@ -22,6 +22,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import com.opencapture.openzcine.bridge.ZoneFrame
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -231,8 +235,11 @@ fun ReadoutPill(
     value: String,
     active: Boolean = false,
     onClick: (() -> Unit)? = null,
+    /** Publishes this pill's root bounds in dp (iOS `topBarPickerFrames`). */
+    onBoundsInRoot: ((ZoneFrame) -> Unit)? = null,
     icon: @Composable (Color) -> Unit,
 ) {
+    val density = LocalDensity.current
     // Active = the iOS readout-button treatment: accent-dim capsule + an
     // accent-dim border (iOS strokes with accentDim, not full accent) with
     // glyph and value going gold while its picker is open.
@@ -246,6 +253,25 @@ fun ReadoutPill(
     Row(
         modifier =
             surface
+                .then(
+                    if (onBoundsInRoot != null) {
+                        Modifier.onGloballyPositioned { coords ->
+                            val b = coords.boundsInRoot()
+                            with(density) {
+                                onBoundsInRoot(
+                                    ZoneFrame(
+                                        x = b.left.toDp().value,
+                                        y = b.top.toDp().value,
+                                        width = b.width.toDp().value,
+                                        height = b.height.toDp().value,
+                                    ),
+                                )
+                            }
+                        }
+                    } else {
+                        Modifier
+                    },
+                )
                 .then(
                     // iOS readout buttons always press like buttons; disabled
                     // handlers no-op silently rather than losing button feel.
@@ -537,6 +563,12 @@ internal const val BATTERY_OUTLINE_WIDTH_DP = 28f
 internal const val BATTERY_STACK_WIDTH_DP = 45f
 internal const val BATTERY_STACK_HEIGHT_DP = BATTERY_ROW_HEIGHT_DP * 2 + BATTERY_ROW_GAP_DP
 
+// The landscape leading rail (lock button + battery stack) sits a touch tight to
+// the feed edge; nudge the whole cluster left by this much. Applied to BOTH the
+// lock and the battery so the deliberate gap between them is preserved.
+// ponytail: a tuning knob — bump if the rail still crowds the feed on a given handset.
+internal const val LEADING_RAIL_LEFT_NUDGE_DP = 8f
+
 /**
  * Stacked phone + camera battery rows for the leading rail (iOS combined
  * indicator): two bare rows — muted device glyph beside a battery-shaped
@@ -647,9 +679,12 @@ private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean)
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (charging) BoltGlyph(tint, Modifier.size(5.dp, 9.dp))
+            // "100" plus the charging bolt is wider than the outline — step the digits
+            // down so the readout stays inside the battery body (iOS shrinks to fit).
+            val fits = !(charging && label.length >= 3)
             Text(
                 label,
-                style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
+                style = chromeStyle(if (fits) 10.5f else 8.5f, FontWeight.SemiBold, mono = true),
                 color = tint,
                 maxLines = 1,
                 softWrap = false,

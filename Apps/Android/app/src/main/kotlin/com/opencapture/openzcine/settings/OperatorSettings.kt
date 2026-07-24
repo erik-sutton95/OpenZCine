@@ -516,6 +516,12 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         Toggle("controls.mediaRemoteShutter.v1", default = true)
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
+    /**
+     * Enables the live-view focus-by-wire scrub strip (default on). Surfaced as a row inside the
+     * FOCUS popup rather than Operator Setup, mirroring the iOS shell; off hides the strip even in
+     * an AF focus mode.
+     */
+    public val mfDriveScrubEnabled: Toggle = Toggle("controls.mfDriveScrub", default = true)
 
     // View Assist — local composited framing aids. These values deliberately
     // stay separate from the camera-owned GridDisplay property so a monitor
@@ -1017,6 +1023,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             mediaRemoteShutterEnabled,
             hapticsEnabled,
             keepScreenAwake,
+            mfDriveScrubEnabled,
             guidesVisible,
             guideMaskEnabled,
             localGridVisible,

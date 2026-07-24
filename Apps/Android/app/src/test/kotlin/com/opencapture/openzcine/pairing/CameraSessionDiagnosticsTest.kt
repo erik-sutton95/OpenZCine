@@ -31,6 +31,15 @@ class CameraSessionDiagnosticsTest {
     }
 
     @Test
+    fun `slow property write logs the property name that stalled the gate`() {
+        // The detail is a closed CameraControl name + elapsed millis — no credential.
+        assertEquals(
+            "propertyWriteSlow: FOCUS_MODE 2100ms",
+            cameraSessionDiagnosticMessage("propertyWriteSlow", "FOCUS_MODE 2100ms"),
+        )
+    }
+
+    @Test
     fun `pairing path maps to closed diagnostic phase tokens`() {
         assertEquals("path.usb", diagnosticPhaseForPairingPath(PairingPath.USB_C))
         assertEquals(

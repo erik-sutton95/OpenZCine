@@ -37,6 +37,9 @@ public enum MonitorZoneMapWire {
     ///   - mode: `DispMode` ordinal — 0 live, 1 clean, 2 command.
     ///   - aspectFill: portrait feed aspect — `false` = fit16x9, `true` = fill.
     ///   - mirrored: `true` for the horizontally mirrored landscape-right chrome.
+    ///   - portraitFeedAspectRatio: the fit-mode feed's content ratio. Photography
+    ///     passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders whole
+    ///     directly under the top bar; video passes 16:9. Ignored in fill.
     ///   - Remaining parameters mirror `MonitorZoneLayout.map` directly.
     public static func flattened(
         viewportWidth: Double,
@@ -50,7 +53,8 @@ public enum MonitorZoneMapWire {
         aspectFill: Bool,
         scopeCount: Int,
         mirrored: Bool,
-        bottomBarHeight: Double
+        bottomBarHeight: Double,
+        portraitFeedAspectRatio: Double = 16.0 / 9.0
     ) -> [Float] {
         let dispMode: DispMode =
             switch mode {
@@ -69,7 +73,8 @@ public enum MonitorZoneMapWire {
             aspect: aspectFill ? .fill : .fit16x9,
             scopeCount: scopeCount,
             horizontalDirection: mirrored ? .mirrored : .standard,
-            bottomBarHeight: bottomBarHeight
+            bottomBarHeight: bottomBarHeight,
+            portraitFeedAspectRatio: portraitFeedAspectRatio
         )
 
         var out: [Float] = []

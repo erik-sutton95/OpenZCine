@@ -188,6 +188,90 @@ public enum class CameraControl {
 
     /** Camera-advertised electronic vibration-reduction state. */
     ELECTRONIC_VR,
+
+    // Stills / photo-mode controls (photography pickers; the movie controls
+    // above stay untouched in photo mode).
+
+    /** Stills ISO sensitivity, such as `"800"`. */
+    STILL_ISO,
+
+    /** Stills Auto-ISO toggle, `"On"` or `"Off"`. */
+    STILL_ISO_AUTO,
+
+    /** Stills shutter speed, such as `"1/250"`, `"30s"`, or `"Bulb"`. */
+    STILL_SHUTTER,
+
+    /** Stills lens aperture, such as `"f/2.8"`. */
+    STILL_IRIS,
+
+    /** Still release/drive mode, such as `"Single"` or `"Continuous H"`. */
+    STILL_DRIVE,
+
+    /** Stills autofocus mode, such as `"AF-S"`. */
+    STILL_FOCUS_MODE,
+
+    /** Stills autofocus area, such as `"Wide-L"`. */
+    STILL_FOCUS_AREA,
+
+    /** Stills subject-detection mode, such as `"People"`. */
+    STILL_FOCUS_SUBJECT,
+
+    /** Exposure metering pattern, such as `"Matrix"`. */
+    STILL_METER,
+
+    /** Photo sensor crop, such as `"FX"` or `"16:9"`. */
+    STILL_IMAGE_AREA,
+
+    /** Camera-enumerated still image-size string, sent back verbatim. */
+    STILL_IMAGE_SIZE,
+
+    /** Still image quality, such as `"RAW+JPEG Fine"`. */
+    STILL_QUALITY,
+
+    /** NEF (RAW) recording compression, such as `"High efficiency★"`. */
+    STILL_RAW_COMPRESSION,
+
+    /** The shooting program a U bank runs as (`"P"`/`"S"`/`"A"`/`"M"`). */
+    STILL_USER_MODE_PROGRAM,
+
+    /** Active picture control (profile), such as `"Standard"` or `"Cloud 3"`. */
+    STILL_PICTURE_CONTROL,
+}
+
+/** Progress of a still release as reported by polling after the release op. */
+public enum class StillReleasePoll {
+    /** The release (including every frame of a burst) finished. */
+    COMPLETE,
+
+    /** AF / shooting / self-timer still running — poll again. */
+    IN_PROGRESS,
+
+    /** A bulb or time exposure is holding the shutter open. */
+    OPEN_SHUTTER,
+
+    /** The release failed (out of focus, storage full, …) or could not be polled. */
+    FAILED,
+}
+
+/**
+ * One relative manual-focus drive outcome. There is no absolute position
+ * readout — the control is relative, like a follow-focus ring.
+ */
+public sealed interface MFDriveOutcome {
+    /** The lens finished moving the requested amount. */
+    public data object Complete : MFDriveOutcome
+
+    /** The drive hit the travel end (near or infinity limit). */
+    public data object EndOfTravel : MFDriveOutcome
+
+    /** The requested amount was below what the lens can move. */
+    public data object StepTooSmall : MFDriveOutcome
+
+    /**
+     * The body refused the drive — a busy channel retries silently; a lens
+     * the body cannot drive (mechanical ring) surfaces once with this code.
+     */
+    public data class Refused(val rawResponseCode: Int) : MFDriveOutcome
 }
 
 /** The camera's active movie-shutter display convention. */
@@ -280,6 +364,8 @@ public data class CameraControlCapabilities(
     val vibrationReduction: List<String> = emptyList(),
     /** Electronic-VR states advertised by the camera. */
     val electronicVr: List<String> = emptyList(),
+    /** Photo image-size strings enumerated by the camera, verbatim. */
+    val imageSizes: List<String> = emptyList(),
 ) {
     /** Returns the advertised labels for one descriptor-dependent control. */
     public fun options(control: CameraControl): List<String> =
@@ -289,6 +375,11 @@ public data class CameraControlCapabilities(
             CameraControl.SHUTTER -> shutterValues
             CameraControl.IRIS -> irisValues
             CameraControl.WHITE_BALANCE -> whiteBalanceValues
+            // Photo mode: the facade swaps shutter/WB/iris domains to the
+            // stills enums, so the still controls read the same lists.
+            CameraControl.STILL_SHUTTER -> shutterValues
+            CameraControl.STILL_IRIS -> irisValues
+            CameraControl.STILL_IMAGE_SIZE -> imageSizes
             CameraControl.FOCUS_MODE -> focusModes
             CameraControl.FOCUS_AREA -> focusAreas
             CameraControl.FOCUS_SUBJECT -> focusSubjects
@@ -419,6 +510,12 @@ public data class CameraPropertySnapshot(
     val exposureBias: String? = null,
     /** Frames remaining on the active card in photo mode. */
     val shotsRemaining: Int? = null,
+    /** Photo sensor-crop (image area) label, such as `FX` or `16:9`. */
+    val imageArea: String? = null,
+    /** NEF (RAW) recording compression label. */
+    val rawCompression: String? = null,
+    /** The shooting program the active U bank runs as (`P`/`S`/`A`/`M`). */
+    val userModeProgram: String? = null,
     /** Active picture-control (profile) label, such as `Standard`. */
     val pictureControl: String? = null,
     /** The body's exposure-indicator needle in 1/6 EV steps (±60 == ±10 EV). */
@@ -506,6 +603,18 @@ public sealed interface CameraSessionEvent {
         override val transactionId: Long,
         override val rawParameters: List<Long>,
         val errorCode: Long?,
+    ) : CameraSessionEvent
+
+    /**
+     * Standard capture-complete (`0x400D`): a still capture run finished
+     * writing (one per run/destination). Fires for body-fired and remote
+     * releases alike — the shell syncs instant playback and the shots
+     * readout from it when no app release is in flight.
+     */
+    public data class StillCaptureCompleted(
+        override val rawEventCode: Int,
+        override val transactionId: Long,
+        override val rawParameters: List<Long>,
     ) : CameraSessionEvent
 
     /**
@@ -736,6 +845,77 @@ public interface CameraSession {
     public suspend fun applyControl(control: CameraControl, label: String) {
         throw CameraControlException.UnsupportedSelection
     }
+
+    /**
+     * Fires one still release when the body is in photo mode (AF-then-release
+     * to the card). Activation-style: returning confirms the release started;
+     * poll [pollStillRelease] between frames for completion. The protocol
+     * operation stays behind the shared Swift boundary.
+     */
+    @Throws(CameraControlException::class)
+    public suspend fun initiateStillCapture() {
+        throw CameraControlException.UnsupportedSelection
+    }
+
+    /** One readiness poll while a still release is in flight. */
+    public suspend fun pollStillRelease(): StillReleasePoll = StillReleasePoll.FAILED
+
+    /**
+     * Ends a bulb/time exposure or stops a running burst; frames captured so
+     * far are kept. Refusals after a run already ended are expected.
+     */
+    @Throws(CameraControlException::class)
+    public suspend fun terminateStillCapture() {
+        throw CameraControlException.UnsupportedSelection
+    }
+
+    /**
+     * Opens/closes the continuous-burst remote-mode bracket around a held
+     * shutter press. The body's dials lock while it is open, so callers
+     * bracket it as tightly as possible.
+     */
+    @Throws(CameraControlException::class)
+    public suspend fun setStillBurstBracket(active: Boolean) {
+        throw CameraControlException.UnsupportedSelection
+    }
+
+    /**
+     * Drives manual focus by [pulses] toward near or infinity (focus-by-wire).
+     * Activation-style with a bounded readiness poll inside the native
+     * session; classified outcomes come back rather than exceptions.
+     */
+    public suspend fun mfDrive(towardNear: Boolean, pulses: Int): MFDriveOutcome =
+        MFDriveOutcome.Refused(rawResponseCode = 0)
+
+    /**
+     * Seeds the instant-review baseline (the card's current object handles)
+     * so the first post-capture diff has something to diff against.
+     */
+    public suspend fun seedInstantReviewBaseline(): Unit = Unit
+
+    /**
+     * The just-captured photo's object handle from a post-capture baseline
+     * diff, or `null` while the card hasn't listed it yet (caller retries).
+     */
+    public suspend fun resolveNewestStillHandle(): Int? = null
+
+    /** The camera's embedded thumbnail for one object, or `null`. */
+    public suspend fun stillThumbnail(handle: Int): ByteArray? = null
+
+    /**
+     * The full captured image, streamed between live-view frames. Long-running;
+     * abort via [cancelStillImageFetch].
+     */
+    public suspend fun stillFullImage(handle: Int): ByteArray? = null
+
+    /** Aborts an in-flight [stillFullImage] at its next chunk boundary. */
+    public fun cancelStillImageFetch() {}
+
+    /**
+     * Writes a 0–5 star rating to one captured object; returns the confirmed
+     * star count, or `null` when the write was refused.
+     */
+    public suspend fun setStillRating(handle: Int, stars: Int): Int? = null
 
     /**
      * Moves the camera autofocus area to [point].

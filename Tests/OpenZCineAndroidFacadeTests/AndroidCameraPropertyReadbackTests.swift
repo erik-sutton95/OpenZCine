@@ -70,8 +70,12 @@ struct AndroidCameraPropertyReadbackTests {
         #expect(properties.electronicVR == "ON")
         #expect(properties.gridDisplay == "ON")
 
+        // Value reads split by code width: 2-byte codes ride the standard op, 4-byte codes
+        // the extended one — the poll-order assertion spans both.
         let propertyReads =
-            server.receivedRequests().filter { $0.operation == .getDevicePropValueEx }
+            server.receivedRequests().filter {
+                $0.operation == .getDevicePropValueEx || $0.operation == .getDevicePropValue
+            }
         let expectedBootstrap = androidPollOrder.map(\.rawValue)
         let bootstrapReads = Array(
             propertyReads.prefix(expectedBootstrap.count).compactMap(\.parameters.first))

@@ -404,6 +404,90 @@ extension PTPIPClientSession {
         return result.data.isEmpty ? nil : result.data
     }
 
+    // MARK: - Instant review (photography live view)
+
+    /// Seeds the instant-review baseline with the card's current handle sets,
+    /// so the first post-capture diff has something to diff against (iOS
+    /// `seedInstantReviewBaseline`).
+    public func seedStillReviewBaseline() throws {
+        var baseline: [UInt32: Set<UInt32>] = [:]
+        for storageID in try usableStorageIDs() {
+            baseline[storageID] = Set((try? objectHandles(storageID: storageID)) ?? [])
+        }
+        stillReviewBaseline = baseline
+    }
+
+    /// The just-captured JPEG/HEIF handle: the diff against the pre-capture
+    /// baseline (a RAW+JPEG pair adds two objects — ObjectInfo picks the
+    /// JPEG/HEIF side). With a baseline but no diff yet the caller retries;
+    /// falling back to the highest handle would show the PREVIOUS photo, so
+    /// that stands in only when no baseline was ever seeded.
+    /// [verify-on-HW: enumeration lag per body]
+    public func resolveNewestStillHandle() throws -> UInt32? {
+        let hadBaseline = !stillReviewBaseline.isEmpty
+        var newHandles: Set<UInt32> = []
+        var maxHandle: UInt32 = 0
+        for storageID in try usableStorageIDs() {
+            let handles = Set((try? objectHandles(storageID: storageID)) ?? [])
+            if let known = stillReviewBaseline[storageID] {
+                newHandles.formUnion(handles.subtracting(known))
+            }
+            maxHandle = max(maxHandle, handles.max() ?? 0)
+            stillReviewBaseline[storageID] = handles
+        }
+        let candidates: [UInt32]
+        if !newHandles.isEmpty {
+            candidates = newHandles.sorted(by: >)
+        } else if !hadBaseline, maxHandle > 0 {
+            candidates = [maxHandle]
+        } else {
+            return nil
+        }
+        for handle in candidates {
+            guard let info = try? objectInfo(handle: handle) else { continue }
+            let name = info.filename.lowercased()
+            if name.hasSuffix(".jpg") || name.hasSuffix(".jpeg") || name.hasSuffix(".hif") {
+                return handle
+            }
+        }
+        return nil
+    }
+
+    /// Chunked full-object fetch for the review — 1 MB `GetPartialObject`
+    /// reads that interleave with live-view frames on the shared serialized
+    /// channel. Aborts when `cancelStillReviewFetch` is called so a dismissed
+    /// review never holds the channel hostage.
+    public func stillReviewImage(handle: UInt32) -> Data? {
+        stillReviewFetchCancelled = false
+        guard let info = try? objectInfo(handle: handle),
+            info.compressedSize > 0, info.compressedSize < 60_000_000
+        else { return nil }
+        var data = Data()
+        data.reserveCapacity(Int(info.compressedSize))
+        var offset: UInt32 = 0
+        let chunk: UInt32 = 1_000_000
+        let total = info.compressedSize
+        while offset < total {
+            if stillReviewFetchCancelled { return nil }
+            let length = min(chunk, total - offset)
+            guard
+                let result = try? transactExpectingOK(
+                    .getPartialObject,
+                    parameters: [handle, offset, length],
+                    dataPhase: .dataIn),
+                !result.data.isEmpty
+            else { return nil }
+            data.append(result.data)
+            offset += UInt32(result.data.count)
+        }
+        return data
+    }
+
+    /// Flags the in-flight review fetch to stop at its next chunk boundary.
+    public func cancelStillReviewFetch() {
+        stillReviewFetchCancelled = true
+    }
+
     /// The candidate card IDs from both Nikon's vendor list and standard PTP
     /// list, de-duplicated and stripped of known placeholder values. Querying
     /// both matches iOS and keeps a vendor-list omission from hiding card 2;

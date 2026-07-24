@@ -154,6 +154,14 @@ struct FeedEffectsWireTests {
         let hlgMapping = ExposureSignalMapping.stills(toneMode: "HLG")
         #expect(render[1] == Float(hlgMapping.clipNative))
         #expect(render[13] == Float(hlgMapping.signalNative(monitorPercent: 96) / 255))
+        // Peaking's de-log (render[2...6]) follows the ACTIVE mode's curve — HLG here, not the
+        // hardcoded Log3G10 that made photography peaking differ from video.
+        for i in 0...4 {
+            let expected = Float(
+                ExposureScale.referenceIRE(
+                    signalNative: Double(i) / 4 * 255, curve: hlgMapping.curve) / 100)
+            #expect(render[2 + i] == expected)
+        }
     }
 
     @Test("Limits cubes preserve a separate paint and mask while reference bands stay core-owned")

@@ -239,10 +239,27 @@ public enum PTPResponseCode: UInt16, Sendable {
     // return this — the session is usable; the open didn't fail.
     case sessionAlreadyOpen = 0x201E
     case deviceBusy = 0x2019
-    // Vendor release-status codes DeviceReady returns while a still release runs
-    // (names mirror their libgphoto2 `PTP_RC_NIKON_*` symbols).
+    // The body refuses the operation because its current state disallows it (a documented
+    // answer to an object-property write the camera won't take in the present mode).
+    case accessDenied = 0x2013
+    // Vendor status codes (names mirror their libgphoto2 `PTP_RC_NIKON_*` symbols). Kept
+    // named rather than folding into `.unknown` so a state-based refusal stays diagnosable —
+    // `invalidStatus` and `notLiveView` are the two answers a focus drive gives when the
+    // camera's mode/state doesn't permit it.
+    case hardwareError = 0xA001
     case outOfFocus = 0xA002
+    case changeCameraModeFailed = 0xA003
+    case invalidStatus = 0xA004
     case shutterSpeedBulb = 0xA008
+    case cameraModeNotAdjustFnumber = 0xA00A
+    case notLiveView = 0xA00B
+    // Manual-focus drive answers on the readiness poll: the drive hit the travel end, or
+    // the requested amount was below what the lens can move.
+    case mfDriveStepEnd = 0xA00C
+    case mfDriveStepInsufficiency = 0xA00E
+    case noFullHDPresent = 0xA00F
+    case storeError = 0xA021
+    case storeUnformatted = 0xA022
     case bulbReleaseBusy = 0xA200
     case silentReleaseBusy = 0xA201
     case movieFrameReleaseBusy = 0xA202
@@ -286,7 +303,8 @@ public struct PTPOperationResponse: Equatable, Sendable {
         guard bytes.count >= 6 else {
             throw PTPOperationResponseError.shortPayload(actualLength: bytes.count)
         }
-        responseCode = PTPResponseCode(rawValue: ByteCoding.readUInt16LE(bytes, at: 0)) ?? .unknown
+        rawResponseCode = ByteCoding.readUInt16LE(bytes, at: 0)
+        responseCode = PTPResponseCode(rawValue: rawResponseCode) ?? .unknown
         transactionID = ByteCoding.readUInt32LE(bytes, at: 2)
 
         var parsedParameters: [UInt32] = []
@@ -299,6 +317,9 @@ public struct PTPOperationResponse: Equatable, Sendable {
     }
 
     public let responseCode: PTPResponseCode
+    /// The exact wire value, kept even when it isn't a known `PTPResponseCode` — so an
+    /// unanticipated refusal (e.g. a state-based rejection) stays diagnosable in a report.
+    public let rawResponseCode: UInt16
     public let transactionID: UInt32
     public let parameters: [UInt32]
 }

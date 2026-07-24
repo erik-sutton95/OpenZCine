@@ -92,7 +92,7 @@ class PlaybackAssistStateTest {
 
         assertEquals(
             AssistTool.entries.toSet() -
-                setOf(AssistTool.AUDIO, AssistTool.LEVEL, AssistTool.EV),
+                setOf(AssistTool.AUDIO, AssistTool.LEVEL, AssistTool.EV, AssistTool.PLAY),
             configurable,
         )
         assertFalse(hasPlaybackAssistOptions(AssistTool.AUDIO))

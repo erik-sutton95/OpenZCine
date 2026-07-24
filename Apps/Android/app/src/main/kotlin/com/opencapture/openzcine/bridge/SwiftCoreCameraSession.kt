@@ -16,7 +16,10 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.core.MFDriveOutcome
+import com.opencapture.openzcine.core.StillReleasePoll
 import com.opencapture.openzcine.transport.UsbPtpTransport
+import com.opencapture.openzcine.withOptimisticControlValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -112,6 +115,14 @@ internal interface SwiftCoreSessionBridge {
     fun setRecording(recording: Boolean): Int
 
     fun applyControl(control: CameraControl, label: String): Int
+
+    fun initiateStillCapture(): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+
+    fun pollStillRelease(): Int = -2
+
+    fun terminateStillCapture(): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+
+    fun setStillBurstBracket(active: Boolean): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
 
     fun changeAfArea(point: CameraFocusPoint): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
 
@@ -209,6 +220,15 @@ internal interface SwiftCoreSessionBridge {
         override fun applyControl(control: CameraControl, label: String): Int =
             SwiftCore.sessionApplyControl(control.nativeSelector, label)
 
+        override fun initiateStillCapture(): Int = SwiftCore.sessionInitiateStillCapture()
+
+        override fun pollStillRelease(): Int = SwiftCore.sessionPollStillRelease()
+
+        override fun terminateStillCapture(): Int = SwiftCore.sessionTerminateStillCapture()
+
+        override fun setStillBurstBracket(active: Boolean): Int =
+            SwiftCore.sessionSetStillBurstBracket(active)
+
         override fun changeAfArea(point: CameraFocusPoint): Int =
             SwiftCore.sessionChangeAfArea(point.x, point.y)
 
@@ -246,6 +266,21 @@ private val CameraControl.nativeSelector: Int
             CameraControl.VIBRATION_REDUCTION -> 19
             CameraControl.ELECTRONIC_VR -> 20
             CameraControl.ISO_AUTO -> 21
+            CameraControl.STILL_ISO -> 22
+            CameraControl.STILL_ISO_AUTO -> 23
+            CameraControl.STILL_SHUTTER -> 24
+            CameraControl.STILL_IRIS -> 25
+            CameraControl.STILL_DRIVE -> 26
+            CameraControl.STILL_FOCUS_MODE -> 27
+            CameraControl.STILL_FOCUS_AREA -> 28
+            CameraControl.STILL_FOCUS_SUBJECT -> 29
+            CameraControl.STILL_METER -> 30
+            CameraControl.STILL_IMAGE_AREA -> 31
+            CameraControl.STILL_IMAGE_SIZE -> 32
+            CameraControl.STILL_QUALITY -> 33
+            CameraControl.STILL_RAW_COMPRESSION -> 34
+            CameraControl.STILL_USER_MODE_PROGRAM -> 35
+            CameraControl.STILL_PICTURE_CONTROL -> 36
         }
 
 /**
@@ -269,6 +304,7 @@ class SwiftCoreCameraSession internal constructor(
     private val propertyRefreshDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val propertyPollIntervalMillis: Long = PROPERTY_POLL_INTERVAL_MILLIS,
     private val evIndicatorPollIntervalMillis: Long = EV_INDICATOR_POLL_INTERVAL_MILLIS,
+    private val selectorPollIntervalMillis: Long = SELECTOR_POLL_INTERVAL_MILLIS,
     private val propertyEventDebounceMillis: Long = PROPERTY_EVENT_DEBOUNCE_MILLIS,
     private val automaticallyRefreshProperties: Boolean = true,
     private val usbTransport: UsbPtpTransport? = null,
@@ -626,17 +662,171 @@ class SwiftCoreCameraSession internal constructor(
                 throw CameraControlException.CoreUnavailable
             }
 
+            // Optimistic tile update (iOS `applyPickerValue`): reflect the operator's pick in the
+            // displayed snapshot the instant the write starts, so the bottom-bar tile moves now
+            // instead of after the facade's blocking write + readback confirm. Done under the
+            // command lock so a concurrent property poll can't interleave a stale value, and only
+            // once the caller's drain has already skipped no-op writes (so this never masks a value
+            // the body would reject). The confirm stays authoritative: the caller's
+            // refreshProperties() reconciles this to the readback on success, and reverts it on a
+            // rejected write (see the drain's failure path).
+            val previousSnapshot = _cameraProperties.value
+            val optimisticSnapshot = previousSnapshot.withOptimisticControlValue(control, label)
+            if (optimisticSnapshot != previousSnapshot) {
+                _cameraProperties.value = optimisticSnapshot
+            }
+
             try {
+                val writeStartedNanos = System.nanoTime()
                 val nativeResult =
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.applyControl(control, label)
                     }
+                // A body can sit on a property write for seconds (e.g. a focus-mode
+                // motor handoff) while it holds the transaction gate — and with it
+                // the feed and every queued write. Leave a trace so "the app stalled"
+                // reports become attributable to the property that stalled.
+                val writeMillis = (System.nanoTime() - writeStartedNanos) / 1_000_000L
+                if (writeMillis > SLOW_WRITE_THRESHOLD_MILLIS) {
+                    phaseLogger("propertyWriteSlow", "$control ${writeMillis}ms")
+                }
                 updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfControlCommandFailed()
             } catch (error: CameraControlException) {
+                // Rejected write: undo the optimistic value so the tile snaps back to what the
+                // camera actually holds (no poll runs concurrently — the write held the mutex).
+                _cameraProperties.value = previousSnapshot
                 throw error
             } catch (_: Throwable) {
+                _cameraProperties.value = previousSnapshot
                 throw CameraControlException.TransportFailed
+            }
+        }
+    }
+
+    /**
+     * Fires one still release through the Swift core, serialized with every
+     * other camera command. The release itself is activation-style — poll
+     * [pollStillRelease] for completion.
+     */
+    override suspend fun initiateStillCapture() {
+        runStillCommand { core.initiateStillCapture() }
+    }
+
+    override suspend fun pollStillRelease(): StillReleasePoll {
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected || !core.isAvailable) {
+                return StillReleasePoll.FAILED
+            }
+            val raw =
+                try {
+                    withContext(Dispatchers.IO + NonCancellable) { core.pollStillRelease() }
+                } catch (_: Throwable) {
+                    return StillReleasePoll.FAILED
+                }
+            return when (raw) {
+                0 -> StillReleasePoll.COMPLETE
+                1 -> StillReleasePoll.IN_PROGRESS
+                2 -> StillReleasePoll.OPEN_SHUTTER
+                else -> StillReleasePoll.FAILED
+            }
+        }
+    }
+
+    override suspend fun terminateStillCapture() {
+        runStillCommand { core.terminateStillCapture() }
+    }
+
+    override suspend fun setStillBurstBracket(active: Boolean) {
+        runStillCommand { core.setStillBurstBracket(active) }
+    }
+
+    override suspend fun mfDrive(towardNear: Boolean, pulses: Int): MFDriveOutcome {
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected || !core.isAvailable) {
+                return MFDriveOutcome.Refused(rawResponseCode = 0)
+            }
+            val raw =
+                try {
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        SwiftCore.sessionMFDrive(towardNear, pulses)
+                    }
+                } catch (_: Throwable) {
+                    return MFDriveOutcome.Refused(rawResponseCode = 0)
+                }
+            updateRoundTripMeasurement(force = true)
+            return when {
+                raw == 0 -> MFDriveOutcome.Complete
+                raw == 1 -> MFDriveOutcome.EndOfTravel
+                raw == 2 -> MFDriveOutcome.StepTooSmall
+                raw >= 0x10000 -> MFDriveOutcome.Refused(rawResponseCode = raw and 0xFFFF)
+                else -> MFDriveOutcome.Refused(rawResponseCode = 0)
+            }
+        }
+    }
+
+    override suspend fun seedInstantReviewBaseline() {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return
+        withContext(Dispatchers.IO) { SwiftCore.sessionSeedStillReviewBaseline() }
+    }
+
+    override suspend fun resolveNewestStillHandle(): Int? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        val handle =
+            withContext(Dispatchers.IO) { SwiftCore.sessionResolveNewestStillHandle() }
+        return handle.takeIf { it != 0 }
+    }
+
+    override suspend fun stillThumbnail(handle: Int): ByteArray? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        return withContext(Dispatchers.IO) { SwiftCore.sessionThumbnail(handle) }
+    }
+
+    // The chunked fetch serializes per-transaction inside the native session,
+    // interleaving with live-view frames — deliberately NOT under
+    // cameraCommandMutex so control writes/polls aren't starved for its
+    // multi-second duration.
+    override suspend fun stillFullImage(handle: Int): ByteArray? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        return withContext(Dispatchers.IO) { SwiftCore.sessionStillImage(handle) }
+    }
+
+    override fun cancelStillImageFetch() {
+        if (!core.isAvailable) return
+        SwiftCore.sessionCancelStillImage()
+    }
+
+    override suspend fun setStillRating(handle: Int, stars: Int): Int? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        val confirmed =
+            withContext(Dispatchers.IO) { SwiftCore.sessionSetObjectRating(handle, stars) }
+        return confirmed.takeIf { it >= 0 }
+    }
+
+    /** Shared gate for the still-release command family. */
+    private suspend fun runStillCommand(command: () -> Int) {
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected) {
+                throw CameraControlException.NotConnected
+            }
+            if (!core.isAvailable) {
+                throw CameraControlException.CoreUnavailable
+            }
+            val nativeResult =
+                try {
+                    withContext(Dispatchers.IO + NonCancellable) { command() }
+                } catch (_: Throwable) {
+                    throw CameraControlException.TransportFailed
+                }
+            updateRoundTripMeasurement(force = true)
+            when (nativeResult) {
+                SwiftCore.RECORDING_COMMAND_ACCEPTED -> Unit
+                SwiftCore.RECORDING_COMMAND_NO_SESSION ->
+                    throw CameraControlException.NotConnected
+                SwiftCore.RECORDING_COMMAND_MEDIA_BUSY -> throw CameraControlException.MediaBusy
+                SwiftCore.RECORDING_COMMAND_REJECTED ->
+                    throw CameraControlException.CommandRejected
+                else -> throw CameraControlException.TransportFailed
             }
         }
     }
@@ -885,6 +1075,15 @@ class SwiftCoreCameraSession internal constructor(
                         parameters,
                         parameters.firstOrNull(),
                     )
+                // Nikon signals a body-fired still through the GetEventEx poll as ObjectAdded
+                // and/or CaptureComplete; both drive the same shell sync (iOS routes both to one
+                // handler). The MonitorScreen collector debounces the resulting burst.
+                STILL_CAPTURE_COMPLETE, OBJECT_ADDED ->
+                    CameraSessionEvent.StillCaptureCompleted(
+                        code,
+                        transactionId and UINT32_MASK,
+                        parameters,
+                    )
                 else ->
                     CameraSessionEvent.Unknown(
                         code,
@@ -910,6 +1109,9 @@ class SwiftCoreCameraSession internal constructor(
             is CameraSessionEvent.PropertyChanged -> {
                 scheduleEventPropertyRefresh(attempt, event.propertyCode)
             }
+            // The monitor shell owns the body-capture sync (instant playback +
+            // shots refresh) off the shared event flow.
+            is CameraSessionEvent.StillCaptureCompleted -> Unit
             is CameraSessionEvent.Unknown -> Unit
         }
     }
@@ -938,6 +1140,9 @@ class SwiftCoreCameraSession internal constructor(
                     }
                 }
                 var fastTick = 0
+                var selectorElapsedMillis = 0L
+                var lastCaptureSelector = _cameraProperties.value.captureSelector
+                var flipFastTicksRemaining = 0
                 while (isActive && ownsConnectedAttempt(attempt)) {
                     // While the EV meter tool is visible (and not recording),
                     // the needle reads at its own fast cadence between the
@@ -957,6 +1162,37 @@ class SwiftCoreCameraSession internal constructor(
                         )
                         fastTick += 1
                         if (fastTick % EV_TICKS_PER_PROPERTY_POLL != 0) continue
+                    } else if (flipFastTicksRemaining > 0) {
+                        // Photo↔video flip: the facade queued the new mode's
+                        // value burst — a short fast-poll run drains it (and
+                        // its follow-up descriptor pass) in ~1-2 s while
+                        // frames keep interleaving, then the slow cadence
+                        // resumes.
+                        flipFastTicksRemaining -= 1
+                        delay(MODE_FLIP_FAST_POLL_INTERVAL_MILLIS)
+                    } else if (selectorPollIntervalMillis < propertyPollIntervalMillis) {
+                        // The physical stills/movie lever only surfaces via a
+                        // property read; the 3 s round-robin left the chrome ~6 s
+                        // behind it. Sub-poll the selector alone at a sub-second gap
+                        // BETWEEN heavy ticks so the chrome flips within ~1 s (iOS
+                        // polls it off its frame loop) WITHOUT changing the heavy
+                        // round-robin cadence — a heavy NEXT still lands once every
+                        // propertyPollIntervalMillis.
+                        delay(selectorPollIntervalMillis.coerceAtLeast(1L))
+                        if (!isActive || !ownsConnectedAttempt(attempt)) break
+                        refreshCameraProperties(
+                            attempt = attempt,
+                            request = SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                            propertyCode = 0L,
+                        )
+                        val fastSelector = _cameraProperties.value.captureSelector
+                        if (fastSelector != lastCaptureSelector) {
+                            lastCaptureSelector = fastSelector
+                            flipFastTicksRemaining = MODE_FLIP_FAST_POLL_TICKS
+                        }
+                        selectorElapsedMillis += selectorPollIntervalMillis
+                        if (selectorElapsedMillis < propertyPollIntervalMillis) continue
+                        selectorElapsedMillis = 0L
                     } else {
                         delay(propertyPollIntervalMillis.coerceAtLeast(1L))
                     }
@@ -966,6 +1202,11 @@ class SwiftCoreCameraSession internal constructor(
                         request = SwiftCore.PROPERTY_REFRESH_NEXT,
                         propertyCode = 0L,
                     )
+                    val selector = _cameraProperties.value.captureSelector
+                    if (selector != lastCaptureSelector) {
+                        lastCaptureSelector = selector
+                        flipFastTicksRemaining = MODE_FLIP_FAST_POLL_TICKS
+                    }
                 }
             }
         synchronized(propertyRefreshJobLock) {
@@ -1199,6 +1440,18 @@ class SwiftCoreCameraSession internal constructor(
          * frames. 3 s keeps battery/ISO fresh enough without punching the feed.
          */
         const val PROPERTY_POLL_INTERVAL_MILLIS: Long = 3_000L
+
+        /**
+         * Fast-poll cadence after a photo↔video flip while the facade drains
+         * the new mode's queued value burst; frames interleave between ticks.
+         */
+        const val MODE_FLIP_FAST_POLL_INTERVAL_MILLIS: Long = 250L
+
+        /**
+         * Fast ticks per flip: chunk (8) × ticks comfortably covers the full
+         * photo/video set plus the follow-up descriptor pass.
+         */
+        const val MODE_FLIP_FAST_POLL_TICKS: Int = 8
         /**
          * Fast EV-needle gap while the meter tool is visible. A single-byte
          * indicator read is the cheapest possible transaction, but it still
@@ -1208,6 +1461,17 @@ class SwiftCoreCameraSession internal constructor(
         const val EV_INDICATOR_POLL_INTERVAL_MILLIS: Long = 750L
         /** Fast EV ticks per regular round-robin property poll (750 ms × 4 = 3 s). */
         const val EV_TICKS_PER_PROPERTY_POLL: Int = 4
+        /**
+         * Steady-state photo/video selector poll gap. The physical stills/movie
+         * lever only surfaces via a property read; iOS detects it in ~0.5 s off
+         * its frame loop, but the Android 3 s round-robin left the chrome ~6 s
+         * behind. A single-byte selector read at this cadence flips the chrome
+         * within ~1 s while the heavy set keeps its 3 s gap (the same trade the
+         * EV needle already makes). [verify-on-HW]
+         */
+        const val SELECTOR_POLL_INTERVAL_MILLIS: Long = 750L
+        /** A property write slower than this stalls the feed behind the transaction gate. */
+        const val SLOW_WRITE_THRESHOLD_MILLIS: Long = 1_500L
         const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
         /** Max rate for command RTT StateFlow updates (LV frames fire every present). */
         const val ROUND_TRIP_PUBLISH_INTERVAL_NANOS: Long = 250_000_000L
@@ -1215,7 +1479,9 @@ class SwiftCoreCameraSession internal constructor(
         const val EVENT_BUFFER_CAPACITY: Int = 64
         const val EVENT_CODE_MASK: Int = 0xFFFF
         const val UINT32_MASK: Long = 0xFFFF_FFFFL
+        const val OBJECT_ADDED: Int = 0x4002
         const val DEVICE_PROPERTY_CHANGED: Int = 0x4006
+        const val STILL_CAPTURE_COMPLETE: Int = 0x400D
         const val MOVIE_RECORD_INTERRUPTED: Int = 0xC105
         const val MOVIE_RECORD_COMPLETE: Int = 0xC108
         const val MOVIE_RECORD_STARTED: Int = 0xC10A

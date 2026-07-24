@@ -11,29 +11,61 @@ actor MediaCellImageLoader {
 
     /// The downsampled image at `url` (long edge ≤ `maxPixelSize`), or `nil` if unreadable.
     /// `kCGImageSourceCreateThumbnailWithTransform` bakes in EXIF orientation, so the cell shows
-    /// exactly the picture a full decode would have.
-    func downsampled(at url: URL, maxPixelSize: Int) -> sending UIImage? {
+    /// exactly the picture a full decode would have. `fallbackOrientation` covers EXIF-stripped
+    /// camera thumbnails whose real orientation was learned from the full file.
+    func downsampled(
+        at url: URL, maxPixelSize: Int, fallbackOrientation: Int? = nil
+    ) -> sending UIImage? {
         autoreleasepool {
             let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
             guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
                 return nil
             }
-            return Self.downsampled(source: source, maxPixelSize: maxPixelSize)
+            return Self.downsampled(
+                source: source, maxPixelSize: maxPixelSize,
+                fallbackOrientation: fallbackOrientation)
         }
     }
 
     /// In-memory variant for bytes that never touch disk (the instant-playback stream).
-    func downsampled(data: Data, maxPixelSize: Int) -> sending UIImage? {
+    func downsampled(
+        data: Data, maxPixelSize: Int, fallbackOrientation: Int? = nil
+    ) -> sending UIImage? {
         autoreleasepool {
             let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
             guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
                 return nil
             }
-            return Self.downsampled(source: source, maxPixelSize: maxPixelSize)
+            return Self.downsampled(
+                source: source, maxPixelSize: maxPixelSize,
+                fallbackOrientation: fallbackOrientation)
         }
     }
 
-    private static func downsampled(source: CGImageSource, maxPixelSize: Int) -> UIImage? {
+    /// The EXIF orientation (1–8) recorded in the image bytes; nil when the file carries none
+    /// (the discriminator between "already upright" and "needs the cached fallback").
+    nonisolated static func exifOrientation(in data: Data) -> Int? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return exifOrientation(source: source)
+    }
+
+    /// File variant, used to learn a still's orientation from its streamed full bytes.
+    nonisolated static func exifOrientation(atFile url: URL) -> Int? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return exifOrientation(source: source)
+    }
+
+    private nonisolated static func exifOrientation(source: CGImageSource) -> Int? {
+        guard
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any]
+        else { return nil }
+        return (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue
+    }
+
+    private static func downsampled(
+        source: CGImageSource, maxPixelSize: Int, fallbackOrientation: Int?
+    ) -> UIImage? {
         let thumbnailOptions =
             [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -43,6 +75,14 @@ actor MediaCellImageLoader {
             ] as [CFString: Any] as CFDictionary
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions)
         else { return nil }
+        // The transform option only rotates when the bytes carry the tag — apply the caller's
+        // learned orientation exactly when the source has none of its own.
+        if let fallbackOrientation, fallbackOrientation != 1,
+            exifOrientation(source: source) == nil,
+            let exif = CGImagePropertyOrientation(rawValue: UInt32(fallbackOrientation))
+        {
+            return UIImage(cgImage: cgImage, scale: 1, orientation: UIImage.Orientation(exif))
+        }
         return UIImage(cgImage: cgImage)
     }
 }
@@ -122,6 +162,8 @@ struct MediaBrowserView: View {
     @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
     @State private var playingClip: MediaClip?
     @State private var viewingPhoto: MediaClip?
+    /// The representative of a burst series whose members are being browsed (Manage series view).
+    @State private var seriesRepresentative: MediaClip?
     /// Transient explanation shown when a proxy-less R3D master is tapped.
     @State private var masterNotice: String?
     @State private var masterNoticeDismissTask: Task<Void, Never>?
@@ -155,7 +197,9 @@ struct MediaBrowserView: View {
     private var displayedClips: [MediaClip] { model.filteredMediaClips }
 
     private var selectedClips: [MediaClip] {
-        displayedClips.filter { selectedClipIDs.contains($0.id) }
+        // A selected burst cell stands for its whole series — expand so delete/share act on
+        // every frame, not just the representative (Erik: "delete only removed 1 of the burst").
+        model.burstExpanded(displayedClips.filter { selectedClipIDs.contains($0.id) })
     }
 
     private var headerTitle: String {
@@ -240,6 +284,12 @@ struct MediaBrowserView: View {
                 filterPopupOverlay
             }
 
+            if let progress = model.mediaDeletionProgress {
+                MediaDeletionProgressOverlay(progress: progress)
+                    .transition(.opacity)
+                    .zIndex(6)
+            }
+
             if let deliveryRequest {
                 deliveryPopupOverlay(clips: deliveryRequest.clips)
             }
@@ -314,6 +364,9 @@ struct MediaBrowserView: View {
         }
         .fullScreenCover(item: $viewingPhoto) { clip in
             MediaPhotoViewer(clip: clip).environment(model)
+        }
+        .fullScreenCover(item: $seriesRepresentative) { clip in
+            MediaBurstSeriesView(representative: clip).environment(model)
         }
         .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
         .animation(.easeInOut(duration: 0.2), value: model.mediaThumbnailSize)
@@ -649,7 +702,9 @@ struct MediaBrowserView: View {
             .buttonStyle(.zcTapTarget)
             .disabled(selectedClipIDs.isEmpty)
             .confirmationDialog(
-                "Delete \(selectedClipIDs.count) item\(selectedClipIDs.count == 1 ? "" : "s") from the camera card? RAW+JPEG pairs delete both files.",
+                // Context-aware: pair/master/backup notes appear only when this selection
+                // actually pulls those companions in (videos never see stills wording).
+                model.deletionConfirmMessage(for: selectedClips),
                 isPresented: $isBatchDeleteConfirmPresented,
                 titleVisibility: .visible
             ) {
@@ -733,7 +788,7 @@ struct MediaBrowserView: View {
     }
 
     private var gridCells: some View {
-        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 16) {
+        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 4) {
             ForEach(displayedClips) { clip in
                 MediaClipCell(
                     clip: clip,
@@ -744,6 +799,7 @@ struct MediaBrowserView: View {
                         ?? model.clipBufferedFraction(clip),
                     isStreaming: model.isClipStreaming(clip),
                     hasRawSibling: model.rawSibling(of: clip) != nil,
+                    burstCount: model.burstSeries(for: clip)?.count,
                     isSelecting: isSelecting,
                     isSelected: selectedClipIDs.contains(clip.id),
                     onOpen: { open(clip) },
@@ -934,6 +990,11 @@ struct MediaBrowserView: View {
     private func open(_ clip: MediaClip) {
         if isSelecting {
             toggleSelection(clip)
+            return
+        }
+        // A burst representative opens the series view (its other frames are hidden in the grid).
+        if model.burstSeries(for: clip) != nil {
+            seriesRepresentative = clip
             return
         }
         if clip.mediaKind == .photo {
@@ -1337,7 +1398,8 @@ private struct MediaClipListRow: View {
             guard !isSelecting else { return }
             onBeginSelection?()
         }
-        .task(id: localURL) {
+        // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
+        .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
             await loadThumbnail()
             await loadDuration()
         }
@@ -1379,8 +1441,8 @@ private struct MediaClipListRow: View {
     }
 
     private func loadThumbnail() async {
-        if thumbnail != nil { return }
-        let cacheKey = "\(clip.id)#list" as NSString
+        // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
+        let cacheKey = "\(clip.id)#list#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
             thumbnail = cached
             return
@@ -1390,7 +1452,11 @@ private struct MediaClipListRow: View {
             thumbnail = image
         }
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
-            if let image = UIImage(data: data) {
+            // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
+            // stands in so portrait shots render upright.
+            if let image = await MediaCellImageLoader.shared.downsampled(
+                data: data, maxPixelSize: 480, fallbackOrientation: clip.exifOrientation)
+            {
                 present(image)
                 return
             }
@@ -1400,7 +1466,7 @@ private struct MediaClipListRow: View {
         }
         if isPhoto, isDownloaded, let localURL,
             let image = await MediaCellImageLoader.shared.downsampled(
-                at: localURL, maxPixelSize: 640)
+                at: localURL, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
         {
             present(image)
             return
@@ -1409,7 +1475,8 @@ private struct MediaClipListRow: View {
             await model.ensureThumbnail(for: clip)
             if let cachedURL = model.clipThumbnailURL(clip),
                 let data = try? Data(contentsOf: cachedURL),
-                let image = UIImage(data: data)
+                let image = await MediaCellImageLoader.shared.downsampled(
+                    data: data, maxPixelSize: 480, fallbackOrientation: clip.exifOrientation)
             {
                 present(image)
             }
@@ -1671,6 +1738,261 @@ private struct MediaCellFramesKey: PreferenceKey {
     }
 }
 
+/// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
+/// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
+/// action. A series that loses frames until one remains degrades back to a normal grid cell.
+/// A centred, non-interactive progress card shown while a batch delete runs — the grid holds
+/// steady behind it and refreshes once when the deletion finishes.
+private struct MediaDeletionProgressOverlay: View {
+    let progress: MediaDeletionProgress
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 6) {
+                Text(
+                    "Deleting \(progress.selectedCount) \(progress.selectedCount == 1 ? "item" : "items")…"
+                )
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+                if progress.hasCompanionFiles {
+                    // Make the inflated file count legible: 8 picks can be 16 files once each
+                    // RAW+JPEG pair (and any backup copies) are counted.
+                    Text("\(progress.completed) of \(progress.total) files · incl. RAW + copies")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(LiveDesign.muted)
+                } else {
+                    Text("\(progress.completed) of \(progress.total)")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(LiveDesign.muted)
+                }
+                ProgressView(value: progress.fraction)
+                    .progressViewStyle(.linear)
+                    .tint(LiveDesign.accent)
+                    .frame(width: 220)
+                    .padding(.top, 6)
+                    .animation(.easeInOut(duration: 0.2), value: progress.fraction)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .allowsHitTesting(true)  // swallow taps so the grid can't be interacted with mid-delete
+    }
+}
+
+private struct MediaBurstSeriesView: View {
+    @Environment(NativeAppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let representative: MediaClip
+    @State private var members: [MediaClip] = []
+    @State private var selectedID: String?
+    @State private var confirmDeleteAll = false
+
+    private var selected: MediaClip? {
+        members.first { $0.id == selectedID } ?? members.first
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let selected {
+                // The selected frame reuses the full photo viewer — streaming decode, zoom,
+                // rating, RAW toggle, share, and single-frame delete all keep working.
+                // Recreated per frame (`.id`) so its per-clip state and stream reset cleanly.
+                MediaPhotoViewer(
+                    clip: selected,
+                    onDeleteAll: { confirmDeleteAll = true },
+                    onDeleted: { advanceAfterDeletion(of: selected) }
+                )
+                .id(selected.id)
+            }
+            // Delete-all runs over this fullScreenCover, so the progress bar mounts here too
+            // (the browser-level overlay is behind the cover).
+            if let progress = model.mediaDeletionProgress {
+                MediaDeletionProgressOverlay(progress: progress)
+                    .transition(.opacity)
+                    .zIndex(6)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            // The scrubber sits above the home indicator via the safe-area inset; the viewer's
+            // rating row stacks above it automatically (its chrome respects the inset edge).
+            if let selected, members.count > 1 {
+                BurstFilmstrip(
+                    members: members,
+                    selectedID: selected.id,
+                    onSelect: { selectedID = $0 }
+                )
+            }
+        }
+        .statusBarHidden()
+        .onAppear {
+            members = model.burstMembers(of: representative)
+            selectedID = members.first?.id
+        }
+        .confirmationDialog(
+            "Delete this burst of \(members.count) frames?",
+            isPresented: $confirmDeleteAll, titleVisibility: .visible
+        ) {
+            Button("Delete \(members.count) frames", role: .destructive) {
+                let targets = members
+                Task {
+                    _ = await model.deleteMediaClips(targets)
+                    dismiss()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(burstDeleteAllMessage)
+        }
+    }
+
+    /// Names what delete-all actually removes — the cross-card/pair notes appear only when
+    /// the plan really pulls those companions in.
+    private var burstDeleteAllMessage: String {
+        var message = "This removes every frame in the series from the card."
+        let plan = model.deletionPlan(for: members)
+        if plan.pairCount > 0 {
+            message += " Both the RAW and JPEG files of each pair are removed."
+        }
+        if plan.backupCount > 0 {
+            message += " The backup copies on the other card are removed too."
+        }
+        message += " This can't be undone."
+        return message
+    }
+
+    /// Drops the deleted frame from the strip and shows its neighbour; a series that empties
+    /// (or degrades to nothing worth paging) closes back to the grid.
+    private func advanceAfterDeletion(of clip: MediaClip) {
+        let index = members.firstIndex { $0.id == clip.id } ?? 0
+        members.removeAll { $0.id == clip.id }
+        guard !members.isEmpty else {
+            dismiss()
+            return
+        }
+        selectedID = members[min(index, members.count - 1)].id
+    }
+}
+
+/// iPhone-Photos-style burst scrubber: dragging scrolls the strip with the centered thumb
+/// highlighting live; the displayed frame commits when the scroll SETTLES, not on every
+/// intermediate frame. The full viewer is heavy (it re-streams the frame), so committing on
+/// every thumb that passes center used to recreate it dozens of times per drag — the lag and
+/// "Preparing image…" storm Erik saw. Tapping a thumb jumps to it immediately.
+private struct BurstFilmstrip: View {
+    let members: [MediaClip]
+    let selectedID: String
+    let onSelect: (String) -> Void
+    /// The thumb currently under the centre line — drives the live highlight only, NOT the
+    /// heavy viewer (which commits when the scrub settles).
+    @State private var scrolledID: String?
+    /// Debounces the commit so the frame lands once the scrub stops, not on every thumb that
+    /// crosses centre. Cancelled on each intermediate move.
+    @State private var commitTask: Task<Void, Never>?
+
+    /// Widest a thumb gets (selected). Half of it is subtracted from the side inset so the
+    /// first/last frame can sit dead-centre.
+    private static let maxThumbWidth: CGFloat = 46
+
+    var body: some View {
+        GeometryReader { proxy in
+            // Enough leading/trailing space that ANY thumb — including the first and last —
+            // can scroll to the centre anchor (was a fixed 130, far too little on a wide
+            // landscape screen, so the edge frames were unreachable by scrubbing).
+            let sideInset = max(0, proxy.size.width / 2 - Self.maxThumbWidth / 2)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 4) {
+                    ForEach(members) { member in
+                        FilmstripThumb(
+                            clip: member, isSelected: member.id == (scrolledID ?? selectedID)
+                        )
+                        .onTapGesture { onSelect(member.id) }
+                        .id(member.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollPosition(id: $scrolledID, anchor: .center)
+            .scrollTargetBehavior(.viewAligned)
+            .contentMargins(.horizontal, sideInset, for: .scrollContent)
+        }
+        .frame(height: 56)
+        .onAppear { scrolledID = selectedID }
+        // Commit the displayed frame only after the scrub settles (~140ms idle): the heavy
+        // viewer re-streams each frame, so committing on every thumb that crosses centre was
+        // the lag + "Preparing image…" storm. Each intermediate move cancels the prior commit.
+        .onChange(of: scrolledID) { _, newValue in
+            commitTask?.cancel()
+            guard let newValue, newValue != selectedID else { return }
+            commitTask = Task {
+                try? await Task.sleep(for: .milliseconds(140))
+                guard !Task.isCancelled else { return }
+                onSelect(newValue)
+            }
+        }
+        .onChange(of: selectedID) { _, newValue in
+            // External selection (tap, deletion advance) re-centres the strip; a settle-commit
+            // already has scrolledID == newValue, so this no-ops for scrubs.
+            guard scrolledID != newValue else { return }
+            withAnimation(.easeOut(duration: 0.2)) { scrolledID = newValue }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+/// One scrubber thumb — the camera thumbnail at strip size, widened when selected (Photos
+/// style). Fetches the thumb from the body when it isn't cached yet.
+private struct FilmstripThumb: View {
+    let clip: MediaClip
+    let isSelected: Bool
+    @Environment(NativeAppModel.self) private var model
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4, style: .continuous).fill(LiveDesign.surface)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
+        }
+        .frame(width: isSelected ? 46 : 30, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(
+                    isSelected ? LiveDesign.accent : Color.clear, lineWidth: 1.5)
+        )
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .task(id: clip.id) { await load() }
+    }
+
+    private func load() async {
+        let cacheKey = "\(clip.id)#strip#o\(clip.exifOrientation ?? 0)" as NSString
+        if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
+            image = cached
+            return
+        }
+        func decodeCachedThumb() async -> UIImage? {
+            guard let url = model.clipThumbnailURL(clip) else { return nil }
+            return await MediaCellImageLoader.shared.downsampled(
+                at: url, maxPixelSize: 120, fallbackOrientation: clip.exifOrientation)
+        }
+        var loaded = await decodeCachedThumb()
+        if loaded == nil, clip.handle != nil {
+            await model.ensureThumbnail(for: clip)
+            loaded = await decodeCachedThumb()
+        }
+        if let loaded {
+            MediaCellThumbnailCache.shared.setObject(loaded, forKey: cacheKey)
+            image = loaded
+        }
+    }
+}
+
 private struct MediaClipCell: View {
     let clip: MediaClip
     let isDownloaded: Bool
@@ -1681,6 +2003,8 @@ private struct MediaClipCell: View {
     let isStreaming: Bool
     /// A same-stem RAW rides behind this JPEG — the cell shows one item for the pair.
     var hasRawSibling: Bool = false
+    /// Frame count when this cell represents a burst series (nil for an ordinary clip).
+    var burstCount: Int?
     var isSelecting: Bool = false
     var isSelected: Bool = false
     let onOpen: () -> Void
@@ -1695,7 +2019,7 @@ private struct MediaClipCell: View {
     private var isPhoto: Bool { clip.mediaKind == .photo }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
             ZStack {
                 RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
                     .fill(LiveDesign.surface)
@@ -1746,6 +2070,22 @@ private struct MediaClipCell: View {
                         .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 1)
                 }
             }
+            .overlay(alignment: .topLeading) {
+                // Burst series: one cell stands for the run, badged with its frame count (like
+                // the body's series card). Tapping the cell opens the series view.
+                if let burstCount, !isSelecting {
+                    HStack(spacing: 2) {
+                        Image(systemName: "square.stack.3d.up.fill").font(.system(size: 9))
+                        Text("\(burstCount)")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    }
+                    .foregroundStyle(LiveDesign.text)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(8)
+                }
+            }
             .contentShape(
                 RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
             )
@@ -1777,7 +2117,8 @@ private struct MediaClipCell: View {
                 )
             }
         }
-        .task(id: localURL) {
+        // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
+        .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
             await loadThumbnail()
             await loadDuration()
         }
@@ -1860,8 +2201,8 @@ private struct MediaClipCell: View {
     }
 
     private func loadThumbnail() async {
-        if thumbnail != nil { return }
-        let cacheKey = "\(clip.id)#grid" as NSString
+        // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
+        let cacheKey = "\(clip.id)#grid#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
             thumbnail = cached
             return
@@ -1871,7 +2212,11 @@ private struct MediaClipCell: View {
             thumbnail = image
         }
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
-            if let image = UIImage(data: data) {
+            // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
+            // stands in so portrait shots render upright.
+            if let image = await MediaCellImageLoader.shared.downsampled(
+                data: data, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
+            {
                 present(image)
                 return
             }
@@ -1881,7 +2226,7 @@ private struct MediaClipCell: View {
         }
         if isPhoto, isDownloaded, let localURL,
             let image = await MediaCellImageLoader.shared.downsampled(
-                at: localURL, maxPixelSize: 640)
+                at: localURL, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
         {
             present(image)
             return
@@ -1890,7 +2235,8 @@ private struct MediaClipCell: View {
             await model.ensureThumbnail(for: clip)
             if let cachedURL = model.clipThumbnailURL(clip),
                 let data = try? Data(contentsOf: cachedURL),
-                let image = UIImage(data: data)
+                let image = await MediaCellImageLoader.shared.downsampled(
+                    data: data, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
             {
                 present(image)
                 return
@@ -1924,6 +2270,11 @@ private struct MediaClipCell: View {
 /// needed. Same-stem RAW+JPEG pairs open on the JPEG with a JPG ⇄ RAW toggle beside Share.
 struct MediaPhotoViewer: View {
     let clip: MediaClip
+    /// Burst-series hosting: shows a "Delete all" action for the whole set in the top bar.
+    var onDeleteAll: (() -> Void)? = nil
+    /// Burst-series hosting: called after a single-frame delete instead of dismissing, so the
+    /// series view can advance to the neighbouring frame.
+    var onDeleted: (() -> Void)? = nil
     @Environment(NativeAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
@@ -1936,6 +2287,8 @@ struct MediaPhotoViewer: View {
     @State private var isDeleteConfirmPresented = false
     /// Camera-read star rating; nil until loaded (or unreachable — row hidden).
     @State private var ratingStars: Int?
+    /// Transient message shown when the body refuses a rating write (with its response code).
+    @State private var ratingToast: String?
     /// RAW side of the JPG/RAW toggle is active (paired stills only).
     @State private var showingRaw = false
 
@@ -1989,28 +2342,58 @@ struct MediaPhotoViewer: View {
                     if rawSibling != nil {
                         sideToggle
                     }
+                    if let onDeleteAll {
+                        Button(action: onDeleteAll) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "trash")
+                                Text("Delete all")
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .liquidGlass(in: Capsule(), interactive: true)
+                        }
+                        .buttonStyle(.zcTapTarget)
+                    }
                     deleteButton
                     shareButton
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 Spacer()
-                if let stars = ratingStars {
-                    StarRatingRow(stars: stars) { target in
-                        let previous = ratingStars
-                        ratingStars = target
-                        Task {
-                            // The camera stays source of truth: confirm the write with a
-                            // readback (the body rounds off-step values down).
-                            if await model.setMediaStarRating(target, for: clip) {
-                                ratingStars = await model.mediaStarRating(for: clip) ?? target
-                            } else {
-                                ratingStars = previous
+                VStack(spacing: 10) {
+                    if let ratingToast {
+                        Text(ratingToast)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(LiveDesign.text)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .liquidGlass(in: Capsule(), interactive: true)
+                            .padding(.horizontal, 24)
+                            .transition(.opacity)
+                    }
+                    if let stars = ratingStars {
+                        StarRatingRow(stars: stars) { target in
+                            let previous = ratingStars
+                            ratingStars = target
+                            Task {
+                                // The camera stays source of truth (the model confirms by
+                                // readback). A refusal shows the body's response code rather
+                                // than silently rolling the star back.
+                                switch await model.setMediaStarRating(target, for: clip) {
+                                case .confirmed(let confirmed):
+                                    ratingStars = confirmed
+                                case .refused(_, let message):
+                                    ratingStars = previous
+                                    showRatingToast(message)
+                                case .offline:
+                                    ratingStars = previous
+                                }
                             }
                         }
                     }
-                    .padding(.bottom, 18)
                 }
+                .padding(.bottom, 18)
             }
         }
         .statusBarHidden()
@@ -2044,16 +2427,18 @@ struct MediaPhotoViewer: View {
         }
         .buttonStyle(.zcTapTarget)
         .confirmationDialog(
-            rawSibling == nil
-                ? "Delete this photo from the camera card?"
-                : "Delete this photo from the camera card? Both the RAW and JPEG files are removed.",
+            model.deletionConfirmMessage(for: [clip]),
             isPresented: $isDeleteConfirmPresented,
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
                 Task {
                     _ = await model.deleteMediaClips([clip])
-                    dismiss()
+                    if let onDeleted {
+                        onDeleted()  // burst hosting advances to the neighbouring frame
+                    } else {
+                        dismiss()
+                    }
                 }
             }
         }
@@ -2126,6 +2511,15 @@ struct MediaPhotoViewer: View {
         loadTask?.cancel()
         model.cancelClipStream()
         loadTask = Task { await loadImage() }
+    }
+
+    /// Briefly shows a rating-write refusal (with the body's response code) above the star row.
+    private func showRatingToast(_ message: String) {
+        withAnimation { ratingToast = message }
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            withAnimation { ratingToast = nil }
+        }
     }
 
     private var loadingMessage: String {
@@ -2229,6 +2623,9 @@ struct MediaPhotoViewer: View {
             let loaded = await MediaCellImageLoader.shared.downsampled(
                 at: url, maxPixelSize: 4096)
         else { return }
+        // The full file always carries the orientation header — learn it once so the grid's
+        // (possibly EXIF-stripped) camera thumbnails render upright from here on.
+        model.resolveEXIFOrientation(for: displayClip, at: url)
         await MainActor.run { image = loaded }
     }
 }
@@ -2592,17 +2989,21 @@ struct MediaPlayerView: View {
                 Spacer()
                 if chromeVisible, let toastMessage { toastView(toastMessage) }
                 if chromeVisible, let stars = playerRatingStars {
-                    // Clip star rating, written to the card — the camera stays source of
-                    // truth (seeded by read, confirmed by readback after every write).
+                    // Clip star rating, written to the card — the camera stays source of truth
+                    // (the model confirms by readback). A refusal surfaces the body's response
+                    // code in a toast instead of a silent rollback.
                     StarRatingRow(stars: stars) { target in
                         let previous = playerRatingStars
                         playerRatingStars = target
                         let clip = activeClip
                         Task {
-                            if await model.setMediaStarRating(target, for: clip) {
-                                playerRatingStars =
-                                    await model.mediaStarRating(for: clip) ?? target
-                            } else {
+                            switch await model.setMediaStarRating(target, for: clip) {
+                            case .confirmed(let confirmed):
+                                playerRatingStars = confirmed
+                            case .refused(_, let message):
+                                playerRatingStars = previous
+                                showToast(message)
+                            case .offline:
                                 playerRatingStars = previous
                             }
                         }

@@ -46,8 +46,9 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     }
 
     /// Tools that only exist in the photography toolset — the cinema strip never offers them.
+    /// The EV meter mirrors the body's stills exposure indicator, so it is a photography tool.
     public var isPhotographyOnly: Bool {
-        self == .instantReview
+        self == .instantReview || self == .evMeter
     }
 
     /// Exposure-analysis tools on the bottom assist toolbar (Display ▸ Exposure Tools).

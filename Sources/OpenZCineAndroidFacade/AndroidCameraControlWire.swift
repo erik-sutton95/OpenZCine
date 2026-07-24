@@ -28,12 +28,44 @@ enum AndroidCameraControl: Hashable, Sendable {
     case codec
     case vibrationReduction
     case electronicVR
+    // Stills / photo-mode controls (photography pickers; the movie controls
+    // above stay untouched in photo mode — iOS `CameraPicker.isStillPicker`).
+    case stillISO
+    case stillISOAuto
+    case stillShutter
+    case stillIris
+    case stillDrive
+    case stillFocusMode
+    case stillFocusArea
+    case stillFocusSubject
+    case stillMeter
+    case stillImageArea
+    case stillImageSize
+    case stillQuality
+    case stillRawCompression
+    case stillUserModeProgram
+    case stillPictureControl
+
+    /// Whether this is one of the photography (stills) controls. Stills writes follow the iOS
+    /// pattern: fixed shared-core ladders encoded by label, the body as the final authority —
+    /// never gated on a descriptor domain the camera may not advertise in photo mode.
+    var isStillControl: Bool {
+        switch self {
+        case .stillISO, .stillISOAuto, .stillShutter, .stillIris, .stillDrive, .stillFocusMode,
+            .stillFocusArea, .stillFocusSubject, .stillMeter, .stillImageArea, .stillImageSize,
+            .stillQuality, .stillRawCompression, .stillUserModeProgram, .stillPictureControl:
+            true
+        default:
+            false
+        }
+    }
 
     /// Whether a write must match the active Swift-owned capability snapshot.
     /// Exposure mode remains the one iOS-parity control whose fixed program labels are owned by
-    /// the shared decoder rather than a body descriptor.
+    /// the shared decoder rather than a body descriptor; the stills set mirrors iOS's
+    /// label-encoded writes with the body as authority.
     var requiresCapabilityValidation: Bool {
-        self != .exposureMode && self != .isoAuto
+        self != .exposureMode && self != .isoAuto && !isStillControl
     }
 
     /// When the capability domain is still empty (descriptor bootstrap pending, or
@@ -51,6 +83,10 @@ enum AndroidCameraControl: Hashable, Sendable {
             true
         case .whiteBalanceTint, .resolutionFrameRate, .codec, .electronicVR:
             false
+        default:
+            // Stills controls skip capability validation outright (`isStillControl`), so this
+            // flag never gates them.
+            isStillControl
         }
     }
 
@@ -74,15 +110,30 @@ enum AndroidCameraControl: Hashable, Sendable {
         case .audio32BitFloat: .audio32BitFloat
         case .resolutionFrameRate: .resolution
         case .codec: .codec
+        case .stillISO: .stillISO
+        case .stillShutter: .stillShutter
+        case .stillIris: .stillIris
+        case .stillDrive: .stillDrive
+        case .stillFocusMode: .stillFocus
+        case .stillFocusArea: .stillFocusArea
+        case .stillFocusSubject: .stillFocusSubject
+        case .stillMeter: .stillMeter
+        case .stillImageSize: .stillImageSize
+        case .stillQuality: .stillQuality
+        case .stillRawCompression: .stillRawCompression
+        case .stillUserModeProgram: .stillUserModeProgram
+        case .stillPictureControl: .stillPictureControl
         case .baseISO, .shutterMode, .shutterLock, .whiteBalanceTint,
-            .vibrationReduction, .electronicVR:
+            .vibrationReduction, .electronicVR, .stillISOAuto, .stillImageArea:
+            // stillISOAuto / stillImageArea are session-local byte writes (no
+            // shared label encoder), mirroring iOS's raw property writes.
             nil
         }
     }
 
     /// Maps the established shared-core control model into this Android-only
     /// superset for source-compatible facade tests and callers. Nil for the
-    /// stills controls the Android shell has not adopted yet.
+    /// stills flash control the Android shell has not adopted.
     init?(_ control: PTPCameraControl) {
         switch control {
         case .iso: self = .iso
@@ -101,9 +152,20 @@ enum AndroidCameraControl: Hashable, Sendable {
         case .windFilter: self = .windFilter
         case .attenuator: self = .attenuator
         case .audio32BitFloat: self = .audio32BitFloat
-        case .stillISO, .stillShutter, .stillIris, .stillDrive, .stillFocus,
-            .stillFlash, .stillMeter, .stillImageSize, .stillQuality, .stillRawCompression,
-            .stillFocusArea, .stillFocusSubject, .stillUserModeProgram, .stillPictureControl:
+        case .stillISO: self = .stillISO
+        case .stillShutter: self = .stillShutter
+        case .stillIris: self = .stillIris
+        case .stillDrive: self = .stillDrive
+        case .stillFocus: self = .stillFocusMode
+        case .stillFocusArea: self = .stillFocusArea
+        case .stillFocusSubject: self = .stillFocusSubject
+        case .stillMeter: self = .stillMeter
+        case .stillImageSize: self = .stillImageSize
+        case .stillQuality: self = .stillQuality
+        case .stillRawCompression: self = .stillRawCompression
+        case .stillUserModeProgram: self = .stillUserModeProgram
+        case .stillPictureControl: self = .stillPictureControl
+        case .stillFlash:
             return nil
         }
     }
@@ -140,6 +202,21 @@ enum AndroidCameraControlWire {
         case 19: return .vibrationReduction
         case 20: return .electronicVR
         case 21: return .isoAuto
+        case 22: return .stillISO
+        case 23: return .stillISOAuto
+        case 24: return .stillShutter
+        case 25: return .stillIris
+        case 26: return .stillDrive
+        case 27: return .stillFocusMode
+        case 28: return .stillFocusArea
+        case 29: return .stillFocusSubject
+        case 30: return .stillMeter
+        case 31: return .stillImageArea
+        case 32: return .stillImageSize
+        case 33: return .stillQuality
+        case 34: return .stillRawCompression
+        case 35: return .stillUserModeProgram
+        case 36: return .stillPictureControl
         default: return nil
         }
     }

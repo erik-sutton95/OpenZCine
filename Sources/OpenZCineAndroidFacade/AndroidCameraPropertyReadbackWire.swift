@@ -16,6 +16,10 @@ public enum AndroidCameraPropertyRefreshRequest: Sendable {
     /// Fast needle read while the EV meter tool is visible: the body's exposure
     /// indicator only (lit-state gate on a slow stride), no round-robin advance.
     case evIndicator
+    /// Fast read of the photo/video capture selector only, so the chrome swaps
+    /// within ~1s of the body's lever (iOS polls it off the frame loop). No
+    /// round-robin advance — the heavy property set keeps its slow cadence.
+    case selector
 }
 
 /// Non-terminal result of one Android camera-property refresh.
@@ -60,7 +64,8 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         resolutionFrameRates: [String] = [],
         codecs: [String] = [],
         vibrationReduction: [String] = [],
-        electronicVR: [String] = []
+        electronicVR: [String] = [],
+        imageSizes: [String] = []
     ) {
         self.resolutionFrameRate = resolutionFrameRate
         self.codec = codec
@@ -85,6 +90,7 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         self.codecs = codecs
         self.vibrationReduction = vibrationReduction
         self.electronicVR = electronicVR
+        self.imageSizes = imageSizes
     }
 
     /// Current shared-core resolution/frame-rate label matching descriptor options.
@@ -133,6 +139,8 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
     public let vibrationReduction: [String]
     /// Electronic-VR values from the camera descriptor.
     public let electronicVR: [String]
+    /// Photo image sizes from the camera's string enumeration, verbatim.
+    public let imageSizes: [String]
 
     /// Empty capabilities before a successful descriptor refresh.
     public static let empty = AndroidCameraControlCapabilities()
@@ -261,6 +269,9 @@ public enum AndroidCameraPropertyReadbackWire {
         append("exposureBias", value: properties.exposureBias, to: &fields)
         append("shotsRemaining", value: properties.shotsRemaining.map(String.init), to: &fields)
         append("pictureControl", value: properties.pictureControl, to: &fields)
+        append("imageArea", value: properties.imageArea?.label, to: &fields)
+        append("rawCompression", value: properties.rawCompression, to: &fields)
+        append("userModeProgram", value: properties.userModeProgram, to: &fields)
         append(
             "evIndicatorSixths", value: properties.evIndicatorSixths.map(String.init), to: &fields)
         append("evIndicatorLit", value: properties.evIndicatorLit.map(String.init), to: &fields)
@@ -293,6 +304,7 @@ public enum AndroidCameraPropertyReadbackWire {
         appendOptions(
             "options.vibrationReduction", values: controls.vibrationReduction, to: &fields)
         appendOptions("options.electronicVr", values: controls.electronicVR, to: &fields)
+        appendOptions("options.imageSize", values: controls.imageSizes, to: &fields)
         return fields.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n")
     }
 

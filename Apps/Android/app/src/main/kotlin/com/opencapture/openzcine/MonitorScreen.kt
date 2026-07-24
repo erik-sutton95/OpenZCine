@@ -64,6 +64,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.platform.testTag
 import androidx.core.view.WindowCompat
@@ -89,6 +90,9 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraSessionEvent
+import com.opencapture.openzcine.core.CameraStorageStatus
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
@@ -117,6 +121,7 @@ import com.opencapture.openzcine.wear.androidWatchRelayState
 import com.opencapture.openzcine.wear.executeWearRecordCommand
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.conflate
@@ -313,6 +318,8 @@ internal fun MonitorScreen(
     liveViewGuideController: LiveViewGuideController? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
+    /** Closed diagnostics breadcrumbs for the MF drive failure surfaces. */
+    onDriveDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -327,14 +334,18 @@ internal fun MonitorScreen(
         }
     val monitorAccessibilityState = monitorCameraStatusAccessibility(cameraFeedStatus)
     val cameraProperties by session.cameraProperties.collectAsState()
-    var stillCapturing by remember { mutableStateOf(false) }
-    LaunchedEffect(stillCapturing) {
-        if (stillCapturing) {
-            // First iteration: optimistic shutter pulse until still-release is session-wired.
-            kotlinx.coroutines.delay(400)
-            stillCapturing = false
-        }
-    }
+    // Real press-tracked still release over the session (single, bulb/time,
+    // and hold-to-burst with the remote-mode bracket). [verify-on-HW]
+    val stillCapture = remember(session) { StillCaptureController(session) }
+    val stillCapturing by stillCapture.isCapturing.collectAsState()
+    // Post-capture instant playback (PLAY view-assist tool).
+    val instantReview = remember(session) { InstantReviewController(session) }
+    val instantReviewState by instantReview.review.collectAsState()
+    // MF focus-by-wire drive (on-feed vertical strip beside the system rail).
+    val mfDrive = remember(session) { MFDriveController(session) }
+    val mfDriveAtEnd by mfDrive.atEnd.collectAsState()
+    val mfDriveNetPulses by mfDrive.netPulses.collectAsState()
+    val mfDriveDialFraction by mfDrive.dialFraction.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -446,6 +457,8 @@ internal fun MonitorScreen(
     val effectiveDisplayMode =
         displayMode.takeIf(displayModeOrder::contains) ?: displayModeOrder.first()
     var locked by remember { mutableStateOf(false) }
+    // Photography's lock-side vertical assist rail (iOS `photoRailExpanded`).
+    var photoRailExpanded by remember { mutableStateOf(true) }
     var focusPointLocked by remember(session) { mutableStateOf(false) }
     var focusLockHolding by remember(session) { mutableStateOf(false) }
     var focusMoveRequestsInFlight by remember(session) { mutableStateOf(0) }
@@ -610,6 +623,9 @@ internal fun MonitorScreen(
     // iOS `captureBarFrame`: measured glass pill so the exposure picker
     // trailing-aligns to the content-hugging bar (not the wider zone slot).
     var measuredCaptureBar by remember { mutableStateOf<ZoneFrame?>(null) }
+    // iOS `topBarPickerFrames`: measured deck pills so a popdown centres under
+    // its own cell rather than the info bar's midpoint.
+    val measuredTopPills = remember { mutableStateMapOf<MonitorPickerKind, ZoneFrame>() }
     LaunchedEffect(effectiveDisplayMode) {
         if (displayMode != effectiveDisplayMode) displayMode = effectiveDisplayMode
     }
@@ -661,9 +677,45 @@ internal fun MonitorScreen(
         remember(commandPresentation, stringResolver) {
             monitorTopPillPickers(commandPresentation, stringResolver)
         }
+    val isPhotographyMode = prefersPhotographyChrome(cameraProperties)
+    // App-side photo timers (iOS photoTimerDelaySeconds / photoTimerShotCount /
+    // driveBeforeBuiltInTimer): the countdown is the app's — a remote release
+    // never runs the body's own self-timer.
+    var photoTimerDelaySeconds by remember { mutableIntStateOf(0) }
+    var photoTimerShotCount by remember { mutableIntStateOf(1) }
+    var driveBeforeBuiltInTimer by remember { mutableStateOf<String?>(null) }
+    // iOS `photoPillShowsStorage`: the SHOTS pill's storage flip-side.
+    var photoPillShowsStorage by remember { mutableStateOf(false) }
+    // The photo strip's nine tiles + stills pickers; WB reuses the movie
+    // presentation (identical popup, writes routed to the stills properties
+    // by the facade's selector).
+    val photographySettings =
+        remember(cameraProperties, captureSettings, photoTimerDelaySeconds, isPhotographyMode) {
+            if (!isPhotographyMode) {
+                emptyList()
+            } else {
+                photographyCaptureSettings(
+                    properties = cameraProperties,
+                    wbPicker =
+                        captureSettings
+                            .firstOrNull { it.kind == MonitorPickerKind.WHITE_BALANCE }
+                            ?.picker,
+                    photoTimerDelaySeconds = photoTimerDelaySeconds,
+                )
+            }
+        }
+    val photographyTopPickers =
+        remember(cameraProperties, isPhotographyMode) {
+            if (isPhotographyMode) photographyTopBarPickers(cameraProperties) else emptyMap()
+        }
     val activeMonitorPicker =
-        captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
-            ?: activeMonitorPickerKind?.let(topPillPickers::get)
+        if (isPhotographyMode) {
+            photographySettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
+                ?: activeMonitorPickerKind?.let(photographyTopPickers::get)
+        } else {
+            captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
+                ?: activeMonitorPickerKind?.let(topPillPickers::get)
+        }
     val mediaOwnsCommandChannel =
         (propertyRefreshStatus as? CameraPropertyRefreshStatus.Degraded)?.failure ==
             CameraPropertyRefreshFailure.MEDIA_BUSY
@@ -801,6 +853,231 @@ internal fun MonitorScreen(
             }
             drainCameraControlWrites()
         }
+    /**
+     * Photography write router (iOS `applyPicker` stills paths): the DRIVE
+     * timer tabs are app semantics — Built-in engages/restores the body's
+     * self-timer drive, App-timer is the in-app countdown — and stills ISO
+     * only writes where the exposure program allows it.
+     */
+    val applyPhotographyControl: (CommandControlRequest, String) -> Unit =
+        applyPhotography@{ request, label ->
+            when (request.title) {
+                "Built-in Timer" -> {
+                    // The two timers are mutually exclusive (iOS setBuiltInTimer).
+                    if (label == "On") {
+                        if (photoTimerDelaySeconds > 0) return@applyPhotography
+                        if (
+                            cameraProperties.stillCaptureMode !=
+                            StillPickerPolicy.SELF_TIMER_LABEL
+                        ) {
+                            driveBeforeBuiltInTimer = cameraProperties.stillCaptureMode
+                            applyCameraControl(
+                                request.copy(title = "DRIVE"),
+                                StillPickerPolicy.SELF_TIMER_LABEL,
+                            )
+                        }
+                    } else if (
+                        cameraProperties.stillCaptureMode == StillPickerPolicy.SELF_TIMER_LABEL
+                    ) {
+                        applyCameraControl(
+                            request.copy(title = "DRIVE"),
+                            driveBeforeBuiltInTimer ?: "Single",
+                        )
+                        driveBeforeBuiltInTimer = null
+                    }
+                }
+                "App-timer" -> {
+                    // The body's own timer owns the release while engaged —
+                    // the app timer stays off (iOS setPhotoTimer).
+                    val seconds = photoTimerSeconds(label)
+                    if (
+                        seconds == 0 ||
+                        cameraProperties.stillCaptureMode != StillPickerPolicy.SELF_TIMER_LABEL
+                    ) {
+                        photoTimerDelaySeconds = seconds
+                    }
+                }
+                else -> {
+                    if (
+                        request.control == CameraControl.STILL_ISO &&
+                        !StillPickerPolicy.allowsManualISO(cameraProperties.exposureMode)
+                    ) {
+                        return@applyPhotography
+                    }
+                    applyCameraControl(request, label)
+                }
+            }
+        }
+    // App self-timer (iOS startStillTimer/fireTimerShots): a per-second beep
+    // through usage-media playback so it stays audible per the device's silent
+    // behaviour, a white tally pulse per tick, and the shots run chained after
+    // the countdown. A second press cancels the countdown or remaining run.
+    var photoTimerRemaining by remember { mutableStateOf<Int?>(null) }
+    var photoTimerJob by remember { mutableStateOf<Job?>(null) }
+    val photoTimerTone =
+        remember { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 80) }
+    DisposableEffect(Unit) { onDispose { photoTimerTone.release() } }
+    fun firePhotoTimerShots(): Job =
+        recordScope.launch {
+            repeat(maxOf(1, photoTimerShotCount)) { index ->
+                if (index > 0) {
+                    // Each shot waits out the previous one's completion.
+                    var waitedMillis = 0
+                    while (stillCapture.isCapturing.value && waitedMillis < 20_000) {
+                        delay(150)
+                        waitedMillis += 150
+                    }
+                    if (stillCapture.isCapturing.value) return@launch
+                }
+                stillCapture.pressed(recordScope, continuousDrive = false)
+                delay(150)
+            }
+        }
+    // Photography shutter press/release (iOS shutterButtonPressed/Released):
+    // countdown/timer runs first; continuous drives latch the burst for the
+    // duration of the hold.
+    val photoShutterPressed: () -> Unit = pressed@{
+        if (photoTimerJob?.isActive == true) {
+            // Second press cancels a running countdown (or the remaining shot
+            // run), matching body behaviour.
+            photoTimerJob?.cancel()
+            photoTimerJob = null
+            photoTimerRemaining = null
+            return@pressed
+        }
+        if (photoTimerDelaySeconds > 0 && !stillCapturing) {
+            photoTimerJob =
+                recordScope.launch {
+                    try {
+                        var remaining = photoTimerDelaySeconds
+                        photoTimerRemaining = remaining
+                        photoTimerTone.startTone(
+                            android.media.ToneGenerator.TONE_PROP_BEEP, 70,
+                        )
+                        while (remaining > 0) {
+                            delay(1000)
+                            remaining -= 1
+                            photoTimerRemaining = remaining
+                            if (remaining > 0) {
+                                photoTimerTone.startTone(
+                                    android.media.ToneGenerator.TONE_PROP_BEEP, 70,
+                                )
+                            }
+                        }
+                        photoTimerTone.startTone(
+                            android.media.ToneGenerator.TONE_PROP_BEEP2, 200,
+                        )
+                        photoTimerRemaining = null
+                        firePhotoTimerShots().join()
+                    } finally {
+                        photoTimerRemaining = null
+                    }
+                }
+            return@pressed
+        }
+        if (
+            photoTimerShotCount > 1 && !stillCapturing &&
+            cameraProperties.stillCaptureMode == StillPickerPolicy.SELF_TIMER_LABEL
+        ) {
+            // Built-in timer engaged: its countdown never runs for command
+            // releases, so the shots field drives a straight run from the press.
+            photoTimerJob = firePhotoTimerShots()
+            return@pressed
+        }
+        stillCapture.pressed(
+            recordScope,
+            continuousDrive =
+                cameraProperties.stillCaptureMode in StillPickerPolicy.CONTINUOUS_DRIVES,
+        )
+    }
+    val photoShutterReleased: () -> Unit = { stillCapture.released(recordScope) }
+    // Arm the instant-review diff with the card's current handles the moment
+    // PLAY is on in photo mode (iOS seedInstantReviewBaseline call sites);
+    // leaving photo mode or losing the session drops any presented review.
+    LaunchedEffect(sessionState, isPhotographyMode, assist.instantReviewEnabled) {
+        if (
+            sessionState is CameraSessionState.Connected &&
+            isPhotographyMode &&
+            assist.instantReviewEnabled
+        ) {
+            instantReview.seedBaseline(this)
+        } else {
+            instantReview.dismiss()
+        }
+    }
+    // Completion is per-run, never per-frame — a held burst schedules exactly
+    // one review, of its last frame. Reassigned per composition so the hook
+    // reads current mode/quality state.
+    // A press that cannot proceed must explain itself — never a silent
+    // dead shutter (body refusal, busy channel, unsupported session).
+    stillCapture.onFailure = { message ->
+        Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+    }
+    // A sustained refusal (retries exhausted) explains itself once per run — the
+    // strip stays up so the next gesture tries again.
+    mfDrive.onRefusalExhausted = { message ->
+        onDriveDiagnostic(AndroidDiagnosticEvent.MF_DRIVE_REFUSED)
+        Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+    }
+    // Travel end: a firm tick as NEAR / ∞ lights (iOS impact haptic).
+    val mfHapticView = LocalView.current
+    LaunchedEffect(mfDriveAtEnd) {
+        if (mfDriveAtEnd != null) {
+            mfHapticView.performOperatorHaptic(
+                HapticFeedbackConstants.LONG_PRESS,
+                enabled = operatorSettings.hapticsEnabled.value,
+            )
+        }
+    }
+    // Bumped when a shutter fires ON THE BODY reaches the app, so the shutter button can pulse
+    // in acknowledgement (iOS `bodyShutterPulse`); the app-fired path animates via its press.
+    var bodyShutterPulse by remember { mutableIntStateOf(0) }
+    // Body-fired shutter (iOS 5e366e7): the capture-complete event syncs the
+    // app exactly as if it fired the release — instant playback against the
+    // fresh card diff plus a shots-remaining refresh — gated to photo mode
+    // and suppressed while an app release is in flight (that path schedules
+    // its own review). The diff baseline is maintained outside the shutter
+    // path, so captures the app didn't initiate resolve the same way.
+    LaunchedEffect(session) {
+        // Debounce the body-capture sync: the GetEventEx poll surfaces a burst as many
+        // ObjectAdded/CaptureComplete events (and the same shot can arrive on both the poll and
+        // the socket), so collapse them to ONE review — iOS uses a 0.8 s window.
+        var lastBodyCaptureSyncNanos = 0L
+        session.events.collect { event ->
+            if (event !is CameraSessionEvent.StillCaptureCompleted) return@collect
+            val snapshot = session.cameraProperties.value
+            val action =
+                bodyCaptureSyncAction(
+                    isPhotography = prefersPhotographyChrome(snapshot),
+                    instantReviewEnabled = assist.instantReviewEnabled,
+                    appReleaseInFlight = stillCapture.isCapturing.value,
+                )
+            if (action == BodyCaptureSync.IGNORE) return@collect
+            val nowNanos = System.nanoTime()
+            if (nowNanos - lastBodyCaptureSyncNanos < 800_000_000L) return@collect
+            lastBodyCaptureSyncNanos = nowNanos
+            // A body capture reached the app: pulse the shutter button so it visibly registers
+            // (iOS `bodyShutterPulse &+= 1`), then run the shots refresh / instant review.
+            bodyShutterPulse++
+            recordScope.launch { runCatching { session.refreshProperties() } }
+            if (action == BodyCaptureSync.REVIEW_AND_SHOTS) {
+                instantReview.onCaptureRunCompleted(
+                    recordScope,
+                    enabled = true,
+                    compression = snapshot.compression,
+                    infoLine = photographyReviewInfoLine(snapshot),
+                )
+            }
+        }
+    }
+    stillCapture.onRunCompleted = {
+        instantReview.onCaptureRunCompleted(
+            recordScope,
+            enabled = isPhotographyMode && assist.instantReviewEnabled,
+            compression = cameraProperties.compression,
+            infoLine = photographyReviewInfoLine(cameraProperties),
+        )
+    }
     // iOS shutter long-press (strip cell + open picker panel): toggle MovieTVLock.
     val shutterHapticView = LocalView.current
     val shutterLongPressToggle: () -> Unit = {
@@ -1053,8 +1330,12 @@ internal fun MonitorScreen(
         val isCommand = effectiveDisplayMode == MonitorDisplayMode.COMMAND
         // Command always uses the fit zone, matching iOS. The persisted fill
         // choice returns unchanged when the operator cycles back to Live.
+        // Photography always lays out as fit too — its feed is the still image
+        // area (3:2/1:1/16:9), and a 16:9 centre-crop "fill" of a still makes no
+        // sense (iOS `isFill = persistedAspect == .fill && !isPhotography`).
         val portraitAspect = operatorSettings.portraitFeedAspect
-        val isPortraitFill = isPortrait && !isCommand && portraitAspect.fillsViewport
+        val isPortraitFill =
+            isPortrait && !isCommand && !isPhotographyMode && portraitAspect.fillsViewport
 
         val statusBarVisible = operatorSettings.statusBarVisible.value
         val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
@@ -1098,8 +1379,7 @@ internal fun MonitorScreen(
             activeMonitorPickerKind,
         ) {
             val kind = activeMonitorPickerKind ?: return@LaunchedEffect
-            val topBar =
-                kind == MonitorPickerKind.RESOLUTION || kind == MonitorPickerKind.CODEC
+            val topBar = kind.isTopBarPicker()
             if (
                 !retainMonitorPickerForChrome(
                     mode = effectiveDisplayMode,
@@ -1129,15 +1409,27 @@ internal fun MonitorScreen(
         // two newest activations, then canonical presentation order.
         val portraitScopes =
             if (isPortrait && !isPortraitFill && effectiveDisplayMode == MonitorDisplayMode.LIVE) {
-                assist.displayedPortraitScopes
+                // Photography suppresses the cinema-only scopes at render, so the
+                // zone must bill only the photography-visible ones (just the
+                // histogram) — a band sized to the full set opens a dead gap
+                // between feed and toolbar (iOS
+                // `displayedFitScopes.filter(appliesToPhotography)`).
+                assist.displayedPortraitScopes.let { scopes ->
+                    if (isPhotographyMode) scopes.filter { it.appliesToPhotography } else scopes
+                }
             } else {
                 emptyList()
             }
         val scopeCount = portraitScopes.size
+        // Photography passes its still image-area ratio (3:2/1:1/16:9) so the
+        // portrait fit feed renders whole under the top bar; video keeps 16:9.
+        val portraitFeedAspectRatio =
+            if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
                 isPortrait, effectiveDisplayMode, isPortraitFill, scopeCount, bottomBarHeight,
+                portraitFeedAspectRatio,
             ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
@@ -1153,6 +1445,7 @@ internal fun MonitorScreen(
                         scopeCount = scopeCount,
                         mirrored = false,
                         bottomBarHeight = bottomBarHeight,
+                        portraitFeedAspectRatio = portraitFeedAspectRatio,
                     ),
                 )
             }
@@ -1355,6 +1648,37 @@ internal fun MonitorScreen(
                 recordConfirmationPending = pendingRecordTarget != null,
             )
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
+        // Photography's landscape feed: the still image-area's shape centred in
+        // the clear box between the chrome lanes — the rail and capture band
+        // never overlap the image (iOS centered letterbox + reserved lanes).
+        val landscapePhotoFeed =
+            if (!isPortrait && isPhotographyMode && !isCommand) {
+                val batteryTrailing =
+                    zones.batteryPhone?.let { anchor ->
+                        val stack = batteryRowStackFrame(anchor = anchor, lock = zones.lock)
+                        stack.x + stack.width
+                    }
+                val leftChromeTrailing =
+                    maxOf(zones.lock.x + zones.lock.width, batteryTrailing ?: 0f)
+                val railLaneTrailing =
+                    if (assistToolbarVisible) {
+                        leftChromeTrailing + 12f + ASSIST_RAIL_EXPANDED_WIDTH_DP + 8f
+                    } else {
+                        leftChromeTrailing + 8f
+                    }
+                val rightRailLeading =
+                    minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x) - 8f
+                photographyFeedFrame(
+                    cinemaFeed = zones.feed,
+                    viewport = physicalViewport,
+                    imageArea = cameraProperties.imageArea,
+                    leadingLaneTrailing = railLaneTrailing,
+                    trailingLaneLeading = rightRailLeading,
+                )
+            } else {
+                null
+            }
+        val effectiveFeed = landscapePhotoFeed ?: zones.feed
         val analysisChromeMounts =
             remember(
                 isPortrait,
@@ -1568,7 +1892,7 @@ internal fun MonitorScreen(
         Box(Modifier.fillMaxSize().then(sceneLayer)) {
         if (!isCommand) {
             Box(
-                Modifier.zone(zones.feed)
+                Modifier.zone(effectiveFeed)
                     // Feed-only recording for bar/chip glass (over the video).
                     .then(
                         if (glass.tier == GlassTier.FULL && glass.layerBackdrop != null) {
@@ -1705,6 +2029,7 @@ internal fun MonitorScreen(
                     cleanMode = isClean,
                     isPortrait = isPortrait,
                     aspectFill = isPortraitFill,
+                    isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
@@ -1738,6 +2063,7 @@ internal fun MonitorScreen(
                     operatorSettings = operatorSettings,
                     commandPresentation = commandPresentation,
                     captureSettings = captureSettings,
+                    photographySettings = photographySettings,
                     activeMonitorPicker = activeMonitorPickerKind,
                     commandControlsEnabled = commandControlsEnabled,
                     pendingCommandControl = pendingCommandControl,
@@ -1745,7 +2071,10 @@ internal fun MonitorScreen(
                     enabledDisplayModeOrder = displayModeOrder,
                     cameraProperties = cameraProperties,
                     stillCapturing = stillCapturing,
-                    onShutter = { stillCapturing = true },
+                    bodyShutterPulse = bodyShutterPulse,
+                    onShutterPressed = photoShutterPressed,
+                    onShutterReleased = photoShutterReleased,
+                    photoTimerRemaining = photoTimerRemaining,
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
                     onRecord = requestRecordToggle,
@@ -1840,8 +2169,22 @@ internal fun MonitorScreen(
                     // the lock, so the band always clears it — same as iPhone
                     // geometry.
                     if (operatorSettings.statusBarVisible.value) {
-                        Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
-                            FitScale(zones.infoBar.width.dp) {
+                        // Photography centres the deck pill group over the
+                        // centred FEED, not the band (iOS centres the deck
+                        // over the feed) — a band slice symmetric about the
+                        // feed midpoint makes Center land there.
+                        val deckHost =
+                            if (isPhotography) {
+                                photographyStripHostFrame(
+                                    band = zones.infoBar,
+                                    feedCenterX =
+                                        effectiveFeed.x + effectiveFeed.width / 2f,
+                                )
+                            } else {
+                                zones.infoBar
+                            }
+                        Box(Modifier.zone(deckHost), contentAlignment = Alignment.Center) {
+                            FitScale(deckHost.width.dp) {
                                 InfoPill(
                                     compact = isClean,
                                     recording = recording,
@@ -1849,8 +2192,18 @@ internal fun MonitorScreen(
                                     sessionState = sessionState,
                                     isPhotography = isPhotography,
                                     shotsRemaining = cameraProperties.shotsRemaining,
-                                    stillSize = cameraProperties.stillSizeCompactLabel(),
+                                    stillSize =
+                                        cameraProperties.stillSizeAreaLabel()
+                                            ?: cameraProperties.stillSizeCompactLabel(),
                                     stillQuality = cameraProperties.stillQualityCompactLabel(),
+                                    photoStorage = cameraProperties.storage,
+                                    photoPillShowsStorage = photoPillShowsStorage,
+                                    onTogglePhotoPill = {
+                                        photoPillShowsStorage = !photoPillShowsStorage
+                                    },
+                                    onPillBounds = { kind, frame ->
+                                        measuredTopPills[kind] = frame
+                                    },
                                     recReadoutVisible = operatorSettings.recReadoutVisible.value,
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
@@ -1894,17 +2247,19 @@ internal fun MonitorScreen(
                     // Photography keeps the toolbar but narrows it to the
                     // stills-relevant tools (iOS `appliesToPhotography`).
                     if (!isClean) {
-                        if (assistToolbarVisible) {
+                        // Photography moves the assist tools to the lock-side
+                        // vertical rail (below), handing the whole band to the
+                        // capture strip (iOS `assistVisible = … && !isPhotographyBand`).
+                        if (assistToolbarVisible && !isPhotography) {
                             zones.assistStrip?.let { strip ->
                                 AssistToolbar(
                                     assist,
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     visibleTools =
                                         frontPinnedAssistTools(
-                                            operatorSettings.visibleAssistToolbarTools.filter {
-                                                !isPhotography || it.appliesToPhotography
-                                            },
-                                            photography = isPhotography,
+                                            operatorSettings.visibleAssistToolbarTools
+                                                .filterNot { it.isPhotographyOnly },
+                                            photography = false,
                                         ),
                                     framingConfiguration = localFraming,
                                     onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
@@ -1914,24 +2269,115 @@ internal fun MonitorScreen(
                                 )
                             }
                         }
+                        // Photography's collapsible vertical assist rail,
+                        // top-aligned next to the lock button and expanding
+                        // downward until it reaches the capture band (iOS
+                        // photo-rail placement in `MonitorUnified`).
+                        if (assistToolbarVisible && isPhotography && !locked) {
+                            zones.assistStrip?.let { band ->
+                                val batteryTrailing =
+                                    zones.batteryPhone?.let { anchor ->
+                                        val stack =
+                                            batteryRowStackFrame(
+                                                anchor = anchor,
+                                                lock = zones.lock,
+                                            )
+                                        stack.x + stack.width
+                                    }
+                                val railFrame =
+                                    photographyAssistRailFrame(
+                                        lock = zones.lock,
+                                        batteryTrailing = batteryTrailing,
+                                        assistBand = band,
+                                        measuredCaptureBar = measuredCaptureBar,
+                                        expanded = photoRailExpanded,
+                                    )
+                                PortraitFillAssistRail(
+                                    state = assist,
+                                    expanded = photoRailExpanded,
+                                    onExpandedChange = { photoRailExpanded = it },
+                                    modifier = Modifier.zone(railFrame),
+                                    visibleTools =
+                                        frontPinnedAssistTools(
+                                            operatorSettings.visibleAssistToolbarTools.filter {
+                                                it.appliesToPhotography
+                                            },
+                                            photography = true,
+                                        ),
+                                    framingConfiguration = localFraming,
+                                    onToggleFramingTool =
+                                        operatorSettings::toggleLocalFramingTool,
+                                    hapticsEnabled = operatorSettings.hapticsEnabled.value,
+                                    enabled = !locked,
+                                    onLongPressToolAnchored = openAssistOptions,
+                                )
+                            }
+                        }
                         if (cameraValuesVisible) {
                             zones.captureStrip?.let { strip ->
+                                // Photography owns the whole band (assist lives
+                                // on the rail) and centres the strip under the
+                                // centred FEED, not the screen (iOS photo band
+                                // alignment .center).
+                                val stripHost =
+                                    if (isPhotography) {
+                                        val bandLeft =
+                                            minOf(zones.assistStrip?.x ?: strip.x, strip.x)
+                                        val bandRight =
+                                            maxOf(
+                                                (zones.assistStrip?.let { it.x + it.width })
+                                                    ?: (strip.x + strip.width),
+                                                strip.x + strip.width,
+                                            )
+                                        photographyStripHostFrame(
+                                            band =
+                                                ZoneFrame(
+                                                    bandLeft,
+                                                    strip.y,
+                                                    bandRight - bandLeft,
+                                                    strip.height,
+                                                ),
+                                            feedCenterX =
+                                                effectiveFeed.x + effectiveFeed.width / 2f,
+                                        )
+                                    } else {
+                                        strip
+                                    }
                                 Box(
-                                    Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
-                                    contentAlignment = Alignment.CenterEnd,
+                                    Modifier.zone(stripHost).alpha(if (locked) 0.4f else 1f),
+                                    contentAlignment =
+                                        if (isPhotography) {
+                                            Alignment.Center
+                                        } else {
+                                            Alignment.CenterEnd
+                                        },
                                 ) {
                                     if (isPhotography) {
-                                        PhotographyCaptureStrip(
-                                            properties = cameraProperties,
-                                            onOpenControl = { label ->
-                                                Toast.makeText(
-                                                        appContext,
-                                                        photographyControlStubMessage(label),
-                                                        Toast.LENGTH_SHORT,
+                                        // The stills strip is the SAME shared
+                                        // strip — cells, active accents, and
+                                        // pinned widths — over the stills
+                                        // presentation set (iOS reuses
+                                        // CaptureSettingButton for both).
+                                        MonitorCaptureStrip(
+                                            settings = photographySettings,
+                                            activePicker = activeMonitorPickerKind,
+                                            controlsEnabled = commandControlsEnabled,
+                                            pendingControl = pendingCommandControl,
+                                            onOpenPicker = { kind ->
+                                                activeCommandControl = null
+                                                activeMonitorPickerKind =
+                                                    nextMonitorPicker(
+                                                        current = activeMonitorPickerKind,
+                                                        requested = kind,
+                                                        controlsEnabled =
+                                                            commandControlsEnabled &&
+                                                                pendingCommandControl == null,
                                                     )
-                                                    .show()
+                                                commandControlFeedback = null
                                             },
-                                            maxContentWidth = strip.width.dp,
+                                            onShutterLongPress = null,
+                                            onBarBoundsInRoot = { measuredCaptureBar = it },
+                                            maxContentWidth = stripHost.width.dp,
                                         )
                                     } else {
                                         MonitorCaptureStrip(
@@ -1962,10 +2408,64 @@ internal fun MonitorScreen(
                     }
                 }
 
+                // Focus-by-wire scrub strip: on the live view just left of the right system rail
+                // in an AF focus mode. The camera refuses a remote drive in MF (Invalid_Status) —
+                // the lens ring owns focus there — so the scrub shows in AF modes (AF-S/AF-C/AF-F/
+                // AF-A) and acts as a manual-focus override. A refused drive is transient, so the
+                // strip never hides on a refusal; it retries.
+                if (
+                    // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`) —
+                    // off hides the strip even in an AF focus mode.
+                    operatorSettings.mfDriveScrubEnabled.value &&
+                    // Photography only (iOS `showsMFDriveScrub … && isPhotographyMode`).
+                    isPhotographyMode &&
+                    !isClean && !locked &&
+                    sessionState is CameraSessionState.Connected &&
+                    !isDemoSession &&
+                    cameraProperties.focusMode != null &&
+                    cameraProperties.focusMode != "MF" &&
+                    // The strip absorbs taps (it drives on drag, swallows plain taps
+                    // so they can't move the AF point under it). Mounting it over an
+                    // open picker/popup would eat the popup's dismiss taps — picking
+                    // MF in the FOCUS popup flips focusMode while that popup is still
+                    // up, so it waits for every panel to close (iOS `showsMFDriveScrub
+                    // … && activePanel == nil`).
+                    activeCommandControl == null &&
+                    activeMonitorPickerKind == null &&
+                    activeAssistOptions == null
+                ) {
+                    val rightRailLeading =
+                        minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)
+                    // Re-arm the relative position when the dial (re)appears.
+                    DisposableEffect(Unit) {
+                        mfDrive.resetDial()
+                        onDispose {}
+                    }
+                    MFDriveStrip(
+                        atEnd = mfDriveAtEnd,
+                        enabled = true,
+                        onDrive = { pulses -> mfDrive.drive(recordScope, pulses) },
+                        modifier =
+                            Modifier.zone(
+                                mfDriveStripFrame(physicalViewport, rightRailLeading),
+                            ),
+                        netPulses = mfDriveNetPulses,
+                        dialFraction = mfDriveDialFraction,
+                    )
+                }
+
                 if (railPlan.fullRailsVisible) {
                     // Persistent side rails: lock + authoritative batteries +
-                    // record / configured DISP / media / settings.
-                    LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
+                    // record / configured DISP / media / settings. The whole
+                    // leading cluster nudges left off the feed edge; the lock and
+                    // the battery shift by the SAME amount so their deliberate gap
+                    // is preserved.
+                    LockButton(
+                        locked,
+                        Modifier.zone(
+                            zones.lock.copy(x = zones.lock.x - LEADING_RAIL_LEFT_NUDGE_DP),
+                        ),
+                    ) { locked = !locked }
                     // Like iOS seating the combined indicator directly under the
                     // lock button, the two battery rows stack at the top of the
                     // leading lane, just below the lock's clearance.
@@ -1975,7 +2475,13 @@ internal fun MonitorScreen(
                             cameraPercent = cameraReadouts.batteryPercent,
                             modifier =
                                 Modifier.zone(
-                                    batteryRowStackFrame(anchor = anchor, lock = zones.lock),
+                                    batteryRowStackFrame(
+                                        anchor =
+                                            anchor.copy(
+                                                x = anchor.x - LEADING_RAIL_LEFT_NUDGE_DP,
+                                            ),
+                                        lock = zones.lock,
+                                    ),
                                 ),
                             phoneExternalPower = phoneBatteryReadout.externalPower,
                             cameraExternalPower = cameraReadouts.externalPower,
@@ -2008,8 +2514,11 @@ internal fun MonitorScreen(
                     if (prefersPhotographyChrome(cameraProperties)) {
                         PhotographyShutterButton(
                             isCapturing = stillCapturing,
-                            onClick = { stillCapturing = true },
                             modifier = Modifier.zone(zones.record),
+                            timerRemaining = photoTimerRemaining,
+                            bodyShutterPulse = bodyShutterPulse,
+                            onPressed = photoShutterPressed,
+                            onReleased = photoShutterReleased,
                         )
                     } else {
                         RecordButton(
@@ -2033,8 +2542,10 @@ internal fun MonitorScreen(
                         if (prefersPhotographyChrome(cameraProperties)) {
                             PhotographyShutterButton(
                                 isCapturing = stillCapturing,
-                                onClick = { stillCapturing = true },
                                 modifier = Modifier.zone(zones.record),
+                                timerRemaining = photoTimerRemaining,
+                                onPressed = photoShutterPressed,
+                                onReleased = photoShutterReleased,
                             )
                         } else {
                             RecordButton(
@@ -2125,9 +2636,12 @@ internal fun MonitorScreen(
         if (focusResetVisible) {
             val bottomChromeInset =
                 with(density) { levelGaugeBottomChromeInset.toDp().value }
+            // Photography's letterboxed feed frame (not the zone map's full-bleed rect):
+            // its leading edge clears the vertical assist rail's lane by construction, so
+            // the affordance seats beside the rail like iOS instead of under it.
             val baseFrame =
                 focusResetButtonBaseFrame(
-                    feed = zones.feed,
+                    feed = effectiveFeed,
                     isPortrait = isPortrait,
                     bottomChromeInset = bottomChromeInset,
                 )
@@ -2135,7 +2649,7 @@ internal fun MonitorScreen(
                 focusResetButtonClearFrame(
                     base = baseFrame,
                     panelFrames = analysisPanelFrames.values,
-                    bounds = zones.feed,
+                    bounds = effectiveFeed,
                 )
             val resetDescription =
                 stringResource(
@@ -2186,6 +2700,8 @@ internal fun MonitorScreen(
                             viewport = physicalViewport,
                             zones = zones,
                             isCommandCenter = false,
+                            kind = picker.kind,
+                            anchorPill = measuredTopPills[picker.kind],
                         )
                     } else {
                         val anchor =
@@ -2210,7 +2726,12 @@ internal fun MonitorScreen(
                             controlsEnabled = commandControlsEnabled,
                             pendingControl = pendingCommandControl,
                             feedback = commandControlFeedback,
-                            onSelect = applyCameraControl,
+                            onSelect =
+                                if (isPhotographyMode) {
+                                    applyPhotographyControl
+                                } else {
+                                    applyCameraControl
+                                },
                             onDismiss = {
                                 if (pendingCommandControl == null) {
                                     activeMonitorPickerKind = null
@@ -2218,11 +2739,53 @@ internal fun MonitorScreen(
                                 }
                             },
                             slideFromTop = isTopDropDown,
-                            onShutterLongPress = shutterLongPressToggle,
+                            // The stills SHUTTER picker has no movie TV-lock hold.
+                            onShutterLongPress =
+                                if (isPhotographyMode) null else shutterLongPressToggle,
+                            timerShotsCount = photoTimerShotCount,
+                            onAdjustTimerShots =
+                                if (isPhotographyMode) {
+                                    { delta ->
+                                        photoTimerShotCount =
+                                            (photoTimerShotCount + delta).coerceIn(1, 9)
+                                    }
+                                } else {
+                                    null
+                                },
+                            nefCompression = cameraProperties.rawCompression,
+                            mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
+                            onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
                         )
                     }
                 }
             }
+        }
+
+        // App self-timer tally: a white border pulse at the physical edge per
+        // countdown tick (iOS timer tally), fading within each second.
+        photoTimerRemaining?.let { remaining ->
+            val pulse = remember(remaining) { Animatable(1f) }
+            LaunchedEffect(remaining) {
+                pulse.animateTo(0.2f, animationSpec = tween(durationMillis = 900))
+            }
+            Box(
+                Modifier.fillMaxSize()
+                    .border(
+                        4.dp,
+                        Color.White.copy(alpha = pulse.value),
+                        RoundedCornerShape(24.dp),
+                    ),
+            )
+        }
+
+        // Post-capture instant playback cover (photography PLAY tool): the
+        // just-captured still full-screen until the duration elapses or a tap.
+        instantReviewState?.let { review ->
+            InstantReviewOverlay(
+                review = review,
+                onDismiss = instantReview::dismiss,
+                onToggleStar = { starred -> instantReview.setStarred(recordScope, starred) },
+            )
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).
@@ -2416,12 +2979,17 @@ private fun InfoPill(
     shotsRemaining: Int? = null,
     stillSize: String? = null,
     stillQuality: String? = null,
+    photoStorage: CameraStorageStatus? = null,
+    photoPillShowsStorage: Boolean = false,
+    onTogglePhotoPill: (() -> Unit)? = null,
     activePicker: MonitorPickerKind? = null,
     resolutionPickerAvailable: Boolean = false,
     codecPickerAvailable: Boolean = false,
     pickersEnabled: Boolean = false,
     onOpenPicker: (MonitorPickerKind) -> Unit = {},
     onToggleMediaReadout: (() -> Unit)? = null,
+    /** Publishes each picker pill's root bounds so its popdown can centre under it. */
+    onPillBounds: ((MonitorPickerKind, ZoneFrame) -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.glass(ChromeShape).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -2430,23 +2998,47 @@ private fun InfoPill(
     ) {
         // Photography swaps the movie readouts for stills ones in the same
         // pill (iOS InfoPillContent): shots remaining takes the timecode slot,
-        // image size and quality take resolution and codec, as plain pills.
+        // image size and quality take resolution and codec as popup buttons.
         if (isPhotography) {
-            ShotsRemainingReadout(shotsRemaining)
+            ShotsRemainingReadout(
+                shotsRemaining,
+                storage = photoStorage,
+                showsStorage = photoPillShowsStorage,
+                onToggle = onTogglePhotoPill,
+            )
             if (!compact) {
-                ReadoutPill(stillSize ?: "—") { tint ->
+                // The SIZE pill drops the Area | Size drum down exactly like
+                // the cinema resolution/codec pills (iOS imageAreaButton).
+                ReadoutPill(
+                    stillSize ?: "—",
+                    active = activePicker == MonitorPickerKind.SIZE,
+                    onClick = {
+                        if (pickersEnabled) onOpenPicker(MonitorPickerKind.SIZE)
+                    },
+                    onBoundsInRoot =
+                        onPillBounds?.let { report ->
+                            { frame -> report(MonitorPickerKind.SIZE, frame) }
+                        },
+                ) { tint ->
                     PhotoGlyph(tint, Modifier.size(14.dp, 11.dp))
                 }
                 if (codecReadoutVisible) {
-                    ReadoutPill(stillQuality ?: "—") { tint ->
+                    ReadoutPill(
+                        stillQuality ?: "—",
+                        active = activePicker == MonitorPickerKind.QUALITY,
+                        onClick = {
+                            if (pickersEnabled) onOpenPicker(MonitorPickerKind.QUALITY)
+                        },
+                        onBoundsInRoot =
+                            onPillBounds?.let { report ->
+                                { frame -> report(MonitorPickerKind.QUALITY, frame) }
+                            },
+                    ) { tint ->
                         ApertureGlyph(tint, Modifier.size(12.dp))
                     }
                 }
-                if (mediaReadoutVisible) {
-                    ReadoutPill(media, onClick = onToggleMediaReadout) { tint ->
-                        SdCardGlyph(tint)
-                    }
-                }
+                // No MEDIA cell in photo mode — the SHOTS readout tap-toggles
+                // to the storage form instead (iOS).
             }
             if (fpsReadoutVisible) {
                 FpsChip(signalBars, fps)
@@ -2472,6 +3064,10 @@ private fun InfoPill(
                 onClick = {
                     if (pickersEnabled) onOpenPicker(MonitorPickerKind.RESOLUTION)
                 },
+                onBoundsInRoot =
+                    onPillBounds?.let { report ->
+                        { frame -> report(MonitorPickerKind.RESOLUTION, frame) }
+                    },
             ) { tint ->
                 VideoGlyph(tint)
             }
@@ -2482,6 +3078,10 @@ private fun InfoPill(
                     onClick = {
                         if (pickersEnabled) onOpenPicker(MonitorPickerKind.CODEC)
                     },
+                    onBoundsInRoot =
+                        onPillBounds?.let { report ->
+                            { frame -> report(MonitorPickerKind.CODEC, frame) }
+                        },
                 ) { tint ->
                     FilmGlyph(tint)
                 }
@@ -2523,6 +3123,7 @@ private fun PortraitChrome(
     operatorSettings: OperatorSettings,
     commandPresentation: CommandDashboardPresentation,
     captureSettings: List<MonitorCaptureSettingPresentation>,
+    photographySettings: List<MonitorCaptureSettingPresentation>,
     activeMonitorPicker: MonitorPickerKind?,
     commandControlsEnabled: Boolean,
     pendingCommandControl: CameraControl?,
@@ -2530,7 +3131,10 @@ private fun PortraitChrome(
     enabledDisplayModeOrder: List<MonitorDisplayMode>,
     cameraProperties: CameraPropertySnapshot,
     stillCapturing: Boolean,
-    onShutter: () -> Unit,
+    bodyShutterPulse: Int = 0,
+    onShutterPressed: () -> Unit,
+    onShutterReleased: () -> Unit,
+    photoTimerRemaining: Int? = null,
     onLock: () -> Unit,
     recordEnabled: Boolean,
     onRecord: () -> Unit,
@@ -2606,7 +3210,7 @@ private fun PortraitChrome(
     val photographyAssistTools =
         frontPinnedAssistTools(
             operatorSettings.visibleAssistToolbarTools.filter {
-                !isPhotography || it.appliesToPhotography
+                if (isPhotography) it.appliesToPhotography else !it.isPhotographyOnly
             },
             photography = isPhotography,
         )
@@ -2654,11 +3258,21 @@ private fun PortraitChrome(
             )
         } else {
             CommandGrid(
-                tiles = commandPresentation.tiles,
+                // Photography renders the stills strip tile-for-tile (MODE ISO
+                // SHUTTER IRIS DRIVE FOCUS WB METER PROFILE) instead of the movie
+                // RESOLUTION/CODEC/VR grid (iOS CommandPrimaryGrid). Taps route to
+                // the same stills pickers via the mapping below.
+                tiles =
+                    if (isPhotography) {
+                        photographyCommandTiles(photographySettings)
+                    } else {
+                        commandPresentation.tiles
+                    },
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
                 onOpenControl = { request ->
-                    monitorPickerKindForRequest(captureSettings, request)
+                    val pickerSource = if (isPhotography) photographySettings else captureSettings
+                    monitorPickerKindForRequest(pickerSource, request)
                         ?.let(onOpenMonitorPicker)
                         ?: onOpenCommandControl(request)
                 },
@@ -2685,31 +3299,19 @@ private fun PortraitChrome(
                 Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                 contentAlignment = Alignment.Center,
             ) {
-                if (isPhotography) {
-                    PhotographyCaptureStrip(
-                        properties = cameraProperties,
-                        onOpenControl = { label ->
-                            Toast.makeText(
-                                    context,
-                                    photographyControlStubMessage(label),
-                                    Toast.LENGTH_SHORT,
-                                )
-                                .show()
-                        },
-                        maxContentWidth = strip.width.dp,
-                    )
-                } else {
-                    MonitorCaptureStrip(
-                        settings = captureSettings,
-                        activePicker = activeMonitorPicker,
-                        controlsEnabled = commandControlsEnabled,
-                        pendingControl = pendingCommandControl,
-                        onOpenPicker = onOpenMonitorPicker,
-                        onShutterLongPress = onShutterLongPress,
-                        onBarBoundsInRoot = onCaptureBarBounds,
-                        maxContentWidth = strip.width.dp,
-                    )
-                }
+                MonitorCaptureStrip(
+                    // Photography swaps in the stills presentation set over the
+                    // same shared strip (cells, accents, pinned widths).
+                    settings = if (isPhotography) photographySettings else captureSettings,
+                    activePicker = activeMonitorPicker,
+                    controlsEnabled = commandControlsEnabled,
+                    pendingControl = pendingCommandControl,
+                    onOpenPicker = onOpenMonitorPicker,
+                    // The stills strip has no movie TV-lock hold on SHUTTER.
+                    onShutterLongPress = if (isPhotography) null else onShutterLongPress,
+                    onBarBoundsInRoot = onCaptureBarBounds,
+                    maxContentWidth = strip.width.dp,
+                )
             }
         }
     }
@@ -2770,8 +3372,11 @@ private fun PortraitChrome(
         if (isPhotography) {
             PhotographyShutterButton(
                 isCapturing = stillCapturing,
-                onClick = onShutter,
                 modifier = Modifier.size(83.dp),
+                timerRemaining = photoTimerRemaining,
+                bodyShutterPulse = bodyShutterPulse,
+                onPressed = onShutterPressed,
+                onReleased = onShutterReleased,
             )
         } else {
             RecordButton(
@@ -2932,7 +3537,7 @@ internal fun toggleShutterLockOnCamera(
 }
 
 /** Clearance between the battery row stack and the lock button above it (dp). */
-internal const val BATTERY_STACK_CLEARANCE_DP = 4f
+internal const val BATTERY_STACK_CLEARANCE_DP = 10f
 
 /**
  * Seats the stacked battery rows in the leading rail lane, directly under the

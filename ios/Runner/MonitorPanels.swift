@@ -129,17 +129,45 @@ struct CommandPrimaryGrid: View {
     /// Spring used for both the live shuffle and the drop — smooth with a touch of life.
     private let shuffle = Animation.spring(response: 0.3, dampingFraction: 0.72)
 
+    /// One resolved grid tile. Video tiles carry their `CommandTileKind` (long-press reorder);
+    /// photography tiles mirror the landscape stills strip tile-for-tile in fixed order.
+    private struct GridTileSpec: Identifiable {
+        let id: String
+        let title: String
+        let value: String
+        let picker: CameraPicker?
+        let kind: CommandTileKind?
+    }
+
+    private var tiles: [GridTileSpec] {
+        if model.isPhotographyMode {
+            return model.cameraPropertySnapshot.photographyCaptureValues.map { entry in
+                GridTileSpec(
+                    id: entry.label,
+                    title: stillsTitle(entry.label),
+                    value: entry.value,
+                    picker: CameraPicker.forValueLabel(entry.label, photography: true),
+                    kind: nil)
+            }
+        }
+        return model.visibleCommandGridOrder.map { kind in
+            GridTileSpec(
+                id: kind.rawValue, title: title(kind), value: value(kind),
+                picker: picker(kind), kind: kind)
+        }
+    }
+
     var body: some View {
         GeometryReader { proxy in
-            let order = model.visibleCommandGridOrder
-            let rows = max(1, Int((Double(order.count) / Double(columns)).rounded(.up)))
+            let tiles = self.tiles
+            let rows = max(1, Int((Double(tiles.count) / Double(columns)).rounded(.up)))
             let rowHeight = max(
                 44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows))
             let tileWidth = (proxy.size.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
             ZStack(alignment: .topLeading) {
-                ForEach(Array(order.enumerated()), id: \.element) { index, kind in
-                    let isDragging = draggingKind == kind
-                    CommandTile(title: title(kind), value: value(kind), height: rowHeight)
+                ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
+                    let isDragging = tile.kind != nil && draggingKind == tile.kind
+                    CommandTile(title: tile.title, value: tile.value, height: rowHeight)
                         .frame(width: tileWidth)
                         .scaleEffect(isDragging ? 1.06 : 1)
                         .shadow(color: .black.opacity(isDragging ? 0.5 : 0), radius: 16, y: 8)
@@ -165,14 +193,31 @@ struct CommandPrimaryGrid: View {
                 SpatialTapGesture(coordinateSpace: .named(Self.space))
                     .onEnded { value in
                         guard draggingKind == nil else { return }
+                        let current = self.tiles
                         let s = slot(
                             at: value.location, tileWidth: tileWidth, rowHeight: rowHeight,
-                            count: order.count)
-                        guard s < order.count, let picker = picker(order[s]) else { return }
+                            count: current.count)
+                        guard s < current.count, let picker = current[s].picker else { return }
                         model.showPicker(picker)
                     }
             )
-            .gesture(reorderGesture(tileWidth: tileWidth, rowHeight: rowHeight, count: order.count))
+            .gesture(reorderGesture(tileWidth: tileWidth, rowHeight: rowHeight, count: tiles.count))
+        }
+    }
+
+    /// Grid title for a photography strip label (mirrors the video tiles' casing).
+    private func stillsTitle(_ label: String) -> String {
+        switch label {
+        case "MODE": "Mode"
+        case "ISO": "ISO"
+        case "SHUTTER": "Shutter"
+        case "IRIS": "Iris"
+        case "DRIVE": "Drive"
+        case "FOCUS": "Focus"
+        case "WB": "White Bal"
+        case "METER": "Meter"
+        case "PROFILE": "Profile"
+        default: label
         }
     }
 
@@ -196,6 +241,8 @@ struct CommandPrimaryGrid: View {
         LongPressGesture(minimumDuration: 0.3)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
             .onChanged { value in
+                // Photography tiles ride the stills strip's fixed order — no reorder.
+                guard !model.isPhotographyMode else { return }
                 guard case .second(true, let drag?) = value else { return }
                 if draggingKind == nil {
                     let order = model.visibleCommandGridOrder
@@ -996,6 +1043,9 @@ struct PickerPanel: View {
                 if !activePickerModes.isEmpty {
                     modeBar
                 }
+                if picker == .focus || picker == .stillFocus {
+                    mfScrubToggleRow
+                }
             }
         }
         // Seed once on appear — NOT in `body`. Camera state is reassigned every live-view frame, so
@@ -1201,6 +1251,28 @@ struct PickerPanel: View {
         }
         .opacity(disabled ? 0.35 : 1)
         .disabled(disabled)
+    }
+
+    /// Focus popup toggle for the live-view focus scrub strip (shows in AF modes on a
+    /// focus-by-wire lens). Off hides the strip regardless of mode.
+    private var mfScrubToggleRow: some View {
+        @Bindable var model = model
+        return Toggle(isOn: $model.mfDriveScrubEnabled) {
+            Text("Focus dial")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+        }
+        .toggleStyle(SwitchToggleStyle(tint: LiveDesign.accent))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            LiveDesign.background.opacity(0.28),
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        }
     }
 
     private func timerShotsStepButton(
@@ -5444,6 +5516,107 @@ struct SettingsLiveTile: View {
             }
             lastFPSCommit = now
             displayedFPS = newValue
+        }
+    }
+}
+
+/// The "Focus dial": a thin vertical drum on the live view beside the right system rail, shown
+/// while an AF focus mode is active on a focus-by-wire lens. Drag up toward ∞, down toward NEAR;
+/// the drum's ticks scroll with the drive so it reads like a physical focus ring, and — once a
+/// full near↔∞ sweep calibrates the travel — a relative position (0 = near, 100 = ∞) is shown
+/// (the camera exposes no absolute distance for AF lenses). Travel ends light their label with a
+/// haptic. [verify-on-HW: pulses-per-point feel per lens]
+struct MFDriveVerticalScrub: View {
+    @Environment(NativeAppModel.self) private var model
+    @State private var lastDragY: CGFloat?
+    @State private var isDragging = false
+
+    /// Drag-to-pulse gain — deliberately gentle so a full sweep is a controllable focus pull.
+    private static let pulsesPerPoint = 4
+    /// Drum geometry: one tick every `pulsesPerTick` pulses, `tickSpacing` points apart.
+    private static let tickSpacing: CGFloat = 11
+    private static let pulsesPerTick: CGFloat = 220
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Text("∞")
+                .foregroundStyle(model.mfDriveAtEnd == 1 ? LiveDesign.accent : LiveDesign.muted)
+            drum
+                .frame(width: 30)
+                .frame(maxHeight: .infinity)
+            Text("NEAR")
+                .foregroundStyle(model.mfDriveAtEnd == -1 ? LiveDesign.accent : LiveDesign.muted)
+            if let fraction = model.mfDriveDialFraction {
+                Text("\(Int((fraction * 100).rounded()))")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(LiveDesign.text)
+            }
+        }
+        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .liquidGlass(in: Capsule())
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    isDragging = true
+                    let delta = (lastDragY ?? value.startLocation.y) - value.location.y
+                    lastDragY = value.location.y
+                    // Upward drag drives toward infinity. Ring-like speed response: a slow
+                    // drag steps finely, a flick multiplies travel (up to ×3, gentle ramp).
+                    let speedFactor = min(1 + abs(delta) / 6, 3)
+                    model.driveManualFocus(
+                        pulses: Int(delta * CGFloat(Self.pulsesPerPoint) * speedFactor))
+                }
+                .onEnded { _ in
+                    lastDragY = nil
+                    isDragging = false
+                }
+        )
+        .sensoryFeedback(.impact(weight: .medium), trigger: model.mfDriveAtEnd) { _, end in
+            end != nil
+        }
+        // Re-arm the relative position each time the dial appears (new lens/mode/session).
+        .onAppear { model.resetMFDriveDial() }
+    }
+
+    /// The scrolling tick drum with a fixed centre reference line marking the current position.
+    private var drum: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            ZStack {
+                Capsule()
+                    .fill(Color.white.opacity(isDragging ? 0.14 : 0.06))
+                    .overlay(
+                        Capsule().strokeBorder(
+                            isDragging ? LiveDesign.accent.opacity(0.7) : LiveDesign.hairline,
+                            lineWidth: 1))
+                Canvas { ctx, canvas in
+                    let mid = canvas.height / 2
+                    let current = CGFloat(model.mfDriveNetPulses) / Self.pulsesPerTick
+                    let span = Int(mid / Self.tickSpacing) + 2
+                    let base = Int(current.rounded())
+                    for offset in -span...span {
+                        let index = base + offset
+                        let y = mid - (CGFloat(index) - current) * Self.tickSpacing
+                        guard y >= 0, y <= canvas.height else { continue }
+                        let major = index % 5 == 0
+                        let w = (major ? 0.72 : 0.4) * canvas.width
+                        let rect = CGRect(
+                            x: (canvas.width - w) / 2, y: y, width: w, height: major ? 1.5 : 1)
+                        ctx.fill(
+                            Path(rect),
+                            with: .color(.white.opacity(major ? 0.5 : 0.28)))
+                    }
+                }
+                // Fixed centre line = the current focus position.
+                Rectangle()
+                    .fill(LiveDesign.accent.opacity(0.95))
+                    .frame(width: isDragging ? 26 : 20, height: 2)
+                    .position(x: size.width / 2, y: size.height / 2)
+            }
+            .animation(.easeOut(duration: 0.12), value: isDragging)
         }
     }
 }

@@ -47,6 +47,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
     case unexpectedPacket(expected: String, actual: PTPIPPacketType)
     case initFailed(PTPIPInitFailReason)
     case operationRejected(PTPOperationCode, PTPResponseCode)
+    /// An object star-rating write the body refused, carrying the exact wire code so the UI can
+    /// name it (a state-based refusal like Access Denied is the discriminator we surface).
+    case objectRatingRejected(response: PTPResponseCode, rawCode: UInt16)
     case invalidPacketLength(UInt32)
     case localNetworkPermissionDenied
     case pairingRejected
@@ -69,6 +72,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
             return "Camera rejected \(operation) with response \(response)."
+        case .objectRatingRejected(let response, let rawCode):
+            return
+                "Camera refused the rating write (\(response), \(String(format: "0x%04X", rawCode)))."
         case .invalidPacketLength(let length):
             return "Invalid PTP-IP packet length \(length)."
         case .localNetworkPermissionDenied:
@@ -452,7 +458,7 @@ final class NativeCameraSession: @unchecked Sendable {
             .initFailed(.rejectedInitiator):
             return false
         case .connectionFailed, .connectionClosed, .timeout, .unexpectedPacket,
-            .invalidPacketLength, .operationRejected, .initFailed:
+            .invalidPacketLength, .operationRejected, .objectRatingRejected, .initFailed:
             return true
         }
     }
@@ -499,6 +505,20 @@ final class NativeCameraSession: @unchecked Sendable {
         try await transport.nextEvent()
     }
 
+    /// Polls the camera's Nikon event queue (`GetEventEx` 0x941C) and returns the events it held.
+    /// Nikon bodies deliver capture events (ObjectAdded, CaptureComplete) through THIS poll, not
+    /// the PTP-IP event socket — so a shutter fired ON THE BODY only surfaces here. Parameter1 = 0
+    /// clears the queue after the read so the same events aren't processed twice. Empty on any
+    /// non-OK answer (the op is capability-checked by the caller). [verify-on-HW]
+    func pollDeviceEvents() async -> [PTPEvent] {
+        guard
+            let result = try? await transact(
+                operationCode: .getEventEx, parameters: [0], dataPhase: .dataIn),
+            result.operationResponse.responseCode == .ok
+        else { return [] }
+        return PTPNikonEventList.parse(Array(result.data))
+    }
+
     func startLiveView() async throws {
         let start = try await transact(operationCode: .startLiveView)
         guard start.operationResponse.responseCode == .ok else {
@@ -528,12 +548,16 @@ final class NativeCameraSession: @unchecked Sendable {
     /// Fires a still release. Activation-style: the OK response only confirms the release
     /// started — completion (including every frame of a burst, or a running bulb) is observed
     /// by polling ``pollStillReleaseReadiness()`` between live-view frames.
-    func initiateStillCapture() async throws {
+    func initiateStillCapture(preserveFocus: Bool = false) async throws {
         let op = operationPolicy.stillCaptureOperation
-        // Media capture: p1 selects AF-then-release (half-press-then-fire, like the body's
-        // shutter button), p2 targets the card. The standard-capture fallback has no params.
+        // Media capture, p1 = CaptureSort: 0xFFFFFFFE runs AF driving THEN releases (a
+        // half-press-then-fire, like the body's shutter button); 0xFFFFFFFF is a plain release
+        // with NO AF-driving step, used to hold the focus the operator set with the focus dial
+        // (an AF release would re-focus at the box and undo the manual pull). p2 targets the
+        // card. [verify-on-HW: 0xFFFFFFFF skips AF while the body is in an AF focus mode]
+        let captureSort: UInt32 = preserveFocus ? 0xFFFF_FFFF : 0xFFFF_FFFE
         let parameters: [UInt32] =
-            op == .initiateCaptureRecInMedia ? [0xFFFF_FFFE, 0x0000] : []
+            op == .initiateCaptureRecInMedia ? [captureSort, 0x0000] : []
         let result = try await transact(
             operationCode: op, parameters: parameters, dataPhase: .noDataOrDataIn)
         guard result.operationResponse.responseCode == .ok else {
@@ -695,6 +719,46 @@ final class NativeCameraSession: @unchecked Sendable {
                 result.operationResponse.responseCode
             )
         }
+    }
+
+    /// One manual-focus drive outcome, classified from the activation + readiness poll.
+    enum MFDriveOutcome: Sendable, Equatable {
+        case complete
+        case endOfTravel
+        case stepTooSmall
+        case refused(PTPResponseCode)
+    }
+
+    /// Drives manual focus by `pulses` toward near or infinity — an activation command whose
+    /// completion is confirmed by the readiness poll (busy while the lens moves). End-of-travel
+    /// and amount-too-small are outcomes, not errors. A refusal is a transient state (the
+    /// stepping-motor lens still initializing, or autofocus momentarily active), not a lens
+    /// verdict — the caller requeues and retries. [verify-on-HW]
+    func mfDrive(towardNear: Bool, pulses: UInt32) async -> MFDriveOutcome {
+        let clamped = min(max(pulses, 1), 32767)
+        guard
+            let start = try? await transact(
+                operationCode: .mfDrive,
+                parameters: [towardNear ? 1 : 2, clamped],
+                dataPhase: .noDataOrDataIn
+            )
+        else { return .refused(.deviceBusy) }
+        guard start.operationResponse.responseCode == .ok else {
+            return .refused(start.operationResponse.responseCode)
+        }
+        for _ in 0..<25 {
+            guard let ready = try? await transact(operationCode: .deviceReady) else {
+                return .refused(.deviceBusy)
+            }
+            switch ready.operationResponse.responseCode {
+            case .ok: return .complete
+            case .deviceBusy: try? await Task.sleep(for: .milliseconds(120))
+            case .mfDriveStepEnd: return .endOfTravel
+            case .mfDriveStepInsufficiency: return .stepTooSmall
+            case let other: return .refused(other)
+            }
+        }
+        return .complete
     }
 
     func afDriveCancel() async throws {
@@ -1090,8 +1154,9 @@ final class NativeCameraSession: @unchecked Sendable {
             dataOut: Data([UInt8(value & 0xFF), UInt8(value >> 8)])
         )
         guard result.operationResponse.responseCode == .ok else {
-            throw NativeCameraSessionError.operationRejected(
-                .setObjectPropValue, result.operationResponse.responseCode)
+            throw NativeCameraSessionError.objectRatingRejected(
+                response: result.operationResponse.responseCode,
+                rawCode: result.operationResponse.rawResponseCode)
         }
     }
 

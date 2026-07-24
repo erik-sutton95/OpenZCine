@@ -208,6 +208,7 @@
     <string name="assist_label_ev_meter">EV</string>
     <string name="assist_label_desqueeze">DE-SQ</string>
     <string name="assist_label_audio">AUDIO</string>
+    <string name="assist_label_play">PLAY</string>
     <string name="assist_title_focus_peaking">Peaking</string>
     <string name="assist_title_false_color">False Color</string>
     <string name="assist_title_zebra">Zebra</string>
@@ -223,6 +224,7 @@
     <string name="assist_title_ev_meter">EV Meter</string>
     <string name="assist_title_desqueeze">Desqueeze</string>
     <string name="assist_title_audio_levels">Audio Levels</string>
+    <string name="assist_title_instant_playback">Instant Playback</string>
     <string name="assist_view">VIEW</string>
     <string name="assist_open_rail_description">Open view assist rail</string>
     <string name="assist_close_rail_description">Close view assist rail</string>
@@ -304,6 +306,7 @@
     <string name="camera_subtitle_shutter">Angle / speed</string>
     <string name="camera_subtitle_iris">Aperture</string>
     <string name="camera_subtitle_focus">AF mode · area · subject</string>
+    <string name="camera_focus_scrub_toggle">Focus dial</string>
     <string name="camera_subtitle_wb">Kelvin / preset / tint</string>
     <!-- Mode tab titles mirror iOS CameraPicker.whiteBalance.modes (Kelvin / Preset / Tint). -->
     <string name="camera_subtitle_resolution">Resolution · frame rate</string>

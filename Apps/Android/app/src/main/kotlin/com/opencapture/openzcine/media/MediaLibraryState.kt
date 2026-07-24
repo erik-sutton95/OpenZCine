@@ -312,6 +312,25 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         return updated
     }
 
+    /**
+     * Sets one favorite explicitly (add when [favorite], remove otherwise) and returns the
+     * complete updated set. This is the mirror a camera star write performs: a shot rated
+     * >= 1 star becomes a favorite so the Favorites tab — which reads this set, not the camera
+     * property — agrees with shots starred during a shoot. iOS `mirrorRatingIntoIndex`.
+     */
+    fun setFavorite(cameraID: String, clip: MediaClipRecord, favorite: Boolean): Set<String> {
+        val updated = favoriteIDs(cameraID).toMutableSet()
+        val identity = clip.libraryKey(cameraID)
+        val changed = if (favorite) updated.add(identity) else updated.remove(identity)
+        if (changed) {
+            preferences.putString(
+                favoritesKey(cameraID),
+                updated.sorted().joinToString(separator = "\n").ifEmpty { null },
+            )
+        }
+        return updated
+    }
+
     /** Restores browser controls without trusting a corrupted preference value. */
     fun viewOptions(defaultSource: MediaLibrarySource): MediaLibraryViewOptions =
         MediaLibraryViewOptions(
@@ -419,6 +438,8 @@ internal object MediaLibraryFiltering {
         todayToken: String = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
         /** Offline multi-camera libraries resolve favorites with the owning bucket. */
         libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
+        /** Offline multi-camera libraries pair RAW+JPEG within the owning bucket. */
+        ownerOf: (MediaClipRecord) -> String = { _ -> cameraID },
     ): List<MediaClipRecord> {
         var filtered =
             when (category) {
@@ -445,6 +466,18 @@ internal object MediaLibraryFiltering {
         filters.storageId?.let { selectedStorage ->
             filtered = filtered.filter { clip -> clip.storageId == selectedStorage }
         }
+        // One item per RAW+JPEG pair: the JPEG carries the still (badge +
+        // viewer toggle), the same-shot RAW never renders its own cell. Keyed
+        // on the filter survivors so an offline pass can still surface a
+        // cached NEF whose JPEG side was filtered away (iOS `displayedClips`).
+        val jpegPairKeys =
+            filtered.mapNotNullTo(hashSetOf()) { clip ->
+                if (clip.isJpegStill) clip.rawPairKey(ownerOf(clip)) else null
+            }
+        filtered =
+            filtered.filterNot { clip ->
+                clip.isRawStill && clip.rawPairKey(ownerOf(clip)) in jpegPairKeys
+            }
         return sort(filtered, sortOrder)
     }
 

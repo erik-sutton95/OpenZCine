@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -49,6 +50,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -57,6 +59,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -72,6 +75,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -113,6 +117,7 @@ import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
@@ -127,6 +132,7 @@ import com.opencapture.openzcine.core.CameraStorageSlotStatus
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -466,6 +472,8 @@ internal fun MediaBrowseScreen(
     selectedLut: FeedLutSelection,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
+    /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
+    onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -547,9 +555,17 @@ internal fun MediaBrowseScreen(
     // Camera-card deletion in flight: the listing effect stays cancelled while
     // non-null so an already-enumerated page cannot re-add the deleted rows.
     var pendingDeletion by remember(cameraID) { mutableStateOf<List<MediaClipRecord>?>(null) }
+    // Deletion progress (completed, total) while a batch delete runs — drives the progress bar
+    // and keeps the grid steady until the run finishes (the listing restarts once, at the end).
+    var deletionProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // Shots the operator selected (smaller than the file total when RAW+JPEG pairs / masters /
+    // backups ride along) — kept so the progress bar can explain the inflated file count.
+    var deletionSelectedCount by remember { mutableStateOf(0) }
     var deleteConfirmTargets by remember { mutableStateOf<List<MediaClipRecord>?>(null) }
     var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
     var viewingPhoto by remember { mutableStateOf<MediaClipRecord?>(null) }
+    // The representative of a burst series whose members are being browsed (Manage series).
+    var seriesRepresentative by remember { mutableStateOf<MediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var autoPlayHandled by remember { mutableStateOf(false) }
     var isSelecting by remember { mutableStateOf(false) }
@@ -721,24 +737,29 @@ internal fun MediaBrowseScreen(
     // restarts the listing so the fresh enumeration confirms the deletions.
     LaunchedEffect(pendingDeletion) {
         val targets = pendingDeletion ?: return@LaunchedEffect
+        // A still viewer closed by this deletion may leave its transfer draining; the blocking
+        // stop joins the pump so the card never sees a delete interleaved with reads of the same
+        // object. The grid holds steady (the listing stays cancelled) — one progress bar covers
+        // the run and it refreshes once at the end.
         withContext(Dispatchers.IO) {
-            // A still viewer closed by this deletion may leave its transfer
-            // draining; the blocking stop joins the pump so the card never
-            // sees a delete interleaved with reads of the same object.
             if (SwiftCore.isAvailable) SwiftCore.sessionStopMediaTransfer()
-            targets.forEach { clip ->
-                // Protected objects are refused by the body and stay listed;
-                // their caches stay too so the row remains fully backed.
-                if (!SwiftCore.isAvailable || !SwiftCore.sessionDeleteObject(clip.handle.toInt())) {
-                    return@forEach
-                }
-                val owner = ownerCameraID(clip)
-                runCatching {
-                    cacheStore.purgeEntry(owner, MediaCacheObjectIdentity(clip))
-                }
-                libraryIndex.purgeClip(owner, clip)
-            }
         }
+        deletionProgress = 0 to targets.size
+        targets.forEachIndexed { index, clip ->
+            withContext(Dispatchers.IO) {
+                // Protected objects are refused by the body and stay listed; their caches stay
+                // too so the row remains fully backed.
+                if (SwiftCore.isAvailable && SwiftCore.sessionDeleteObject(clip.handle.toInt())) {
+                    val owner = ownerCameraID(clip)
+                    runCatching {
+                        cacheStore.purgeEntry(owner, MediaCacheObjectIdentity(clip))
+                    }
+                    libraryIndex.purgeClip(owner, clip)
+                }
+            }
+            deletionProgress = (index + 1) to targets.size
+        }
+        deletionProgress = null
         favorites =
             withContext(Dispatchers.IO) {
                 val ids = offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
@@ -753,7 +774,8 @@ internal fun MediaBrowseScreen(
         val catalog = (state as? BrowseState.Loaded)?.clips.orEmpty()
         deleteConfirmTargets = null
         viewingPhoto = null
-        pendingDeletion = cameraDeletionTargets(catalog, selection)
+        deletionSelectedCount = selection.size
+        pendingDeletion = cameraDeletionTargets(catalog, selection, ::ownerCameraID)
     }
 
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
@@ -782,9 +804,60 @@ internal fun MediaBrowseScreen(
             sortOrder = options.sortOrder,
             filters = filters,
             libraryKey = ::clipKey,
+            ownerOf = ::ownerCameraID,
         )
+    // Collapse continuous-drive runs into one representative cell per series (iOS
+    // filteredMediaClips burst step). Grouping runs on the displayed set, so an offline pass
+    // groups only cached frames; the series view reaches the hidden members.
+    val burstSeries =
+        remember(displayedClips) {
+            BurstSeriesGrouping.group(displayedClips.map { it.burstFrame(ownerCameraID(it)) })
+        }
+    val burstByRepresentative =
+        remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
+    val hiddenBurstIDs =
+        remember(burstSeries) { burstSeries.flatMapTo(hashSetOf()) { it.memberIDs.drop(1) } }
+    val gridClips =
+        remember(displayedClips, hiddenBurstIDs) {
+            if (hiddenBurstIDs.isEmpty()) displayedClips
+            else displayedClips.filter { clipKey(it) !in hiddenBurstIDs }
+        }
+    fun burstMembers(representative: MediaClipRecord): List<MediaClipRecord> {
+        val series = burstByRepresentative[clipKey(representative)] ?: return emptyList()
+        val byID = displayedClips.associateBy(::clipKey)
+        return series.memberIDs.mapNotNull { byID[it] }
+    }
+    // A grid burst cell stands for its whole series (iOS `burstExpanded`): expand each selected
+    // representative to every member so a multiselect delete/share acts on the whole set, not
+    // just the representative. Non-series clips pass through; deduped, order preserved.
+    fun burstExpanded(clips: List<MediaClipRecord>): List<MediaClipRecord> {
+        if (clips.isEmpty()) return clips
+        val byID = displayedClips.associateBy(::clipKey)
+        val seen = HashSet<String>()
+        val result = ArrayList<MediaClipRecord>(clips.size)
+        for (clip in clips) {
+            val members =
+                burstByRepresentative[clipKey(clip)]?.memberIDs?.mapNotNull { byID[it] }
+                    ?.takeIf { it.isNotEmpty() } ?: listOf(clip)
+            for (member in members) if (seen.add(clipKey(member))) result.add(member)
+        }
+        return result
+    }
+    // Pair lookups scan the unfiltered catalog so the RAW side survives tab
+    // and chip filters (iOS `rawSibling(of:)`).
+    val rawStillPairKeys =
+        remember(loadedClips, offlineClipOwners) {
+            loadedClips.mapNotNullTo(hashSetOf()) { clip ->
+                if (clip.isRawStill) clip.rawPairKey(ownerCameraID(clip)) else null
+            }
+        }
+    fun hasRawSibling(clip: MediaClipRecord): Boolean =
+        clip.isJpegStill && clip.rawPairKey(ownerCameraID(clip)) in rawStillPairKeys
     val selectedClips =
         displayedClips.filter { clip -> clipKey(clip) in selectedIDs }
+    // Delete/share act on the whole burst series behind a selected representative (iOS
+    // `burstExpanded`); the selection COUNT stays on the representatives, mirroring iOS.
+    val selectedSeriesClips = burstExpanded(selectedClips)
     val visibleIDs = displayedClips.map { clip -> clipKey(clip) }.toSet()
 
     LaunchedEffect(visibleIDs) {
@@ -824,19 +897,44 @@ internal fun MediaBrowseScreen(
             is FeedLutSelection.Stored -> lutLibrary.displayName(selectedLut.value)
         }
 
+    // Re-merge favorites across offline buckets so the star stays accurate after a change.
+    fun mergedFavorites(updated: Set<String>): Set<String> =
+        if (offlineCameraIDs.isEmpty()) {
+            updated
+        } else {
+            offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+        }
+
     fun toggleFavorite(clip: MediaClipRecord) {
         val owner = ownerCameraID(clip)
         val updated = libraryIndex.toggleFavorite(owner, clip)
-        // Re-merge favorites across offline buckets so the star stays accurate.
-        favorites =
-            if (offlineCameraIDs.isEmpty()) {
-                updated
-            } else {
-                offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
+        favorites = mergedFavorites(updated)
+        // Heart and camera star are one signal (Favorites reads the set that star writes fill):
+        // agree the body's rating with the heart when connected. Best-effort — an offline clip
+        // keeps only the local flag. [verify-on-HW]
+        val nowFavorite = clip.libraryKey(owner) in updated
+        if (effectiveCameraConnected && SwiftCore.isAvailable && clip.handle != 0L) {
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), if (nowFavorite) 1 else 0)
+                }
             }
+        }
+    }
+
+    // Mirrors a camera star write (viewer/player, seed-read or set) into the local favorite set
+    // so the Favorites tab surfaces rated shots. iOS `mirrorRatingIntoIndex`.
+    fun mirrorRating(clip: MediaClipRecord, stars: Int) {
+        val owner = ownerCameraID(clip)
+        favorites = mergedFavorites(libraryIndex.setFavorite(owner, clip, stars >= 1))
     }
 
     fun open(clip: MediaClipRecord) {
+        // A burst representative opens the series view (its other frames are hidden in the grid).
+        if (burstByRepresentative[clipKey(clip)] != null) {
+            seriesRepresentative = clip
+            return
+        }
         when (clip.contentKind) {
             MediaContentKind.PLAYABLE_PROXY -> playingClip = clip
             MediaContentKind.STILL_PHOTO -> viewingPhoto = clip
@@ -861,7 +959,7 @@ internal fun MediaBrowseScreen(
 
     fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedClips
+        val selectionSnapshot = selectedSeriesClips
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
             scope.launch {
@@ -893,7 +991,7 @@ internal fun MediaBrowseScreen(
             }
             return
         }
-        val selectionSnapshotLegacy = selectedClips
+        val selectionSnapshotLegacy = selectedSeriesClips
         shareInProgress = true
         shareMessage = null
         shareJob =
@@ -1004,7 +1102,7 @@ internal fun MediaBrowseScreen(
 
     fun beginBatchGallerySave(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedClips
+        val selectionSnapshot = selectedSeriesClips
         // Gallery accepts playable proxies AND still photos; only R3D masters
         // and unsupported objects are omitted.
         val savableSelection =
@@ -1143,7 +1241,7 @@ internal fun MediaBrowseScreen(
 
     fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
         if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedClips
+        val selectionSnapshot = selectedSeriesClips
         frameioDeliveryPresented = false
         shareInProgress = true
         frameioPreparationInProgress = true
@@ -1305,7 +1403,7 @@ internal fun MediaBrowseScreen(
                             librarySource == MediaLibrarySource.CAMERA &&
                                 effectiveCameraConnected,
                         onExitSelection = ::cancelActiveShareOrExitSelection,
-                        onDelete = { deleteConfirmTargets = selectedClips },
+                        onDelete = { deleteConfirmTargets = selectedSeriesClips },
                         onShare = {
                             // Unified Share sheet (native + Frame.io), like iOS.
                             presentNativeDelivery()
@@ -1316,13 +1414,15 @@ internal fun MediaBrowseScreen(
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         MediaLibraryBody(
                             state = state,
-                            clips = displayedClips,
+                            clips = gridClips,
                             source = librarySource,
                             layout = options.layout,
                             thumbnailSize = options.thumbnailSize,
                             cameraID = cameraID,
                             cameraIDFor = ::ownerCameraID,
                             clipIdentity = ::clipKey,
+                            hasRawSibling = ::hasRawSibling,
+                            burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
                             favorites = favorites,
@@ -1398,20 +1498,22 @@ internal fun MediaBrowseScreen(
                                 librarySource == MediaLibrarySource.CAMERA &&
                                     effectiveCameraConnected,
                             onExitSelection = ::cancelActiveShareOrExitSelection,
-                            onDelete = { deleteConfirmTargets = selectedClips },
+                            onDelete = { deleteConfirmTargets = selectedSeriesClips },
                             onShare = { presentNativeDelivery() },
                             onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                             onShowFilters = { filterDialogPresented = true },
                         )
                         MediaLibraryBody(
                             state = state,
-                            clips = displayedClips,
+                            clips = gridClips,
                             source = librarySource,
                             layout = options.layout,
                             thumbnailSize = options.thumbnailSize,
                             cameraID = cameraID,
                             cameraIDFor = ::ownerCameraID,
                             clipIdentity = ::clipKey,
+                            hasRawSibling = ::hasRawSibling,
+                            burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
                             favorites = favorites,
@@ -1499,15 +1601,66 @@ internal fun MediaBrowseScreen(
             )
         }
 
+        // Manage-series view, iPhone-Photos burst style: the selected frame full-screen through
+        // the still viewer (streaming decode, zoom, rating, RAW toggle, share, single-frame
+        // delete all keep working) with a bottom scrubber strip; "Delete all" routes the whole
+        // set through the shared confirm + batch deletion. Dismisses when its frames are gone.
+        seriesRepresentative?.let { representative ->
+            val members = remember(representative, displayedClips) { burstMembers(representative) }
+            LaunchedEffect(members) { if (members.isEmpty()) seriesRepresentative = null }
+            var selectedFrameKey by remember(representative) { mutableStateOf<String?>(null) }
+            val selected =
+                members.firstOrNull { clipKey(it) == selectedFrameKey } ?: members.firstOrNull()
+            selected?.let { clip ->
+                val owner = ownerCameraID(clip)
+                MediaStillViewer(
+                    clip = clip,
+                    cameraID = owner,
+                    cameraTransferAvailable = cameraConnected,
+                    rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
+                    deleteAvailable =
+                        librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
+                    deleteConfirmMessage =
+                        deleteConfirmationMessage(loadedClips, listOf(clip), ::ownerCameraID),
+                    onDelete = { requestDeletion(listOf(clip)) },
+                    onDeleteAll = { if (members.isNotEmpty()) deleteConfirmTargets = members },
+                    onRatingMirrored = ::mirrorRating,
+                    onRatingDiagnostic = onRatingDiagnostic,
+                    onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                        libraryIndex.rememberResolvedObjectSize(
+                            ownerCameraID(resolvedClip),
+                            resolvedClip,
+                            resolvedSize,
+                        )
+                    },
+                    filmstrip = {
+                        BurstFilmstrip(
+                            members = members,
+                            selectedKey = clipKey(clip),
+                            keyOf = ::clipKey,
+                            onSelect = { selectedFrameKey = it },
+                            thumb = { member, thumbModifier ->
+                                ClipArtwork(
+                                    clip = member,
+                                    source = librarySource,
+                                    cameraID = ownerCameraID(member),
+                                    cameraConnected = effectiveCameraConnected,
+                                    cacheStore = cacheStore,
+                                    modifier = thumbModifier,
+                                )
+                            },
+                        )
+                    },
+                    onClose = { seriesRepresentative = null },
+                )
+            }
+        }
+
         deleteConfirmTargets?.let { targets ->
             MediaDeleteConfirmDialog(
-                message =
-                    deleteConfirmationMessage(
-                        targets,
-                        hasRawPair =
-                            targets.size == 1 &&
-                                rawSibling(loadedClips, targets.single()) != null,
-                    ),
+                // Context-aware: pair/master/backup notes appear only when this selection
+                // actually pulls those companions in (videos never see stills wording).
+                message = deleteConfirmationMessage(loadedClips, targets, ::ownerCameraID),
                 onDelete = { requestDeletion(targets) },
                 onDismiss = { deleteConfirmTargets = null },
             )
@@ -1531,6 +1684,8 @@ internal fun MediaBrowseScreen(
                 frameioController = frameioController,
                 mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                 onToggleFavorite = ::toggleFavorite,
+                onRatingMirrored = ::mirrorRating,
+                onRatingDiagnostic = onRatingDiagnostic,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
                         ownerCameraID(resolvedClip),
@@ -1550,10 +1705,14 @@ internal fun MediaBrowseScreen(
                 clip = clip,
                 cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
-                hasRawSibling = rawSibling(loadedClips, clip) != null,
+                rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
                 deleteAvailable =
                     librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
+                deleteConfirmMessage =
+                    deleteConfirmationMessage(loadedClips, listOf(clip), ::ownerCameraID),
                 onDelete = { requestDeletion(listOf(clip)) },
+                onRatingMirrored = ::mirrorRating,
+                onRatingDiagnostic = onRatingDiagnostic,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
                         ownerCameraID(resolvedClip),
@@ -1566,6 +1725,44 @@ internal fun MediaBrowseScreen(
                     reloadKey += 1
                 },
             )
+        }
+
+        // Batch-delete progress: the grid holds steady behind this until the run finishes.
+        deletionProgress?.let { (done, total) ->
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .chromeClickable(onClick = {}),  // swallow taps mid-delete
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    Modifier
+                        .glass(RoundedCornerShape(16.dp))
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val picks = deletionSelectedCount.coerceAtLeast(1)
+                    Text(
+                        "Deleting $picks ${if (picks == 1) "item" else "items"}…",
+                        style = chromeStyle(14f, FontWeight.SemiBold),
+                        color = LiveDesign.text,
+                    )
+                    // Explain the inflated file count: 8 picks can be 16 files once each
+                    // RAW+JPEG pair (and any backup copies) are counted.
+                    Text(
+                        if (total > picks) "$done of $total files · incl. RAW + copies"
+                        else "$done of $total",
+                        style = chromeStyle(11f, FontWeight.Normal),
+                        color = LiveDesign.muted,
+                    )
+                    LinearProgressIndicator(
+                        progress = { if (total > 0) done.toFloat() / total else 0f },
+                        modifier = Modifier.width(220.dp).padding(top = 6.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -2448,6 +2645,10 @@ private fun MediaLibraryBody(
     cameraID: String,
     cameraIDFor: (MediaClipRecord) -> String = { cameraID },
     clipIdentity: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
+    /** A same-stem RAW rides behind this JPEG — the cell shows one item for the pair. */
+    hasRawSibling: (MediaClipRecord) -> Boolean = { false },
+    /** Frame count when a clip represents a burst series (null for an ordinary clip). */
+    burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2478,6 +2679,8 @@ private fun MediaLibraryBody(
                         source = source,
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
+                        hasRawSibling = hasRawSibling,
+                        burstCountOf = burstCountOf,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2495,6 +2698,8 @@ private fun MediaLibraryBody(
                         source = source,
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
+                        hasRawSibling = hasRawSibling,
+                        burstCountOf = burstCountOf,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2526,6 +2731,8 @@ private fun MediaClipGrid(
     source: MediaLibrarySource,
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
+    hasRawSibling: (MediaClipRecord) -> Boolean,
+    burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2563,9 +2770,10 @@ private fun MediaClipGrid(
             columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
-            // iOS LazyVGrid spacing: 16.
+            // Column gap unchanged; tight row gap for a dense vertical rhythm (iOS LazyVGrid
+            // spacing 16→8→4 — less dead space between rows).
             horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
             // Overlay owns movement while selecting; plain scroll resumes after exit.
             userScrollEnabled = !isSelecting,
@@ -2576,6 +2784,8 @@ private fun MediaClipGrid(
                     clip = clip,
                     source = source,
                     cameraID = cameraIDFor(clip),
+                    hasRawSibling = hasRawSibling(clip),
+                    burstCount = burstCountOf(clip),
                     cameraConnected = cameraConnected,
                     cacheStore = cacheStore,
                     favorite = identity in favorites,
@@ -2633,6 +2843,8 @@ private fun MediaClipList(
     source: MediaLibrarySource,
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
+    hasRawSibling: (MediaClipRecord) -> Boolean,
+    burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2677,6 +2889,7 @@ private fun MediaClipList(
                     clip = clip,
                     source = source,
                     cameraID = cameraIDFor(clip),
+                    hasRawSibling = hasRawSibling(clip),
                     cameraConnected = cameraConnected,
                     cacheStore = cacheStore,
                     favorite = identity in favorites,
@@ -2868,6 +3081,8 @@ private fun MediaClipCell(
     clip: MediaClipRecord,
     source: MediaLibrarySource,
     cameraID: String,
+    hasRawSibling: Boolean,
+    burstCount: Int? = null,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorite: Boolean,
@@ -2890,7 +3105,8 @@ private fun MediaClipCell(
                 onLongClickLabel = "Select ${clip.filename}",
             )
         }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    // Tight thumbnail↔filename gap (iOS cell spacing 8→4→2): less dead space under the frame.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Box(
             Modifier.fillMaxWidth()
                 .aspectRatio(16f / 9f)
@@ -2925,7 +3141,7 @@ private fun MediaClipCell(
                         .padding(horizontal = 6.dp, vertical = 3.dp),
             )
             Text(
-                clip.badgeLabel,
+                pairAwareBadgeLabel(clip, hasRawSibling),
                 style = chromeStyle(9f, FontWeight.Bold, mono = true),
                 color = LiveDesign.text,
                 modifier =
@@ -2934,6 +3150,20 @@ private fun MediaClipCell(
                         .badgeBackground()
                         .padding(horizontal = 6.dp, vertical = 3.dp),
             )
+            // Burst series: one cell stands for the run, badged with its frame count (like the
+            // body's series card). Tapping opens the Manage-series view.
+            if (burstCount != null && !isSelecting) {
+                Text(
+                    "⚡$burstCount",
+                    style = chromeStyle(9f, FontWeight.Bold, mono = true),
+                    color = LiveDesign.text,
+                    modifier =
+                        Modifier.align(Alignment.BottomStart)
+                            .padding(7.dp)
+                            .badgeBackground()
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                )
+            }
             // iOS has no "ON DEVICE" cell badge — offline is implied by the library source.
             if (isSelecting) {
                 SelectionMarker(selected = selected, modifier = Modifier.align(Alignment.TopEnd).padding(7.dp))
@@ -2962,6 +3192,7 @@ private fun MediaClipListRow(
     clip: MediaClipRecord,
     source: MediaLibrarySource,
     cameraID: String,
+    hasRawSibling: Boolean,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorite: Boolean,
@@ -3026,7 +3257,7 @@ private fun MediaClipListRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${clip.badgeLabel} · ${clipActionLabel(clip)}",
+                "${pairAwareBadgeLabel(clip, hasRawSibling)} · ${clipActionLabel(clip)}",
                 style = chromeStyle(10f, FontWeight.Medium, mono = true),
                 color = LiveDesign.muted,
                 maxLines = 1,
@@ -3035,6 +3266,98 @@ private fun MediaClipListRow(
         }
         if (!isSelecting) {
             FavoriteButton(favorite = favorite, filename = clip.filename, onClick = onToggleFavorite)
+        }
+    }
+}
+
+/**
+ * iPhone-Photos-style burst scrubber (iOS `BurstFilmstrip`): dragging scrolls the strip with the
+ * centered thumb highlighting live; the displayed frame commits only when the scroll SETTLES, not
+ * on every intermediate frame. The viewer re-streams each frame, so committing on every thumb that
+ * crossed centre was the lag + reload storm (and the programmatic-scroll rubber-band). Tapping a
+ * thumb jumps to it immediately; external selection changes (deletion advance) re-center the strip.
+ */
+@Composable
+private fun BurstFilmstrip(
+    members: List<MediaClipRecord>,
+    selectedKey: String,
+    keyOf: (MediaClipRecord) -> String,
+    onSelect: (String) -> Unit,
+    thumb: @Composable (MediaClipRecord, Modifier) -> Unit,
+) {
+    // Widest a thumb gets (selected). Half of it is subtracted from the side inset so the
+    // first/last frame can sit dead-centre; the inset math and the item width must stay in sync.
+    val maxThumbWidth = 46.dp
+    val listState = rememberLazyListState()
+    val currentSelected by rememberUpdatedState(selectedKey)
+    val currentOnSelect by rememberUpdatedState(onSelect)
+    // The thumb under the centre line — drives the live highlight only, NOT the heavy viewer
+    // (which commits when the scrub settles). Reset when the series changes.
+    var centeredKey by remember(members) { mutableStateOf(selectedKey) }
+
+    fun centeredKeyNow(): String? {
+        val info = listState.layoutInfo
+        val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
+        val index = info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - center) }?.index
+        return index?.let { members.getOrNull(it) }?.let(keyOf)
+    }
+
+    // Cheap live highlight: track the centred thumb continuously (no viewer reload).
+    LaunchedEffect(listState, members) {
+        snapshotFlow { centeredKeyNow() }.collect { key -> if (key != null) centeredKey = key }
+    }
+    // Commit the displayed frame only after the scrub SETTLES (idle after a real drag/fling).
+    // Reading layoutInfo at settle time picks the actually-rested thumb, so a programmatic
+    // re-center (which rests on the already-selected frame) never commits back — no rubber-band.
+    LaunchedEffect(listState, members) {
+        var wasScrolling = false
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (wasScrolling && !scrolling) {
+                val key = centeredKeyNow()
+                if (key != null && key != currentSelected) currentOnSelect(key)
+            }
+            wasScrolling = scrolling
+        }
+    }
+    // External selection (tap, deletion advance) re-centers the strip; a settle-commit already
+    // left centeredKey == selectedKey, so this no-ops for scrubs (iOS `guard scrolledID != …`).
+    LaunchedEffect(selectedKey, members) {
+        if (centeredKey == selectedKey) return@LaunchedEffect
+        centeredKey = selectedKey
+        val index = members.indexOfFirst { keyOf(it) == selectedKey }
+        if (index >= 0 && !listState.isScrollInProgress) listState.animateScrollToItem(index)
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth().height(56.dp)) {
+        // Half the viewport (minus half a max-width thumb) so ANY thumb — first and last
+        // included — can reach the centre anchor (was a fixed 130, unreachable on a wide
+        // landscape screen). With this inset, start-aligned snapping lands a thumb centred.
+        val sideInset = ((maxWidth - maxThumbWidth) / 2f).coerceAtLeast(0.dp)
+        LazyRow(
+            state = listState,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            contentPadding = PaddingValues(horizontal = sideInset),
+            // .viewAligned snapping: the scrub lands cleanly on a frame instead of drifting.
+            flingBehavior = rememberSnapFlingBehavior(listState),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            items(members, key = { keyOf(it) }) { member ->
+                val isSelected = keyOf(member) == centeredKey
+                Box(
+                    Modifier
+                        .width(if (isSelected) maxThumbWidth else 30.dp)
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .border(
+                            if (isSelected) 1.5.dp else 0.dp,
+                            if (isSelected) LiveDesign.accent else Color.Transparent,
+                            RoundedCornerShape(4.dp),
+                        )
+                        .chromeClickable { onSelect(keyOf(member)) },
+                ) {
+                    thumb(member, Modifier.fillMaxSize())
+                }
+            }
         }
     }
 }
@@ -3056,7 +3379,16 @@ private fun ClipArtwork(
                 val cameraThumbnail =
                     if (source == MediaLibrarySource.CAMERA && cameraConnected && SwiftCore.isAvailable) {
                         SwiftCore.sessionThumbnail(clip.handle.toInt())?.let { jpeg ->
-                            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.asImageBitmap()
+                            // The body's thumb bytes may be EXIF-stripped — fall back to the
+                            // orientation this session learned from the object's full file.
+                            val key = clip.libraryKey(cameraID)
+                            val orientation =
+                                MediaExifOrientation.fromBytes(jpeg)
+                                    ?.also { MediaExifOrientation.learn(key, it) }
+                                    ?: MediaExifOrientation.learned(key)
+                            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                ?.upright(orientation)
+                                ?.asImageBitmap()
                         }
                     } else {
                         null
@@ -3101,13 +3433,19 @@ private fun cachedStillThumbnail(
         while (bounds.outWidth / sampleSize > 640 || bounds.outHeight / sampleSize > 640) {
             sampleSize *= 2
         }
+        // The full file carries the orientation header — learn it for the object so the
+        // connected grid's (possibly EXIF-stripped) camera thumbs rotate too.
+        val orientation =
+            MediaExifOrientation.fromFile(entry.finalPath)?.also {
+                MediaExifOrientation.learn(clip.libraryKey(cameraID), it)
+            }
         BitmapFactory.decodeFile(
             entry.finalPath.toString(),
             BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             },
-        )?.asImageBitmap()
+        )?.upright(orientation)?.asImageBitmap()
     } catch (_: OutOfMemoryError) {
         null
     } catch (_: RuntimeException) {
@@ -3325,6 +3663,10 @@ private fun clipActionLabel(clip: MediaClipRecord): String =
         MediaContentKind.R3D_MASTER -> "MASTER"
         MediaContentKind.UNSUPPORTED -> "MEDIA"
     }
+
+/** A paired still's one cell announces both sides (iOS `RAW+J` badge). */
+private fun pairAwareBadgeLabel(clip: MediaClipRecord, hasRawSibling: Boolean): String =
+    if (hasRawSibling) "${clip.sizeLabel} · RAW+J" else clip.badgeLabel
 
 private fun clipAccessibilityLabel(
     clip: MediaClipRecord,

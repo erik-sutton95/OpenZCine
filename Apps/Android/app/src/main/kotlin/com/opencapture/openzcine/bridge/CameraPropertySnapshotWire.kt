@@ -118,6 +118,9 @@ internal object CameraPropertySnapshotWire {
             flashMode = value.optionalString("flashMode"),
             exposureBias = value.optionalString("exposureBias"),
             shotsRemaining = value.optionalInt("shotsRemaining"),
+            imageArea = value.optionalString("imageArea"),
+            rawCompression = value.optionalString("rawCompression"),
+            userModeProgram = value.optionalString("userModeProgram"),
             pictureControl = value.optionalString("pictureControl"),
             evIndicatorSixths = value.optionalInt("evIndicatorSixths"),
             evIndicatorLit = value.optionalBoolean("evIndicatorLit"),
@@ -143,6 +146,7 @@ internal object CameraPropertySnapshotWire {
                     codecs = value.options("options.codec"),
                     vibrationReduction = value.options("options.vibrationReduction"),
                     electronicVr = value.options("options.electronicVr"),
+                    imageSizes = value.options("options.imageSize"),
                 ),
         )
     }

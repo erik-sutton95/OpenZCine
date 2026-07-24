@@ -138,6 +138,9 @@ object SwiftCore {
      * @param mode DispMode ordinal: 0 live, 1 clean, 2 command.
      * @param aspectFill portrait feed aspect; false = fit 16:9.
      * @param mirrored true for the mirrored landscape-right chrome.
+     * @param portraitFeedAspectRatio fit-mode feed content ratio: photography
+     *   passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders
+     *   whole under the top bar; video passes 16:9. Ignored in fill.
      */
     external fun monitorZoneMap(
         viewportWidth: Float,
@@ -152,6 +155,7 @@ object SwiftCore {
         scopeCount: Int,
         mirrored: Boolean,
         bottomBarHeight: Float,
+        portraitFeedAspectRatio: Float,
     ): FloatArray
 
     /**
@@ -495,6 +499,13 @@ object SwiftCore {
      */
     const val PROPERTY_REFRESH_EV_INDICATOR: Int = 3
 
+    /**
+     * One fast read of the photo/video capture selector only, so the chrome
+     * swaps within ~1s of the body's lever (iOS polls it off the frame loop).
+     * Never advances the round-robin — the heavy set keeps its slow cadence.
+     */
+    const val PROPERTY_REFRESH_SELECTOR: Int = 4
+
     /** `sessionSetRecording` completed and the camera accepted the command. */
     const val RECORDING_COMMAND_ACCEPTED: Int = 0
 
@@ -613,7 +624,8 @@ object SwiftCore {
      * Refreshes semantic Android camera state through the Swift core and
      * returns a flat semantic record consumed by `SwiftCoreCameraSession`. [request]
      * must be one of [PROPERTY_REFRESH_BOOTSTRAP], [PROPERTY_REFRESH_NEXT],
-     * or [PROPERTY_REFRESH_EVENT]. [recording] informs the core's shared
+     * [PROPERTY_REFRESH_EVENT], [PROPERTY_REFRESH_EV_INDICATOR], or
+     * [PROPERTY_REFRESH_SELECTOR]. [recording] informs the core's shared
      * low-rate poll policy. [propertyCode] is only a raw value forwarded from
      * an existing `DevicePropChanged` event; Kotlin never creates or decodes a
      * Nikon property identifier. Null is reserved for an unavailable native
@@ -651,6 +663,51 @@ object SwiftCore {
      * [RECORDING_COMMAND_REJECTED], or [RECORDING_COMMAND_TRANSPORT_FAILED].
      */
     external fun sessionSetRecording(recording: Boolean): Int
+
+    /**
+     * Fires one still release on the active session (photo mode). Returns a
+     * `RECORDING_COMMAND_*` result; completion lands via [sessionPollStillRelease].
+     */
+    external fun sessionInitiateStillCapture(): Int
+
+    /**
+     * One readiness poll while a still release is in flight: 0 complete,
+     * 1 in progress, 2 bulb/time open shutter, 3 failed, negatives for
+     * session/transport faults.
+     */
+    external fun sessionPollStillRelease(): Int
+
+    /** Ends a bulb/time exposure or stops a running burst (frames kept). */
+    external fun sessionTerminateStillCapture(): Int
+
+    /** Opens/closes the continuous-burst remote-mode bracket. */
+    external fun sessionSetStillBurstBracket(active: Boolean): Int
+
+    /**
+     * One relative manual-focus drive with its classified outcome: 0 complete,
+     * 1 end of travel, 2 amount too small, -1 no session, or
+     * `0x10000 or responseCode` for a body refusal. Blocking — call from IO.
+     */
+    external fun sessionMFDrive(towardNear: Boolean, pulses: Int): Int
+
+    /** Snapshots the card's handle sets as the instant-review diff baseline. */
+    external fun sessionSeedStillReviewBaseline(): Int
+
+    /**
+     * The just-captured JPEG/HEIF handle from the post-capture baseline diff,
+     * or 0 while the card hasn't listed it yet (caller retries).
+     */
+    external fun sessionResolveNewestStillHandle(): Int
+
+    /**
+     * The full captured image, streamed in chunks between live-view frames.
+     * Long-running and blocking — call from IO; cancel via
+     * [sessionCancelStillImage].
+     */
+    external fun sessionStillImage(handle: Int): ByteArray?
+
+    /** Aborts an in-flight [sessionStillImage] at its next chunk boundary. */
+    external fun sessionCancelStillImage()
 
     /**
      * Applies one typed camera control selection on the active session. [control]
@@ -879,7 +936,10 @@ object SwiftCore {
 
     /**
      * Writes a 0–5 star rating and returns the camera-confirmed star count
-     * after readback, or -1 on failure. Blocking — call from IO.
+     * after readback (`>= 0`); `-1` when the write can't be attempted or fails
+     * without a response; or the NEGATED raw PTP response code (e.g. `-0x2013`
+     * for a state-based Access Denied) when the body refuses, so the caller can
+     * name the refusal. See `ratingWriteResult`. Blocking — call from IO.
      */
     external fun sessionSetObjectRating(handle: Int, stars: Int): Int
 

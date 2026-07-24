@@ -113,6 +113,10 @@ struct PeakingSettings: Equatable, Sendable {
     /// 0.035 is the stored default (Sensitivity = Med); the renderer rescales it onto the
     /// gradient-edge response.
     var threshold: Double = 0.035
+    /// The feed's transfer curve, so the de-log linearises with the SAME anchor as false colour
+    /// and zebra. Photography's display-referred sRGB/HLG feed was previously de-logged as
+    /// Log3G10 (video's curve), so peaking looked different between the two modes.
+    var curve: ExposureToneCurve = .redLog3G10
 }
 
 extension Peaking.Sensitivity {
@@ -254,7 +258,8 @@ extension NativeAppModel {
             peaking: visible.contains(.peaking)
                 ? PeakingSettings(
                     color: assistConfiguration.peakingColor,
-                    threshold: assistConfiguration.peakingSensitivity.peakingThreshold) : nil,
+                    threshold: assistConfiguration.peakingSensitivity.peakingThreshold,
+                    curve: exposureSignalMapping.curve) : nil,
             zebra: visible.contains(.zebra)
                 ? ZebraSettings(
                     unit: assistConfiguration.zebra.unit,

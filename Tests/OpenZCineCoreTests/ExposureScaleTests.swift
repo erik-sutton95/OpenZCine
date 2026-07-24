@@ -192,7 +192,11 @@ struct ExposureScaleTests {
     @Test("Minus five through plus five stops round-trip through each published curve")
     func zStopRoundTripsBothCurves() {
         for curve in ExposureToneCurve.allCases {
-            for stop in -5...5 {
+            // Display-referred curves carry finite headroom (sRGB clips at display white,
+            // HLG at its signal peak) — stops beyond it clamp by design and cannot
+            // round-trip, so each curve is exercised across its own representable range.
+            let maxStop = log2(curve.decode(encodedValue: 1) / 0.18)
+            for stop in -5...5 where Double(stop) <= maxStop + 0.0001 {
                 let native = ExposureScale.signalNative(zStop: Double(stop), curve: curve)
                 let decoded = ExposureScale.zStop(signalNative: native, curve: curve)
                 #expect(abs(decoded - Double(stop)) < 0.0001)

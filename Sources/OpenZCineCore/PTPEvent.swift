@@ -5,6 +5,11 @@ import Foundation
 /// Provenance: libgphoto2 `PTP_EC_NIKON_*` in `camlibs/ptp2/ptp.h`
 /// (<https://github.com/gphoto/libgphoto2>).
 public enum PTPEventCode: UInt16, Sendable {
+    /// Standard PIMA 15740 event: a new object landed on the card (one per file — a
+    /// RAW+JPEG pair emits two). Fires for body-fired and remote releases alike.
+    case objectAdded = 0x4002
+    /// Standard PIMA 15740 event: the capture run finished writing (one per destination).
+    case captureComplete = 0x400D
     case movieRecordInterrupted = 0xC105
     case movieRecordComplete = 0xC108
     case movieRecordStarted = 0xC10A
@@ -40,6 +45,15 @@ public struct PTPEvent: Equatable, Sendable {
         try self.init(payloadBytes: Array(packet.payload))
     }
 
+    /// Direct construction from a code + parameters — used by the `GetEventEx` poll, whose
+    /// event-array elements carry no transaction ID (unlike the socket packet layout).
+    public init(eventCode raw: UInt16, parameters: [UInt32]) {
+        rawEventCode = raw
+        eventCode = PTPEventCode(rawValue: raw) ?? .unknown
+        transactionID = 0
+        self.parameters = parameters
+    }
+
     /// The camera-sent event code, preserved even when this build does not
     /// know its Nikon-specific meaning.
     public let rawEventCode: UInt16
@@ -66,9 +80,41 @@ public struct PTPEvent: Equatable, Sendable {
             return .recording
         case .movieRecordComplete, .movieRecordInterrupted:
             return .standby
-        case .unknown:
+        case .objectAdded, .captureComplete, .unknown:
             return nil
         }
+    }
+}
+
+/// Parses the event array a Nikon body returns from the `GetEventEx` (0x941C) poll — the
+/// channel through which capture events (ObjectAdded, CaptureComplete) actually arrive; the
+/// PTP-IP event socket does not carry them, so a shutter fired ON THE BODY only surfaces here.
+///
+/// Layout (little-endian): `NumberOfElements(UINT32)`, then per element `EventCode(UINT16)`,
+/// `NumParameters(UINT16)`, `NumParameters × Parameter(UINT32)`. Element count is capped at 2048.
+public enum PTPNikonEventList {
+    public static func parse(_ bytes: [UInt8]) -> [PTPEvent] {
+        guard bytes.count >= 4 else { return [] }
+        let declared = ByteCoding.readUInt32LE(bytes, at: 0)
+        let count = Int(min(declared, 2048))
+        var events: [PTPEvent] = []
+        events.reserveCapacity(count)
+        var offset = 4
+        for _ in 0..<count {
+            guard offset + 4 <= bytes.count else { break }
+            let code = ByteCoding.readUInt16LE(bytes, at: offset)
+            let numParams = Int(ByteCoding.readUInt16LE(bytes, at: offset + 2))
+            offset += 4
+            var params: [UInt32] = []
+            params.reserveCapacity(numParams)
+            for _ in 0..<numParams {
+                guard offset + 4 <= bytes.count else { break }
+                params.append(ByteCoding.readUInt32LE(bytes, at: offset))
+                offset += 4
+            }
+            events.append(PTPEvent(eventCode: code, parameters: params))
+        }
+        return events
     }
 }
 
