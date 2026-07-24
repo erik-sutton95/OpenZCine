@@ -47,8 +47,9 @@ internal enum class BodyCaptureSync {
 /**
  * iOS event-drain guards for a body-fired shutter: react only in photo mode
  * and never while an app-initiated release is in flight — the app path
- * schedules its own review on completion. One review per body run
- * (capture-complete, never per object-added).
+ * schedules its own review on completion. Nikon surfaces a body-fired still
+ * through the GetEventEx poll as ObjectAdded and/or CaptureComplete; the
+ * MonitorScreen collector debounces that burst to one review per body run.
  */
 internal fun bodyCaptureSyncAction(
     isPhotography: Boolean,

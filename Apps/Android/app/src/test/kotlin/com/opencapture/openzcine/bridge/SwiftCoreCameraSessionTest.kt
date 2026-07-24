@@ -495,6 +495,32 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
+    fun `body-fired ObjectAdded surfaces as a still-capture-completed event`() = runTest {
+        val bridge = FakeBridge()
+        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+
+        val captureEvent = async { session.events.first() }
+        runCurrent()
+        // Nikon delivers a body-fired still through the GetEventEx poll as ObjectAdded (0x4002);
+        // the shell must treat it as a completed still capture, exactly like CaptureComplete, so
+        // the monitor's body-capture sync (pulse + instant review) fires.
+        bridge.eventListeners.single().onEvent(0x4002, 7, longArrayOf(0x0001_0042))
+
+        assertEquals(
+            CameraSessionEvent.StillCaptureCompleted(
+                rawEventCode = 0x4002,
+                transactionId = 7,
+                rawParameters = listOf(0x0001_0042),
+            ),
+            captureEvent.await(),
+        )
+    }
+
+    @Test
     fun `late camera event after disconnect is ignored`() = runTest {
         val bridge = FakeBridge()
         val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)

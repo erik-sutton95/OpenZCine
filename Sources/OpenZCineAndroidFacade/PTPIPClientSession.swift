@@ -589,6 +589,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var eventDrainActive = false
     private var eventDrainStopRequested = false
 
+    /// The socket drain's `onEvent` sink, shared with the `GetEventEx` capture poll so a
+    /// body-fired capture reaches Kotlin through the SAME callback path whichever channel
+    /// delivered it (mirrors iOS routing both the socket event and the poll through one
+    /// handler). Guarded by `deviceEventSinkLock`, which is held for the whole poll delivery so
+    /// a concurrent drain teardown cannot release the Kotlin listener mid-callback.
+    private let deviceEventSinkLock = NSLock()
+    private var deviceEventSink: (@Sendable (PTPEvent) -> Void)?
+
     /// Media payload pump state. Like live view, this is independent of the
     /// transaction lock so stop/join can proceed while one camera read is in
     /// flight.
@@ -3204,9 +3212,41 @@ public final class PTPIPClientSession: @unchecked Sendable {
         eventDrainStopRequested = false
         eventDrainCondition.unlock()
 
+        // Share the sink with the GetEventEx capture poll (see `pollDeviceEvents`) so both
+        // channels route through one path; cleared in `finishEventDrain` before the listener
+        // is released.
+        deviceEventSinkLock.lock()
+        deviceEventSink = onEvent
+        deviceEventSinkLock.unlock()
+
         Thread.detachNewThread { [self] in
             runEventDrain(onEvent: onEvent, onEnded: onEnded)
         }
+    }
+
+    /// Polls the camera's Nikon event queue (`GetEventEx` 0x941C) and returns the events it
+    /// held. Nikon bodies deliver capture events (`ObjectAdded` 0x4002, `CaptureComplete`
+    /// 0x400D) through THIS poll, not the PTP-IP event socket the drain reads — so a shutter
+    /// fired ON THE CAMERA BODY only surfaces here. Parameter1 = 0 clears the queue after the
+    /// read so the same events are not seen twice.
+    ///
+    /// Gated to photography chrome (the only place a body-fired still matters, mirroring the
+    /// iOS poll) and skipped while media mode owns the wire. Acquires the command-lifecycle
+    /// lock non-blockingly so a poll driven off the live-view pump never stacks behind an
+    /// in-flight control write and stalls the feed — the body's queue persists, so the next
+    /// frame's poll picks up whatever a skipped one missed. Empty on a busy/non-OK answer.
+    /// [verify-on-HW: the ZR's real GetEventEx cadence and which capture code(s) it emits]
+    public func pollDeviceEvents() -> [PTPEvent] {
+        guard commandLifecycleLock.`try`() else { return [] }
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive,
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector),
+            let result = try? executeTransaction(
+                .getEventEx, parameters: [0], dataPhase: .dataIn),
+            result.operationResponse.responseCode == .ok
+        else { return [] }
+        return PTPNikonEventList.parse(Array(result.data))
     }
 
     /// Stops the event reader by closing its dedicated socket, then waits only
@@ -3343,6 +3383,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
         eventDrainStopRequested = false
         eventDrainCondition.broadcast()
         eventDrainCondition.unlock()
+        // Drop the capture-poll sink before the listener is released so a live-view poll cannot
+        // route an event into a freed Kotlin reference. The lock serializes with an in-flight
+        // poll delivery, so this returns only once no delivery is mid-callback.
+        deviceEventSinkLock.lock()
+        deviceEventSink = nil
+        deviceEventSinkLock.unlock()
         onEnded(failure)
     }
 
@@ -3609,6 +3655,13 @@ public final class PTPIPClientSession: @unchecked Sendable {
     public static let liveViewFrameIntervalNanoseconds: UInt64 =
         AndroidLiveViewPolicyWire.standardFrameIntervalNanoseconds
 
+    /// Body-capture (`GetEventEx`) poll stride: one queue poll every N delivered live-view
+    /// frames. At the 60 Hz target that is a few polls/second — brisk enough that a shutter
+    /// fired ON THE BODY reaches instant playback promptly, without a poll on every frame
+    /// stealing the transaction lock from the feed. [verify-on-HW: tune against the ZR's real
+    /// feed rate and GetEventEx cadence]
+    public static let deviceEventPollFrameStride = 8
+
     /// Fastest accepted preview pull (~60 fps).
     public static let minimumLiveViewFrameIntervalNanoseconds: UInt64 =
         AndroidLiveViewPolicyWire.minimumFrameIntervalNanoseconds
@@ -3701,6 +3754,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
         throw PTPIPClientSessionError.timeout("Device readiness polling")
     }
 
+    /// Polls the Nikon event queue once and routes any events into the socket drain's sink, so
+    /// a shutter fired ON THE BODY reaches Kotlin exactly as a socket event would. Called from
+    /// the live-view pump thread, which is already JVM-attached for frame delivery, so the sink
+    /// (a JNI callback) runs on a valid thread. The sink lock is held across delivery so a
+    /// concurrent drain teardown cannot release the Kotlin listener mid-callback.
+    private func deliverPolledDeviceEvents() {
+        let events = pollDeviceEvents()
+        guard !events.isEmpty else { return }
+        deviceEventSinkLock.lock()
+        defer { deviceEventSinkLock.unlock() }
+        guard let sink = deviceEventSink else { return }
+        for event in events { sink(event) }
+    }
+
     /// Pump body: fetch → deliver → sleep-to-schedule, until stop or a
     /// transport error, then best-effort `EndLiveView` and exactly one
     /// `onEnded`.
@@ -3711,6 +3778,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) {
         let startNanos = Self.monotonicNanoseconds()
         var pollIndex: UInt64 = 0
+        var framesSinceDeviceEventPoll = 0
         while !liveViewStopIsRequested() {
             do {
                 let result = try transactExpectingOK(.getLiveViewImageEx, dataPhase: .dataIn)
@@ -3721,6 +3789,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 focusFrameCondition.broadcast()
                 focusFrameCondition.unlock()
                 onFrame(frame, Int64(Self.monotonicNanoseconds()))
+                // Nikon delivers a body-fired capture (ObjectAdded / CaptureComplete) through
+                // the GetEventEx poll, NOT the PTP-IP event socket the drain reads — so poll the
+                // queue every Nth frame and route captures into the SAME sink the socket drain
+                // feeds. Inline in this serial pump = inherently single-flight, one poll at most.
+                framesSinceDeviceEventPoll += 1
+                if framesSinceDeviceEventPoll >= Self.deviceEventPollFrameStride {
+                    framesSinceDeviceEventPoll = 0
+                    deliverPolledDeviceEvents()
+                }
             } catch is PTPLiveViewObjectError {
                 // A single unparsable frame is stream jitter, not a stream
                 // death — skip it, like the iOS watchdog's bad-frame budget.

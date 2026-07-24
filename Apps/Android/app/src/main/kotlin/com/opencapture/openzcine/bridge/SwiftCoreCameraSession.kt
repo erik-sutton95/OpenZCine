@@ -1056,7 +1056,10 @@ class SwiftCoreCameraSession internal constructor(
                         parameters,
                         parameters.firstOrNull(),
                     )
-                STILL_CAPTURE_COMPLETE ->
+                // Nikon signals a body-fired still through the GetEventEx poll as ObjectAdded
+                // and/or CaptureComplete; both drive the same shell sync (iOS routes both to one
+                // handler). The MonitorScreen collector debounces the resulting burst.
+                STILL_CAPTURE_COMPLETE, OBJECT_ADDED ->
                     CameraSessionEvent.StillCaptureCompleted(
                         code,
                         transactionId and UINT32_MASK,
@@ -1457,6 +1460,7 @@ class SwiftCoreCameraSession internal constructor(
         const val EVENT_BUFFER_CAPACITY: Int = 64
         const val EVENT_CODE_MASK: Int = 0xFFFF
         const val UINT32_MASK: Long = 0xFFFF_FFFFL
+        const val OBJECT_ADDED: Int = 0x4002
         const val DEVICE_PROPERTY_CHANGED: Int = 0x4006
         const val STILL_CAPTURE_COMPLETE: Int = 0x400D
         const val MOVIE_RECORD_INTERRUPTED: Int = 0xC105

@@ -1038,6 +1038,10 @@ internal fun MonitorScreen(
     // its own review). The diff baseline is maintained outside the shutter
     // path, so captures the app didn't initiate resolve the same way.
     LaunchedEffect(session) {
+        // Debounce the body-capture sync: the GetEventEx poll surfaces a burst as many
+        // ObjectAdded/CaptureComplete events (and the same shot can arrive on both the poll and
+        // the socket), so collapse them to ONE review — iOS uses a 0.8 s window.
+        var lastBodyCaptureSyncNanos = 0L
         session.events.collect { event ->
             if (event !is CameraSessionEvent.StillCaptureCompleted) return@collect
             val snapshot = session.cameraProperties.value
@@ -1048,6 +1052,9 @@ internal fun MonitorScreen(
                     appReleaseInFlight = stillCapture.isCapturing.value,
                 )
             if (action == BodyCaptureSync.IGNORE) return@collect
+            val nowNanos = System.nanoTime()
+            if (nowNanos - lastBodyCaptureSyncNanos < 800_000_000L) return@collect
+            lastBodyCaptureSyncNanos = nowNanos
             // A body capture reached the app: pulse the shutter button so it visibly registers
             // (iOS `bodyShutterPulse &+= 1`), then run the shots refresh / instant review.
             bodyShutterPulse++
