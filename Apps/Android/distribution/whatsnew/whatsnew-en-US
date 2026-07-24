@@ -1,4 +1,5 @@
-- Photography mode chrome: stills strip with WB and PROFILE tiles, shots/size/quality readouts, and a real shutter button.
-- EV meter assist fed by the camera's own exposure indicator; scopes and false color measure the stills preview correctly.
-- Media page: delete with multi-select, 1-5 star ratings written to the card, and pinch zoom that follows your fingers.
-- Deleted items stay deleted; battery gauges sit under the lock button; slot chips follow the physical card slots.
+- Photography mode: a real shutter (hold for a burst), tap-to-AF, self-timers, and pickers for mode, ISO, focus, WB, size, quality, and picture profile.
+- Focus dial: pull the lens focus on the live view (photo mode).
+- Burst stacks open to a scrubbing pager; multi-select to delete or share.
+- Body-fired shots sync to the app with instant playback.
+- Delete photos/videos (RAW+JPEG or MP4+master) with a progress bar; backup shots under both cards; ratings; auto-rotate.
