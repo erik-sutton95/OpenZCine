@@ -3369,7 +3369,7 @@ internal fun toggleShutterLockOnCamera(
 }
 
 /** Clearance between the battery row stack and the lock button above it (dp). */
-internal const val BATTERY_STACK_CLEARANCE_DP = 4f
+internal const val BATTERY_STACK_CLEARANCE_DP = 10f
 
 /**
  * Seats the stacked battery rows in the leading rail lane, directly under the
