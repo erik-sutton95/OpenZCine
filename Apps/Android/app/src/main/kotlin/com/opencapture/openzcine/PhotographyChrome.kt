@@ -3,12 +3,10 @@ package com.opencapture.openzcine
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -16,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -211,20 +210,37 @@ internal fun shotsRemainingCompactLabel(count: Int): String =
         count.toString()
     }
 
-/** System-rail still shutter (replaces the red record control in photography mode). */
+/**
+ * System-rail still shutter (replaces the red record control in photography
+ * mode). Press-tracked (iOS `shutterButtonPressed`/`Released`): finger-down
+ * fires the release, and a hold in a continuous drive latches the burst until
+ * finger-up. Stays tappable while capturing so a second press can end a
+ * bulb/time exposure or cancel a countdown.
+ */
 @Composable
 internal fun PhotographyShutterButton(
     isCapturing: Boolean,
-    onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    onPressed: () -> Unit = {},
+    onReleased: () -> Unit = {},
 ) {
     Box(
         modifier
             .size(54.dp)
             .clip(CircleShape)
             .border(3.dp, Color.White.copy(alpha = 0.92f), CircleShape)
-            .clickable(enabled = enabled && !isCapturing, onClick = onClick)
+            .pointerInput(enabled) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    if (!enabled) return@awaitEachGesture
+                    onPressed()
+                    // A cancelled pointer still releases the latch — iOS
+                    // backstops swallowed finger-ups the same way.
+                    waitForUpOrCancellation()
+                    onReleased()
+                }
+            }
             .semantics {
                 contentDescription = if (isCapturing) "Capturing" else "Shutter"
             },

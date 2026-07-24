@@ -1450,6 +1450,106 @@
         }
     }
 
+    /// `SwiftCore.sessionInitiateStillCapture(): Int` — fires one still
+    /// release (AF-then-release to the card). 0 = the release started; poll
+    /// `sessionPollStillRelease` between frames for completion.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionInitiateStillCapture")
+    public func swiftCoreSessionInitiateStillCapture(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            try session.initiateStillCapture()
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionPollStillRelease(): Int` — one `DeviceReady` poll
+    /// while a release is in flight: 0 complete, 1 in progress, 2 bulb/time
+    /// open shutter, 3 failed, negatives for session/transport faults.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionPollStillRelease")
+    public func swiftCoreSessionPollStillRelease(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        do {
+            switch try session.pollStillReleaseReadiness() {
+            case .complete: return 0
+            case .inProgress: return 1
+            case .openShutterInProgress: return 2
+            case .failed: return 3
+            }
+        } catch {
+            return -2
+        }
+    }
+
+    /// `SwiftCore.sessionTerminateStillCapture(): Int` — ends a bulb/time
+    /// exposure or stops a running burst; frames captured so far are kept.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionTerminateStillCapture")
+    public func swiftCoreSessionTerminateStillCapture(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            try session.terminateStillCapture()
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionSetStillBurstBracket(active): Int` — opens/closes the
+    /// continuous-burst remote-mode bracket (burst ceiling only persists while
+    /// remote mode is held). [verify-on-HW]
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetStillBurstBracket")
+    public func swiftCoreSessionSetStillBurstBracket(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, active: jboolean
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            try session.setStillBurstBracket(active: active != 0)
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
     /// `SwiftCore.sessionApplyControl(control, label): Int` — validates the
     /// semantic Kotlin selector, then applies its human-readable selection on
     /// the active facade session. Swift resolves every Nikon property ID and

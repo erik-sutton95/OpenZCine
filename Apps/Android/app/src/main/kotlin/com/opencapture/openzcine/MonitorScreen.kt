@@ -328,14 +328,10 @@ internal fun MonitorScreen(
         }
     val monitorAccessibilityState = monitorCameraStatusAccessibility(cameraFeedStatus)
     val cameraProperties by session.cameraProperties.collectAsState()
-    var stillCapturing by remember { mutableStateOf(false) }
-    LaunchedEffect(stillCapturing) {
-        if (stillCapturing) {
-            // First iteration: optimistic shutter pulse until still-release is session-wired.
-            kotlinx.coroutines.delay(400)
-            stillCapturing = false
-        }
-    }
+    // Real press-tracked still release over the session (single, bulb/time,
+    // and hold-to-burst with the remote-mode bracket). [verify-on-HW]
+    val stillCapture = remember(session) { StillCaptureController(session) }
+    val stillCapturing by stillCapture.isCapturing.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -895,6 +891,16 @@ internal fun MonitorScreen(
                 }
             }
         }
+    // Photography shutter press/release (iOS shutterButtonPressed/Released):
+    // continuous drives latch the burst for the duration of the hold.
+    val photoShutterPressed: () -> Unit = {
+        stillCapture.pressed(
+            recordScope,
+            continuousDrive =
+                cameraProperties.stillCaptureMode in StillPickerPolicy.CONTINUOUS_DRIVES,
+        )
+    }
+    val photoShutterReleased: () -> Unit = { stillCapture.released(recordScope) }
     // iOS shutter long-press (strip cell + open picker panel): toggle MovieTVLock.
     val shutterHapticView = LocalView.current
     val shutterLongPressToggle: () -> Unit = {
@@ -1839,7 +1845,8 @@ internal fun MonitorScreen(
                     enabledDisplayModeOrder = displayModeOrder,
                     cameraProperties = cameraProperties,
                     stillCapturing = stillCapturing,
-                    onShutter = { stillCapturing = true },
+                    onShutterPressed = photoShutterPressed,
+                    onShutterReleased = photoShutterReleased,
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
                     onRecord = requestRecordToggle,
@@ -2168,8 +2175,9 @@ internal fun MonitorScreen(
                     if (prefersPhotographyChrome(cameraProperties)) {
                         PhotographyShutterButton(
                             isCapturing = stillCapturing,
-                            onClick = { stillCapturing = true },
                             modifier = Modifier.zone(zones.record),
+                            onPressed = photoShutterPressed,
+                            onReleased = photoShutterReleased,
                         )
                     } else {
                         RecordButton(
@@ -2193,8 +2201,9 @@ internal fun MonitorScreen(
                         if (prefersPhotographyChrome(cameraProperties)) {
                             PhotographyShutterButton(
                                 isCapturing = stillCapturing,
-                                onClick = { stillCapturing = true },
                                 modifier = Modifier.zone(zones.record),
+                                onPressed = photoShutterPressed,
+                                onReleased = photoShutterReleased,
                             )
                         } else {
                             RecordButton(
@@ -2728,7 +2737,8 @@ private fun PortraitChrome(
     enabledDisplayModeOrder: List<MonitorDisplayMode>,
     cameraProperties: CameraPropertySnapshot,
     stillCapturing: Boolean,
-    onShutter: () -> Unit,
+    onShutterPressed: () -> Unit,
+    onShutterReleased: () -> Unit,
     onLock: () -> Unit,
     recordEnabled: Boolean,
     onRecord: () -> Unit,
@@ -2956,8 +2966,9 @@ private fun PortraitChrome(
         if (isPhotography) {
             PhotographyShutterButton(
                 isCapturing = stillCapturing,
-                onClick = onShutter,
                 modifier = Modifier.size(83.dp),
+                onPressed = onShutterPressed,
+                onReleased = onShutterReleased,
             )
         } else {
             RecordButton(

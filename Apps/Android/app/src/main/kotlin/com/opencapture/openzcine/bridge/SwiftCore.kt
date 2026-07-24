@@ -653,6 +653,25 @@ object SwiftCore {
     external fun sessionSetRecording(recording: Boolean): Int
 
     /**
+     * Fires one still release on the active session (photo mode). Returns a
+     * `RECORDING_COMMAND_*` result; completion lands via [sessionPollStillRelease].
+     */
+    external fun sessionInitiateStillCapture(): Int
+
+    /**
+     * One readiness poll while a still release is in flight: 0 complete,
+     * 1 in progress, 2 bulb/time open shutter, 3 failed, negatives for
+     * session/transport faults.
+     */
+    external fun sessionPollStillRelease(): Int
+
+    /** Ends a bulb/time exposure or stops a running burst (frames kept). */
+    external fun sessionTerminateStillCapture(): Int
+
+    /** Opens/closes the continuous-burst remote-mode bracket. */
+    external fun sessionSetStillBurstBracket(active: Boolean): Int
+
+    /**
      * Applies one typed camera control selection on the active session. [control]
      * is a stable semantic selector owned by [CameraControl]; [label] is the
      * operator-facing selection such as `"5600K"` or `"AF-C"`. Swift owns all

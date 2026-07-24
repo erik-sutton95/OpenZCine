@@ -238,6 +238,21 @@ public enum class CameraControl {
     STILL_PICTURE_CONTROL,
 }
 
+/** Progress of a still release as reported by polling after the release op. */
+public enum class StillReleasePoll {
+    /** The release (including every frame of a burst) finished. */
+    COMPLETE,
+
+    /** AF / shooting / self-timer still running — poll again. */
+    IN_PROGRESS,
+
+    /** A bulb or time exposure is holding the shutter open. */
+    OPEN_SHUTTER,
+
+    /** The release failed (out of focus, storage full, …) or could not be polled. */
+    FAILED,
+}
+
 /** The camera's active movie-shutter display convention. */
 public enum class CameraShutterMode {
     /** The camera displays a reciprocal exposure time, such as `1/50`. */
@@ -795,6 +810,39 @@ public interface CameraSession {
      */
     @Throws(CameraControlException::class)
     public suspend fun applyControl(control: CameraControl, label: String) {
+        throw CameraControlException.UnsupportedSelection
+    }
+
+    /**
+     * Fires one still release when the body is in photo mode (AF-then-release
+     * to the card). Activation-style: returning confirms the release started;
+     * poll [pollStillRelease] between frames for completion. The protocol
+     * operation stays behind the shared Swift boundary.
+     */
+    @Throws(CameraControlException::class)
+    public suspend fun initiateStillCapture() {
+        throw CameraControlException.UnsupportedSelection
+    }
+
+    /** One readiness poll while a still release is in flight. */
+    public suspend fun pollStillRelease(): StillReleasePoll = StillReleasePoll.FAILED
+
+    /**
+     * Ends a bulb/time exposure or stops a running burst; frames captured so
+     * far are kept. Refusals after a run already ended are expected.
+     */
+    @Throws(CameraControlException::class)
+    public suspend fun terminateStillCapture() {
+        throw CameraControlException.UnsupportedSelection
+    }
+
+    /**
+     * Opens/closes the continuous-burst remote-mode bracket around a held
+     * shutter press. The body's dials lock while it is open, so callers
+     * bracket it as tightly as possible.
+     */
+    @Throws(CameraControlException::class)
+    public suspend fun setStillBurstBracket(active: Boolean) {
         throw CameraControlException.UnsupportedSelection
     }
 

@@ -2074,6 +2074,28 @@ public final class PTPIPClientSession: @unchecked Sendable {
         try transactExpectingOK(.terminateCapture, parameters: [0, 0])
     }
 
+    /// Opens/closes the continuous-burst remote-mode bracket: host-set capture
+    /// session values (the burst ceiling) only persist while remote mode is
+    /// held — without it every release snaps back to a single frame. The
+    /// body's dials lock for the bracket's duration, so it opens on the press
+    /// and closes the moment the burst ends. Closing tolerates a refusal
+    /// (release/AF may still be settling). [verify-on-HW]
+    public func setStillBurstBracket(active: Bool) throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+        if active {
+            try transactExpectingOK(.changeCameraMode, parameters: [1])
+            try writeCameraProperty(
+                PTPCameraPropertyWrite(
+                    property: .burstNumber, data: Data(ByteCoding.uint16LE(65535))))
+        } else {
+            try transactExpectingOK(.changeCameraMode, parameters: [0])
+        }
+    }
+
     // MARK: - Android live-view configuration
 
     /// Applies one shared-policy preview request before the next live-view start.

@@ -16,6 +16,7 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.core.StillReleasePoll
 import com.opencapture.openzcine.transport.UsbPtpTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -113,6 +114,14 @@ internal interface SwiftCoreSessionBridge {
 
     fun applyControl(control: CameraControl, label: String): Int
 
+    fun initiateStillCapture(): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+
+    fun pollStillRelease(): Int = -2
+
+    fun terminateStillCapture(): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+
+    fun setStillBurstBracket(active: Boolean): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+
     fun changeAfArea(point: CameraFocusPoint): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
 
     fun resetFocusPoint(): Int = SwiftCore.FOCUS_COMMAND_UNAVAILABLE
@@ -208,6 +217,15 @@ internal interface SwiftCoreSessionBridge {
 
         override fun applyControl(control: CameraControl, label: String): Int =
             SwiftCore.sessionApplyControl(control.nativeSelector, label)
+
+        override fun initiateStillCapture(): Int = SwiftCore.sessionInitiateStillCapture()
+
+        override fun pollStillRelease(): Int = SwiftCore.sessionPollStillRelease()
+
+        override fun terminateStillCapture(): Int = SwiftCore.sessionTerminateStillCapture()
+
+        override fun setStillBurstBracket(active: Boolean): Int =
+            SwiftCore.sessionSetStillBurstBracket(active)
 
         override fun changeAfArea(point: CameraFocusPoint): Int =
             SwiftCore.sessionChangeAfArea(point.x, point.y)
@@ -652,6 +670,71 @@ class SwiftCoreCameraSession internal constructor(
                 throw error
             } catch (_: Throwable) {
                 throw CameraControlException.TransportFailed
+            }
+        }
+    }
+
+    /**
+     * Fires one still release through the Swift core, serialized with every
+     * other camera command. The release itself is activation-style — poll
+     * [pollStillRelease] for completion.
+     */
+    override suspend fun initiateStillCapture() {
+        runStillCommand { core.initiateStillCapture() }
+    }
+
+    override suspend fun pollStillRelease(): StillReleasePoll {
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected || !core.isAvailable) {
+                return StillReleasePoll.FAILED
+            }
+            val raw =
+                try {
+                    withContext(Dispatchers.IO + NonCancellable) { core.pollStillRelease() }
+                } catch (_: Throwable) {
+                    return StillReleasePoll.FAILED
+                }
+            return when (raw) {
+                0 -> StillReleasePoll.COMPLETE
+                1 -> StillReleasePoll.IN_PROGRESS
+                2 -> StillReleasePoll.OPEN_SHUTTER
+                else -> StillReleasePoll.FAILED
+            }
+        }
+    }
+
+    override suspend fun terminateStillCapture() {
+        runStillCommand { core.terminateStillCapture() }
+    }
+
+    override suspend fun setStillBurstBracket(active: Boolean) {
+        runStillCommand { core.setStillBurstBracket(active) }
+    }
+
+    /** Shared gate for the still-release command family. */
+    private suspend fun runStillCommand(command: () -> Int) {
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected) {
+                throw CameraControlException.NotConnected
+            }
+            if (!core.isAvailable) {
+                throw CameraControlException.CoreUnavailable
+            }
+            val nativeResult =
+                try {
+                    withContext(Dispatchers.IO + NonCancellable) { command() }
+                } catch (_: Throwable) {
+                    throw CameraControlException.TransportFailed
+                }
+            updateRoundTripMeasurement(force = true)
+            when (nativeResult) {
+                SwiftCore.RECORDING_COMMAND_ACCEPTED -> Unit
+                SwiftCore.RECORDING_COMMAND_NO_SESSION ->
+                    throw CameraControlException.NotConnected
+                SwiftCore.RECORDING_COMMAND_MEDIA_BUSY -> throw CameraControlException.MediaBusy
+                SwiftCore.RECORDING_COMMAND_REJECTED ->
+                    throw CameraControlException.CommandRejected
+                else -> throw CameraControlException.TransportFailed
             }
         }
     }
