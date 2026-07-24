@@ -40,6 +40,14 @@ internal class StillCaptureController(
      */
     var onRunCompleted: (() -> Unit)? = null
 
+    /**
+     * Fired when a press cannot proceed (body refusal, busy channel, no
+     * session) — silent no-ops are the enemy: the shell toasts this so a dead
+     * shutter always explains itself. The quiet burst-end terminate and the
+     * best-effort bracket never report here.
+     */
+    var onFailure: ((String) -> Unit)? = null
+
     /** Frames chained in one hold — a hard cap backstops a swallowed finger-up. */
     private companion object {
         const val MAX_CHAINED_FRAMES = 30
@@ -120,12 +128,29 @@ internal class StillCaptureController(
                         // next press terminates.
                         openShutter.set(true)
                     }
-                    StillReleasePoll.FAILED -> break
+                    StillReleasePoll.FAILED -> {
+                        // A refused/failed release surfaces (iOS "Still
+                        // capture failed"); quiet when a finger-up already
+                        // terminated the latched run.
+                        if (chained == 0 && held.get()) {
+                            runCatching {
+                                onFailure?.invoke("The camera refused the still release.")
+                            }
+                        }
+                        break
+                    }
                 }
             }
-        } catch (_: Exception) {
-            // Rejections surface through the run simply ending; the property
-            // poll restores authoritative state.
+        } catch (error: Exception) {
+            // A refused release must never die silently — surface the typed
+            // message (body rejection, busy channel, unsupported session) so
+            // an on-device dead shutter always explains itself. State still
+            // resets below; the property poll restores authoritative state.
+            runCatching {
+                onFailure?.invoke(
+                    error.message ?: "The camera did not accept the still release.",
+                )
+            }
         } finally {
             if (bracketOpen) runCatching { session.setStillBurstBracket(false) }
             openShutter.set(false)

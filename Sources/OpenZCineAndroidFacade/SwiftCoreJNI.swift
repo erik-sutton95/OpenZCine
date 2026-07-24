@@ -1634,6 +1634,12 @@
             return .unavailable
         case .operationRejected:
             return .rejected
+        case .timeout:
+            // A slow answer while the body is mid-AF is a soft refusal, not a
+            // dead link — the session stays up and the live-view pump is the
+            // authority on genuine transport loss. Surfacing it as
+            // "connection failed" scared operators off a healthy session.
+            return .rejected
         default:
             return .transportFailed
         }

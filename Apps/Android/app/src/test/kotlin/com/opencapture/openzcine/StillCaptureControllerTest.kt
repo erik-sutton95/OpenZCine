@@ -32,6 +32,7 @@ class StillCaptureControllerTest {
         var refreshes = 0
         var polls: ArrayDeque<StillReleasePoll> = ArrayDeque()
         var failInitiate = false
+        var failBracket = false
         var refreshDelayMillis = 0L
 
         override suspend fun connect() = Unit
@@ -55,6 +56,9 @@ class StillCaptureControllerTest {
         }
 
         override suspend fun setStillBurstBracket(active: Boolean) {
+            if (failBracket) {
+                throw com.opencapture.openzcine.core.CameraControlException.CommandRejected
+            }
             bracketCalls += active
         }
 
@@ -154,6 +158,65 @@ class StillCaptureControllerTest {
         advanceUntilIdle()
 
         assertEquals(listOf(true, false), session.bracketCalls)
+        assertFalse(controller.isCapturing.value)
+    }
+
+    @Test
+    fun `a refused release surfaces a reason and never latches the press gate`() = runTest {
+        val session = FakeSession()
+        session.failInitiate = true
+        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        val failures = mutableListOf<String>()
+        controller.onFailure = { failures += it }
+
+        controller.pressed(this, continuousDrive = false)
+        advanceUntilIdle()
+
+        // The refusal explained itself and reset every gate.
+        assertEquals(1, failures.size)
+        assertFalse(controller.isCapturing.value)
+
+        // The NEXT press must fire — a failed release can never leave the
+        // shutter dead (the on-device silent-no-op regression).
+        session.failInitiate = false
+        session.polls.add(StillReleasePoll.COMPLETE)
+        controller.pressed(this, continuousDrive = false)
+        advanceUntilIdle()
+        assertEquals(1, session.initiates)
+        assertFalse(controller.isCapturing.value)
+    }
+
+    @Test
+    fun `a refused bracket still fires the release without a failure toast`() = runTest {
+        val session = FakeSession()
+        session.failBracket = true
+        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        val failures = mutableListOf<String>()
+        controller.onFailure = { failures += it }
+        session.polls.add(StillReleasePoll.COMPLETE)
+
+        controller.pressed(this, continuousDrive = true)
+        controller.released(this)
+        advanceUntilIdle()
+
+        // The best-effort bracket is quiet; the plain release still fired.
+        assertEquals(1, session.initiates)
+        assertTrue(failures.isEmpty())
+        assertFalse(controller.isCapturing.value)
+    }
+
+    @Test
+    fun `a failed release poll surfaces a reason for a plain press`() = runTest {
+        val session = FakeSession()
+        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        val failures = mutableListOf<String>()
+        controller.onFailure = { failures += it }
+        session.polls.add(StillReleasePoll.FAILED)
+
+        controller.pressed(this, continuousDrive = false)
+        advanceUntilIdle()
+
+        assertEquals(1, failures.size)
         assertFalse(controller.isCapturing.value)
     }
 }

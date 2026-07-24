@@ -2829,7 +2829,19 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard !isMediaModeActive else {
             throw PTPIPClientSessionError.mediaModeActive
         }
-        try changeAfAreaTransaction(x: x, y: y)
+        // A body mid-AF/mid-release answers busy for a beat — bounded retries
+        // before giving up, like iOS servicing taps at tolerant safe points.
+        for attempt in 0..<4 {
+            do {
+                try changeAfAreaTransaction(x: x, y: y)
+                break
+            } catch let error as PTPIPClientSessionError {
+                guard attempt < 3,
+                    case .operationRejected(_, .deviceBusy) = error
+                else { throw error }
+                Thread.sleep(forTimeInterval: 0.12)
+            }
+        }
         // Photography: moving the point alone never focuses (video's
         // continuous AF does that part) — drive AF like a half-press, with a
         // short DeviceReady drain so the body isn't left mid-drive. Subject
