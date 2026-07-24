@@ -39,130 +39,12 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import java.util.Locale
 
-/**
- * Photography capture strip when the body reports photo mode (iOS
- * `MonitorCaptureStrip` while `isPhotography`): the SAME glass pill, cell
- * shape, and typography as the cinema capture strip, rendering the stills
- * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/METER. Stills pickers
- * are still stubs, so every tile
- * routes to [onOpenControl] with its label instead of a drum picker.
- */
-@Composable
-internal fun PhotographyCaptureStrip(
-    properties: CameraPropertySnapshot,
-    onOpenControl: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    maxContentWidth: Dp? = null,
-    /**
-     * Publishes the glass pill's root bounds in dp (iOS `captureBarFrame`),
-     * matching the cinema strip's reporting contract.
-     */
-    onBarBoundsInRoot: ((ZoneFrame) -> Unit)? = null,
-) {
-    val density = LocalDensity.current
-    // Same 58dp glass shell as MonitorCaptureStrip so the two bottom bars
-    // always align; when a width budget is given, only the CELLS scale down.
-    Box(
-        modifier =
-            modifier
-                .height(LiveDesign.CONTROL_HEIGHT_DP.dp)
-                .glass(ChromeShape)
-                .then(
-                    if (onBarBoundsInRoot != null) {
-                        Modifier.onGloballyPositioned { coords ->
-                            val b = coords.boundsInRoot()
-                            with(density) {
-                                onBarBoundsInRoot(
-                                    ZoneFrame(
-                                        x = b.left.toDp().value,
-                                        y = b.top.toDp().value,
-                                        width = b.width.toDp().value,
-                                        height = b.height.toDp().value,
-                                    ),
-                                )
-                            }
-                        }
-                    } else {
-                        Modifier
-                    },
-                )
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        val cells: @Composable () -> Unit = {
-            PhotographyStripCells(
-                properties = properties,
-                onOpenControl = onOpenControl,
-            )
-        }
-        if (maxContentWidth != null) {
-            FitScale(maxContentWidth - 24.dp) { cells() }
-        } else {
-            cells()
-        }
-    }
-}
-
-@Composable
-private fun PhotographyStripCells(
-    properties: CameraPropertySnapshot,
-    onOpenControl: (String) -> Unit,
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        photographyStripTiles(properties).forEach { tile ->
-            Box(
-                Modifier
-                    .chromeClickable { onOpenControl(tile.label) }
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = "${tile.label} ${tile.value}"
-                    },
-            ) {
-                CaptureSettingCell(
-                    label = tile.label,
-                    value = tile.value,
-                    widestValue = tile.widestValue,
-                    active = false,
-                    controlLocked = false,
-                    // WB presets render as icons like the movie tile; Kelvin stays numeric.
-                    wbIcon = if (tile.label == "WB") captureBarWbIcon(tile.value) else null,
-                )
-            }
-        }
-    }
-}
-
-/** One stills readout in the shared capture-cell shape. */
-private data class PhotographyStripTile(
-    val label: String,
-    val value: String,
-    val widestValue: String,
-)
-
-/** iOS `photographyCaptureValues`: same tiles, same order, same width pins. */
-private fun photographyStripTiles(
-    properties: CameraPropertySnapshot,
-): List<PhotographyStripTile> =
-    listOf(
-        PhotographyStripTile("MODE", properties.exposureMode ?: "—", "Auto"),
-        PhotographyStripTile("ISO", properties.iso?.toString() ?: "—", "25600"),
-        PhotographyStripTile("SHUTTER", properties.shutterSpeed ?: "—", "1/16000"),
-        PhotographyStripTile("IRIS", properties.iris ?: "—", "f/2.8"),
-        PhotographyStripTile("DRIVE", compactDriveLabel(properties.stillCaptureMode) ?: "—", "Single"),
-        PhotographyStripTile("FOCUS", properties.focusMode ?: "—", "Wide-L"),
-        PhotographyStripTile("WB", stillWhiteBalanceValue(properties), "5560K"),
-        PhotographyStripTile("METER", properties.meteringMode ?: "—", "Matrix"),
-        PhotographyStripTile(
-            "PROFILE",
-            compactPictureControlLabel(properties.pictureControl) ?: "—",
-            "Auto",
-        ),
-    )
+// The photography capture strip renders through the shared `MonitorCaptureStrip`
+// over `photographyCaptureSettings` (PhotographyPickers.kt) — iOS reuses
+// `CaptureSettingButton` for both chromes the same way.
 
 /** Drive-mode label compacted to strip width ("Continuous H" → "CH"). */
-private fun compactDriveLabel(stillCaptureMode: String?): String? =
+internal fun compactDriveLabel(stillCaptureMode: String?): String? =
     when (stillCaptureMode) {
         null -> null
         "Continuous H" -> "CH"
@@ -225,13 +107,6 @@ internal fun CameraPropertySnapshot.stillQualityCompactLabel(): String? {
 /** Image-size label compacted for the photo top bar ("Size L" → "L"). */
 internal fun CameraPropertySnapshot.stillSizeCompactLabel(): String? =
     imageSize?.replace("Size ", "")
-
-/** iOS stub feedback for a not-yet-implemented photography control. */
-internal fun photographyControlStubMessage(label: String): String {
-    val capitalized =
-        label.lowercase(Locale.ROOT).replaceFirstChar { it.titlecase(Locale.ROOT) }
-    return "$capitalized control — coming next in photography mode."
-}
 
 /**
  * Frames left on the card, in the timecode slot's typography (iOS

@@ -93,7 +93,7 @@ internal val IosPanelRevealSpec =
         easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
     )
 
-/** Stable identities for the five camera controls surrounding iOS live view. */
+/** Stable identities for the camera controls surrounding iOS live view. */
 internal enum class MonitorPickerKind {
     ISO,
     SHUTTER,
@@ -102,6 +102,15 @@ internal enum class MonitorPickerKind {
     WHITE_BALANCE,
     RESOLUTION,
     CODEC,
+
+    // Photography-only pickers (iOS `CameraPicker.isStillPicker` set; the
+    // shared kinds above are reused by the stills strip with stills writes).
+    MODE,
+    DRIVE,
+    METER,
+    PROFILE,
+    SIZE,
+    QUALITY,
 }
 
 /** One typed control tab inside an in-monitor picker. */
@@ -123,6 +132,19 @@ internal data class MonitorPickerModePresentation(
     val applyValueOnActivate: Boolean = true,
     /** Drum star markers for this tab (native base ISOs). */
     val markedValues: Set<String> = emptySet(),
+    /**
+     * Grays this tab out entirely (iOS `pickerModeDisabled`): a U-bank inner
+     * program outside the banks, mutually-exclusive photo timers, or Manual
+     * ISO in a full-auto program.
+     */
+    val disabled: Boolean = false,
+    /**
+     * Freezes only this tab's value drum while it tracks the camera's live
+     * pick (photo ISO's Auto tab). Tabs stay interactive.
+     */
+    val drumLocked: Boolean = false,
+    /** Shows the photo timers' `[−] n [+]` shots stepper under the drum. */
+    val showsTimerShots: Boolean = false,
 )
 
 /** Camera-backed picker shown over live view. */
@@ -1091,7 +1113,10 @@ internal fun monitorTopBarPickerFrame(
 
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */
 internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
-    this == MonitorPickerKind.RESOLUTION || this == MonitorPickerKind.CODEC
+    this == MonitorPickerKind.RESOLUTION ||
+        this == MonitorPickerKind.CODEC ||
+        this == MonitorPickerKind.SIZE ||
+        this == MonitorPickerKind.QUALITY
 
 /**
  * Seats iOS's portrait-fill assist rail inside the shared feed frame and
@@ -1320,6 +1345,12 @@ internal fun MonitorControlPickerPanel(
     showBackdrop: Boolean = true,
     /** iOS PickerPanel long-press: shutter control lock toggle (0.45s, hold anywhere). */
     onShutterLongPress: (() -> Unit)? = null,
+    /** Photo timers' shared shot count, rendered in tabs flagged [MonitorPickerModePresentation.showsTimerShots]. */
+    timerShotsCount: Int = 1,
+    /** Steps the timers' shot count by ±1 (nil hides the stepper row). */
+    onAdjustTimerShots: ((Int) -> Unit)? = null,
+    /** Live NEF (RAW) compression readout for the QUALITY dual-drum panel. */
+    nefCompression: String? = null,
 ) {
     val dismissAllowed = pendingControl == null
     BackHandler(enabled = dismissAllowed, onBack = onDismiss)
@@ -1371,16 +1402,29 @@ internal fun MonitorControlPickerPanel(
                 contentKey = { it.kind },
                 label = "monitorPickerSwitch",
             ) { currentPicker ->
-                PickerPanelBody(
-                    picker = currentPicker,
-                    frame = frame,
-                    controlsEnabled = controlsEnabled,
-                    pendingControl = pendingControl,
-                    feedback = feedback,
-                    onSelect = onSelect,
-                    onDismiss = onDismiss,
-                    onShutterLongPress = onShutterLongPress,
-                )
+                if (currentPicker.kind == MonitorPickerKind.QUALITY) {
+                    // Image quality is a dual-drum pair, not a value wheel
+                    // (iOS `QualityPickerPanel`).
+                    QualityPickerPanelBody(
+                        picker = currentPicker,
+                        nefCompression = nefCompression,
+                        onSelect = onSelect,
+                        onDismiss = onDismiss,
+                    )
+                } else {
+                    PickerPanelBody(
+                        picker = currentPicker,
+                        frame = frame,
+                        controlsEnabled = controlsEnabled,
+                        pendingControl = pendingControl,
+                        feedback = feedback,
+                        onSelect = onSelect,
+                        onDismiss = onDismiss,
+                        onShutterLongPress = onShutterLongPress,
+                        timerShotsCount = timerShotsCount,
+                        onAdjustTimerShots = onAdjustTimerShots,
+                    )
+                }
             }
         }
     }
@@ -1397,6 +1441,8 @@ private fun PickerPanelBody(
     onSelect: (CommandControlRequest, String) -> Unit,
     onDismiss: () -> Unit,
     onShutterLongPress: (() -> Unit)? = null,
+    timerShotsCount: Int = 1,
+    onAdjustTimerShots: ((Int) -> Unit)? = null,
 ) {
     val pickerDescription =
         stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
@@ -1436,9 +1482,11 @@ private fun PickerPanelBody(
     // Keep the drum scrollable while a write is in flight (iOS). Pending applies
     // coalesce in MonitorScreen; freezing the wheel dropped rapid settles.
     // Full interaction lock (shutter control lock / R3D recording) freezes mode tabs too.
-    // Auto ISO only freezes the value drum so Auto Off remains reachable.
+    // Auto ISO only freezes the value drum so Auto Off remains reachable — the
+    // photo ISO Auto tab does the same per-mode via `drumLocked`.
     val modeInteractive = controlsEnabled && !picker.interactionLocked
-    val drumInteractive = modeInteractive && !picker.drumInteractionLocked
+    val drumInteractive =
+        modeInteractive && !picker.drumInteractionLocked && !mode.drumLocked && !mode.disabled
     // Ignore drum-settles briefly after a ±10 nudge so scroll snap cannot
     // overwrite the fine-tuned value with a neighbouring dial step.
     var suppressDrumSettleUntil by remember(picker.kind) { mutableStateOf(0L) }
@@ -1534,7 +1582,13 @@ private fun PickerPanelBody(
                 maxLines = 2,
             )
         }
-        (picker.drumLockBanner ?: picker.lockBanner)?.let { banner ->
+        // The drum-lock banner belongs to the locked drum: picker-wide (movie
+        // Auto ISO), or only while the locked tab is active (photo ISO Auto).
+        val activeDrumBanner =
+            picker.drumLockBanner?.takeIf {
+                picker.drumInteractionLocked || mode.drumLocked
+            }
+        (activeDrumBanner ?: picker.lockBanner)?.let { banner ->
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1559,9 +1613,14 @@ private fun PickerPanelBody(
 
         // Landed Kelvin / drum selection is owned by the panel so the fixed
         // fine-adjust row (below this weight slot) can read the same value.
+        // A locked drum (photo ISO Auto) instead tracks the camera's live pick.
         val landed =
-            lastByMode.getOrNull(modeIndex)?.takeIf { it.isNotBlank() }
-                ?: mode.request.currentValue
+            if (mode.drumLocked) {
+                mode.request.currentValue
+            } else {
+                lastByMode.getOrNull(modeIndex)?.takeIf { it.isNotBlank() }
+                    ?: mode.request.currentValue
+            }
         val drumLabels =
             if (isKelvinMode) {
                 WbPickerPolicy.kelvinOptions(
@@ -1671,6 +1730,9 @@ private fun PickerPanelBody(
                                         }
                                 },
                         onSettle = { settled ->
+                            // A locked/disabled drum only mirrors the camera —
+                            // its settles never write (photo ISO Auto tracking).
+                            if (!drumInteractive) return@AccentDrumWheel
                             if (android.os.SystemClock.uptimeMillis() < suppressDrumSettleUntil) {
                                 return@AccentDrumWheel
                             }
@@ -1696,6 +1758,16 @@ private fun PickerPanelBody(
         // No in-panel "Applying change…" — iOS is silent while the drum rolls;
         // the bar/tile value is the feedback. Errors still render above.
 
+        if (mode.showsTimerShots && onAdjustTimerShots != null) {
+            // The timers' shared shot count rides inside both timer tabs —
+            // fired by the app after the countdown (iOS `timerShotsRow`).
+            TimerShotsRow(
+                count = timerShotsCount,
+                enabled = modeInteractive && !mode.disabled,
+                onAdjust = onAdjustTimerShots,
+            )
+        }
+
         if (picker.modes.size > 1) {
             // Fixed-height mode bar (never in the weight slot) — preserves full
             // KELVIN/PRESET/TINT hit targets when the Tint pad is tall.
@@ -1705,10 +1777,19 @@ private fun PickerPanelBody(
             ) {
                 picker.modes.forEachIndexed { index, candidate ->
                     val selected = index == modeIndex
+                    val tabEnabled = modeInteractive && !candidate.disabled
                     Column(
                         Modifier
                             .weight(1f)
-                            .alpha(if (modeInteractive) 1f else 0.55f)
+                            .alpha(
+                                when {
+                                    // iOS `pickerModeDisabled` grays harder than
+                                    // the interaction lock.
+                                    candidate.disabled -> 0.35f
+                                    !modeInteractive -> 0.55f
+                                    else -> 1f
+                                },
+                            )
                             .background(
                                 if (selected) {
                                     LiveDesign.accentDim
@@ -1722,7 +1803,7 @@ private fun PickerPanelBody(
                                 if (selected) LiveDesign.accent else LiveDesign.hairline,
                                 ChromeShape,
                             )
-                            .chromeClickable(enabled = modeInteractive) {
+                            .chromeClickable(enabled = tabEnabled) {
                                 if (index == modeIndex) return@chromeClickable
                                 selectedMode = index
                                 suppressDrumSettleUntil = 0L

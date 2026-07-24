@@ -663,9 +663,43 @@ internal fun MonitorScreen(
         remember(commandPresentation, stringResolver) {
             monitorTopPillPickers(commandPresentation, stringResolver)
         }
+    val isPhotographyMode = prefersPhotographyChrome(cameraProperties)
+    // App-side photo timers (iOS photoTimerDelaySeconds / photoTimerShotCount /
+    // driveBeforeBuiltInTimer): the countdown is the app's — a remote release
+    // never runs the body's own self-timer.
+    var photoTimerDelaySeconds by remember { mutableIntStateOf(0) }
+    var photoTimerShotCount by remember { mutableIntStateOf(1) }
+    var driveBeforeBuiltInTimer by remember { mutableStateOf<String?>(null) }
+    // The photo strip's nine tiles + stills pickers; WB reuses the movie
+    // presentation (identical popup, writes routed to the stills properties
+    // by the facade's selector).
+    val photographySettings =
+        remember(cameraProperties, captureSettings, photoTimerDelaySeconds, isPhotographyMode) {
+            if (!isPhotographyMode) {
+                emptyList()
+            } else {
+                photographyCaptureSettings(
+                    properties = cameraProperties,
+                    wbPicker =
+                        captureSettings
+                            .firstOrNull { it.kind == MonitorPickerKind.WHITE_BALANCE }
+                            ?.picker,
+                    photoTimerDelaySeconds = photoTimerDelaySeconds,
+                )
+            }
+        }
+    val photographyTopPickers =
+        remember(cameraProperties, isPhotographyMode) {
+            if (isPhotographyMode) photographyTopBarPickers(cameraProperties) else emptyMap()
+        }
     val activeMonitorPicker =
-        captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
-            ?: activeMonitorPickerKind?.let(topPillPickers::get)
+        if (isPhotographyMode) {
+            photographySettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
+                ?: activeMonitorPickerKind?.let(photographyTopPickers::get)
+        } else {
+            captureSettings.firstOrNull { it.kind == activeMonitorPickerKind }?.picker
+                ?: activeMonitorPickerKind?.let(topPillPickers::get)
+        }
     val mediaOwnsCommandChannel =
         (propertyRefreshStatus as? CameraPropertyRefreshStatus.Degraded)?.failure ==
             CameraPropertyRefreshFailure.MEDIA_BUSY
@@ -802,6 +836,61 @@ internal fun MonitorScreen(
                 activeCommandControl = request.copy(currentValue = label)
             }
             drainCameraControlWrites()
+        }
+    /**
+     * Photography write router (iOS `applyPicker` stills paths): the DRIVE
+     * timer tabs are app semantics — Built-in engages/restores the body's
+     * self-timer drive, App-timer is the in-app countdown — and stills ISO
+     * only writes where the exposure program allows it.
+     */
+    val applyPhotographyControl: (CommandControlRequest, String) -> Unit =
+        applyPhotography@{ request, label ->
+            when (request.title) {
+                "Built-in Timer" -> {
+                    // The two timers are mutually exclusive (iOS setBuiltInTimer).
+                    if (label == "On") {
+                        if (photoTimerDelaySeconds > 0) return@applyPhotography
+                        if (
+                            cameraProperties.stillCaptureMode !=
+                            StillPickerPolicy.SELF_TIMER_LABEL
+                        ) {
+                            driveBeforeBuiltInTimer = cameraProperties.stillCaptureMode
+                            applyCameraControl(
+                                request.copy(title = "DRIVE"),
+                                StillPickerPolicy.SELF_TIMER_LABEL,
+                            )
+                        }
+                    } else if (
+                        cameraProperties.stillCaptureMode == StillPickerPolicy.SELF_TIMER_LABEL
+                    ) {
+                        applyCameraControl(
+                            request.copy(title = "DRIVE"),
+                            driveBeforeBuiltInTimer ?: "Single",
+                        )
+                        driveBeforeBuiltInTimer = null
+                    }
+                }
+                "App-timer" -> {
+                    // The body's own timer owns the release while engaged —
+                    // the app timer stays off (iOS setPhotoTimer).
+                    val seconds = photoTimerSeconds(label)
+                    if (
+                        seconds == 0 ||
+                        cameraProperties.stillCaptureMode != StillPickerPolicy.SELF_TIMER_LABEL
+                    ) {
+                        photoTimerDelaySeconds = seconds
+                    }
+                }
+                else -> {
+                    if (
+                        request.control == CameraControl.STILL_ISO &&
+                        !StillPickerPolicy.allowsManualISO(cameraProperties.exposureMode)
+                    ) {
+                        return@applyPhotography
+                    }
+                    applyCameraControl(request, label)
+                }
+            }
         }
     // iOS shutter long-press (strip cell + open picker panel): toggle MovieTVLock.
     val shutterHapticView = LocalView.current
@@ -1100,8 +1189,7 @@ internal fun MonitorScreen(
             activeMonitorPickerKind,
         ) {
             val kind = activeMonitorPickerKind ?: return@LaunchedEffect
-            val topBar =
-                kind == MonitorPickerKind.RESOLUTION || kind == MonitorPickerKind.CODEC
+            val topBar = kind.isTopBarPicker()
             if (
                 !retainMonitorPickerForChrome(
                     mode = effectiveDisplayMode,
@@ -1740,6 +1828,7 @@ internal fun MonitorScreen(
                     operatorSettings = operatorSettings,
                     commandPresentation = commandPresentation,
                     captureSettings = captureSettings,
+                    photographySettings = photographySettings,
                     activeMonitorPicker = activeMonitorPickerKind,
                     commandControlsEnabled = commandControlsEnabled,
                     pendingCommandControl = pendingCommandControl,
@@ -1968,18 +2057,31 @@ internal fun MonitorScreen(
                                     contentAlignment = Alignment.CenterEnd,
                                 ) {
                                     if (isPhotography) {
-                                        PhotographyCaptureStrip(
-                                            properties = cameraProperties,
-                                            onOpenControl = { label ->
-                                                Toast.makeText(
-                                                        appContext,
-                                                        photographyControlStubMessage(label),
-                                                        Toast.LENGTH_SHORT,
+                                        // The stills strip is the SAME shared
+                                        // strip — cells, active accents, and
+                                        // pinned widths — over the stills
+                                        // presentation set (iOS reuses
+                                        // CaptureSettingButton for both).
+                                        MonitorCaptureStrip(
+                                            settings = photographySettings,
+                                            activePicker = activeMonitorPickerKind,
+                                            controlsEnabled = commandControlsEnabled,
+                                            pendingControl = pendingCommandControl,
+                                            onOpenPicker = { kind ->
+                                                activeCommandControl = null
+                                                activeMonitorPickerKind =
+                                                    nextMonitorPicker(
+                                                        current = activeMonitorPickerKind,
+                                                        requested = kind,
+                                                        controlsEnabled =
+                                                            commandControlsEnabled &&
+                                                                pendingCommandControl == null,
                                                     )
-                                                    .show()
+                                                commandControlFeedback = null
                                             },
-                                            maxContentWidth = strip.width.dp,
+                                            onShutterLongPress = null,
                                             onBarBoundsInRoot = { measuredCaptureBar = it },
+                                            maxContentWidth = strip.width.dp,
                                         )
                                     } else {
                                         MonitorCaptureStrip(
@@ -2258,7 +2360,12 @@ internal fun MonitorScreen(
                             controlsEnabled = commandControlsEnabled,
                             pendingControl = pendingCommandControl,
                             feedback = commandControlFeedback,
-                            onSelect = applyCameraControl,
+                            onSelect =
+                                if (isPhotographyMode) {
+                                    applyPhotographyControl
+                                } else {
+                                    applyCameraControl
+                                },
                             onDismiss = {
                                 if (pendingCommandControl == null) {
                                     activeMonitorPickerKind = null
@@ -2266,7 +2373,20 @@ internal fun MonitorScreen(
                                 }
                             },
                             slideFromTop = isTopDropDown,
-                            onShutterLongPress = shutterLongPressToggle,
+                            // The stills SHUTTER picker has no movie TV-lock hold.
+                            onShutterLongPress =
+                                if (isPhotographyMode) null else shutterLongPressToggle,
+                            timerShotsCount = photoTimerShotCount,
+                            onAdjustTimerShots =
+                                if (isPhotographyMode) {
+                                    { delta ->
+                                        photoTimerShotCount =
+                                            (photoTimerShotCount + delta).coerceIn(1, 9)
+                                    }
+                                } else {
+                                    null
+                                },
+                            nefCompression = cameraProperties.rawCompression,
                         )
                     }
                 }
@@ -2571,6 +2691,7 @@ private fun PortraitChrome(
     operatorSettings: OperatorSettings,
     commandPresentation: CommandDashboardPresentation,
     captureSettings: List<MonitorCaptureSettingPresentation>,
+    photographySettings: List<MonitorCaptureSettingPresentation>,
     activeMonitorPicker: MonitorPickerKind?,
     commandControlsEnabled: Boolean,
     pendingCommandControl: CameraControl?,
@@ -2733,31 +2854,19 @@ private fun PortraitChrome(
                 Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                 contentAlignment = Alignment.Center,
             ) {
-                if (isPhotography) {
-                    PhotographyCaptureStrip(
-                        properties = cameraProperties,
-                        onOpenControl = { label ->
-                            Toast.makeText(
-                                    context,
-                                    photographyControlStubMessage(label),
-                                    Toast.LENGTH_SHORT,
-                                )
-                                .show()
-                        },
-                        maxContentWidth = strip.width.dp,
-                    )
-                } else {
-                    MonitorCaptureStrip(
-                        settings = captureSettings,
-                        activePicker = activeMonitorPicker,
-                        controlsEnabled = commandControlsEnabled,
-                        pendingControl = pendingCommandControl,
-                        onOpenPicker = onOpenMonitorPicker,
-                        onShutterLongPress = onShutterLongPress,
-                        onBarBoundsInRoot = onCaptureBarBounds,
-                        maxContentWidth = strip.width.dp,
-                    )
-                }
+                MonitorCaptureStrip(
+                    // Photography swaps in the stills presentation set over the
+                    // same shared strip (cells, accents, pinned widths).
+                    settings = if (isPhotography) photographySettings else captureSettings,
+                    activePicker = activeMonitorPicker,
+                    controlsEnabled = commandControlsEnabled,
+                    pendingControl = pendingCommandControl,
+                    onOpenPicker = onOpenMonitorPicker,
+                    // The stills strip has no movie TV-lock hold on SHUTTER.
+                    onShutterLongPress = if (isPhotography) null else onShutterLongPress,
+                    onBarBoundsInRoot = onCaptureBarBounds,
+                    maxContentWidth = strip.width.dp,
+                )
             }
         }
     }
