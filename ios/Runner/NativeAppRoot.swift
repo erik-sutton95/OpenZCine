@@ -108,6 +108,18 @@ enum PreferencesStore {
         UserDefaults.standard.set(order.rawValue, forKey: mediaSortOrderKey)
     }
 
+    private static let mfScrubEnabledKey = "mfDriveScrubEnabled"
+
+    /// Whether the live-view focus scrub strip is enabled (default on) — operator toggle in the
+    /// FOCUS popup.
+    static func loadMFScrubEnabled() -> Bool {
+        UserDefaults.standard.object(forKey: mfScrubEnabledKey) as? Bool ?? true
+    }
+
+    static func saveMFScrubEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: mfScrubEnabledKey)
+    }
+
     static func loadMediaThumbnailSize() -> MediaThumbnailSize {
         guard let raw = UserDefaults.standard.string(forKey: mediaThumbnailSizeKey),
             let size = MediaThumbnailSize(rawValue: raw)
@@ -6199,6 +6211,12 @@ final class NativeAppModel {
 
     // MARK: - Manual focus drive (focus-by-wire scrub)
 
+    /// Operator toggle for the live-view focus scrub strip (persisted, default on) — flipped from
+    /// the FOCUS popup.
+    var mfDriveScrubEnabled: Bool = PreferencesStore.loadMFScrubEnabled() {
+        didSet { PreferencesStore.saveMFScrubEnabled(mfDriveScrubEnabled) }
+    }
+
     /// The live-view focus scrub drives the lens focus-by-wire motor with a remote drive. The
     /// camera permits that ONLY in an AF focus mode — in MF the lens ring has exclusive control
     /// and the body refuses every drive with Invalid_Status ("the focus mode is MF"). So the
@@ -6207,7 +6225,7 @@ final class NativeAppModel {
     /// up so picking a mode in the FOCUS popup can't mount an overlay under the operator's finger.
     /// [verify-on-HW: whether continuous AF fights the drive in AF-C vs AF-S]
     var showsMFDriveScrub: Bool {
-        guard let mode = cameraPropertySnapshot.focusMode else { return false }
+        guard mfDriveScrubEnabled, let mode = cameraPropertySnapshot.focusMode else { return false }
         return mode != "MF" && isConnected && !isDemoSession && activePanel == nil
     }
 

@@ -1043,6 +1043,9 @@ struct PickerPanel: View {
                 if !activePickerModes.isEmpty {
                     modeBar
                 }
+                if picker == .focus || picker == .stillFocus {
+                    mfScrubToggleRow
+                }
             }
         }
         // Seed once on appear — NOT in `body`. Camera state is reassigned every live-view frame, so
@@ -1248,6 +1251,28 @@ struct PickerPanel: View {
         }
         .opacity(disabled ? 0.35 : 1)
         .disabled(disabled)
+    }
+
+    /// Focus popup toggle for the live-view focus scrub strip (shows in AF modes on a
+    /// focus-by-wire lens). Off hides the strip regardless of mode.
+    private var mfScrubToggleRow: some View {
+        @Bindable var model = model
+        return Toggle(isOn: $model.mfDriveScrubEnabled) {
+            Text("Live-view focus scrub")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+        }
+        .toggleStyle(SwitchToggleStyle(tint: LiveDesign.accent))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            LiveDesign.background.opacity(0.28),
+            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
+                .stroke(LiveDesign.hairline, lineWidth: 1)
+        }
     }
 
     private func timerShotsStepButton(
@@ -5504,8 +5529,9 @@ struct MFDriveVerticalScrub: View {
     @State private var lastDragY: CGFloat?
     @State private var isDragging = false
 
-    /// Drag-to-pulse gain: a full strip sweep ≈ a few thousand pulses.
-    private static let pulsesPerPoint = 24
+    /// Drag-to-pulse gain — deliberately gentle so a full strip sweep is a controllable focus
+    /// pull, not a slam to the stop (was 24/pt, ~6-8× too twitchy on a real lens).
+    private static let pulsesPerPoint = 4
 
     var body: some View {
         VStack(spacing: 6) {
@@ -5555,8 +5581,8 @@ struct MFDriveVerticalScrub: View {
                     let delta = (lastDragY ?? value.startLocation.y) - value.location.y
                     lastDragY = value.location.y
                     // Upward drag drives toward infinity. Ring-like speed response: a slow
-                    // drag steps finely, a flick multiplies travel (up to ×6).
-                    let speedFactor = min(1 + abs(delta) / 3, 6)
+                    // drag steps finely, a flick multiplies travel (up to ×3, gentle ramp).
+                    let speedFactor = min(1 + abs(delta) / 6, 3)
                     model.driveManualFocus(
                         pulses: Int(delta * CGFloat(Self.pulsesPerPoint) * speedFactor))
                 }
