@@ -2413,6 +2413,9 @@ internal fun MonitorScreen(
                 // AF-A) and acts as a manual-focus override. A refused drive is transient, so the
                 // strip never hides on a refusal; it retries.
                 if (
+                    // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`) —
+                    // off hides the strip even in an AF focus mode.
+                    operatorSettings.mfDriveScrubEnabled.value &&
                     !isClean && !locked &&
                     sessionState is CameraSessionState.Connected &&
                     !isDemoSession &&
@@ -2741,6 +2744,8 @@ internal fun MonitorScreen(
                                     null
                                 },
                             nefCompression = cameraProperties.rawCompression,
+                            mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
+                            onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
                         )
                     }
                 }

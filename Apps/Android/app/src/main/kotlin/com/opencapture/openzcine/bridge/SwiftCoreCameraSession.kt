@@ -19,6 +19,7 @@ import com.opencapture.openzcine.core.LiveFrameSource
 import com.opencapture.openzcine.core.MFDriveOutcome
 import com.opencapture.openzcine.core.StillReleasePoll
 import com.opencapture.openzcine.transport.UsbPtpTransport
+import com.opencapture.openzcine.withOptimisticControlValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -661,6 +662,20 @@ class SwiftCoreCameraSession internal constructor(
                 throw CameraControlException.CoreUnavailable
             }
 
+            // Optimistic tile update (iOS `applyPickerValue`): reflect the operator's pick in the
+            // displayed snapshot the instant the write starts, so the bottom-bar tile moves now
+            // instead of after the facade's blocking write + readback confirm. Done under the
+            // command lock so a concurrent property poll can't interleave a stale value, and only
+            // once the caller's drain has already skipped no-op writes (so this never masks a value
+            // the body would reject). The confirm stays authoritative: the caller's
+            // refreshProperties() reconciles this to the readback on success, and reverts it on a
+            // rejected write (see the drain's failure path).
+            val previousSnapshot = _cameraProperties.value
+            val optimisticSnapshot = previousSnapshot.withOptimisticControlValue(control, label)
+            if (optimisticSnapshot != previousSnapshot) {
+                _cameraProperties.value = optimisticSnapshot
+            }
+
             try {
                 val writeStartedNanos = System.nanoTime()
                 val nativeResult =
@@ -678,8 +693,12 @@ class SwiftCoreCameraSession internal constructor(
                 updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfControlCommandFailed()
             } catch (error: CameraControlException) {
+                // Rejected write: undo the optimistic value so the tile snaps back to what the
+                // camera actually holds (no poll runs concurrently — the write held the mutex).
+                _cameraProperties.value = previousSnapshot
                 throw error
             } catch (_: Throwable) {
+                _cameraProperties.value = previousSnapshot
                 throw CameraControlException.TransportFailed
             }
         }

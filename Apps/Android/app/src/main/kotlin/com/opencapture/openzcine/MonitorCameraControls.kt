@@ -68,8 +68,10 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,6 +83,7 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.openzcine.settings.SettingsSwitchGraphic
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -1367,6 +1370,10 @@ internal fun MonitorControlPickerPanel(
     onAdjustTimerShots: ((Int) -> Unit)? = null,
     /** Live NEF (RAW) compression readout for the QUALITY dual-drum panel. */
     nefCompression: String? = null,
+    /** Current persisted focus-scrub preference, shown as a toggle row in the FOCUS popup. */
+    mfScrubEnabled: Boolean = true,
+    /** Flips the focus-scrub preference; null omits the FOCUS popup's toggle row. */
+    onToggleMfScrub: (() -> Unit)? = null,
 ) {
     val dismissAllowed = pendingControl == null
     BackHandler(enabled = dismissAllowed, onBack = onDismiss)
@@ -1439,6 +1446,8 @@ internal fun MonitorControlPickerPanel(
                         onShutterLongPress = onShutterLongPress,
                         timerShotsCount = timerShotsCount,
                         onAdjustTimerShots = onAdjustTimerShots,
+                        mfScrubEnabled = mfScrubEnabled,
+                        onToggleMfScrub = onToggleMfScrub,
                     )
                 }
             }
@@ -1459,6 +1468,8 @@ private fun PickerPanelBody(
     onShutterLongPress: (() -> Unit)? = null,
     timerShotsCount: Int = 1,
     onAdjustTimerShots: ((Int) -> Unit)? = null,
+    mfScrubEnabled: Boolean = true,
+    onToggleMfScrub: (() -> Unit)? = null,
 ) {
     val pickerDescription =
         stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
@@ -1878,6 +1889,42 @@ private fun PickerPanelBody(
                 }
             }
         }
+
+        // FOCUS popup only: the live-view focus-scrub toggle (iOS `mfScrubToggleRow`).
+        // Persisted; off hides the scrub strip even in an AF mode. Independent of the
+        // mode bar so it renders whether or not the focus picker exposes multiple tabs.
+        if (picker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
+            MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
+        }
+    }
+}
+
+/**
+ * FOCUS popup toggle for the live-view focus-scrub strip (iOS `mfScrubToggleRow`): a bordered
+ * glass row with a label and the shared settings switch graphic. Off hides the strip regardless
+ * of focus mode.
+ */
+@Composable
+private fun MfScrubToggleRow(enabled: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(LiveDesign.background.copy(alpha = 0.28f), ChromeShape)
+            .border(1.dp, LiveDesign.hairline, ChromeShape)
+            .chromeClickable(onClick = onToggle)
+            .semantics { role = Role.Switch }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(R.string.camera_focus_scrub_toggle),
+            style = chromeStyle(12f, FontWeight.SemiBold),
+            color = LiveDesign.text,
+            maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+        SettingsSwitchGraphic(isOn = enabled)
     }
 }
 
@@ -2006,8 +2053,11 @@ internal fun CaptureWbGlyph(icon: CaptureWbIcon, tint: Color, modifier: Modifier
     }
 }
 
-/** Drag-to-pulse gain per dp (a full strip sweep ≈ a few thousand pulses). */
-internal const val MF_DRIVE_PULSES_PER_DP = 24
+/**
+ * Drag-to-pulse gain per dp — deliberately gentle so a full strip sweep is a controllable focus
+ * pull, not a slam to the stop (was 24/dp, ~6-8× too twitchy on a real lens).
+ */
+internal const val MF_DRIVE_PULSES_PER_DP = 4
 
 /** The vertical strip's touch width; the visual capsule is slimmer inside. */
 internal const val MF_DRIVE_STRIP_WIDTH_DP = 44f
@@ -2062,10 +2112,10 @@ internal fun MFDriveStrip(
                     change.consume()
                     // Screen-up is negative y; up drives toward infinity (+).
                     // Ring-like speed response: a slow drag steps finely, a
-                    // flick multiplies travel (up to ×6) — iOS speedFactor.
+                    // flick multiplies travel (up to ×3, gentle ramp) — iOS speedFactor.
                     val deltaDp = -dragAmount.y.toDp().value
                     val speedFactor =
-                        (1f + kotlin.math.abs(deltaDp) / 3f).coerceAtMost(6f)
+                        (1f + kotlin.math.abs(deltaDp) / 6f).coerceAtMost(3f)
                     val pulses =
                         (deltaDp * MF_DRIVE_PULSES_PER_DP * speedFactor).toInt()
                     if (pulses != 0) onDrive(pulses)
