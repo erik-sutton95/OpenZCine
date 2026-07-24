@@ -491,9 +491,7 @@ internal fun photographyCaptureSettings(
                             ),
                         applyValueOnActivate = false,
                     ),
-                    // MF gains the focus-by-wire Drive tab (iOS stillFocus).
-                    mfDriveMode(properties.focusMode),
-                ).filterNotNull(),
+                ),
         )
 
     val meterPicker =

@@ -338,9 +338,21 @@ internal fun MonitorScreen(
     // Post-capture instant playback (PLAY view-assist tool).
     val instantReview = remember(session) { InstantReviewController(session) }
     val instantReviewState by instantReview.review.collectAsState()
-    // MF focus-by-wire drive (FOCUS picker Drive tab).
+    // MF focus-by-wire drive (on-feed vertical strip beside the system rail).
     val mfDrive = remember(session) { MFDriveController(session) }
     val mfDriveAtEnd by mfDrive.atEnd.collectAsState()
+    val mfLensState by mfDrive.lensState.collectAsState()
+    // Prove drivability when MF engages, re-prove on a lens change, and let a
+    // busy-left-unknown probe retry on each poll tick (the snapshot key).
+    LaunchedEffect(cameraProperties, sessionState) {
+        if (
+            sessionState is CameraSessionState.Connected &&
+            !isDemoSession &&
+            cameraProperties.focusMode == "MF"
+        ) {
+            mfDrive.probeIfNeeded(this, cameraProperties.lens)
+        }
+    }
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -2369,6 +2381,27 @@ internal fun MonitorScreen(
                     }
                 }
 
+                // MF focus-by-wire strip: on the live view just left of the
+                // right system rail, only while the focus mode is MF AND the
+                // attached lens is proven by-wire (the probe gate).
+                if (
+                    !isClean && !locked &&
+                    cameraProperties.focusMode == "MF" &&
+                    mfLensState == MFDriveLensState.DRIVABLE
+                ) {
+                    val rightRailLeading =
+                        minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)
+                    MFDriveStrip(
+                        atEnd = mfDriveAtEnd,
+                        enabled = true,
+                        onDrive = { pulses -> mfDrive.drive(recordScope, pulses) },
+                        modifier =
+                            Modifier.zone(
+                                mfDriveStripFrame(physicalViewport, rightRailLeading),
+                            ),
+                    )
+                }
+
                 if (railPlan.fullRailsVisible) {
                     // Persistent side rails: lock + authoritative batteries +
                     // record / configured DISP / media / settings.
@@ -2653,13 +2686,6 @@ internal fun MonitorScreen(
                                     null
                                 },
                             nefCompression = cameraProperties.rawCompression,
-                            onDriveManualFocus =
-                                if (isDemoSession) {
-                                    null
-                                } else {
-                                    { pulses -> mfDrive.drive(recordScope, pulses) }
-                                },
-                            mfDriveAtEnd = mfDriveAtEnd,
                         )
                     }
                 }

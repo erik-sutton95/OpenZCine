@@ -46,6 +46,19 @@ class MFDriveControllerTest {
     }
 
     @Test
+    fun `strip seats left of the right system rail, vertically centred`() {
+        val viewport = com.opencapture.openzcine.bridge.ZoneFrame(0f, 0f, 914f, 384f)
+
+        val frame = mfDriveStripFrame(viewport, rightRailLeading = 830f)
+
+        assertEquals(830f - MF_DRIVE_STRIP_WIDTH_DP - 12f, frame.x)
+        assertEquals(MF_DRIVE_STRIP_WIDTH_DP, frame.width)
+        // Vertically centred, capped to the 0.6-viewport height bound.
+        assertEquals(384f * 0.6f, frame.height, 0.01f)
+        assertEquals((384f - frame.height) / 2f, frame.y, 0.01f)
+    }
+
+    @Test
     fun `gesture pulses accumulate while one drive is in flight`() = runTest {
         val session = FakeSession()
         val controller = MFDriveController(session)
@@ -120,6 +133,80 @@ class MFDriveControllerTest {
         assertEquals(2, session.drives.size)
         assertEquals(1, messages.size)
         assertTrue(messages.single().contains("0x201F"))
+    }
+
+    @Test
+    fun `probe proves a by-wire lens and restores the complete nudge`() = runTest {
+        val session = FakeSession()
+        val controller = MFDriveController(session)
+        // A drivable lens that actually moved: complete → 1 pulse back.
+        session.outcomes.add(MFDriveOutcome.Complete)
+        session.outcomes.add(MFDriveOutcome.Complete)
+
+        controller.probeIfNeeded(this, "NIKKOR Z 50mm")
+        advanceUntilIdle()
+
+        assertEquals(listOf(true to 1, false to 1), session.drives)
+        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
+
+        // Same lens: the cached proof never re-probes.
+        controller.probeIfNeeded(this, "NIKKOR Z 50mm")
+        advanceUntilIdle()
+        assertEquals(2, session.drives.size)
+    }
+
+    @Test
+    fun `probe accepts amount-too-small without a restore drive`() = runTest {
+        val session = FakeSession()
+        val controller = MFDriveController(session)
+        session.outcomes.add(MFDriveOutcome.StepTooSmall)
+
+        controller.probeIfNeeded(this, "lens-a")
+        advanceUntilIdle()
+
+        assertEquals(listOf(true to 1), session.drives)
+        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
+    }
+
+    @Test
+    fun `probe hides the strip for a mechanical ring and re-probes on lens change`() = runTest {
+        val session = FakeSession()
+        val controller = MFDriveController(session)
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x201F))
+
+        controller.probeIfNeeded(this, "mechanical")
+        advanceUntilIdle()
+        assertEquals(MFDriveLensState.UNDRIVABLE, controller.lensState.value)
+
+        // The verdict is cached for this lens…
+        controller.probeIfNeeded(this, "mechanical")
+        advanceUntilIdle()
+        assertEquals(1, session.drives.size)
+
+        // …and a lens swap re-probes from scratch.
+        session.outcomes.add(MFDriveOutcome.StepTooSmall)
+        controller.probeIfNeeded(this, "by-wire")
+        advanceUntilIdle()
+        assertEquals(2, session.drives.size)
+        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
+    }
+
+    @Test
+    fun `busy probe leaves the gate unknown and the next tick retries`() = runTest {
+        val session = FakeSession()
+        val controller = MFDriveController(session)
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+
+        controller.probeIfNeeded(this, "lens-a")
+        advanceUntilIdle()
+        assertEquals(MFDriveLensState.UNKNOWN, controller.lensState.value)
+
+        // The next poll tick re-probes the same lens and proves it.
+        session.outcomes.add(MFDriveOutcome.StepTooSmall)
+        controller.probeIfNeeded(this, "lens-a")
+        advanceUntilIdle()
+        assertEquals(2, session.drives.size)
+        assertEquals(MFDriveLensState.DRIVABLE, controller.lensState.value)
     }
 
     @Test

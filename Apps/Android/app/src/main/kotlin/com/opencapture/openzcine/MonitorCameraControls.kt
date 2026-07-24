@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -545,10 +546,6 @@ internal fun focusPickerPresentation(
                 base = FocusPickerPolicy.SUBJECT_BASE,
                 live = subjectLive,
             ),
-            // In MF the FOCUS picker gains the focus-by-wire Drive tab. The
-            // lens's actual drivability only shows on the first drive attempt
-            // (iOS pickerModes). [verify-on-HW]
-            mfDriveMode(afLive),
         )
     if (modes.isEmpty()) return null
 
@@ -568,26 +565,6 @@ internal fun focusPickerPresentation(
         subtitle = FocusPickerPolicy.SUBTITLE,
         modes = modes,
         initialModeIndex = initialMode.coerceIn(0, modes.lastIndex),
-    )
-}
-
-/**
- * The FOCUS picker's MF "Drive" tab (focus-by-wire scrub) — present only while
- * the live AF mode is MF. The empty-option request is a tab marker; the panel
- * renders the scrub instead of a drum and no value write ever fires from it.
- */
-internal fun mfDriveMode(liveFocusMode: String?): MonitorPickerModePresentation? {
-    if (liveFocusMode != "MF") return null
-    return MonitorPickerModePresentation(
-        label = "Drive",
-        request =
-            CommandControlRequest(
-                title = "FOCUS",
-                control = CameraControl.FOCUS_MODE,
-                currentValue = "MF",
-                options = emptyList(),
-            ),
-        applyValueOnActivate = false,
     )
 }
 
@@ -1390,10 +1367,6 @@ internal fun MonitorControlPickerPanel(
     onAdjustTimerShots: ((Int) -> Unit)? = null,
     /** Live NEF (RAW) compression readout for the QUALITY dual-drum panel. */
     nefCompression: String? = null,
-    /** Focus-by-wire drive (signed pulses) for the FOCUS MF Drive tab. */
-    onDriveManualFocus: ((Int) -> Unit)? = null,
-    /** Travel-end feedback for the scrub: −1 near, +1 infinity, null moving. */
-    mfDriveAtEnd: Int? = null,
 ) {
     val dismissAllowed = pendingControl == null
     BackHandler(enabled = dismissAllowed, onBack = onDismiss)
@@ -1466,8 +1439,6 @@ internal fun MonitorControlPickerPanel(
                         onShutterLongPress = onShutterLongPress,
                         timerShotsCount = timerShotsCount,
                         onAdjustTimerShots = onAdjustTimerShots,
-                        onDriveManualFocus = onDriveManualFocus,
-                        mfDriveAtEnd = mfDriveAtEnd,
                     )
                 }
             }
@@ -1488,8 +1459,6 @@ private fun PickerPanelBody(
     onShutterLongPress: (() -> Unit)? = null,
     timerShotsCount: Int = 1,
     onAdjustTimerShots: ((Int) -> Unit)? = null,
-    onDriveManualFocus: ((Int) -> Unit)? = null,
-    mfDriveAtEnd: Int? = null,
 ) {
     val pickerDescription =
         stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
@@ -1523,10 +1492,6 @@ private fun PickerPanelBody(
     val modeIndex = selectedMode.coerceIn(0, picker.modes.lastIndex.coerceAtLeast(0))
     val mode = picker.modes.getOrNull(modeIndex) ?: return
     val isTintMode = mode.request.control == CameraControl.WHITE_BALANCE_TINT
-    // FOCUS's MF "Drive" tab renders the focus-by-wire scrub instead of a drum
-    // (iOS isMFDriveMode).
-    val isMFDriveMode =
-        picker.kind == MonitorPickerKind.FOCUS && mode.label == "Drive"
     val isKelvinMode =
         picker.kind == MonitorPickerKind.WHITE_BALANCE &&
             mode.label.equals("Kelvin", ignoreCase = true)
@@ -1694,13 +1659,7 @@ private fun PickerPanelBody(
             Modifier.fillMaxWidth().weight(1f, fill = true),
             contentAlignment = Alignment.Center,
         ) {
-            if (isMFDriveMode) {
-                MFDriveScrub(
-                    atEnd = mfDriveAtEnd,
-                    enabled = modeInteractive && onDriveManualFocus != null,
-                    onDrive = { pulses -> onDriveManualFocus?.invoke(pulses) },
-                )
-            } else if (isTintMode) {
+            if (isTintMode) {
                 val tintAvailable = mode.request.options.isNotEmpty()
                 val tintLabel = landed.ifBlank { "Neutral" }
                 WhiteBalanceTintPad(
@@ -2047,102 +2006,89 @@ internal fun CaptureWbGlyph(icon: CaptureWbIcon, tint: Color, modifier: Modifier
     }
 }
 
-/** iOS `MFDriveScrub.pulsesPerPoint`: drag-to-pulse gain per dp. */
+/** Drag-to-pulse gain per dp (a full strip sweep ≈ a few thousand pulses). */
 internal const val MF_DRIVE_PULSES_PER_DP = 24
 
-/** iOS `MFDriveScrub` fine / coarse step-button pulse counts. */
-internal const val MF_DRIVE_FINE_STEP = 60
-internal const val MF_DRIVE_COARSE_STEP = 400
+/** The vertical strip's touch width; the visual capsule is slimmer inside. */
+internal const val MF_DRIVE_STRIP_WIDTH_DP = 44f
 
 /**
- * Focus-by-wire scrub for MF (iOS `MFDriveScrub`): drag the strip toward
- * NEAR / ∞ to drive the lens (relative pulses — there is no absolute position
- * to seek), with fine and coarse step taps flanking it. Travel ends light the
- * reached side. [verify-on-HW: pulses-per-dp feel per lens]
+ * Seats the MF focus-by-wire strip just left of the right system rail
+ * (record/DISP/media/settings), vertically centred in the viewport.
+ */
+internal fun mfDriveStripFrame(
+    viewport: ZoneFrame,
+    rightRailLeading: Float,
+): ZoneFrame {
+    val height = minOf(260f, viewport.height * 0.6f)
+    return ZoneFrame(
+        x = rightRailLeading - MF_DRIVE_STRIP_WIDTH_DP - 12f,
+        y = viewport.y + (viewport.height - height) / 2f,
+        width = MF_DRIVE_STRIP_WIDTH_DP,
+        height = height,
+    )
+}
+
+/**
+ * Vertical focus-by-wire strip on the live view (MF + proven-drivable lens
+ * only): a slim glass capsule with ∞ at the top, NEAR at the bottom, and a
+ * centre tick. Dragging drives the lens by relative pulses — up toward
+ * infinity — there is no absolute position to seek. Travel ends light their
+ * label. [verify-on-HW: pulses-per-dp feel per lens]
  */
 @Composable
-internal fun MFDriveScrub(
+internal fun MFDriveStrip(
     atEnd: Int?,
     enabled: Boolean,
     onDrive: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier.fillMaxWidth().padding(vertical = 10.dp).alpha(if (enabled) 1f else 0.55f),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        MFStepButton("«", enabled) { onDrive(-MF_DRIVE_COARSE_STEP) }
-        MFStepButton("‹", enabled) { onDrive(-MF_DRIVE_FINE_STEP) }
-        Box(
-            Modifier
-                .weight(1f)
-                .height(44.dp)
-                .background(Color.White.copy(alpha = 0.07f), CircleShape)
-                .border(1.dp, LiveDesign.hairline, CircleShape)
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        val pulses =
-                            (dragAmount.x.toDp().value * MF_DRIVE_PULSES_PER_DP).toInt()
-                        if (pulses != 0) onDrive(pulses)
-                    }
-                }
-                .semantics {
-                    contentDescription =
-                        "Manual focus drive. Drag toward near or infinity to move the lens."
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "NEAR",
-                    style = chromeStyle(10f, FontWeight.SemiBold, mono = true),
-                    color = if (atEnd == -1) LiveDesign.accent else LiveDesign.muted,
-                )
-                Box(Modifier.weight(1f))
-                Box(
-                    Modifier.size(width = 2.dp, height = 16.dp)
-                        .background(LiveDesign.accent.copy(alpha = 0.9f)),
-                )
-                Box(Modifier.weight(1f))
-                Text(
-                    "∞",
-                    style = chromeStyle(12f, FontWeight.SemiBold, mono = true),
-                    color = if (atEnd == 1) LiveDesign.accent else LiveDesign.muted,
-                )
-            }
-        }
-        MFStepButton("›", enabled) { onDrive(MF_DRIVE_FINE_STEP) }
-        MFStepButton("»", enabled) { onDrive(MF_DRIVE_COARSE_STEP) }
-    }
-}
-
-@Composable
-private fun MFStepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier
-            .size(44.dp)
-            .chromeClickable(enabled = enabled, onClick = onClick)
-            .semantics { contentDescription = "Focus step $glyph" },
+        modifier
+            .alpha(if (enabled) 1f else 0.55f)
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    // Screen-up is negative y; up drives toward infinity (+).
+                    val pulses =
+                        (-dragAmount.y.toDp().value * MF_DRIVE_PULSES_PER_DP).toInt()
+                    if (pulses != 0) onDrive(pulses)
+                }
+            }
+            .semantics {
+                contentDescription =
+                    "Manual focus drive. Drag up toward infinity or down toward near."
+            },
         contentAlignment = Alignment.Center,
     ) {
-        Box(
+        Column(
             Modifier
-                .size(38.dp)
-                .background(LiveDesign.background.copy(alpha = 0.4f), CircleShape)
-                .border(1.dp, LiveDesign.hairline, CircleShape),
-            contentAlignment = Alignment.Center,
+                .width(28.dp)
+                .fillMaxHeight()
+                .glass(CircleShape)
+                .border(1.dp, LiveDesign.hairline, CircleShape)
+                .padding(vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                glyph,
-                style = chromeStyle(17f, FontWeight.SemiBold),
-                color = LiveDesign.text,
+                "∞",
+                style = chromeStyle(12f, FontWeight.SemiBold, mono = true),
+                color = if (atEnd == 1) LiveDesign.accent else LiveDesign.muted,
+            )
+            Box(Modifier.weight(1f))
+            // Centre tick — the strip is a relative ring, not a position bar.
+            Box(
+                Modifier.size(width = 16.dp, height = 2.dp)
+                    .background(LiveDesign.accent.copy(alpha = 0.9f)),
+            )
+            Box(Modifier.weight(1f))
+            Text(
+                "NEAR",
+                style = chromeStyle(7f, FontWeight.SemiBold, mono = true),
+                color = if (atEnd == -1) LiveDesign.accent else LiveDesign.muted,
                 maxLines = 1,
+                softWrap = false,
             )
         }
     }
