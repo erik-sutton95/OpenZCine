@@ -722,6 +722,10 @@ internal fun MediaBrowseScreen(
     LaunchedEffect(pendingDeletion) {
         val targets = pendingDeletion ?: return@LaunchedEffect
         withContext(Dispatchers.IO) {
+            // A still viewer closed by this deletion may leave its transfer
+            // draining; the blocking stop joins the pump so the card never
+            // sees a delete interleaved with reads of the same object.
+            if (SwiftCore.isAvailable) SwiftCore.sessionStopMediaTransfer()
             targets.forEach { clip ->
                 // Protected objects are refused by the body and stay listed;
                 // their caches stay too so the row remains fully backed.
