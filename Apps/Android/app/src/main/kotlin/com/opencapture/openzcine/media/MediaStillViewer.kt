@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,6 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -66,12 +69,14 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.glass
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.Locale
 import kotlin.math.max
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -98,18 +103,34 @@ internal fun MediaStillViewer(
     clip: MediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
-    /** The grid item hides a same-stem RAW behind this JPEG (delete removes both). */
-    hasRawSibling: Boolean = false,
+    /** The grid item hides this same-stem RAW behind the JPEG (delete removes both). */
+    rawSibling: MediaClipRecord? = null,
     /** Camera-card deletion offered only while the camera source is live. */
     deleteAvailable: Boolean = false,
+    /** Plan-derived confirm copy naming everything the deletion touches (null = local fallback). */
+    deleteConfirmMessage: String? = null,
     /** Post-confirmation deletion; the browse screen owns the card operations. */
     onDelete: () -> Unit = {},
+    /** Burst-series hosting: shows a "Delete all" action for the whole set in the chrome. */
+    onDeleteAll: (() -> Unit)? = null,
+    /** Burst-series hosting: the scrubber strip rendered along the bottom edge. */
+    filmstrip: (@Composable () -> Unit)? = null,
+    /** Mirrors a camera star (seed-read or write) into the local favorite index. */
+    onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
+    /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
+    onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    // RAW side of the JPG/RAW toggle is active (paired stills only). The
+    // displayed side is what the viewer loads, names, and shares; the JPEG
+    // stays the item's identity for ratings and deletion (iOS `displayClip`).
+    var showingRaw by remember(clip.handle) { mutableStateOf(false) }
+    var sideSwitchInFlight by remember(clip.handle) { mutableStateOf(false) }
+    val displayClip = stillViewerDisplaySide(clip, rawSibling, showingRaw)
     val classification =
-        clip.stillPhoto
+        displayClip.stillPhoto
             ?: StillPhotoClassification("Photo", StillPreviewStrategy.THUMBNAIL_ONLY)
     val cacheStore =
         remember(context) {
@@ -117,18 +138,18 @@ internal fun MediaStillViewer(
         }
     val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
     val coordinator =
-        remember(cacheStore, cameraID, clip, cameraTransferAvailable) {
+        remember(cacheStore, cameraID, displayClip, cameraTransferAvailable) {
             MediaTransferCoordinator(
                 prepareTransfer = {
                     withContext(Dispatchers.IO) {
                         prepareMediaObjectTransfer(
                             cacheStore = cacheStore,
                             cameraID = cameraID,
-                            clip = clip,
+                            clip = displayClip,
                             objectLabel = "image",
                             cameraTransferAvailable = cameraTransferAvailable,
                             onResolvedSize = { resolvedSize ->
-                                currentOnResolvedObjectSize(clip, resolvedSize)
+                                currentOnResolvedObjectSize(displayClip, resolvedSize)
                             },
                         )
                     }
@@ -140,12 +161,19 @@ internal fun MediaStillViewer(
                 },
             )
         }
-    val loadGate = remember(clip.handle) { StillViewerLoadGate() }
-    var thumbnail by remember(clip.handle) { mutableStateOf<Bitmap?>(null) }
-    var fullPreview by remember(clip.handle) { mutableStateOf<Bitmap?>(null) }
-    var previewState by remember(clip.handle) {
+    val loadGate = remember(displayClip.handle) { StillViewerLoadGate() }
+    var thumbnail by remember(displayClip.handle) { mutableStateOf<Bitmap?>(null) }
+    var fullPreview by remember(displayClip.handle) { mutableStateOf<Bitmap?>(null) }
+    var previewState by remember(displayClip.handle) {
         mutableStateOf<StillPreviewUiState>(StillPreviewStates.initial())
     }
+    // The displayed side's completed cache artifact. The share button arms
+    // once the full file has landed — iOS keeps its button live and waits;
+    // the transfer banner already narrates progress here, so arming late is
+    // the same information with less machinery.
+    var shareableEntry by remember(displayClip.handle) { mutableStateOf<MediaCacheEntry?>(null) }
+    var shareInProgress by remember(displayClip.handle) { mutableStateOf(false) }
+    var shareMessage by remember(displayClip.handle) { mutableStateOf<String?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var deleteConfirmPresented by remember(clip.handle) { mutableStateOf(false) }
     // Camera-read star rating; null until loaded (or unreachable — row hidden).
@@ -156,17 +184,28 @@ internal fun MediaStillViewer(
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
         val read =
             withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
-        if (read >= 0) ratingStars = read
+        if (read >= 0) {
+            ratingStars = read
+            // Self-correct the local favorite cache against the body (truth) on open — this is
+            // also how a shot starred in instant playback lands under Favorites once opened.
+            onRatingMirrored(clip, read)
+        }
     }
-    val ratingScope = rememberCoroutineScope()
+    val viewerScope = rememberCoroutineScope()
 
     LaunchedEffect(coordinator, classification) {
         val requestGeneration = loadGate.begin()
         val cameraThumbnail =
             withContext(Dispatchers.IO) {
                 if (cameraTransferAvailable && SwiftCore.isAvailable) {
-                    SwiftCore.sessionThumbnail(clip.handle.toInt())?.let { jpeg ->
-                        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                    SwiftCore.sessionThumbnail(displayClip.handle.toInt())?.let { jpeg ->
+                        // Stripped thumb bytes fall back to the session-learned orientation.
+                        val key = displayClip.libraryKey(cameraID)
+                        val orientation =
+                            MediaExifOrientation.fromBytes(jpeg)
+                                ?.also { MediaExifOrientation.learn(key, it) }
+                                ?: MediaExifOrientation.learned(key)
+                        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.upright(orientation)
                     }
                 } else {
                     null
@@ -175,11 +214,9 @@ internal fun MediaStillViewer(
         if (!loadGate.accepts(requestGeneration)) return@LaunchedEffect
         thumbnail = cameraThumbnail
 
-        if (classification.previewStrategy == StillPreviewStrategy.THUMBNAIL_ONLY) {
-            previewState = StillPreviewStates.decoderUnavailable(classification, thumbnail != null)
-            return@LaunchedEffect
-        }
-
+        // THUMBNAIL_ONLY (Nikon RAW) still transfers the full file — iOS
+        // streams the RAW side too so it can be shared/kept offline — while
+        // the honest thumbnail-fallback message stands in for the preview.
         when (val preparation = coordinator.prepare()) {
             is MediaTransferPreparation.Ready ->
                 observeStillPreview(
@@ -196,6 +233,17 @@ internal fun MediaStillViewer(
                     },
                     clearFullPreview = {
                         if (loadGate.accepts(requestGeneration)) fullPreview = null
+                    },
+                    onCompleteEntry = { entry ->
+                        if (loadGate.accepts(requestGeneration)) shareableEntry = entry
+                        // The landed full file answers the object's orientation for the whole
+                        // session — the connected grid's stripped camera thumbs rotate from it.
+                        val learnedKey = displayClip.libraryKey(cameraID)
+                        viewerScope.launch(Dispatchers.IO) {
+                            MediaExifOrientation.fromFile(entry.finalPath)?.let {
+                                MediaExifOrientation.learn(learnedKey, it)
+                            }
+                        }
                     },
                 )
             is MediaTransferPreparation.Failed ->
@@ -245,7 +293,7 @@ internal fun MediaStillViewer(
         if (displayedImage != null) {
             ZoomableStillPreview(
                 bitmap = displayedImage,
-                filename = clip.filename,
+                filename = displayClip.filename,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -253,10 +301,57 @@ internal fun MediaStillViewer(
         }
 
         StillViewerChrome(
-            filename = clip.filename,
+            filename = displayClip.filename,
             closeEnabled = !closeRequested,
             deleteAvailable = deleteAvailable && !closeRequested,
+            // JPG ⇄ RAW toggle for a same-stem pair (iOS `sideToggle`).
+            showingRaw = if (rawSibling != null) showingRaw else null,
+            onSelectSide = { raw ->
+                if (raw != showingRaw && !sideSwitchInFlight && !closeRequested) {
+                    sideSwitchInFlight = true
+                    loadGate.invalidate()
+                    viewerScope.launch {
+                        // iOS `showSide` cancels the active stream before the
+                        // other side loads; the same join order the deletion
+                        // path keeps, so the card never sees two transfers.
+                        coordinator.close()
+                        showingRaw = raw
+                        sideSwitchInFlight = false
+                    }
+                }
+            },
             onDelete = { deleteConfirmPresented = true },
+            onDeleteAll = onDeleteAll,
+            // Shares the currently-viewed side of the still (JPEG/HEIF/NEF
+            // alike) once its camera download completes (iOS `shareButton`).
+            shareEnabled = shareableEntry != null && !closeRequested,
+            shareInProgress = shareInProgress,
+            onShare = {
+                val entry = shareableEntry
+                if (entry != null && !shareInProgress) {
+                    shareInProgress = true
+                    shareMessage = null
+                    val target = displayClip
+                    viewerScope.launch {
+                        try {
+                            val staged =
+                                withContext(Dispatchers.IO) {
+                                    MediaShareStager(context.cacheDir.toPath())
+                                        .stage(entry, target)
+                                }
+                            context.startActivity(
+                                AndroidMediaShareIntent.chooserIntent(context, staged),
+                            )
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            shareMessage = error.message ?: "Couldn't share this photo."
+                        } finally {
+                            shareInProgress = false
+                        }
+                    }
+                }
+            },
             onClose = { closeRequested = true },
         )
         // Clip star rating written to the card — hidden until the camera read
@@ -274,33 +369,83 @@ internal fun MediaStillViewer(
                             WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
                         ),
                     )
-                    .padding(bottom = 18.dp),
+                    // The scrubber strip owns the bottom edge in burst hosting.
+                    .padding(bottom = if (filmstrip != null) 82.dp else 18.dp),
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 StarRatingRow(stars = stars) { target ->
                     val previous = ratingStars
                     ratingStars = target
-                    ratingScope.launch {
-                        val confirmed =
+                    onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_ATTEMPTED)
+                    viewerScope.launch {
+                        val written =
                             withContext(Dispatchers.IO) {
-                                SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                                val result =
+                                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                                if (result >= 0 && rawSibling != null) {
+                                    // iOS parity: a pair writes both sides, tolerating
+                                    // the RAW side's refusal; the JPEG handle stays the
+                                    // confirming identity. [verify-on-HW]
+                                    SwiftCore.sessionSetObjectRating(
+                                        rawSibling.handle.toInt(),
+                                        target,
+                                    )
+                                }
+                                result
                             }
-                        ratingStars = if (confirmed >= 0) confirmed else previous
+                        when (val outcome = ratingWriteResult(written)) {
+                            is RatingWriteResult.Confirmed -> {
+                                ratingStars = outcome.stars
+                                shareMessage = null
+                                // Mirror ONLY a confirmed write onto the JPEG-identity row.
+                                onRatingMirrored(clip, outcome.stars)
+                                onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_CONFIRMED)
+                            }
+                            is RatingWriteResult.Refused -> {
+                                // Never a silent rollback — say why, with the body's response code.
+                                ratingStars = previous
+                                shareMessage = ratingRefusalMessage(outcome.code)
+                                onRatingDiagnostic(
+                                    if (outcome.code == 0x2013) {
+                                        AndroidDiagnosticEvent.RATING_WRITE_REFUSED_ACCESS_DENIED
+                                    } else {
+                                        AndroidDiagnosticEvent.RATING_WRITE_REFUSED
+                                    })
+                            }
+                        }
                     }
                 }
             }
         }
-        StillPreviewStatus(previewState)
+        StillPreviewStatus(previewState, shareMessage)
+        // Burst scrubber along the bottom edge, above the gesture-nav inset (landscape-safe).
+        filmstrip?.let { strip ->
+            Box(
+                Modifier.fillMaxSize()
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                        ),
+                    )
+                    .padding(bottom = 10.dp),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                strip()
+            }
+        }
     }
     if (deleteConfirmPresented) {
         MediaDeleteConfirmDialog(
+            // The browse screen supplies plan-derived copy (pair/backup notes only when those
+            // companions actually exist); the local fallback covers direct viewer embeddings.
             message =
-                if (hasRawSibling) {
-                    "Delete this photo from the camera card? " +
-                        "Both the RAW and JPEG files are removed."
-                } else {
-                    "Delete this photo from the camera card?"
-                },
+                deleteConfirmMessage
+                    ?: if (rawSibling != null) {
+                        "Delete this photo from the camera card? " +
+                            "Both the RAW and JPEG files are removed."
+                    } else {
+                        "Delete this photo from the camera card?"
+                    },
             onDelete = {
                 deleteConfirmPresented = false
                 onDelete()
@@ -319,6 +464,7 @@ private suspend fun observeStillPreview(
     showState: (StillPreviewUiState) -> Unit,
     showFullPreview: (Bitmap) -> Unit,
     clearFullPreview: () -> Unit,
+    onCompleteEntry: (MediaCacheEntry) -> Unit,
 ) {
     var lastDecodeBytes = -1L
     while (currentCoroutineContext().isActive && loadGate.accepts(requestGeneration)) {
@@ -341,6 +487,9 @@ private suspend fun observeStillPreview(
                 delay(200)
             }
             MediaCacheState.COMPLETE -> {
+                // The full file has landed whether or not it decodes — a
+                // complete NEF is shareable behind its thumbnail preview.
+                onCompleteEntry(entry)
                 val decoded = withContext(Dispatchers.IO) { decodeCacheBitmap(entry) }
                 if (!loadGate.accepts(requestGeneration)) return
                 if (decoded != null) {
@@ -399,7 +548,10 @@ private fun decodeBitmap(path: Path): Bitmap? {
                 inSampleSize = previewSampleSize(bounds.outWidth, bounds.outHeight)
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
+        // `BitmapFactory` ignores EXIF — the file's own header (present once the leading
+        // bytes of a progressive stream have landed) supplies the upright rotation.
         BitmapFactory.decodeFile(path.toString(), options)
+            ?.upright(MediaExifOrientation.fromFile(path))
     } catch (_: OutOfMemoryError) {
         null
     } catch (_: RuntimeException) {
@@ -542,7 +694,15 @@ private fun StillViewerChrome(
     filename: String,
     closeEnabled: Boolean,
     deleteAvailable: Boolean,
+    /** Active side of a RAW+JPEG pair; null hides the toggle (unpaired stills). */
+    showingRaw: Boolean?,
+    onSelectSide: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    /** Burst-series hosting: destructive whole-set deletion; null hides the pill. */
+    onDeleteAll: (() -> Unit)? = null,
+    shareEnabled: Boolean,
+    shareInProgress: Boolean,
+    onShare: () -> Unit,
     onClose: () -> Unit,
 ) {
     Row(
@@ -569,10 +729,100 @@ private fun StillViewerChrome(
                 overflow = TextOverflow.Clip,
             )
         }
+        if (showingRaw != null) {
+            StillViewerSideToggle(showingRaw = showingRaw, onSelectSide = onSelectSide)
+        }
+        if (onDeleteAll != null && deleteAvailable) {
+            Text(
+                "Delete all",
+                style = chromeStyle(13f, FontWeight.SemiBold),
+                color = Color(0xFFFF5A54),
+                modifier =
+                    Modifier.glass(CircleShape)
+                        .semantics {
+                            contentDescription = "Delete the whole burst series"
+                            role = Role.Button
+                        }.chromeClickable(onClick = onDeleteAll)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
         if (deleteAvailable) {
             StillViewerDeleteButton(onClick = onDelete)
         }
+        StillViewerShareButton(
+            enabled = shareEnabled,
+            inProgress = shareInProgress,
+            onClick = onShare,
+        )
     }
+}
+
+/** Share circle (iOS viewer `shareButton`): system share sheet for the viewed side. */
+@Composable
+private fun StillViewerShareButton(enabled: Boolean, inProgress: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(40.dp)
+            .glass(CircleShape)
+            .semantics {
+                contentDescription = "Share photo"
+                role = Role.Button
+            }
+            .chromeClickable(enabled && !inProgress) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (inProgress) {
+            CircularProgressIndicator(
+                color = LiveDesign.accent,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(18.dp),
+            )
+        } else {
+            Icon(
+                Icons.Filled.Share,
+                contentDescription = null,
+                tint = if (enabled) LiveDesign.text else LiveDesign.faint,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+/** Compact JPG ⇄ RAW switch for a same-stem pair (iOS viewer `sideToggle`). */
+@Composable
+private fun StillViewerSideToggle(showingRaw: Boolean, onSelectSide: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .background(Color.Black.copy(alpha = 0.35f), CircleShape)
+            .border(1.dp, LiveDesign.hairline, CircleShape)
+            .padding(2.dp)
+            .semantics {
+                contentDescription = "Photo format"
+                stateDescription = if (showingRaw) "RAW" else "JPG"
+            },
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StillViewerSideSegment("JPG", active = !showingRaw) { onSelectSide(false) }
+        StillViewerSideSegment("RAW", active = showingRaw) { onSelectSide(true) }
+    }
+}
+
+@Composable
+private fun StillViewerSideSegment(title: String, active: Boolean, onClick: () -> Unit) {
+    Text(
+        title,
+        style = chromeStyle(10f, FontWeight.Bold, mono = true),
+        color = if (active) LiveDesign.accent else LiveDesign.muted,
+        modifier =
+            Modifier
+                .background(if (active) LiveDesign.accentDim else Color.Transparent, CircleShape)
+                .semantics {
+                    contentDescription = "Show $title"
+                    role = Role.Button
+                }
+                .chromeClickable { onClick() }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
 }
 
 /** Trash circle (iOS viewer `deleteButton`): destructive confirmation follows. */
@@ -618,18 +868,19 @@ private fun StillViewerCloseButton(enabled: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun StillPreviewStatus(state: StillPreviewUiState) {
+private fun StillPreviewStatus(state: StillPreviewUiState, shareMessage: String? = null) {
     val message =
-        when (state) {
-            StillPreviewUiState.Preparing -> "Preparing camera thumbnail…"
-            is StillPreviewUiState.Downloading ->
-                "${state.message} ${(state.progress * 100).toInt()}%"
-            is StillPreviewUiState.ThumbnailFallback -> state.message
-            is StillPreviewUiState.Failed -> state.message
-            StillPreviewUiState.FullPreview,
-            StillPreviewUiState.Closed,
-            -> return
-        }
+        shareMessage
+            ?: when (state) {
+                StillPreviewUiState.Preparing -> "Preparing camera thumbnail…"
+                is StillPreviewUiState.Downloading ->
+                    "${state.message} ${(state.progress * 100).toInt()}%"
+                is StillPreviewUiState.ThumbnailFallback -> state.message
+                is StillPreviewUiState.Failed -> state.message
+                StillPreviewUiState.FullPreview,
+                StillPreviewUiState.Closed,
+                -> return
+            }
 
     Box(
         Modifier.fillMaxSize()

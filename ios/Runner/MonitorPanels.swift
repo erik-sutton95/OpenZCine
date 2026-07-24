@@ -129,17 +129,45 @@ struct CommandPrimaryGrid: View {
     /// Spring used for both the live shuffle and the drop — smooth with a touch of life.
     private let shuffle = Animation.spring(response: 0.3, dampingFraction: 0.72)
 
+    /// One resolved grid tile. Video tiles carry their `CommandTileKind` (long-press reorder);
+    /// photography tiles mirror the landscape stills strip tile-for-tile in fixed order.
+    private struct GridTileSpec: Identifiable {
+        let id: String
+        let title: String
+        let value: String
+        let picker: CameraPicker?
+        let kind: CommandTileKind?
+    }
+
+    private var tiles: [GridTileSpec] {
+        if model.isPhotographyMode {
+            return model.cameraPropertySnapshot.photographyCaptureValues.map { entry in
+                GridTileSpec(
+                    id: entry.label,
+                    title: stillsTitle(entry.label),
+                    value: entry.value,
+                    picker: CameraPicker.forValueLabel(entry.label, photography: true),
+                    kind: nil)
+            }
+        }
+        return model.visibleCommandGridOrder.map { kind in
+            GridTileSpec(
+                id: kind.rawValue, title: title(kind), value: value(kind),
+                picker: picker(kind), kind: kind)
+        }
+    }
+
     var body: some View {
         GeometryReader { proxy in
-            let order = model.visibleCommandGridOrder
-            let rows = max(1, Int((Double(order.count) / Double(columns)).rounded(.up)))
+            let tiles = self.tiles
+            let rows = max(1, Int((Double(tiles.count) / Double(columns)).rounded(.up)))
             let rowHeight = max(
                 44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows))
             let tileWidth = (proxy.size.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
             ZStack(alignment: .topLeading) {
-                ForEach(Array(order.enumerated()), id: \.element) { index, kind in
-                    let isDragging = draggingKind == kind
-                    CommandTile(title: title(kind), value: value(kind), height: rowHeight)
+                ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
+                    let isDragging = tile.kind != nil && draggingKind == tile.kind
+                    CommandTile(title: tile.title, value: tile.value, height: rowHeight)
                         .frame(width: tileWidth)
                         .scaleEffect(isDragging ? 1.06 : 1)
                         .shadow(color: .black.opacity(isDragging ? 0.5 : 0), radius: 16, y: 8)
@@ -165,14 +193,31 @@ struct CommandPrimaryGrid: View {
                 SpatialTapGesture(coordinateSpace: .named(Self.space))
                     .onEnded { value in
                         guard draggingKind == nil else { return }
+                        let current = self.tiles
                         let s = slot(
                             at: value.location, tileWidth: tileWidth, rowHeight: rowHeight,
-                            count: order.count)
-                        guard s < order.count, let picker = picker(order[s]) else { return }
+                            count: current.count)
+                        guard s < current.count, let picker = current[s].picker else { return }
                         model.showPicker(picker)
                     }
             )
-            .gesture(reorderGesture(tileWidth: tileWidth, rowHeight: rowHeight, count: order.count))
+            .gesture(reorderGesture(tileWidth: tileWidth, rowHeight: rowHeight, count: tiles.count))
+        }
+    }
+
+    /// Grid title for a photography strip label (mirrors the video tiles' casing).
+    private func stillsTitle(_ label: String) -> String {
+        switch label {
+        case "MODE": "Mode"
+        case "ISO": "ISO"
+        case "SHUTTER": "Shutter"
+        case "IRIS": "Iris"
+        case "DRIVE": "Drive"
+        case "FOCUS": "Focus"
+        case "WB": "White Bal"
+        case "METER": "Meter"
+        case "PROFILE": "Profile"
+        default: label
         }
     }
 
@@ -196,6 +241,8 @@ struct CommandPrimaryGrid: View {
         LongPressGesture(minimumDuration: 0.3)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
             .onChanged { value in
+                // Photography tiles ride the stills strip's fixed order — no reorder.
+                guard !model.isPhotographyMode else { return }
                 guard case .second(true, let drag?) = value else { return }
                 if draggingKind == nil {
                     let order = model.visibleCommandGridOrder
@@ -5444,6 +5491,78 @@ struct SettingsLiveTile: View {
             }
             lastFPSCommit = now
             displayedFPS = newValue
+        }
+    }
+}
+
+/// Vertical focus-by-wire scrub, living on the live view beside the right system rail —
+/// only while MF is active on a proven drivable lens. Drag up toward ∞, down toward NEAR
+/// (relative pulses; there is no absolute position to seek); travel ends light their label
+/// with a haptic. [verify-on-HW: pulses-per-point feel per lens]
+struct MFDriveVerticalScrub: View {
+    @Environment(NativeAppModel.self) private var model
+    @State private var lastDragY: CGFloat?
+    @State private var isDragging = false
+
+    /// Drag-to-pulse gain: a full strip sweep ≈ a few thousand pulses.
+    private static let pulsesPerPoint = 24
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text("∞")
+                .foregroundStyle(model.mfDriveAtEnd == 1 ? LiveDesign.accent : LiveDesign.muted)
+            ZStack {
+                Capsule()
+                    .fill(Color.white.opacity(isDragging ? 0.16 : 0.07))
+                    .overlay(
+                        Capsule().strokeBorder(
+                            isDragging ? LiveDesign.accent.opacity(0.7) : LiveDesign.hairline,
+                            lineWidth: 1))
+                Rectangle()
+                    .fill(LiveDesign.accent.opacity(0.9))
+                    .frame(width: isDragging ? 20 : 14, height: 2)
+            }
+            .frame(width: 30)
+            .frame(maxHeight: .infinity)
+            .animation(.easeOut(duration: 0.12), value: isDragging)
+            Text("MF")
+                .foregroundStyle(LiveDesign.faint)
+            Text("NEAR")
+                .foregroundStyle(model.mfDriveAtEnd == -1 ? LiveDesign.accent : LiveDesign.muted)
+            #if DEBUG
+                // Live drive telemetry (acknowledged·busy) — the on-device discriminator for
+                // "strip moves but the glass doesn't" vs "drives never land".
+                if model.mfDriveDebugOK + model.mfDriveDebugBusy > 0 {
+                    Text("\(model.mfDriveDebugOK)·\(model.mfDriveDebugBusy)")
+                        .font(.system(size: 7, weight: .regular, design: .monospaced))
+                        .foregroundStyle(LiveDesign.faint)
+                }
+            #endif
+        }
+        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .liquidGlass(in: Capsule())
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    isDragging = true
+                    let delta = (lastDragY ?? value.startLocation.y) - value.location.y
+                    lastDragY = value.location.y
+                    // Upward drag drives toward infinity. Ring-like speed response: a slow
+                    // drag steps finely, a flick multiplies travel (up to ×6).
+                    let speedFactor = min(1 + abs(delta) / 3, 6)
+                    model.driveManualFocus(
+                        pulses: Int(delta * CGFloat(Self.pulsesPerPoint) * speedFactor))
+                }
+                .onEnded { _ in
+                    lastDragY = nil
+                    isDragging = false
+                }
+        )
+        .sensoryFeedback(.impact(weight: .medium), trigger: model.mfDriveAtEnd) { _, end in
+            end != nil
         }
     }
 }

@@ -1450,6 +1450,106 @@
         }
     }
 
+    /// `SwiftCore.sessionInitiateStillCapture(): Int` — fires one still
+    /// release (AF-then-release to the card). 0 = the release started; poll
+    /// `sessionPollStillRelease` between frames for completion.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionInitiateStillCapture")
+    public func swiftCoreSessionInitiateStillCapture(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            try session.initiateStillCapture()
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionPollStillRelease(): Int` — one `DeviceReady` poll
+    /// while a release is in flight: 0 complete, 1 in progress, 2 bulb/time
+    /// open shutter, 3 failed, negatives for session/transport faults.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionPollStillRelease")
+    public func swiftCoreSessionPollStillRelease(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        do {
+            switch try session.pollStillReleaseReadiness() {
+            case .complete: return 0
+            case .inProgress: return 1
+            case .openShutterInProgress: return 2
+            case .failed: return 3
+            }
+        } catch {
+            return -2
+        }
+    }
+
+    /// `SwiftCore.sessionTerminateStillCapture(): Int` — ends a bulb/time
+    /// exposure or stops a running burst; frames captured so far are kept.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionTerminateStillCapture")
+    public func swiftCoreSessionTerminateStillCapture(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            try session.terminateStillCapture()
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionSetStillBurstBracket(active): Int` — opens/closes the
+    /// continuous-burst remote-mode bracket (burst ceiling only persists while
+    /// remote mode is held). [verify-on-HW]
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetStillBurstBracket")
+    public func swiftCoreSessionSetStillBurstBracket(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, active: jboolean
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else {
+            return RecordingCommandResult.noSession.rawValue
+        }
+        do {
+            try session.setStillBurstBracket(active: active != 0)
+            return RecordingCommandResult.accepted.rawValue
+        } catch let error as PTPIPClientSessionError {
+            switch error {
+            case .mediaModeActive, .mediaModeRequired:
+                return RecordingCommandResult.mediaBusy.rawValue
+            case .operationRejected:
+                return RecordingCommandResult.rejected.rawValue
+            default:
+                return RecordingCommandResult.transportFailed.rawValue
+            }
+        } catch {
+            return RecordingCommandResult.transportFailed.rawValue
+        }
+    }
+
     /// `SwiftCore.sessionApplyControl(control, label): Int` — validates the
     /// semantic Kotlin selector, then applies its human-readable selection on
     /// the active facade session. Swift resolves every Nikon property ID and
@@ -1485,6 +1585,27 @@
             }
         } catch {
             return ControlCommandResult.transportFailed.rawValue
+        }
+    }
+
+    /// `SwiftCore.sessionMFDrive(towardNear, pulses): Int` — one relative
+    /// manual-focus drive with its classified outcome: 0 complete,
+    /// 1 end of travel, 2 amount too small, -1 no session, or
+    /// `0x10000 | responseCode` for a body refusal (the shell surfaces a
+    /// non-drivable lens once with that code). Blocking; Kotlin calls it from
+    /// `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionMFDrive")
+    public func swiftCoreSessionMFDrive(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        towardNear: jboolean, pulses: jint
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        let bounded = UInt32(min(max(Int(pulses), 1), 32767))
+        switch session.mfDrive(towardNear: towardNear != 0, pulses: bounded) {
+        case .complete: return 0
+        case .endOfTravel: return 1
+        case .stepTooSmall: return 2
+        case .refused(let code): return jint(0x10000 | Int32(code.rawValue))
         }
     }
 
@@ -1533,6 +1654,12 @@
         case .focusStateUnavailable, .unsupportedControl:
             return .unavailable
         case .operationRejected:
+            return .rejected
+        case .timeout:
+            // A slow answer while the body is mid-AF is a soft refusal, not a
+            // dead link — the session stays up and the live-view pump is the
+            // authority on genuine transport loss. Surfacing it as
+            // "connection failed" scared operators off a healthy session.
             return .rejected
         default:
             return .transportFailed
@@ -1809,6 +1936,66 @@
         MediaBrowseCursorRegistry.shared.cancel(handle: Int64(cursor))
     }
 
+    /// `SwiftCore.sessionSeedStillReviewBaseline(): Int` — snapshots the
+    /// card's object-handle sets as the instant-review diff baseline. 0 on
+    /// success.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSeedStillReviewBaseline")
+    public func swiftCoreSessionSeedStillReviewBaseline(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        do {
+            try session.seedStillReviewBaseline()
+            return 0
+        } catch {
+            return -2
+        }
+    }
+
+    /// `SwiftCore.sessionResolveNewestStillHandle(): Int` — the just-captured
+    /// JPEG/HEIF handle from the post-capture baseline diff, or 0 when the
+    /// card hasn't listed it yet (caller retries).
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResolveNewestStillHandle")
+    public func swiftCoreSessionResolveNewestStillHandle(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let handle = try? session.resolveNewestStillHandle()
+        else { return 0 }
+        return jint(bitPattern: UInt32(handle))
+    }
+
+    /// `SwiftCore.sessionStillImage(handle): ByteArray?` — the full captured
+    /// image, streamed in 1 MB chunks between live-view frames. Null when
+    /// cancelled or unavailable. Blocking; Kotlin calls it from
+    /// `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStillImage")
+    public func swiftCoreSessionStillImage(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+    ) -> jbyteArray? {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let image = session.stillReviewImage(handle: UInt32(bitPattern: handle))
+        else { return nil }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(image.count)) else { return nil }
+        image.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(image.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        return array
+    }
+
+    /// `SwiftCore.sessionCancelStillImage()` — aborts an in-flight review
+    /// fetch at its next chunk boundary.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionCancelStillImage")
+    public func swiftCoreSessionCancelStillImage(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.cancelStillReviewFetch()
+    }
+
     /// `SwiftCore.sessionThumbnail(handle): ByteArray?` — the camera's
     /// embedded thumbnail JPEG for one object (`GetThumb`). Null when
     /// disconnected, rejected, or the object has no thumbnail. Blocking;
@@ -1859,7 +2046,11 @@
 
     /// `SwiftCore.sessionSetObjectRating(handle, stars): Int` — writes a 0–5
     /// star rating and confirms with a readback (the body rounds off-step
-    /// values down); returns the confirmed star count or -1 on failure.
+    /// values down). Returns the confirmed star count (0–5); `-1` when the
+    /// write can't be attempted (no session / bad input) or a non-response
+    /// failure; or the NEGATED raw PTP response code (e.g. `-0x2013` for a
+    /// state-based Access Denied) when the body refuses the write, so the
+    /// caller can name the refusal instead of rolling back silently.
     /// Blocking; Kotlin calls it from `Dispatchers.IO`. [verify-on-HW]
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetObjectRating")
     public func swiftCoreSessionSetObjectRating(
@@ -1869,12 +2060,19 @@
             let session = ActiveSessionSlot.shared.current()
         else { return -1 }
         let objectHandle = UInt32(bitPattern: handle)
-        guard
-            (try? session.setObjectRating(
+        do {
+            try session.setObjectRating(
                 handle: objectHandle,
-                value: StillCapturePolicy.ratingValue(forStars: Int(stars)))) != nil,
-            let confirmed = try? session.objectRating(handle: objectHandle)
-        else { return -1 }
+                value: StillCapturePolicy.ratingValue(forStars: Int(stars)))
+        } catch PTPIPClientSessionError.operationRejected(_, let response) {
+            // A refusal carries the wire code — negate it so the sign distinguishes it from a
+            // confirmed 0–5 star count. The bridge already maps every negative to `null`.
+            return -jint(response.rawValue)
+        } catch {
+            return -1
+        }
+        // Write accepted — confirm by readback, falling back to the requested count.
+        guard let confirmed = try? session.objectRating(handle: objectHandle) else { return stars }
         return jint(StillCapturePolicy.stars(fromRatingValue: confirmed))
     }
 

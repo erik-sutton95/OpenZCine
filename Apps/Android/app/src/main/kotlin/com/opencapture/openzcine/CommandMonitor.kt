@@ -1013,6 +1013,24 @@ internal fun cameraPropertyConfirmsSelection(
                 )
         CameraControl.VIBRATION_REDUCTION -> snapshot.vibrationReduction == label
         CameraControl.ELECTRONIC_VR -> snapshot.electronicVr == label
+        // Photo mode: the stills poll writes these properties into the same
+        // snapshot readouts the photo strip renders.
+        CameraControl.STILL_ISO -> snapshot.iso?.toString() == label
+        CameraControl.STILL_ISO_AUTO ->
+            snapshot.isoAuto?.let { auto -> (if (auto) "On" else "Off") == label } == true
+        CameraControl.STILL_SHUTTER -> snapshot.shutterSpeed == label
+        CameraControl.STILL_IRIS -> snapshot.iris == label
+        CameraControl.STILL_DRIVE -> snapshot.stillCaptureMode == label
+        CameraControl.STILL_FOCUS_MODE -> snapshot.focusMode == label
+        CameraControl.STILL_FOCUS_AREA -> snapshot.focusArea == label
+        CameraControl.STILL_FOCUS_SUBJECT -> snapshot.focusSubject == label
+        CameraControl.STILL_METER -> snapshot.meteringMode == label
+        CameraControl.STILL_IMAGE_AREA -> snapshot.imageArea == label
+        CameraControl.STILL_IMAGE_SIZE -> snapshot.imageSize == label
+        CameraControl.STILL_QUALITY -> snapshot.compression == label
+        CameraControl.STILL_RAW_COMPRESSION -> snapshot.rawCompression == label
+        CameraControl.STILL_USER_MODE_PROGRAM -> snapshot.userModeProgram == label
+        CameraControl.STILL_PICTURE_CONTROL -> snapshot.pictureControl == label
     }
 
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */

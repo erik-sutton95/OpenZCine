@@ -265,6 +265,10 @@ private struct AndroidRawControlCatalog: Sendable {
     var vibrationReduction: [AndroidRawControlMode<UInt8>] = []
     var electronicVR: [AndroidRawControlMode<UInt8>] = []
     var allowsApertureFallback = false
+    // Photo-mode descriptor domains (iOS `cameraControlOptions` stills equivalents).
+    var stillShutterSpeeds: [AndroidRawControlMode<UInt32>] = []
+    var stillWhiteBalanceModes: [AndroidRawControlMode<UInt16>] = []
+    var imageSizes: [String] = []
 
     func capabilities(
         properties: PTPCameraPropertySnapshot,
@@ -322,12 +326,21 @@ private struct AndroidRawControlCatalog: Sendable {
                     fallback: ""
                 ).nilIfEmpty
         }
-        let activeShutterValues: [String] =
+        let photography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: properties.captureSelector)
+        let activeShutterValues: [String]
+        if photography {
+            // Photo: the body enumerates the stills speeds valid for the active
+            // program/flash state (iOS `optionProperty` for `.stillShutter`);
+            // the shell keeps its ladder fallback when empty.
+            activeShutterValues = stillShutterSpeeds.map(\.label)
+        } else {
             switch properties.shutterMode {
-            case .angle: shutterAngles.map(\.label)
-            case .speed: shutterSpeeds.map(\.label)
-            case nil: []
+            case .angle: activeShutterValues = shutterAngles.map(\.label)
+            case .speed: activeShutterValues = shutterSpeeds.map(\.label)
+            case nil: activeShutterValues = []
             }
+        }
         let irisValues: [String]
         if !apertures.isEmpty {
             irisValues = apertures.map(\.label)
@@ -359,10 +372,21 @@ private struct AndroidRawControlCatalog: Sendable {
         } else {
             isoValues = []
         }
-        let whiteBalanceValues =
-            (whiteBalanceModes.contains { $0.label == "Color temp" }
-                ? whiteBalanceKelvin.map(\.label) : [])
-            + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+        let whiteBalanceValues: [String]
+        if photography {
+            // Photo WB: the stills preset enum, with the shared Kelvin dial
+            // ladder while the body offers colour-temperature mode (iOS photo
+            // WB reuses the movie popup over the stills property).
+            whiteBalanceValues =
+                (stillWhiteBalanceModes.contains { $0.label == "Color temp" }
+                    ? WhiteBalanceKelvinPolicy.kelvinOptions : [])
+                + stillWhiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+        } else {
+            whiteBalanceValues =
+                (whiteBalanceModes.contains { $0.label == "Color temp" }
+                    ? whiteBalanceKelvin.map(\.label) : [])
+                + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+        }
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: resolutionFrameRate,
             codec: properties.fileType.map(MonitorTextFormat.codecShortLabel),
@@ -394,7 +418,8 @@ private struct AndroidRawControlCatalog: Sendable {
             // Unknown/raw codecs fail closed: only a recognized non-raw codec unlocks e-VR.
             electronicVR:
                 recognizedCodec.map(MonitorTextFormat.isRawCodec) == false
-                ? electronicVR.map(\.label) : []
+                ? electronicVR.map(\.label) : [],
+            imageSizes: imageSizes
         )
     }
 
@@ -519,6 +544,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var androidEVIndicatorPollTick = 0
     private var androidLastStorageRefreshAt: Date?
     private var androidLastDescriptorRefreshAt: Date?
+    /// Remaining property reads of a photo↔video flip's value burst, drained
+    /// in bounded chunks per poll tick so frames keep interleaving.
+    private var androidPendingModeFlipBurst: [PTPPropertyCode] = []
+    /// A flip marked the descriptor domains stale; the pass runs once after
+    /// the value queue drains.
+    private var androidDescriptorsDueForModeFlip = false
     private var nextTransactionID: UInt32 = 1
     private var isClosed = false
 
@@ -563,6 +594,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// flight.
     private let mediaTransferCondition = NSCondition()
     private var mediaTransferActive = false
+    /// Last known object handles per storage — the instant-review baseline a
+    /// post-capture diff runs against. Maintained outside the shutter path so
+    /// the release itself never waits on enumeration; the Kotlin review flow
+    /// serializes access.
+    var stillReviewBaseline: [UInt32: Set<UInt32>] = [:]
+    /// Aborts an in-flight chunked review fetch so the shared channel is
+    /// released the moment the review is dismissed.
+    var stillReviewFetchCancelled = false
     private var mediaTransferStopRequested = false
 
     /// Camera identity resolved during `connect`. Written once by
@@ -1164,10 +1203,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
         switch request {
         case .bootstrap:
-            var result: AndroidCameraPropertyRefreshResult = .accepted
-            // Full live order — same set as steady-state poll, read back-to-back
+            // Read the photo/video selector FIRST so a body connected in photo
+            // mode seeds the stills set (aperture, metering, shots remaining,
+            // quality…) instead of the movie properties it doesn't fill there.
+            var result = refreshAndroidProperty(.liveViewSelector)
+            let order = Self.androidBootstrapPollOrder(
+                captureSelector: androidPropertySnapshot.captureSelector)
+            // Full order — same set as steady-state poll, read back-to-back
             // so the operator does not wait ~30s for focus/lens/subject.
-            for property in Self.androidLiveMonitorPollOrder {
+            for property in order where property != .liveViewSelector {
                 result = mergedAndroidPropertyRefreshResult(
                     result, refreshAndroidProperty(property))
                 if result == .transportFailed { break }
@@ -1200,7 +1244,56 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     captureSelector: androidPropertySnapshot.captureSelector))
             androidPropertyPollIndex &+= 1
             let previousFileType = androidPropertySnapshot.fileType
+            let previousSelector = androidPropertySnapshot.captureSelector
             var result = refreshAndroidProperty(property)
+            if property == .liveViewSelector,
+                result == .accepted,
+                androidPropertySnapshot.captureSelector != previousSelector
+            {
+                // Photo ↔ video flip: QUEUE the new mode's property set instead
+                // of bursting it synchronously — a blocked tick held the
+                // selector readback hostage for the whole burst, so the chrome
+                // itself swapped seconds late. The queue drains in bounded
+                // chunks on the following ticks, interleaving with live-view
+                // frames; the stream itself is never restarted. Single-flight:
+                // a second flip simply replaces the queue.
+                androidPendingModeFlipBurst =
+                    Self.androidBootstrapPollOrder(
+                        captureSelector: androidPropertySnapshot.captureSelector
+                    )
+                    .filter { $0 != .liveViewSelector }
+                // Descriptor domains (apertures for the mounted lens, stills
+                // speed enum, photo WB presets, image sizes) are NOT refreshed
+                // at flip time — mark them due; the maintenance pass below
+                // picks them up once the value queue drains.
+                androidDescriptorsDueForModeFlip = true
+            }
+            // Drain a bounded slice of a pending flip queue each tick — frames
+            // keep flowing between ticks and the whole set lands within a few
+            // fast Kotlin polls (~1-2 s).
+            var flipBudget = Self.androidModeFlipBurstChunk
+            while !androidPendingModeFlipBurst.isEmpty,
+                flipBudget > 0,
+                result != .transportFailed
+            {
+                let extra = androidPendingModeFlipBurst.removeFirst()
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidProperty(extra))
+                flipBudget -= 1
+            }
+            // The flip's descriptor pass runs ONCE, only after the value queue
+            // drained (chrome + readouts are already live), so the flip itself
+            // never blocks on ~24 descriptor reads. [verify-on-HW: pass length
+            // vs frame cadence on-body]
+            if androidPendingModeFlipBurst.isEmpty,
+                androidDescriptorsDueForModeFlip,
+                result != .transportFailed,
+                !isRecording
+            {
+                androidDescriptorsDueForModeFlip = false
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidControlDescriptors())
+            }
             if property == .movieFileType,
                 result == .accepted,
                 androidPropertySnapshot.fileType != previousFileType
@@ -1400,6 +1493,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
             refreshAndroidWhiteBalanceTintDescriptor,
             refreshAndroidVibrationReductionDescriptor,
             refreshAndroidElectronicVRDescriptor,
+            // Photo-mode enums (stills shutter / photo WB presets / image sizes).
+            // Bodies reject them in movie mode; the walk continues past that.
+            refreshAndroidStillShutterDescriptor,
+            refreshAndroidStillWhiteBalanceDescriptor,
+            refreshAndroidImageSizeDescriptor,
         ]
         var result: AndroidCameraPropertyRefreshResult = .accepted
         for refresh in refreshers {
@@ -1503,15 +1601,21 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private func refreshAndroidApertureDescriptor() throws {
         androidControlCatalog.apertures = []
         androidControlCatalog.allowsApertureFallback = false
+        // Photo mode describes the STANDARD aperture property for the mounted
+        // lens; the movie enum is not authoritative there (iOS
+        // refreshLensApertures routing). A flip marks descriptors due, so the
+        // list refetches for the new mode. [verify-on-HW]
+        let property = Self.apertureDescriptorProperty(
+            captureSelector: androidPropertySnapshot.captureSelector)
         do {
-            let raw = try descriptorEnumValues(.movieFNumber, valueByteCount: 2)
+            let raw = try descriptorEnumValues(property, valueByteCount: 2)
             let modes = uniqueUInt16Modes(raw) { value in
                 let label = PTPCameraPropertyDecoders.irisFNumber(value)
                 return label == "—" ? nil : label
             }
             guard raw.isEmpty || !modes.isEmpty else {
                 throw PTPIPClientSessionError.unwritablePropertyDescriptor(
-                    PTPPropertyCode.movieFNumber.rawValue)
+                    property.rawValue)
             }
             androidControlCatalog.apertures = modes
             androidControlCatalog.allowsApertureFallback = raw.isEmpty && usesNikonZRFallbacks
@@ -1696,12 +1800,53 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
+    private func refreshAndroidStillShutterDescriptor() throws {
+        // The body enumerates stills speeds valid for the active program/flash
+        // state (fraction-packed `ShutterSpeed` plus the Bulb/Time sentinels).
+        // Sentinels a picker cannot re-encode are dropped like iOS. [verify-on-HW]
+        androidControlCatalog.stillShutterSpeeds = []
+        let raw = try descriptorEnumValues(Self.stillShutterOptionsProperty, valueByteCount: 4)
+        androidControlCatalog.stillShutterSpeeds = uniqueUInt32Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.stillShutterLabel(value)
+            guard PTPCameraPropertyDecoders.stillShutterRaw(for: label) != nil else {
+                return nil
+            }
+            return label
+        }
+    }
+
+    private func refreshAndroidStillWhiteBalanceDescriptor() throws {
+        // Photo WB preset enum (`WhiteBalance` 0x5005) — the photography popup's
+        // Preset drum follows it, mirroring iOS's stills WB option source.
+        androidControlCatalog.stillWhiteBalanceModes = []
+        let raw = try descriptorEnumValues(
+            Self.stillWhiteBalanceOptionsProperty, valueByteCount: 2)
+        androidControlCatalog.stillWhiteBalanceModes = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.whiteBalanceMode(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    private func refreshAndroidImageSizeDescriptor() throws {
+        // `ImageSize` is a string enumeration ("Size L" / resolution strings);
+        // the SIZE picker offers the exact strings and writes them verbatim.
+        androidControlCatalog.imageSizes = []
+        let descriptor = try readPropertyDescriptor(Self.stillImageSizeOptionsProperty)
+        androidControlCatalog.imageSizes =
+            PTPCameraPropertyDecoders.devicePropDescStringEnumValues(data: descriptor)
+    }
+
     private func refreshAndroidWhiteBalanceTintDescriptor() throws {
         androidControlCatalog.whiteBalanceTints = []
         androidWhiteBalanceTint = nil
         guard
             let mode = androidPropertySnapshot.wbMode,
-            let property = WhiteBalanceTint.tuneProperty(forWBModeLabel: mode)
+            let property = WhiteBalanceTint.tuneProperty(
+                forWBModeLabel: mode,
+                // Photo mode fine-tunes the stills pad family (iOS routes by
+                // the snapshot's selector). [verify-on-HW]
+                photography: StillCapturePolicy.prefersPhotographyChrome(
+                    selector: androidPropertySnapshot.captureSelector))
         else {
             return
         }
@@ -1931,6 +2076,36 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return androidLiveMonitorPollOrder
     }
 
+    /// The back-to-back seed order for connect and photo↔video flips: the
+    /// selector's own full monitor set.
+    static func androidBootstrapPollOrder(
+        captureSelector: CameraCaptureSelector? = nil
+    ) -> [PTPPropertyCode] {
+        androidMonitorPollOrder(isRecording: false, captureSelector: captureSelector)
+    }
+
+    /// Reads per tick while a flip's value queue drains: large enough that a
+    /// few fast Kotlin polls land the whole set in ~1-2 s, small enough that
+    /// live-view frames interleave between ticks.
+    static let androidModeFlipBurstChunk = 8
+
+    /// The aperture enum property for the active selector: photo mode
+    /// describes the STANDARD aperture property — the movie enum is not
+    /// authoritative there (iOS `refreshLensApertures`). [verify-on-HW]
+    static func apertureDescriptorProperty(
+        captureSelector: CameraCaptureSelector?
+    ) -> PTPPropertyCode {
+        StillCapturePolicy.prefersPhotographyChrome(selector: captureSelector)
+            ? .fNumber : .movieFNumber
+    }
+
+    /// Photo-mode option-enum sources, pinned so tests and refreshers can
+    /// never drift apart: the stills speed enum, the photo WB preset enum,
+    /// and the image-size string enum.
+    static let stillShutterOptionsProperty: PTPPropertyCode = .stillShutterSpeed
+    static let stillWhiteBalanceOptionsProperty: PTPPropertyCode = .whiteBalance
+    static let stillImageSizeOptionsProperty: PTPPropertyCode = .imageSize
+
     /// Full live-monitor property set used for both the post-connect bootstrap
     /// burst and the steady-state round-robin. Each entry is still one PTP
     /// transaction; bootstrap just issues them back-to-back without the 1.5 s gap.
@@ -2002,6 +2177,28 @@ public final class PTPIPClientSession: @unchecked Sendable {
             throw PTPIPClientSessionError.mediaModeActive
         }
         try transactExpectingOK(.terminateCapture, parameters: [0, 0])
+    }
+
+    /// Opens/closes the continuous-burst remote-mode bracket: host-set capture
+    /// session values (the burst ceiling) only persist while remote mode is
+    /// held — without it every release snaps back to a single frame. The
+    /// body's dials lock for the bracket's duration, so it opens on the press
+    /// and closes the moment the burst ends. Closing tolerates a refusal
+    /// (release/AF may still be settling). [verify-on-HW]
+    public func setStillBurstBracket(active: Bool) throws {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else {
+            throw PTPIPClientSessionError.mediaModeActive
+        }
+        if active {
+            try transactExpectingOK(.changeCameraMode, parameters: [1])
+            try writeCameraProperty(
+                PTPCameraPropertyWrite(
+                    property: .burstNumber, data: Data(ByteCoding.uint16LE(65535))))
+        } else {
+            try transactExpectingOK(.changeCameraMode, parameters: [0])
+        }
     }
 
     // MARK: - Android live-view configuration
@@ -2156,6 +2353,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     || androidControlCatalog.whiteBalanceModes.contains {
                         $0.label == "Color temp"
                     }
+                    || androidControlCatalog.stillWhiteBalanceModes.contains {
+                        $0.label == "Color temp"
+                    }
                 let isFineKelvin =
                     control == .whiteBalance
                     && WhiteBalanceKelvinPolicy.isKelvinLabel(label)
@@ -2205,6 +2405,22 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
             return sharedControlWrites(control, label: label)
         case .whiteBalance:
+            // Photography reuses the movie WB picker; the shared core routes the write to the
+            // stills WB property family by the snapshot's selector. Prefer the photo descriptor's
+            // exact preset raws when the body advertised them. [verify-on-HW]
+            if StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector)
+            {
+                if let raw = androidControlCatalog.stillWhiteBalanceModes.first(where: {
+                    $0.label == label
+                })?.raw {
+                    return [
+                        PTPCameraPropertyWrite(
+                            property: .whiteBalance, data: Data(ByteCoding.uint16LE(raw)))
+                    ]
+                }
+                return sharedControlWrites(control, label: label)
+            }
             let descriptorWrites = whiteBalanceDescriptorWrites(label: label)
             if !descriptorWrites.isEmpty { return descriptorWrites }
             return sharedControlWrites(control, label: label)
@@ -2320,6 +2536,46 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 property: .electronicVR)
         case .exposureMode:
             return sharedControlWrites(control, label: label)
+        case .stillShutter:
+            // Prefer the exact camera-advertised raw for the label (the stills
+            // enum narrows by program/flash state); shared fraction-packing
+            // covers the ladder fallback.
+            if let raw = androidControlCatalog.stillShutterSpeeds.first(where: {
+                $0.label == label
+            })?.raw {
+                return [
+                    PTPCameraPropertyWrite(
+                        property: .stillShutterSpeed, data: Data(ByteCoding.uint32LE(raw)))
+                ]
+            }
+            return sharedControlWrites(control, label: label)
+        case .stillISOAuto:
+            // Stills Auto ISO toggle — iOS's raw one-byte property write.
+            switch label {
+            case "On", "ON":
+                return [
+                    PTPCameraPropertyWrite(property: .stillISOAutoControl, data: Data([1]))
+                ]
+            case "Off", "OFF":
+                return [
+                    PTPCameraPropertyWrite(property: .stillISOAutoControl, data: Data([0]))
+                ]
+            default:
+                return []
+            }
+        case .stillImageArea:
+            // Photo sensor crop — the raw area byte, exactly like iOS's
+            // `setStillImageArea` safe-point write.
+            guard let area = StillImageArea.area(forLabel: label) else { return [] }
+            return [
+                PTPCameraPropertyWrite(property: .captureAreaCrop, data: Data([area.rawValue]))
+            ]
+        case .stillISO, .stillIris, .stillDrive, .stillFocusMode, .stillFocusArea,
+            .stillFocusSubject, .stillMeter, .stillImageSize, .stillQuality,
+            .stillRawCompression, .stillUserModeProgram, .stillPictureControl:
+            // Stills writes ride the shared-core label encoders (the same
+            // byte policy iOS queues); the body stays the final authority.
+            return sharedControlWrites(control, label: label)
         }
     }
 
@@ -2390,6 +2646,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
         case .vibrationReduction: capabilities.vibrationReduction
         case .electronicVR: capabilities.electronicVR
         case .exposureMode: []
+        case .stillISO, .stillISOAuto, .stillShutter, .stillIris, .stillDrive,
+            .stillFocusMode, .stillFocusArea, .stillFocusSubject, .stillMeter,
+            .stillImageArea, .stillImageSize, .stillQuality, .stillRawCompression,
+            .stillUserModeProgram, .stillPictureControl:
+            // Stills controls skip capability validation (`isStillControl`).
+            []
         }
     }
 
@@ -2460,7 +2722,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return WhiteBalanceTint.write(
             wbModeLabel: mode,
             amberBlueCell: tint.amberBlue,
-            greenMagentaCell: tint.greenMagenta)
+            greenMagentaCell: tint.greenMagenta,
+            // Photo mode writes the stills tune property for the active WB mode.
+            photography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector))
     }
 
     private func confirmAndroidControlWrites(
@@ -2522,10 +2787,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
             return PTPCameraPropertyDecoders.movieFocusMode(written)
                 == PTPCameraPropertyDecoders.movieFocusMode(live)
         }
-        // Effective / dual-base / exposure-index ISO — compare the UINT32, not raw length.
+        // Effective / dual-base / exposure-index / stills ISO — compare the UINT32, not raw length.
         if write.property == .movieExposureIndex
             || write.property == .movieISOSensitivity
-            || write.property == .isoControlSensitivity,
+            || write.property == .isoControlSensitivity
+            || write.property == .exposureIndexEx,
             write.data.count >= 4,
             readback.count >= 4
         {
@@ -2552,6 +2818,49 @@ public final class PTPIPClientSession: @unchecked Sendable {
             dataOut: write.data)
     }
 
+    // MARK: - Manual focus drive (focus-by-wire)
+
+    /// One manual-focus drive outcome, classified from the activation + readiness poll.
+    public enum MFDriveOutcome: Equatable, Sendable {
+        case complete
+        case endOfTravel
+        case stepTooSmall
+        case refused(PTPResponseCode)
+    }
+
+    /// Drives manual focus by `pulses` toward near or infinity — an activation
+    /// command whose completion is confirmed by the readiness poll (busy while
+    /// the lens moves). End-of-travel and amount-too-small are outcomes, not
+    /// errors; a lens the body cannot drive (mechanical ring) refuses with an
+    /// invalid-status class answer. There is no absolute position readout —
+    /// the control is relative, like a follow-focus ring. [verify-on-HW]
+    public func mfDrive(towardNear: Bool, pulses: UInt32) -> MFDriveOutcome {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else { return .refused(.deviceBusy) }
+        let clamped = min(max(pulses, 1), 32767)
+        guard
+            let start = try? executeTransaction(
+                .mfDrive, parameters: [towardNear ? 1 : 2, clamped])
+        else { return .refused(.deviceBusy) }
+        guard start.operationResponse.responseCode == .ok else {
+            return .refused(start.operationResponse.responseCode)
+        }
+        for _ in 0..<25 {
+            guard let ready = try? executeTransaction(.deviceReady) else {
+                return .refused(.deviceBusy)
+            }
+            switch ready.operationResponse.responseCode {
+            case .ok: return .complete
+            case .deviceBusy: Thread.sleep(forTimeInterval: 0.12)
+            case .mfDriveStepEnd: return .endOfTravel
+            case .mfDriveStepInsufficiency: return .stepTooSmall
+            case let other: return .refused(other)
+            }
+        }
+        return .complete
+    }
+
     // MARK: - Autofocus area
 
     /// Moves the live-view AF area through Nikon `ChangeAfArea` while keeping
@@ -2563,7 +2872,37 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard !isMediaModeActive else {
             throw PTPIPClientSessionError.mediaModeActive
         }
-        try changeAfAreaTransaction(x: x, y: y)
+        // A body mid-AF/mid-release answers busy for a beat — bounded retries
+        // before giving up, like iOS servicing taps at tolerant safe points.
+        for attempt in 0..<4 {
+            do {
+                try changeAfAreaTransaction(x: x, y: y)
+                break
+            } catch let error as PTPIPClientSessionError {
+                guard attempt < 3,
+                    case .operationRejected(_, .deviceBusy) = error
+                else { throw error }
+                Thread.sleep(forTimeInterval: 0.12)
+            }
+        }
+        // Photography: moving the point alone never focuses (video's
+        // continuous AF does that part) — drive AF like a half-press, with a
+        // short DeviceReady drain so the body isn't left mid-drive. Subject
+        // tracking latches through the same area change, exactly as in video.
+        // Out-of-focus or a still-busy timeout stays silent; the AF box state
+        // in the header tells the story. [verify-on-HW]
+        if StillCapturePolicy.prefersPhotographyChrome(
+            selector: androidPropertySnapshot.captureSelector)
+        {
+            _ = try? transactExpectingOK(.afDrive)
+            for _ in 0..<4 {
+                guard let result = try? executeTransaction(.deviceReady),
+                    case .inProgress = StillCapturePolicy.releaseReadiness(
+                        result.operationResponse.responseCode)
+                else { break }
+                Thread.sleep(forTimeInterval: 0.12)
+            }
+        }
     }
 
     /// Recentres the AF area using only current camera-owned focus dimensions,

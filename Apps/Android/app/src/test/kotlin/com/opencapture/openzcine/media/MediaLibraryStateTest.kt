@@ -432,6 +432,57 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `setFavorite mirrors a camera star into the favorite set and clears it at zero`() {
+        val preferences = MemoryPreferences()
+        val index = MediaLibraryIndex(preferences)
+        val shot = clip(handle = 7, filename = "DSC_0007.JPG", kind = MediaContentKind.STILL_PHOTO)
+
+        // A >= 1-star write favorites the shot; a 0-star write clears it. Offline path — only
+        // the local set is touched, no camera involved.
+        val starred = index.setFavorite("camera-a", shot, favorite = true)
+        assertTrue(shot.libraryKey("camera-a") in starred)
+        assertTrue(shot.libraryKey("camera-a") in MediaLibraryIndex(preferences).favoriteIDs("camera-a"))
+
+        val cleared = index.setFavorite("camera-a", shot, favorite = false)
+        assertFalse(shot.libraryKey("camera-a") in cleared)
+        assertTrue(MediaLibraryIndex(preferences).favoriteIDs("camera-a").isEmpty())
+    }
+
+    @Test
+    fun `a shot favorited by a rating write surfaces under the Favorites filter`() {
+        val cameraID = "camera"
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val rated = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val other = clip(handle = 2, filename = "DSC_0002.JPG", kind = MediaContentKind.STILL_PHOTO)
+
+        val favorites = index.setFavorite(cameraID, rated, favorite = true)
+
+        assertEquals(
+            listOf(rated),
+            MediaLibraryFiltering.displayed(
+                listOf(rated, other),
+                MediaLibraryCategory.FAVORITES,
+                favorites,
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+            ),
+        )
+    }
+
+    @Test
+    fun `rating a pair favorites the jpeg row and leaves the raw sibling untouched`() {
+        val cameraID = "camera"
+        val index = MediaLibraryIndex(MemoryPreferences())
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+
+        val favorites = index.setFavorite(cameraID, jpeg, favorite = true)
+
+        assertTrue(jpeg.libraryKey(cameraID) in favorites)
+        assertFalse(raw.libraryKey(cameraID) in favorites)
+    }
+
+    @Test
     fun `categories and sort consume shared core actions instead of extensions`() {
         val cameraID = "camera"
         val proxy = clip(handle = 1, filename = "PHOTO.NEF", kind = MediaContentKind.PLAYABLE_PROXY)
@@ -470,6 +521,66 @@ class MediaLibraryStateTest {
                 MediaLibrarySortOrder.NAME,
             ),
         )
+    }
+
+    @Test
+    fun `raw cell collapses into its jpeg pair and one item survives per pair`() {
+        val cameraID = "camera"
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+        val lonelyRaw =
+            clip(handle = 3, filename = "DSC_0002.NEF", kind = MediaContentKind.STILL_PHOTO)
+        val clips = listOf(jpeg, raw, lonelyRaw)
+
+        // One item per pair: the JPEG carries the cell, the same-shot RAW
+        // never renders its own; an unpaired RAW keeps its cell.
+        assertEquals(
+            listOf(jpeg, lonelyRaw),
+            MediaLibraryFiltering.displayed(
+                clips,
+                MediaLibraryCategory.ALL,
+                emptySet(),
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+            ),
+        )
+        // Suppression is keyed on the filter survivors: when a chip keeps only
+        // the cached NEF (its JPEG side filtered away), the RAW surfaces its
+        // own cell instead of vanishing entirely.
+        assertEquals(
+            listOf(raw),
+            MediaLibraryFiltering.displayed(
+                listOf(jpeg, raw),
+                MediaLibraryCategory.FAVORITES,
+                setOf(raw.libraryKey(cameraID)),
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+            ),
+        )
+        // Offline multi-camera library: two cameras' formulaic DSC_0001 stems
+        // never pair across owning buckets.
+        assertEquals(
+            listOf(jpeg, raw),
+            MediaLibraryFiltering.displayed(
+                listOf(jpeg, raw),
+                MediaLibraryCategory.ALL,
+                emptySet(),
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+                ownerOf = { if (it.handle == 1L) "camera-a" else "camera-b" },
+            ),
+        )
+    }
+
+    @Test
+    fun `viewer displays the toggled pair side while identity stays on the jpeg`() {
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+
+        assertEquals(jpeg, stillViewerDisplaySide(jpeg, raw, showingRaw = false))
+        assertEquals(raw, stillViewerDisplaySide(jpeg, raw, showingRaw = true))
+        // Unpaired stills ignore a stray RAW request.
+        assertEquals(jpeg, stillViewerDisplaySide(jpeg, rawSibling = null, showingRaw = true))
     }
 
     @Test

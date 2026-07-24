@@ -653,6 +653,51 @@ object SwiftCore {
     external fun sessionSetRecording(recording: Boolean): Int
 
     /**
+     * Fires one still release on the active session (photo mode). Returns a
+     * `RECORDING_COMMAND_*` result; completion lands via [sessionPollStillRelease].
+     */
+    external fun sessionInitiateStillCapture(): Int
+
+    /**
+     * One readiness poll while a still release is in flight: 0 complete,
+     * 1 in progress, 2 bulb/time open shutter, 3 failed, negatives for
+     * session/transport faults.
+     */
+    external fun sessionPollStillRelease(): Int
+
+    /** Ends a bulb/time exposure or stops a running burst (frames kept). */
+    external fun sessionTerminateStillCapture(): Int
+
+    /** Opens/closes the continuous-burst remote-mode bracket. */
+    external fun sessionSetStillBurstBracket(active: Boolean): Int
+
+    /**
+     * One relative manual-focus drive with its classified outcome: 0 complete,
+     * 1 end of travel, 2 amount too small, -1 no session, or
+     * `0x10000 or responseCode` for a body refusal. Blocking — call from IO.
+     */
+    external fun sessionMFDrive(towardNear: Boolean, pulses: Int): Int
+
+    /** Snapshots the card's handle sets as the instant-review diff baseline. */
+    external fun sessionSeedStillReviewBaseline(): Int
+
+    /**
+     * The just-captured JPEG/HEIF handle from the post-capture baseline diff,
+     * or 0 while the card hasn't listed it yet (caller retries).
+     */
+    external fun sessionResolveNewestStillHandle(): Int
+
+    /**
+     * The full captured image, streamed in chunks between live-view frames.
+     * Long-running and blocking — call from IO; cancel via
+     * [sessionCancelStillImage].
+     */
+    external fun sessionStillImage(handle: Int): ByteArray?
+
+    /** Aborts an in-flight [sessionStillImage] at its next chunk boundary. */
+    external fun sessionCancelStillImage()
+
+    /**
      * Applies one typed camera control selection on the active session. [control]
      * is a stable semantic selector owned by [CameraControl]; [label] is the
      * operator-facing selection such as `"5600K"` or `"AF-C"`. Swift owns all
@@ -879,7 +924,10 @@ object SwiftCore {
 
     /**
      * Writes a 0–5 star rating and returns the camera-confirmed star count
-     * after readback, or -1 on failure. Blocking — call from IO.
+     * after readback (`>= 0`); `-1` when the write can't be attempted or fails
+     * without a response; or the NEGATED raw PTP response code (e.g. `-0x2013`
+     * for a state-based Access Denied) when the body refuses, so the caller can
+     * name the refusal. See `ratingWriteResult`. Blocking — call from IO.
      */
     external fun sessionSetObjectRating(handle: Int, stars: Int): Int
 

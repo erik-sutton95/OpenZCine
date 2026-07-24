@@ -52,6 +52,37 @@ private final class USBPrewarmDelegate: NSObject, ICCameraDeviceDelegate, @unche
     }
 }
 
+/// The phone's physical connector, for USB-path guidance. Lightning iPhones can only host
+/// USB cameras through Apple's Lightning-to-USB camera adapter — a USB-C-to-Lightning cable
+/// wires the phone as the *device* end, so a camera plugged through one never enumerates.
+enum DeviceUSBConnector {
+    case usbC
+    case lightning
+
+    static let current: DeviceUSBConnector = {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let machine = withUnsafeBytes(of: &systemInfo.machine) { raw in
+            String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+        return connector(forModel: machine)
+    }()
+
+    /// iPhones up through `iPhone14,*` are Lightning, as are the iPhone 14 Pro pair
+    /// (`iPhone15,2` / `iPhone15,3`); everything newer — and every non-iPhone, including
+    /// the simulator — reads as USB-C.
+    static func connector(forModel model: String) -> DeviceUSBConnector {
+        guard model.hasPrefix("iPhone") else { return .usbC }
+        let digits = model.dropFirst("iPhone".count).prefix(while: { $0 != "," })
+        guard let major = Int(digits) else { return .usbC }
+        if major <= 14 { return .lightning }
+        if major == 15 {
+            return (model == "iPhone15,2" || model == "iPhone15,3") ? .lightning : .usbC
+        }
+        return .usbC
+    }
+}
+
 final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked Sendable {
     static let shared = USBCameraDeviceBrowser()
 
@@ -85,6 +116,8 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
                 self.setAuthorizationStatus(granted)
                 usbLogger.info(
                     "USB control authorization resolved: \(granted.rawValue, privacy: .public)")
+                AppDiagnostics.shared.record(
+                    granted == .authorized ? .usbAuthorizationGranted : .usbAuthorizationDenied)
                 self.browser.start()
             }
         } else {
@@ -159,6 +192,7 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         }
         usbLogger.info(
             "USB camera attached: \(device.name ?? "unnamed", privacy: .private(mask: .hash))")
+        AppDiagnostics.shared.record(.usbCameraAttached)
     }
 
     func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
@@ -168,6 +202,7 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         lock.unlock()
         usbLogger.info(
             "USB camera detached: \(device.name ?? "unnamed", privacy: .private(mask: .hash))")
+        AppDiagnostics.shared.record(.usbCameraDetached)
     }
 
     /// Pre-warm open finished (delegate callback relay). Clears the in-flight marker so a connect

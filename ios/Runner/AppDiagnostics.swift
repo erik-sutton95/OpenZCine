@@ -27,6 +27,12 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case connectionPathCameraAp = "connection.path.camera-ap"
     case connectionPathPhoneHotspot = "connection.path.phone-hotspot"
     case connectionPathUsb = "connection.path.usb"
+    // USB browser truth, so a "USB finds nothing" report shows whether the system ever
+    // surfaced a camera and whether control authorization was granted.
+    case usbAuthorizationGranted = "usb.authorization.granted"
+    case usbAuthorizationDenied = "usb.authorization.denied"
+    case usbCameraAttached = "usb.camera.attached"
+    case usbCameraDetached = "usb.camera.detached"
     case monitorPresented = "monitor.presented"
     case monitorDismissed = "monitor.dismissed"
     case liveViewStarted = "live-view.started"
@@ -46,6 +52,22 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case guideCompleted = "live-guide.completed"
     case guideSkipped = "live-guide.skipped"
     case diagnosticsExported = "diagnostics.exported"
+    // Object star-rating writes. The vocabulary stays closed (no free-form codes leak into the
+    // support log); the exact wire code rides the user-facing toast instead. Access-Denied gets
+    // its own breadcrumb because it is the leading hypothesis for a state-based refusal.
+    case ratingWriteAttempted = "rating.write.attempted"
+    case ratingWriteConfirmed = "rating.write.confirmed"
+    case ratingWriteRefused = "error.rating.write.refused"
+    case ratingWriteRefusedAccessDenied = "error.rating.write.refused.access-denied"
+
+    // Manual-focus drives (focus-by-wire scrub). Success stays off the log (a scrub is dozens
+    // of drives); only a sustained refusal (retries exhausted) leaves a trace — the wire code
+    // rides the user-facing toast.
+    case mfDriveRefused = "error.mf.drive.refused"
+
+    // A camera property write held the transaction gate unusually long (>1.5s) — the feed and
+    // queued writes stall behind it. The property rides the connection log, not the vocabulary.
+    case propertyWriteSlow = "camera.write.slow"
 }
 
 struct DiagnosticBreadcrumb: Codable, Equatable, Sendable {

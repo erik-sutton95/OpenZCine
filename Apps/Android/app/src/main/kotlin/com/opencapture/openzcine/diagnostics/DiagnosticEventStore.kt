@@ -37,6 +37,19 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     CONNECTION_EVENT_CHANNEL_ENDED("error.connection.event-channel-ended"),
     LIVE_VIEW_FAILED("error.live-view.failed"),
     LIVE_VIEW_STALLED("warning.live-view.stalled"),
+    // Object star-rating writes. The vocabulary stays closed (no wire code leaks into the log);
+    // the exact code rides the user-facing message. Access-Denied gets its own breadcrumb as the
+    // leading hypothesis for a state-based refusal.
+    RATING_WRITE_ATTEMPTED("rating.write.attempted"),
+    RATING_WRITE_CONFIRMED("rating.write.confirmed"),
+    RATING_WRITE_REFUSED("error.rating.write.refused"),
+    RATING_WRITE_REFUSED_ACCESS_DENIED("error.rating.write.refused.access-denied"),
+
+    // Manual-focus drives (focus-by-wire scrub). Success stays off the log (a
+    // scrub is dozens of drives); only the two actionable failures leave a
+    // trace — the wire code rides the user-facing toast.
+    MF_DRIVE_BUSY_EXHAUSTED("error.mf.drive.busy-exhausted"),
+    MF_DRIVE_REFUSED("error.mf.drive.refused"),
     ;
 
     companion object {

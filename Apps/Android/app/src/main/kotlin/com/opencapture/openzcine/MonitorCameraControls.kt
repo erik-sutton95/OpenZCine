@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,6 +34,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -93,7 +97,7 @@ internal val IosPanelRevealSpec =
         easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
     )
 
-/** Stable identities for the five camera controls surrounding iOS live view. */
+/** Stable identities for the camera controls surrounding iOS live view. */
 internal enum class MonitorPickerKind {
     ISO,
     SHUTTER,
@@ -102,6 +106,15 @@ internal enum class MonitorPickerKind {
     WHITE_BALANCE,
     RESOLUTION,
     CODEC,
+
+    // Photography-only pickers (iOS `CameraPicker.isStillPicker` set; the
+    // shared kinds above are reused by the stills strip with stills writes).
+    MODE,
+    DRIVE,
+    METER,
+    PROFILE,
+    SIZE,
+    QUALITY,
 }
 
 /** One typed control tab inside an in-monitor picker. */
@@ -123,6 +136,19 @@ internal data class MonitorPickerModePresentation(
     val applyValueOnActivate: Boolean = true,
     /** Drum star markers for this tab (native base ISOs). */
     val markedValues: Set<String> = emptySet(),
+    /**
+     * Grays this tab out entirely (iOS `pickerModeDisabled`): a U-bank inner
+     * program outside the banks, mutually-exclusive photo timers, or Manual
+     * ISO in a full-auto program.
+     */
+    val disabled: Boolean = false,
+    /**
+     * Freezes only this tab's value drum while it tracks the camera's live
+     * pick (photo ISO's Auto tab). Tabs stay interactive.
+     */
+    val drumLocked: Boolean = false,
+    /** Shows the photo timers' `[−] n [+]` shots stepper under the drum. */
+    val showsTimerShots: Boolean = false,
 )
 
 /** Camera-backed picker shown over live view. */
@@ -1013,15 +1039,14 @@ internal fun monitorPickerFrame(
     // tabs) is never forced under ~300dp of panel height. Drum pickers fill
     // leftover space.
     val height = min(if (isPortrait) 320f else 360f, availableHeight)
-    // iOS hasBar: width = bar.width, trailing edge = bar.maxX (no feed clamp that
-    // shifts the panel left of the glass pill).
+    // iOS `bottomPickerBody` hasBar: cap at the top-popup width and CENTRE the
+    // panel over the capture bar — a bar-wide drum panel reads as a
+    // full-screen sheet (width = min(bar.width, 420), centred on bar.midX).
     val width =
         if (isPortrait) {
             max(0f, viewport.width - outerMargin * 2f)
         } else if (anchorFrame != null) {
-            // Prefer exact bar / strip width (iOS). Cap at 420 only as a fallback
-            // when the zone is missing and we would otherwise use the full feed.
-            max(0f, anchorFrame.width)
+            min(420f, max(0f, anchorFrame.width))
         } else {
             min(420f, max(0f, zones.feed.width))
         }
@@ -1029,28 +1054,19 @@ internal fun monitorPickerFrame(
         if (isPortrait) {
             viewport.x + outerMargin
         } else if (anchorFrame != null) {
-            // Trailing-align to the bar (iOS .bottomTrailing on bar.maxX).
-            anchorFrame.x + anchorFrame.width - width
+            anchorFrame.x + anchorFrame.width / 2f - width / 2f
         } else {
             zones.feed.x + zones.feed.width - outerMargin - width
         }
-    // Keep the panel on-screen without shifting its trailing edge left of the
-    // capture bar when the bar itself is already inside the viewport.
+    // Keep the panel on-screen (iOS clamps its trailing edge to host − 8).
     val minX = viewport.x + outerMargin
     val maxX =
         max(
             minX,
             viewport.x + viewport.width - width - outerMargin,
         )
-    val x =
-        if (!isPortrait && anchorFrame != null) {
-            // Prefer exact trailing alignment; only nudge if the left edge clips.
-            max(minX, rawX)
-        } else {
-            rawX.coerceIn(minX, maxX)
-        }
     return ZoneFrame(
-        x = x,
+        x = rawX.coerceIn(minX, maxX),
         y = max(topLimit, bottomLimit - height),
         width = width,
         height = height,
@@ -1058,40 +1074,55 @@ internal fun monitorPickerFrame(
 }
 
 /**
- * iOS landscape top-deck res/codec popdown: width 340, centered on the info
- * bar (cell midX), dropped just below the bar. Command mode centres the
- * panel in the viewport.
+ * iOS landscape top-deck popdown (`topPickerBody`): width 340 (the two-drum
+ * quality pair 400), centred on the tapped pill's cell (info-bar mid as the
+ * fallback), dropped just below it. Height fills the space under the anchor —
+ * the quality pair's NEF chips and star toggle must never fold under a fixed
+ * cap. Command mode centres the panel in the viewport.
  */
 internal fun monitorTopBarPickerFrame(
     viewport: ZoneFrame,
     zones: MonitorZones,
     isCommandCenter: Boolean = false,
+    kind: MonitorPickerKind? = null,
+    anchorPill: ZoneFrame? = null,
 ): ZoneFrame {
     val outerMargin = 8f
-    val width = min(340f, max(0f, viewport.width - outerMargin * 2f))
-    val height = min(300f, max(120f, viewport.height * 0.55f))
+    val preferredWidth = if (kind == MonitorPickerKind.QUALITY) 400f else 340f
+    val width = min(preferredWidth, max(0f, viewport.width - outerMargin * 2f))
+    if (isCommandCenter) {
+        val height = min(300f, max(120f, viewport.height * 0.55f))
+        return ZoneFrame(
+            x = viewport.x + (viewport.width - width) / 2f,
+            y = viewport.y + (viewport.height - height) / 2f,
+            width = width,
+            height = height,
+        )
+    }
+    val anchorMid =
+        anchorPill?.let { it.x + it.width / 2f }
+            ?: (zones.infoBar.x + zones.infoBar.width / 2f)
+    val anchorBottom =
+        anchorPill?.let { it.y + it.height }
+            ?: (zones.infoBar.y + zones.infoBar.height)
     val x =
-        if (isCommandCenter) {
-            viewport.x + (viewport.width - width) / 2f
-        } else {
-            val mid = zones.infoBar.x + zones.infoBar.width / 2f
-            (mid - width / 2f).coerceIn(
-                viewport.x + outerMargin,
-                viewport.x + viewport.width - width - outerMargin,
-            )
-        }
-    val y =
-        if (isCommandCenter) {
-            viewport.y + (viewport.height - height) / 2f
-        } else {
-            zones.infoBar.y + zones.infoBar.height + 8f
-        }
+        (anchorMid - width / 2f).coerceIn(
+            viewport.x + outerMargin,
+            max(viewport.x + outerMargin, viewport.x + viewport.width - width - outerMargin),
+        )
+    val y = anchorBottom + 8f
+    val maxHeight = if (kind == MonitorPickerKind.QUALITY) 380f else 300f
+    val height =
+        min(maxHeight, max(120f, viewport.y + viewport.height - y - outerMargin))
     return ZoneFrame(x = x, y = y, width = width, height = height)
 }
 
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */
 internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
-    this == MonitorPickerKind.RESOLUTION || this == MonitorPickerKind.CODEC
+    this == MonitorPickerKind.RESOLUTION ||
+        this == MonitorPickerKind.CODEC ||
+        this == MonitorPickerKind.SIZE ||
+        this == MonitorPickerKind.QUALITY
 
 /**
  * Seats iOS's portrait-fill assist rail inside the shared feed frame and
@@ -1238,12 +1269,9 @@ private fun CaptureStripCells(
             // iOS stroke uses accentDim (same as fill), not full accent.
             val cellModifier =
                 Modifier
-                    .background(if (active) LiveDesign.accentDim else Color.Transparent, ChromeShape)
-                    .border(
-                        1.dp,
-                        if (active) LiveDesign.accentDim else Color.Transparent,
-                        ChromeShape,
-                    )
+                    // iOS `.minTapTarget()`: the hit area meets a 44dp floor
+                    // even though the visible cell hugs its readout.
+                    .defaultMinSize(minHeight = 44.dp)
                     .semantics(mergeDescendants = true) {
                         contentDescription = summary
                         if (!enabled) disabled()
@@ -1276,7 +1304,19 @@ private fun CaptureStripCells(
                             else -> 1f
                         },
                     )
-            Box(cellModifier) {
+            Box(cellModifier, contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .background(
+                            if (active) LiveDesign.accentDim else Color.Transparent,
+                            ChromeShape,
+                        )
+                        .border(
+                            1.dp,
+                            if (active) LiveDesign.accentDim else Color.Transparent,
+                            ChromeShape,
+                        ),
+                ) {
                 CaptureSettingCell(
                     label = setting.label,
                     value = setting.value,
@@ -1290,6 +1330,7 @@ private fun CaptureStripCells(
                             null
                         },
                 )
+                }
             }
         }
     }
@@ -1320,6 +1361,12 @@ internal fun MonitorControlPickerPanel(
     showBackdrop: Boolean = true,
     /** iOS PickerPanel long-press: shutter control lock toggle (0.45s, hold anywhere). */
     onShutterLongPress: (() -> Unit)? = null,
+    /** Photo timers' shared shot count, rendered in tabs flagged [MonitorPickerModePresentation.showsTimerShots]. */
+    timerShotsCount: Int = 1,
+    /** Steps the timers' shot count by ±1 (nil hides the stepper row). */
+    onAdjustTimerShots: ((Int) -> Unit)? = null,
+    /** Live NEF (RAW) compression readout for the QUALITY dual-drum panel. */
+    nefCompression: String? = null,
 ) {
     val dismissAllowed = pendingControl == null
     BackHandler(enabled = dismissAllowed, onBack = onDismiss)
@@ -1371,16 +1418,29 @@ internal fun MonitorControlPickerPanel(
                 contentKey = { it.kind },
                 label = "monitorPickerSwitch",
             ) { currentPicker ->
-                PickerPanelBody(
-                    picker = currentPicker,
-                    frame = frame,
-                    controlsEnabled = controlsEnabled,
-                    pendingControl = pendingControl,
-                    feedback = feedback,
-                    onSelect = onSelect,
-                    onDismiss = onDismiss,
-                    onShutterLongPress = onShutterLongPress,
-                )
+                if (currentPicker.kind == MonitorPickerKind.QUALITY) {
+                    // Image quality is a dual-drum pair, not a value wheel
+                    // (iOS `QualityPickerPanel`).
+                    QualityPickerPanelBody(
+                        picker = currentPicker,
+                        nefCompression = nefCompression,
+                        onSelect = onSelect,
+                        onDismiss = onDismiss,
+                    )
+                } else {
+                    PickerPanelBody(
+                        picker = currentPicker,
+                        frame = frame,
+                        controlsEnabled = controlsEnabled,
+                        pendingControl = pendingControl,
+                        feedback = feedback,
+                        onSelect = onSelect,
+                        onDismiss = onDismiss,
+                        onShutterLongPress = onShutterLongPress,
+                        timerShotsCount = timerShotsCount,
+                        onAdjustTimerShots = onAdjustTimerShots,
+                    )
+                }
             }
         }
     }
@@ -1397,6 +1457,8 @@ private fun PickerPanelBody(
     onSelect: (CommandControlRequest, String) -> Unit,
     onDismiss: () -> Unit,
     onShutterLongPress: (() -> Unit)? = null,
+    timerShotsCount: Int = 1,
+    onAdjustTimerShots: ((Int) -> Unit)? = null,
 ) {
     val pickerDescription =
         stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
@@ -1436,9 +1498,11 @@ private fun PickerPanelBody(
     // Keep the drum scrollable while a write is in flight (iOS). Pending applies
     // coalesce in MonitorScreen; freezing the wheel dropped rapid settles.
     // Full interaction lock (shutter control lock / R3D recording) freezes mode tabs too.
-    // Auto ISO only freezes the value drum so Auto Off remains reachable.
+    // Auto ISO only freezes the value drum so Auto Off remains reachable — the
+    // photo ISO Auto tab does the same per-mode via `drumLocked`.
     val modeInteractive = controlsEnabled && !picker.interactionLocked
-    val drumInteractive = modeInteractive && !picker.drumInteractionLocked
+    val drumInteractive =
+        modeInteractive && !picker.drumInteractionLocked && !mode.drumLocked && !mode.disabled
     // Ignore drum-settles briefly after a ±10 nudge so scroll snap cannot
     // overwrite the fine-tuned value with a neighbouring dial step.
     var suppressDrumSettleUntil by remember(picker.kind) { mutableStateOf(0L) }
@@ -1534,7 +1598,13 @@ private fun PickerPanelBody(
                 maxLines = 2,
             )
         }
-        (picker.drumLockBanner ?: picker.lockBanner)?.let { banner ->
+        // The drum-lock banner belongs to the locked drum: picker-wide (movie
+        // Auto ISO), or only while the locked tab is active (photo ISO Auto).
+        val activeDrumBanner =
+            picker.drumLockBanner?.takeIf {
+                picker.drumInteractionLocked || mode.drumLocked
+            }
+        (activeDrumBanner ?: picker.lockBanner)?.let { banner ->
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1559,9 +1629,14 @@ private fun PickerPanelBody(
 
         // Landed Kelvin / drum selection is owned by the panel so the fixed
         // fine-adjust row (below this weight slot) can read the same value.
+        // A locked drum (photo ISO Auto) instead tracks the camera's live pick.
         val landed =
-            lastByMode.getOrNull(modeIndex)?.takeIf { it.isNotBlank() }
-                ?: mode.request.currentValue
+            if (mode.drumLocked) {
+                mode.request.currentValue
+            } else {
+                lastByMode.getOrNull(modeIndex)?.takeIf { it.isNotBlank() }
+                    ?: mode.request.currentValue
+            }
         val drumLabels =
             if (isKelvinMode) {
                 WbPickerPolicy.kelvinOptions(
@@ -1671,6 +1746,9 @@ private fun PickerPanelBody(
                                         }
                                 },
                         onSettle = { settled ->
+                            // A locked/disabled drum only mirrors the camera —
+                            // its settles never write (photo ISO Auto tracking).
+                            if (!drumInteractive) return@AccentDrumWheel
                             if (android.os.SystemClock.uptimeMillis() < suppressDrumSettleUntil) {
                                 return@AccentDrumWheel
                             }
@@ -1696,6 +1774,16 @@ private fun PickerPanelBody(
         // No in-panel "Applying change…" — iOS is silent while the drum rolls;
         // the bar/tile value is the feedback. Errors still render above.
 
+        if (mode.showsTimerShots && onAdjustTimerShots != null) {
+            // The timers' shared shot count rides inside both timer tabs —
+            // fired by the app after the countdown (iOS `timerShotsRow`).
+            TimerShotsRow(
+                count = timerShotsCount,
+                enabled = modeInteractive && !mode.disabled,
+                onAdjust = onAdjustTimerShots,
+            )
+        }
+
         if (picker.modes.size > 1) {
             // Fixed-height mode bar (never in the weight slot) — preserves full
             // KELVIN/PRESET/TINT hit targets when the Tint pad is tall.
@@ -1705,10 +1793,19 @@ private fun PickerPanelBody(
             ) {
                 picker.modes.forEachIndexed { index, candidate ->
                     val selected = index == modeIndex
+                    val tabEnabled = modeInteractive && !candidate.disabled
                     Column(
                         Modifier
                             .weight(1f)
-                            .alpha(if (modeInteractive) 1f else 0.55f)
+                            .alpha(
+                                when {
+                                    // iOS `pickerModeDisabled` grays harder than
+                                    // the interaction lock.
+                                    candidate.disabled -> 0.35f
+                                    !modeInteractive -> 0.55f
+                                    else -> 1f
+                                },
+                            )
                             .background(
                                 if (selected) {
                                     LiveDesign.accentDim
@@ -1722,7 +1819,7 @@ private fun PickerPanelBody(
                                 if (selected) LiveDesign.accent else LiveDesign.hairline,
                                 ChromeShape,
                             )
-                            .chromeClickable(enabled = modeInteractive) {
+                            .chromeClickable(enabled = tabEnabled) {
                                 if (index == modeIndex) return@chromeClickable
                                 selectedMode = index
                                 suppressDrumSettleUntil = 0L
@@ -1904,6 +2001,135 @@ internal fun CaptureWbGlyph(icon: CaptureWbIcon, tint: Color, modifier: Modifier
                         close()
                     }
                 drawPath(bolt, tint)
+            }
+        }
+    }
+}
+
+/** Drag-to-pulse gain per dp (a full strip sweep ≈ a few thousand pulses). */
+internal const val MF_DRIVE_PULSES_PER_DP = 24
+
+/** The vertical strip's touch width; the visual capsule is slimmer inside. */
+internal const val MF_DRIVE_STRIP_WIDTH_DP = 44f
+
+/**
+ * Seats the MF focus-by-wire strip just left of the right system rail
+ * (record/DISP/media/settings), vertically centred in the viewport.
+ */
+internal fun mfDriveStripFrame(
+    viewport: ZoneFrame,
+    rightRailLeading: Float,
+): ZoneFrame {
+    val height = minOf(260f, viewport.height * 0.6f)
+    return ZoneFrame(
+        x = rightRailLeading - MF_DRIVE_STRIP_WIDTH_DP - 12f,
+        y = viewport.y + (viewport.height - height) / 2f,
+        width = MF_DRIVE_STRIP_WIDTH_DP,
+        height = height,
+    )
+}
+
+/**
+ * Vertical focus-by-wire strip on the live view (MF + proven-drivable lens
+ * only): a slim glass capsule with ∞ at the top, NEAR at the bottom, and a
+ * centre tick. Dragging drives the lens by relative pulses — up toward
+ * infinity — there is no absolute position to seek. Travel ends light their
+ * label. [verify-on-HW: pulses-per-dp feel per lens]
+ */
+@Composable
+internal fun MFDriveStrip(
+    atEnd: Int?,
+    enabled: Boolean,
+    onDrive: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    /** Debug-build caption: cumulative acknowledged·busy drive counters. */
+    driveStats: Pair<Int, Int> = 0 to 0,
+) {
+    // Drag feedback (iOS MFDriveVerticalScrub isDragging): the strip must
+    // visibly react to touch even before the lens moves — a scrub against a
+    // busy body otherwise reads as dead input.
+    var dragging by remember { mutableStateOf(false) }
+    Box(
+        modifier
+            .alpha(if (enabled) 1f else 0.55f)
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectDragGestures(
+                    onDragStart = { dragging = true },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false },
+                ) { change, dragAmount ->
+                    change.consume()
+                    // Screen-up is negative y; up drives toward infinity (+).
+                    // Ring-like speed response: a slow drag steps finely, a
+                    // flick multiplies travel (up to ×6) — iOS speedFactor.
+                    val deltaDp = -dragAmount.y.toDp().value
+                    val speedFactor =
+                        (1f + kotlin.math.abs(deltaDp) / 3f).coerceAtMost(6f)
+                    val pulses =
+                        (deltaDp * MF_DRIVE_PULSES_PER_DP * speedFactor).toInt()
+                    if (pulses != 0) onDrive(pulses)
+                }
+            }
+            // Absorb plain taps: the strip sits over the feed, and a tap that
+            // fell through would move the AF point under the scrub.
+            .pointerInput(Unit) { detectTapGestures(onTap = {}) }
+            .semantics {
+                contentDescription =
+                    "Manual focus drive. Drag up toward infinity or down toward near."
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .width(28.dp)
+                .fillMaxHeight()
+                .glass(CircleShape)
+                .background(
+                    Color.White.copy(alpha = if (dragging) 0.14f else 0f),
+                    CircleShape,
+                )
+                .border(
+                    if (dragging) 1.5.dp else 1.dp,
+                    if (dragging) LiveDesign.accent else LiveDesign.hairline,
+                    CircleShape,
+                )
+                .padding(vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "∞",
+                style = chromeStyle(12f, FontWeight.SemiBold, mono = true),
+                color = if (atEnd == 1) LiveDesign.accent else LiveDesign.muted,
+            )
+            Box(Modifier.weight(1f))
+            // Centre tick — the strip is a relative ring, not a position bar.
+            Box(
+                Modifier.size(
+                    width = if (dragging) 22.dp else 16.dp,
+                    height = if (dragging) 3.dp else 2.dp,
+                )
+                    .background(LiveDesign.accent.copy(alpha = 0.9f)),
+            )
+            Box(Modifier.weight(1f))
+            Text(
+                "NEAR",
+                style = chromeStyle(7f, FontWeight.SemiBold, mono = true),
+                color = if (atEnd == -1) LiveDesign.accent else LiveDesign.muted,
+                maxLines = 1,
+                softWrap = false,
+            )
+            // Live drive telemetry (acknowledged·busy) — the on-device
+            // discriminator for "strip moves but the glass doesn't" vs
+            // "drives never land". Debug builds only.
+            if (BuildConfig.DEBUG && driveStats.first + driveStats.second > 0) {
+                Text(
+                    "${driveStats.first}·${driveStats.second}",
+                    style = chromeStyle(7f, FontWeight.Normal, mono = true),
+                    color = LiveDesign.faint,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
         }
     }

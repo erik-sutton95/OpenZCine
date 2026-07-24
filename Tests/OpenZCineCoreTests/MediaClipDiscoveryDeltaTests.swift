@@ -7,10 +7,22 @@ import Testing
         MediaObjectHandle(storageID: 1, handle: 10),
         MediaObjectHandle(storageID: 1, handle: 20),
     ]
-    let delta = MediaClipDiscoveryDelta.compute(cachedHandles: [10, 20, 30], cameraHandles: camera)
-    #expect(delta.reuseHandles == [10, 20])
+    let delta = MediaClipDiscoveryDelta.compute(
+        cachedHandles: [
+            MediaObjectHandle(storageID: 1, handle: 10),
+            MediaObjectHandle(storageID: 1, handle: 20),
+            MediaObjectHandle(storageID: 1, handle: 30),
+        ],
+        cameraHandles: camera
+    )
+    #expect(
+        delta.reuseHandles == [
+            MediaObjectHandle(storageID: 1, handle: 10),
+            MediaObjectHandle(storageID: 1, handle: 20),
+        ]
+    )
     #expect(delta.fetchHandles.isEmpty)
-    #expect(delta.removedHandles == [30])
+    #expect(delta.removedHandles == [MediaObjectHandle(storageID: 1, handle: 30)])
 }
 
 @Test func discoveryDeltaFetchesOnlyNewHandles() {
@@ -18,8 +30,11 @@ import Testing
         MediaObjectHandle(storageID: 2, handle: 100),
         MediaObjectHandle(storageID: 2, handle: 200),
     ]
-    let delta = MediaClipDiscoveryDelta.compute(cachedHandles: [100], cameraHandles: camera)
-    #expect(delta.reuseHandles == [100])
+    let delta = MediaClipDiscoveryDelta.compute(
+        cachedHandles: [MediaObjectHandle(storageID: 2, handle: 100)],
+        cameraHandles: camera
+    )
+    #expect(delta.reuseHandles == [MediaObjectHandle(storageID: 2, handle: 100)])
     #expect(delta.fetchHandles == [MediaObjectHandle(storageID: 2, handle: 200)])
     #expect(delta.removedHandles.isEmpty)
 }
@@ -32,5 +47,21 @@ import Testing
     let delta = MediaClipDiscoveryDelta.compute(cachedHandles: [], cameraHandles: camera)
     #expect(delta.reuseHandles.isEmpty)
     #expect(delta.fetchHandles.count == 2)
+    #expect(delta.removedHandles.isEmpty)
+}
+
+/// Backup mode: the second card's copy shares the handle VALUE with an unrelated first-card
+/// object — storage-qualified identity must keep them apart instead of "reusing" the wrong one.
+@Test func discoveryDeltaKeepsCrossCardHandleCollisionsApart() {
+    let camera: [MediaObjectHandle] = [
+        MediaObjectHandle(storageID: 0x0001_0001, handle: 7),
+        MediaObjectHandle(storageID: 0x0002_0001, handle: 7),
+    ]
+    let delta = MediaClipDiscoveryDelta.compute(
+        cachedHandles: [MediaObjectHandle(storageID: 0x0001_0001, handle: 7)],
+        cameraHandles: camera
+    )
+    #expect(delta.reuseHandles == [MediaObjectHandle(storageID: 0x0001_0001, handle: 7)])
+    #expect(delta.fetchHandles == [MediaObjectHandle(storageID: 0x0002_0001, handle: 7)])
     #expect(delta.removedHandles.isEmpty)
 }

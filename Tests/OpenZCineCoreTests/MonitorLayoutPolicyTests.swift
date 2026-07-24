@@ -580,12 +580,16 @@ import Testing
 @Test func batteryRailPlacesIndicatorsAroundSideNotch() {
     let layout = MonitorBatteryRailLayout.fit(railHeight: 390)
 
+    // Dynamic-Island rails let the frames intrude on the reservation by their internal
+    // slack; the classic notch (below) carries none.
     #expect(
         layout.phoneBottom
-            == layout.notchTop - MonitorBatteryRailLayout.dynamicIslandPadding)
+            == layout.notchTop - MonitorBatteryRailLayout.dynamicIslandPadding
+            + MonitorBatteryRailLayout.indicatorFrameSlack)
     #expect(
         layout.cameraTop
-            == layout.notchBottom + MonitorBatteryRailLayout.dynamicIslandPadding)
+            == layout.notchBottom + MonitorBatteryRailLayout.dynamicIslandPadding
+            - MonitorBatteryRailLayout.indicatorFrameSlack)
 }
 
 @Test func batteryRailKeepsIndicatorsCloserThanCornerAnchors() {
@@ -623,10 +627,12 @@ import Testing
     #expect(classic.cameraTop == classic.notchBottom + MonitorBatteryRailLayout.notchPadding)
     #expect(
         dynamicIsland.phoneBottom
-            == dynamicIsland.notchTop - MonitorBatteryRailLayout.dynamicIslandPadding)
+            == dynamicIsland.notchTop - MonitorBatteryRailLayout.dynamicIslandPadding
+            + MonitorBatteryRailLayout.indicatorFrameSlack)
     #expect(
         dynamicIsland.cameraTop
-            == dynamicIsland.notchBottom + MonitorBatteryRailLayout.dynamicIslandPadding)
+            == dynamicIsland.notchBottom + MonitorBatteryRailLayout.dynamicIslandPadding
+            - MonitorBatteryRailLayout.indicatorFrameSlack)
 }
 
 @Test func dynamicIslandGeometryKeepsTheEstablishedMonitorLayout() {

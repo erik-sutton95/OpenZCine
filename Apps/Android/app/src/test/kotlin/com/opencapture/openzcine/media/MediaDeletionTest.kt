@@ -10,6 +10,26 @@ import kotlin.test.assertTrue
 /** JVM coverage for the camera-card deletion policy and its local purge. */
 class MediaDeletionTest {
     @Test
+    fun `rating write result decodes confirmed stars, coded refusals, and no-code failures`() {
+        assertEquals(RatingWriteResult.Confirmed(3), ratingWriteResult(3))
+        assertEquals(RatingWriteResult.Confirmed(0), ratingWriteResult(0))
+        // -1 is a failure with no reported code; a smaller negative is a negated wire code.
+        assertEquals(RatingWriteResult.Refused(0), ratingWriteResult(-1))
+        assertEquals(RatingWriteResult.Refused(0x2013), ratingWriteResult(-0x2013))
+        assertEquals(RatingWriteResult.Refused(0x2005), ratingWriteResult(-0x2005))
+    }
+
+    @Test
+    fun `rating refusal message carries the response code so the report self-diagnoses`() {
+        val accessDenied = ratingRefusalMessage(0x2013)
+        assertTrue(accessDenied.contains("Access Denied"))
+        assertTrue(accessDenied.contains("0x2013"))
+        assertTrue(ratingRefusalMessage(0x2005).contains("0x2005"))
+        // No code reported → a distinct, code-free line (not a bogus 0x0000).
+        assertTrue(ratingRefusalMessage(0).contains("didn't respond"))
+    }
+
+    @Test
     fun `raw sibling pairs the same stem on the same card only`() {
         val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
         val raw = still(handle = 2, filename = "DSC_0001.NEF")
@@ -17,17 +37,33 @@ class MediaDeletionTest {
         val unrelated = still(handle = 4, filename = "DSC_0002.NEF")
         val catalog = listOf(jpeg, raw, otherCardRaw, unrelated)
 
-        assertEquals(raw, rawSibling(catalog, jpeg))
+        assertEquals(raw, rawSibling(catalog, jpeg, oneBucket))
         // Case-insensitive stem matching, like iOS.
         assertEquals(
             raw,
-            rawSibling(catalog, jpeg.copy(filename = "dsc_0001.jpg")),
+            rawSibling(catalog, jpeg.copy(filename = "dsc_0001.jpg"), oneBucket),
         )
         // RAW cells and non-stills never claim a sibling of their own.
-        assertNull(rawSibling(catalog, raw))
-        assertNull(rawSibling(catalog, still(handle = 5, filename = "C0001.MOV")))
+        assertNull(rawSibling(catalog, raw, oneBucket))
+        assertNull(rawSibling(catalog, still(handle = 5, filename = "C0001.MOV"), oneBucket))
         // Split recording: a same-stem RAW on another card is a separate item.
-        assertNull(rawSibling(listOf(jpeg, otherCardRaw), jpeg))
+        assertNull(rawSibling(listOf(jpeg, otherCardRaw), jpeg, oneBucket))
+    }
+
+    @Test
+    fun `pair key scopes formulaic stems to the owning camera bucket`() {
+        val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
+        val foreignRaw = still(handle = 2, filename = "DSC_0001.NEF")
+        // Two cameras produce identical DSC_0001 stems and formulaic storage
+        // IDs; the offline library must never pair them across buckets.
+        val owners = mapOf<Long, String>(1L to "camera-a", 2L to "camera-b")
+        assertNull(rawSibling(listOf(jpeg, foreignRaw), jpeg) { owners.getValue(it.handle) })
+        // The same catalog pairs normally inside one bucket.
+        assertEquals(
+            foreignRaw,
+            rawSibling(listOf(jpeg, foreignRaw), jpeg, oneBucket),
+        )
+        assertEquals("camera/7/dsc_0001", still(handle = 3, filename = "DSC_0001.JPG", storageId = 7).rawPairKey("camera"))
     }
 
     @Test
@@ -38,15 +74,70 @@ class MediaDeletionTest {
         val catalog = listOf(jpeg, raw, movie)
 
         // Deleting the JPEG deletes both sides of the pair.
-        assertEquals(listOf(jpeg, raw), cameraDeletionTargets(catalog, listOf(jpeg)))
+        assertEquals(listOf(jpeg, raw), cameraDeletionTargets(catalog, listOf(jpeg), oneBucket))
         // Selecting both sides still deletes each object exactly once.
         assertEquals(
             listOf(jpeg, raw),
-            cameraDeletionTargets(catalog, listOf(jpeg, raw)),
+            cameraDeletionTargets(catalog, listOf(jpeg, raw), oneBucket),
         )
-        // A RAW-only selection deletes only the RAW (its cell is its own item).
-        assertEquals(listOf(raw), cameraDeletionTargets(catalog, listOf(raw)))
-        assertEquals(listOf(movie), cameraDeletionTargets(catalog, listOf(movie)))
+        // A RAW cell only surfaces when its JPEG side is absent; deleting it
+        // then deletes only the RAW, exactly like iOS.
+        assertEquals(listOf(raw), cameraDeletionTargets(catalog, listOf(raw), oneBucket))
+        assertEquals(listOf(movie), cameraDeletionTargets(catalog, listOf(movie), oneBucket))
+    }
+
+    @Test
+    fun `deletion widens to cross-card backup twins and says so`() {
+        val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
+        val raw = still(handle = 2, filename = "DSC_0001.NEF")
+        val backupJpeg = still(handle = 21, filename = "DSC_0001.JPG", storageId = 2)
+        val backupRaw = still(handle = 22, filename = "DSC_0001.NEF", storageId = 2)
+        val bystander = still(handle = 3, filename = "DSC_0002.JPG", captureDate = "20260714T110000")
+        val catalog = listOf(jpeg, raw, backupJpeg, backupRaw, bystander)
+
+        val plan = deletionPlan(catalog, listOf(jpeg), oneBucket)
+
+        assertEquals(setOf(jpeg, raw, backupJpeg, backupRaw), plan.targets.toSet())
+        assertEquals(1, plan.pairCount)
+        assertEquals(2, plan.backupCount)
+        val message = deleteConfirmationMessage(catalog, listOf(jpeg), oneBucket)
+        assertTrue("backup copies on the other card" in message)
+        assertTrue("RAW and JPEG" in message)
+    }
+
+    @Test
+    fun `deleting a proxy takes its hidden camera master and uses video wording`() {
+        val proxy = still(handle = 5, filename = "A001_0001.MP4")
+        val master = still(handle = 6, filename = "A001_0001.NEV")
+        val otherProxy = still(handle = 7, filename = "A001_0002.MP4", captureDate = "20260714T111000")
+        val catalog = listOf(proxy, master, otherProxy)
+
+        val plan = deletionPlan(catalog, listOf(proxy), oneBucket)
+
+        assertEquals(listOf(proxy, master), plan.targets)
+        assertEquals(1, plan.masterCount)
+        assertEquals(0, plan.pairCount)
+        val message = deleteConfirmationMessage(catalog, listOf(proxy), oneBucket)
+        assertTrue("A001_0001.MP4" in message)
+        assertTrue("master" in message)
+        assertTrue("RAW and JPEG" !in message)
+        assertTrue("backup copies" !in message)
+    }
+
+    @Test
+    fun `undated clips never twin and plain singles keep the plain copy`() {
+        val jpeg = still(handle = 1, filename = "DSC_0003.JPG", captureDate = "")
+        val elsewhere = still(handle = 2, filename = "DSC_0003.NEF", storageId = 2, captureDate = "")
+        val catalog = listOf(jpeg, elsewhere)
+
+        val plan = deletionPlan(catalog, listOf(jpeg), oneBucket)
+
+        assertEquals(listOf(jpeg), plan.targets)
+        assertEquals(0, plan.backupCount)
+        assertEquals(
+            "Delete this photo from the camera card?",
+            deleteConfirmationMessage(catalog, listOf(jpeg), oneBucket),
+        )
     }
 
     @Test
@@ -96,32 +187,39 @@ class MediaDeletionTest {
         }
     }
 
+    /** Single-bucket owner used by every camera-source pairing call. */
+    private val oneBucket: (MediaClipRecord) -> String = { "camera" }
+
     private fun still(
         handle: Long,
         filename: String,
         storageId: Long = 1,
-    ): MediaClipRecord =
-        MediaClipRecord(
+        captureDate: String = "20260714T101010",
+    ): MediaClipRecord {
+        val kind =
+            when (filename.substringAfterLast('.').lowercase()) {
+                "mov", "mp4" -> MediaContentKind.PLAYABLE_PROXY
+                "r3d" -> MediaContentKind.R3D_MASTER
+                "nev" -> MediaContentKind.UNSUPPORTED
+                else -> MediaContentKind.STILL_PHOTO
+            }
+        return MediaClipRecord(
             handle = handle,
             storageId = storageId,
             sizeBytes = 100,
-            captureDate = "20260714T101010",
+            captureDate = captureDate,
             pixelWidth = 3840,
             pixelHeight = 2160,
             filename = filename,
-            contentKind =
-                if (filename.endsWith(".MOV", ignoreCase = true)) {
-                    MediaContentKind.PLAYABLE_PROXY
-                } else {
-                    MediaContentKind.STILL_PHOTO
-                },
+            contentKind = kind,
             stillPhoto =
-                if (filename.endsWith(".MOV", ignoreCase = true)) {
-                    null
-                } else {
+                if (kind == MediaContentKind.STILL_PHOTO) {
                     StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE)
+                } else {
+                    null
                 },
         )
+    }
 
     private class MemoryMediaPreferences : MediaLibraryPreferences {
         private val values = mutableMapOf<String, String>()

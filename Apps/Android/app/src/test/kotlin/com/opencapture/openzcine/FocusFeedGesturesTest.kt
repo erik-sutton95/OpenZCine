@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.LiveFocusBox
 import com.opencapture.openzcine.core.LiveFocusInfo
 import com.opencapture.openzcine.core.LiveFocusResult
@@ -67,6 +68,62 @@ class FocusFeedGesturesTest {
             geometry.cameraCoordinateAt(FocusFeedPixelPoint(500f, 500.5f)),
         )
         assertNull(geometry.cameraCoordinateAt(FocusFeedPixelPoint(500f, 783f)))
+    }
+
+    @Test
+    fun `photo full-height frame maps corner and band-edge taps in range`() {
+        // The photography feed container IS the letterboxed 3:2 image
+        // (photographyFeedFrame): container aspect == source aspect, so the
+        // content rect fills the box exactly and every corner maps inclusive.
+        val container = photographyFeedFrame(
+            cinemaFeed = ZoneFrame(59f, 0f, 683f, 384f),
+            viewport = ZoneFrame(0f, 0f, 914f, 384f),
+            imageArea = "FX",
+            leadingLaneTrailing = 136f,
+            trailingLaneLeading = 844f,
+        )
+        val content =
+            liveFeedContentRect(container.width, container.height, 5_760, 3_840)
+        requireNotNull(content)
+        val geometry =
+            focusFeedGeometry(
+                content = content,
+                horizontalPresentationScale = 1f,
+                viewport = LiveOverlayRect(0f, 0f, container.width, container.height),
+                coordinateWidth = 5_760,
+                coordinateHeight = 3_840,
+                generation = 1,
+            )
+        requireNotNull(geometry)
+
+        // Corners clamp to the zero-based inclusive endpoints — never the
+        // dimension itself, never negative.
+        assertEquals(
+            FocusFeedCoordinate(0, 0),
+            geometry.cameraCoordinateAt(FocusFeedPixelPoint(0f, 0f)),
+        )
+        assertEquals(
+            FocusFeedCoordinate(5_759, 3_839),
+            geometry.cameraCoordinateAt(
+                FocusFeedPixelPoint(container.width, container.height),
+            ),
+        )
+        // A tap in the band-overlaid bottom strip of the image is still ON the
+        // image: valid, clamped coordinates.
+        val bandTap =
+            geometry.cameraCoordinateAt(
+                FocusFeedPixelPoint(container.width / 2f, container.height - 4f),
+            )
+        requireNotNull(bandTap)
+        assertTrue(bandTap.x in 0..5_759)
+        assertTrue(bandTap.y in 0..3_839)
+        // Outside the image box (the letterbox side lanes host chrome and are
+        // outside this container) the gesture rejects rather than emitting
+        // out-of-range coordinates.
+        assertNull(
+            geometry.cameraCoordinateAt(FocusFeedPixelPoint(container.width + 24f, 100f)),
+        )
+        assertNull(geometry.cameraCoordinateAt(FocusFeedPixelPoint(-6f, 100f)))
     }
 
     @Test

@@ -142,7 +142,8 @@ public enum MonitorZoneLayout {
         aspect: PortraitFeedAspect,
         scopeCount: Int,
         horizontalDirection: MonitorHorizontalLayoutDirection,
-        bottomBarHeight: Double
+        bottomBarHeight: Double,
+        portraitFeedAspectRatio: Double = 16.0 / 9.0
     ) -> MonitorZoneMap {
         if isPortrait {
             return portraitMap(
@@ -152,7 +153,8 @@ public enum MonitorZoneLayout {
                 mode: mode,
                 aspect: aspect,
                 scopeCount: scopeCount,
-                assistToolbarHeight: bottomBarHeight
+                assistToolbarHeight: bottomBarHeight,
+                feedAspectRatio: portraitFeedAspectRatio
             )
         }
         return landscapeMap(
@@ -387,7 +389,8 @@ public enum MonitorZoneLayout {
         mode: DispMode,
         aspect: PortraitFeedAspect,
         scopeCount: Int,
-        assistToolbarHeight: Double
+        assistToolbarHeight: Double,
+        feedAspectRatio: Double = 16.0 / 9.0
     ) -> MonitorZoneMap {
         let legacy = MonitorPortraitLayout.zones(
             viewportWidth: viewportWidth,
@@ -396,7 +399,8 @@ public enum MonitorZoneLayout {
             mode: mode,
             aspect: aspect,
             scopeCount: scopeCount,
-            assistToolbarHeight: assistToolbarHeight
+            assistToolbarHeight: assistToolbarHeight,
+            feedAspectRatio: feedAspectRatio
         )
 
         // In `.fill`, the controls region is a capture strip (hidden in clean). In `.fit16x9`, the

@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -55,8 +56,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 
 /**
@@ -83,13 +85,17 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     /** Camera-fed exposure indicator (the body's own metering needle). */
     EV("EV", "EV Meter"),
     DESQ("DE-SQ", "Desqueeze"),
+    /** Photography-only instant playback of the just-captured still. */
+    PLAY("PLAY", "Instant Playback"),
     AUDIO("AUDIO", "Audio Levels"),
 
     ;
 
     /** Whether a long press opens the iOS-equivalent quick-configuration panel. */
     val hasConfiguration: Boolean
-        get() = this != AUDIO && this != EV
+        // ponytail: PLAY's iOS options drawer (AF box / info / duration) is a
+        // follow-up; the toggle alone covers the between-shots review.
+        get() = this != AUDIO && this != EV && this != PLAY
 
     /**
      * Assist tools that apply to still photography (iOS `appliesToPhotography`):
@@ -100,9 +106,13 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     val appliesToPhotography: Boolean
         get() =
             when (this) {
-                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV -> true
+                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY -> true
                 else -> false
             }
+
+    /** Photography-only tools, hidden from the cinema toolbar entirely. */
+    val isPhotographyOnly: Boolean
+        get() = this == PLAY
 
     companion object {
         /**
@@ -131,8 +141,10 @@ internal fun frontPinnedAssistTools(
     photography: Boolean,
 ): List<AssistTool> {
     if (photography) {
-        if (AssistTool.EV !in tools) return tools
-        return listOf(AssistTool.EV) + tools.filterNot { it == AssistTool.EV }
+        // Photography leads with instant playback then the EV meter (iOS pins).
+        val pins = listOf(AssistTool.PLAY, AssistTool.EV).filter { it in tools }
+        if (pins.isEmpty()) return tools
+        return pins + tools.filterNot { it in pins }
     }
     val evIndex = tools.indexOf(AssistTool.EV)
     if (evIndex <= 1) return tools
@@ -140,6 +152,59 @@ internal fun frontPinnedAssistTools(
     rest.removeAt(evIndex)
     rest.add(1, AssistTool.EV)
     return rest
+}
+
+/** iOS `MonitorAssistStrip.expandedWidth`: the vertical rail's column width. */
+internal const val ASSIST_RAIL_EXPANDED_WIDTH_DP = 60f
+
+/** iOS `MonitorAssistStrip.collapsedPillSize`: the collapsed pill's diameter. */
+internal const val ASSIST_RAIL_COLLAPSED_PILL_DP = 44f
+
+/** iOS `MonitorAssistStrip.bottomFadeHeight`: the expanded rail's scroll fade. */
+internal const val ASSIST_RAIL_BOTTOM_FADE_DP = 40f
+
+/**
+ * Seats photography's collapsible vertical assist rail beside the lock/battery
+ * lane (iOS `MonitorUnified` photo-rail placement): the rail clears whichever
+ * left-edge chrome reaches furthest (lock button or battery stack) plus 12dp,
+ * hugs the lock row while expanded, centre-aligns the collapsed pill on the
+ * lock button, and runs down to the assist band's bottom edge unless the
+ * measured capture strip actually enters the rail's lane — then it stops 10dp
+ * above the band.
+ */
+internal fun photographyAssistRailFrame(
+    lock: ZoneFrame,
+    batteryTrailing: Float?,
+    assistBand: ZoneFrame,
+    measuredCaptureBar: ZoneFrame?,
+    expanded: Boolean,
+): ZoneFrame {
+    val leftChromeTrailing = maxOf(lock.x + lock.width, batteryTrailing ?: 0f)
+    val laneLeading = leftChromeTrailing + 12f
+    val laneTrailing = laneLeading + ASSIST_RAIL_EXPANDED_WIDTH_DP
+    if (!expanded) {
+        val railCenterX = laneLeading + ASSIST_RAIL_EXPANDED_WIDTH_DP / 2f
+        return ZoneFrame(
+            x = railCenterX - ASSIST_RAIL_COLLAPSED_PILL_DP / 2f,
+            y = lock.y + (lock.height - ASSIST_RAIL_COLLAPSED_PILL_DP) / 2f,
+            width = ASSIST_RAIL_COLLAPSED_PILL_DP,
+            height = ASSIST_RAIL_COLLAPSED_PILL_DP,
+        )
+    }
+    // "Fill until it hits the bottom bar": a trailing-aligned strip on a wide
+    // body never reaches the rail's lane, so the rail runs to the band bottom.
+    val stripEntersLane =
+        measuredCaptureBar != null &&
+            measuredCaptureBar.width > 1f &&
+            measuredCaptureBar.x < laneTrailing + 16f
+    val railBottom =
+        if (stripEntersLane) assistBand.y - 10f else assistBand.y + assistBand.height
+    return ZoneFrame(
+        x = laneLeading,
+        y = lock.y,
+        width = ASSIST_RAIL_EXPANDED_WIDTH_DP,
+        height = maxOf(0f, railBottom - lock.y),
+    )
 }
 
 @StringRes
@@ -160,6 +225,7 @@ internal fun AssistTool.labelResource(): Int =
         AssistTool.LEVEL -> R.string.assist_label_level
         AssistTool.EV -> R.string.assist_label_ev_meter
         AssistTool.DESQ -> R.string.assist_label_desqueeze
+        AssistTool.PLAY -> R.string.assist_label_play
         AssistTool.AUDIO -> R.string.assist_label_audio
     }
 
@@ -181,6 +247,7 @@ internal fun AssistTool.titleResource(): Int =
         AssistTool.LEVEL -> R.string.assist_title_horizon
         AssistTool.EV -> R.string.assist_title_ev_meter
         AssistTool.DESQ -> R.string.assist_title_desqueeze
+        AssistTool.PLAY -> R.string.assist_title_instant_playback
         AssistTool.AUDIO -> R.string.assist_title_audio_levels
     }
 
@@ -246,6 +313,13 @@ class AssistState(
         private set
 
     /**
+     * Whether photography's instant playback (PLAY) is armed. Session-local —
+     * arming also reseeds the capture baseline via the monitor's effect.
+     */
+    var instantReviewEnabled: Boolean by mutableStateOf(false)
+        private set
+
+    /**
      * Activates the process-local compatibility mirror after composition has
      * committed. Constructing this state often happens inside `remember`, so
      * writing another Compose state from the initializer can race an activity
@@ -268,6 +342,7 @@ class AssistState(
             AssistTool.VECTOR -> ScopeKind.VECTORSCOPE in selectedScopes
             AssistTool.LIGHTS -> ScopeKind.TRAFFIC_LIGHTS in selectedScopes
             AssistTool.AUDIO -> audioMetersEnabled
+            AssistTool.PLAY -> instantReviewEnabled
             // Framing tools are persisted by OperatorSettings instead of this
             // feed-effects state. AssistToolbar routes them through its local
             // framing callback; keeping this fallback false prevents an
@@ -322,6 +397,10 @@ class AssistState(
             AssistTool.AUDIO -> {
                 audioMetersEnabled = !audioMetersEnabled
                 persistState()
+                true
+            }
+            AssistTool.PLAY -> {
+                instantReviewEnabled = !instantReviewEnabled
                 true
             }
             // See isOn: monitor and settings framing controls are routed to
@@ -782,31 +861,85 @@ internal fun PortraitFillAssistRail(
             visibleTools.filterNot { it in imageEffectTools }
         }
     val scroll = rememberScrollState()
-    val view = LocalView.current
-    Column(
+    Box(
         modifier
+            // Rows must never draw outside the rail's rounded silhouette —
+            // the scroll column clips to rectangular bounds otherwise (iOS
+            // clipShape on the expanded rail).
+            .clip(ChromeShape)
             .glass(ChromeShape)
-            .fillMaxSize()
-            .verticalScroll(scroll)
-            .padding(horizontal = 4.dp, vertical = 6.dp)
             .semantics {
                 contentDescription = railDescription
                 stateDescription = expandedDescription
             },
-        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scroll)
+                .padding(horizontal = 4.dp)
+                // The last row must be able to scroll fully clear of the
+                // bottom fade — without this it parks half-faded against the
+                // rail's rounded end (iOS bottomFadeHeight + 10 padding).
+                .padding(top = 6.dp, bottom = ASSIST_RAIL_BOTTOM_FADE_DP.dp + 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .chromeClickable(enabled) { onExpandedChange(false) }
+                    .semantics { contentDescription = closeDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                // iOS collapse handle is a chevron, not a text label.
+                ChevronCollapseGlyph(LiveDesign.accent, Modifier.size(13.dp))
+            }
+            AssistRailToolCells(
+                supportedTools = supportedTools,
+                state = state,
+                framingConfiguration = framingConfiguration,
+                onToggleFramingTool = onToggleFramingTool,
+                hapticsEnabled = hapticsEnabled,
+                enabled = enabled,
+                onLongPressTool = onLongPressTool,
+                onLongPressToolAnchored = onLongPressToolAnchored,
+            )
+        }
+        // Rows scroll UNDER a bottom gradient so the last tool never
+        // hard-clips mid-glyph against the rail's rounded edge — the fade
+        // itself is the scroll affordance, reaching near-opaque well before
+        // the rail's end (iOS bottom fade).
         Box(
             Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(38.dp)
-                .chromeClickable(enabled) { onExpandedChange(false) }
-                .semantics { contentDescription = closeDescription },
-            contentAlignment = Alignment.Center,
-        ) {
-            // iOS collapse handle is a chevron, not a text label.
-            ChevronCollapseGlyph(LiveDesign.accent, Modifier.size(13.dp))
-        }
-        supportedTools.forEach { tool ->
+                .height(ASSIST_RAIL_BOTTOM_FADE_DP.dp)
+                .background(
+                    Brush.verticalGradient(
+                        0f to LiveDesign.background.copy(alpha = 0f),
+                        0.55f to LiveDesign.background.copy(alpha = 0.85f),
+                        1f to LiveDesign.background.copy(alpha = 0.98f),
+                    ),
+                ),
+        )
+    }
+}
+
+/** The vertical rail's tool cells, shared by the expanded-rail scroll column. */
+@Composable
+private fun AssistRailToolCells(
+    supportedTools: List<AssistTool>,
+    state: AssistState,
+    framingConfiguration: LocalFramingAssistConfiguration?,
+    onToggleFramingTool: (AssistTool) -> Unit,
+    hapticsEnabled: Boolean,
+    enabled: Boolean,
+    onLongPressTool: ((AssistTool) -> Unit)?,
+    onLongPressToolAnchored: ((AssistTool, Rect) -> Unit)?,
+) {
+    val view = LocalView.current
+    supportedTools.forEach { tool ->
             val isFramingTool = tool in AssistTool.framingTools
             val isOn =
                 if (isFramingTool) {
@@ -842,7 +975,6 @@ internal fun PortraitFillAssistRail(
                     view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                 }
             }
-        }
     }
 }
 
@@ -1179,6 +1311,26 @@ internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier =
                 drawLine(tint, Offset(inset, y), Offset(inset + head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
                 drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y - head), 1.7.dp.toPx(), StrokeCap.Round)
                 drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
+            }
+            // SF `photo.badge.checkmark`: photo frame with a check tick.
+            AssistTool.PLAY -> {
+                val stroke2 = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                drawRoundRect(
+                    tint,
+                    topLeft = Offset(size.width * 0.06f, size.height * 0.14f),
+                    size = androidx.compose.ui.geometry.Size(
+                        size.width * 0.70f,
+                        size.height * 0.62f,
+                    ),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height * 0.12f),
+                    style = stroke2,
+                )
+                val check = Path().apply {
+                    moveTo(size.width * 0.62f, size.height * 0.78f)
+                    lineTo(size.width * 0.74f, size.height * 0.90f)
+                    lineTo(size.width * 0.96f, size.height * 0.62f)
+                }
+                drawPath(check, tint, style = stroke2)
             }
             // SF `slider.vertical.3`: three compact audio level bars.
             AssistTool.AUDIO -> {

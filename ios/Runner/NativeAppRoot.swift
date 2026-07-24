@@ -407,7 +407,9 @@ final class NativeAppModel {
             case .phoneHotspot:
                 "Turn on Personal Hotspot — the camera joins your iPhone's network."
             case .usbC:
-                "Plug the camera into this iPhone with a USB-C cable."
+                DeviceUSBConnector.current == .lightning
+                    ? "Connect through Apple's Lightning to USB camera adapter — a USB-C to Lightning cable can't host the camera."
+                    : "Plug the camera into this iPhone with a USB-C cable."
             }
         }
 
@@ -844,6 +846,9 @@ final class NativeAppModel {
     /// On-disk cache + index for camera clips (Media page), and the current library list.
     let mediaClipStore = MediaClipStore()
     var mediaClips: [MediaClip] = []
+    /// Burst-series lookup keyed by representative clip id, refreshed as a side effect of
+    /// `filteredMediaClips` (the grid renders one cell per series; the series view reaches the rest).
+    @ObservationIgnored private(set) var burstByRepresentative: [String: BurstSeries] = [:]
     var mediaFetchInProgress = false
     /// Movie clips discovered so far during an in-flight `fetchClipsFromCamera` listing pass.
     var mediaFetchListedCount = 0
@@ -956,6 +961,12 @@ final class NativeAppModel {
             connectedHost: connectedIdentity?.host,
             isIPhoneHotspotBridgeActive: isIPhoneHotspotBridgeActive
         )
+    }
+
+    /// Whether iOS has denied USB camera-control access — drives the USB empty state's
+    /// permission-recovery copy.
+    var isUSBControlAuthorizationDenied: Bool {
+        USBCameraDeviceBrowser.shared.isControlAuthorizationDenied
     }
 
     var pairingDiscoveryCandidates: [DiscoveredCamera] {
@@ -3635,7 +3646,23 @@ final class NativeAppModel {
                 guard let self, self.cameraSession === session else { return }
                 do {
                     let event = try await session.nextEvent()
-                    if event.eventCode == .movieRecordInterrupted {
+                    if event.eventCode == .captureComplete {
+                        // A body-fired release finished writing (the app path schedules its
+                        // own review on completion, so only react when no app release is in
+                        // flight): sync the app — instant playback of the new shot and a
+                        // fresh shots-remaining readout. [verify-on-HW]
+                        if !self.isStillCapturing, !self.pendingStillCapture,
+                            StillCapturePolicy.prefersPhotographyChrome(
+                                selector: self.cameraPropertySnapshot.captureSelector)
+                        {
+                            self.scheduleInstantReview(session: session)
+                            await self.readAndApplyCameraProperty(
+                                session: session, property: .exposureRemaining)
+                        }
+                        // The card object set changed (backup mode adds a second-card copy
+                        // that fires no event of its own) — the next media pass must re-list.
+                        self.mediaFetchCompletedTab = nil
+                    } else if event.eventCode == .movieRecordInterrupted {
                         // An interruption is authoritative even while an optimistic app record
                         // command is in its brief readback-suppression window.
                         self.applyCameraRecordState(isRecording: false, force: true)
@@ -4488,7 +4515,19 @@ final class NativeAppModel {
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
         do {
+            let writeStarted = ContinuousClock.now
             try await session.writeCameraProperty(pending.write)
+            // A body can sit on a write for seconds (e.g. a focus-mode motor handoff) while
+            // it holds the transaction gate — and with it the whole feed. Leave a trace so
+            // "the app stalled" reports become attributable to the property that stalled.
+            let writeSeconds = writeStarted.duration(to: .now) / .seconds(1)
+            if writeSeconds > 1.5 {
+                AppDiagnostics.shared.record(.propertyWriteSlow)
+                logConnection(
+                    String(
+                        format: "slow write %@: %.1fs",
+                        String(describing: pending.write.property), writeSeconds))
+            }
             if isShutterModeWrite || isBaseISOWrite || isISOAutoWrite || isFocusModeWrite
                 || isShutterLockWrite
             {
@@ -6099,40 +6138,233 @@ final class NativeAppModel {
         startInstantReviewCountdown()
     }
 
+    // MARK: - Manual focus drive (focus-by-wire scrub)
+
+    /// The live-view MF scrub shows whenever the focus mode is MF on a live session. There is
+    /// no drivability verdict: a focus-by-wire drive can be refused for transient state reasons
+    /// (the stepping-motor lens is still initializing after a mode change; autofocus is briefly
+    /// active) — none of which mean the lens can't be driven, so a single refusal must never
+    /// latch the strip off. Hidden while a panel is up: picking MF in the FOCUS popup must not
+    /// mount a new interactive overlay under the operator's finger mid-popup.
+    var showsMFDriveScrub: Bool {
+        cameraPropertySnapshot.focusMode == "MF"
+            && isConnected && !isDemoSession && activePanel == nil
+    }
+
+    @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
+    /// Signed pulses awaiting dispatch (+ toward infinity, − toward near). Scrub gestures
+    /// accumulate here; a single in-flight drive drains it so gesture speed never floods
+    /// the command channel.
+    @ObservationIgnored private var mfDrivePendingPulses = 0
+    /// Travel-end feedback for the scrub UI: −1 near limit, +1 infinity limit, nil moving.
+    private(set) var mfDriveAtEnd: Int?
+    /// Strip debug caption counters (Debug builds): drives acknowledged vs retried.
+    private(set) var mfDriveDebugOK = 0
+    private(set) var mfDriveDebugBusy = 0
+
+    /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
+    /// while a drive is in flight. A refused drive is treated as transient — the stepping-motor
+    /// lens initializing after a mode change and momentary autofocus activity both refuse for a
+    /// beat — so the pulses requeue and retry; only a sustained refusal surfaces one message,
+    /// and the strip is never hidden. [verify-on-HW: per-lens pulse feel + which codes a given
+    /// lens answers]
+    func driveManualFocus(pulses: Int) {
+        guard pulses != 0, !isDemoSession, cameraSession != nil else { return }
+        mfDrivePendingPulses += pulses
+        mfDriveAtEnd = nil
+        guard mfDriveTask == nil else { return }
+        mfDriveTask = Task { [weak self] in
+            defer { self?.mfDriveTask = nil }
+            var retries = 0
+            while let self, let session = self.cameraSession,
+                self.mfDrivePendingPulses != 0, !Task.isCancelled
+            {
+                let pending = self.mfDrivePendingPulses
+                self.mfDrivePendingPulses = 0
+                let outcome = await session.mfDrive(
+                    towardNear: pending < 0,
+                    pulses: UInt32(min(abs(pending), 32767))
+                )
+                switch outcome {
+                case .complete, .stepTooSmall:
+                    retries = 0
+                    self.mfDriveDebugOK += 1
+                case .endOfTravel:
+                    self.mfDriveAtEnd = pending < 0 ? -1 : 1
+                    self.mfDrivePendingPulses = 0
+                    retries = 0
+                    self.mfDriveDebugOK += 1
+                case .refused(let code):
+                    // Every refusal is transient state, not a lens verdict: busy = the
+                    // stepping-motor lens is still initializing (or an acquisition is
+                    // running); access-denied = autofocus is momentarily active / settling.
+                    // Requeue and retry; a genuinely stuck state surfaces one message but
+                    // leaves the strip up so the next gesture tries again.
+                    self.mfDriveDebugBusy += 1
+                    retries += 1
+                    if retries <= 16 {
+                        self.mfDrivePendingPulses += pending
+                        try? await Task.sleep(for: .milliseconds(80))
+                        continue
+                    }
+                    self.mfDrivePendingPulses = 0
+                    retries = 0
+                    AppDiagnostics.shared.record(.mfDriveRefused)
+                    self.connectionMessage =
+                        "Couldn't drive focus just now — make sure focus mode is MF and autofocus isn't running, then try again (\(String(format: "0x%04X", code.rawValue)))."
+                }
+            }
+        }
+    }
+
     /// Rates the reviewed shot in place (0–5 stars) — writes straight to the captured
-    /// object so the culling decision is done before the next frame. [verify-on-HW]
+    /// object so the culling decision is done before the next frame. Mirrors only a
+    /// confirmed write into the index. [verify-on-HW]
     func rateInstantReview(stars: Int) async -> Bool {
         guard let handle = instantReview?.handle, let session = cameraSession else {
             return false
         }
-        return
-            (try? await session.setObjectRating(
-                handle: handle, value: StillCapturePolicy.ratingValue(forStars: stars))) != nil
+        AppDiagnostics.shared.record(.ratingWriteAttempted)
+        do {
+            try await performRatingWrite(
+                session: session, handle: handle,
+                value: StillCapturePolicy.ratingValue(forStars: stars))
+        } catch {
+            _ = refusalOutcome(error)  // records the refusal breadcrumb with its code
+            return false
+        }
+        // Instant playback holds a raw object handle, not a MediaClip — resolve the JPEG's
+        // filename so the confirmed write mirrors into the media index (the review already
+        // fetched this ObjectInfo once; a second lookup here is off the hot capture path).
+        let confirmed = await confirmedStars(session: session, handle: handle, requested: stars)
+        if let info = try? await session.getObjectInfo(handle: handle) {
+            mirrorRatingIntoIndex(
+                cameraID: mediaBucketID, filename: info.filename, stars: confirmed)
+        }
+        AppDiagnostics.shared.record(.ratingWriteConfirmed)
+        return true
     }
 
     // MARK: - Media delete + star rating
     // (The rating step table lives in shared core `StillCapturePolicy` — both shells map
     // stars ↔ raw property values through the same code.)
 
-    /// Deletes clips from the camera card (and any local copies). A RAW+JPEG pair deletes
-    /// both sides. Protected objects are refused by the body and stay listed. Returns the
-    /// number of items actually removed. [verify-on-HW]
+    /// Everything one deletion will actually remove, and why — so the confirm copy and the
+    /// delete run from the same expansion and can never disagree.
+    struct DeletionPlan {
+        /// Requested clips plus every companion object of the same shots, deduplicated.
+        let targets: [MediaClip]
+        /// RAW siblings pulled in behind requested JPEGs.
+        let pairCount: Int
+        /// Same-stem camera masters (R3D / NEV) pulled in behind requested proxies.
+        let masterCount: Int
+        /// Shots whose copy also lives on the other card (backup recording) — deleting the
+        /// shot clears both cards.
+        let backupCount: Int
+    }
+
+    /// Same-stem camera masters (`.R3D` / `.NEV`) on the same card as a playable proxy — the
+    /// grid hides them behind the proxy, so deleting the proxy must take them along.
+    private func linkedMasters(of clip: MediaClip) -> [MediaClip] {
+        guard MediaClipFilename.isPlayableProxy(clip.filename) else { return [] }
+        let stem = MediaClipFilename.stem(of: clip.filename)
+        return mediaClips.filter {
+            $0.id != clip.id && $0.cameraID == clip.cameraID && $0.storageID == clip.storageID
+                && ["r3d", "nev"].contains($0.fileExtension)
+                && MediaClipFilename.stem(of: $0.filename) == stem
+        }
+    }
+
+    /// Expands a deletion request to the full set of objects it honestly removes: each shot's
+    /// RAW sibling and its hidden camera master. Backup copies ride on the shot's own row (the
+    /// locations model folds both cards into one row), so they need no separate widening — they
+    /// go when `deleteMediaClips` walks the row's `allLocations`.
+    func deletionPlan(for clips: [MediaClip]) -> DeletionPlan {
+        var byID: [String: MediaClip] = [:]
+        var ordered: [MediaClip] = []
+        var pairs = 0
+        var masters = 0
+        var backups = 0
+        func insert(_ clip: MediaClip) -> Bool {
+            guard byID[clip.id] == nil else { return false }
+            byID[clip.id] = clip
+            ordered.append(clip)
+            if clip.allLocations.count > 1 { backups += 1 }
+            return true
+        }
+        for clip in clips {
+            var shot: [MediaClip] = [clip]
+            if let raw = rawSibling(of: clip), byID[raw.id] == nil { shot.append(raw) }
+            shot.append(contentsOf: linkedMasters(of: clip))
+            for (index, piece) in shot.enumerated() where insert(piece) {
+                if index > 0 {
+                    if piece.isRawPhoto { pairs += 1 } else { masters += 1 }
+                }
+            }
+        }
+        return DeletionPlan(
+            targets: ordered, pairCount: pairs, masterCount: masters, backupCount: backups)
+    }
+
+    /// Destructive-confirmation copy for a deletion, naming only what this request actually
+    /// removes: still wording for stills, master wording for proxies with hidden masters, and
+    /// the cross-card note only when backup copies really exist.
+    func deletionConfirmMessage(for clips: [MediaClip]) -> String {
+        let plan = deletionPlan(for: clips)
+        var message: String
+        if clips.count == 1, let only = clips.first {
+            message =
+                only.mediaKind == .photo
+                ? "Delete this photo from the camera card?"
+                : "Delete \(only.filename) from the camera card?"
+        } else {
+            message = "Delete \(clips.count) items from the camera card?"
+        }
+        if plan.pairCount > 0 {
+            message += " Both the RAW and JPEG files of a pair are removed."
+        }
+        if plan.masterCount > 0 {
+            message += " The camera master file is removed with its proxy."
+        }
+        if plan.backupCount > 0 {
+            message += " The backup copies on the other card are removed too."
+        }
+        return message
+    }
+
+    /// Deletes clips from the camera card (and any local copies). The request widens through
+    /// `deletionPlan` — RAW siblings and hidden camera masters go with their shots, and each
+    /// shot's own row deletes every card it lives on. Protected objects are refused by the body
+    /// and stay listed. Returns the number of items actually removed. [verify-on-HW]
     func deleteMediaClips(_ clips: [MediaClip]) async -> Int {
         // A camera list enumerated before the deletions would re-add the rows when it
         // lands — cancel it up front and re-list fresh once the deletions are done.
         mediaFetchTask?.cancel()
         mediaFetchTask = nil
-        var targets: [MediaClip] = []
-        for clip in clips {
-            targets.append(clip)
-            if let raw = rawSibling(of: clip) { targets.append(raw) }
-        }
+        let targets = deletionPlan(for: clips).targets
         var deleted = 0
         for clip in targets {
-            if let handle = clip.handle {
-                guard let session = cameraSession,
-                    (try? await session.deleteObject(handle: handle)) != nil
-                else { continue }
+            let doomed = clip.allLocations
+            if !doomed.isEmpty {
+                guard let session = cameraSession else { continue }
+                // Backup mode: one shot is a distinct object on EACH card — delete every
+                // copy, not just the primary. [verify-on-HW: cross-card handle delete]
+                var survivors: [MediaObjectHandle] = []
+                for location in doomed
+                where (try? await session.deleteObject(handle: location.handle)) == nil {
+                    survivors.append(location)
+                }
+                if !survivors.isEmpty {
+                    // The body refused a copy (protected object) — the row lives on with
+                    // what remains instead of the app pretending the shot is gone.
+                    mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+                        row in
+                        row.storageLocations = survivors
+                        row.handle = survivors.first?.handle
+                        row.storageID = survivors.first?.storageID
+                    }
+                    continue
+                }
             }
             // Purge every trace the list scan could resurrect an item from: cached
             // bytes, thumbnail, and the index row.
@@ -6148,26 +6380,116 @@ final class NativeAppModel {
         return deleted
     }
 
+    /// Caches a still's EXIF orientation (1–8) on its index row — the camera's PTP thumbnails
+    /// can be EXIF-stripped, so grid/filmstrip decodes need the full file's answer without
+    /// re-fetching headers.
+    func cacheEXIFOrientation(_ orientation: Int, for clip: MediaClip) {
+        guard (1...8).contains(orientation), clip.exifOrientation != orientation else { return }
+        mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+            $0.exifOrientation = orientation
+        }
+        refreshMediaClips()
+    }
+
+    /// Learns a still's orientation from its on-disk bytes (a streamed full file always carries
+    /// the header) and caches it once; a no-op for videos and already-resolved rows.
+    func resolveEXIFOrientation(for clip: MediaClip, at url: URL) {
+        guard clip.mediaKind == .photo, clip.exifOrientation == nil else { return }
+        guard let orientation = MediaCellImageLoader.exifOrientation(atFile: url) else { return }
+        cacheEXIFOrientation(orientation, for: clip)
+    }
+
     /// The clip's star rating from the camera (0–5); nil when unreachable (offline or a
-    /// local-only clip).
+    /// local-only clip). Mirrors what it reads back into the index so the Favorites cache
+    /// self-corrects against the body (truth) on viewer open — no per-cell round-trip needed.
     func mediaStarRating(for clip: MediaClip) async -> Int? {
         guard let handle = clip.handle, let session = cameraSession else { return nil }
         guard let value = try? await session.objectRating(handle: handle) else { return nil }
+        let stars = StillCapturePolicy.stars(fromRatingValue: value)
+        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars)
+        return stars
+    }
+
+    /// Writes a 0–5 star rating to the clip and confirms it with a readback; a RAW+JPEG pair
+    /// writes both sides, tolerating the RAW side's refusal (RAW stills carry no rating
+    /// property). Returns the outcome so the viewer can surface a refusal — with the body's raw
+    /// response code — instead of a silent rollback. The index mirror lands ONLY on a confirmed
+    /// write, so a refused write never leaves a Favorites ghost the card doesn't have. [verify-on-HW]
+    func setMediaStarRating(_ stars: Int, for clip: MediaClip) async -> RatingWriteOutcome {
+        guard let handle = clip.handle, let session = cameraSession else { return .offline }
+        AppDiagnostics.shared.record(.ratingWriteAttempted)
+        let value = StillCapturePolicy.ratingValue(forStars: stars)
+        do {
+            try await performRatingWrite(session: session, handle: handle, value: value)
+        } catch {
+            return refusalOutcome(error)
+        }
+        if let raw = rawSibling(of: clip), let rawHandle = raw.handle {
+            try? await performRatingWrite(session: session, handle: rawHandle, value: value)
+        }
+        // Confirm via readback and mirror ONLY the confirmed value onto the JPEG-side row.
+        let confirmed = await confirmedStars(session: session, handle: handle, requested: stars)
+        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: confirmed)
+        AppDiagnostics.shared.record(.ratingWriteConfirmed)
+        return .confirmed(confirmed)
+    }
+
+    /// Mirrors a CONFIRMED camera star write (viewer or instant playback) into the media index:
+    /// caches the star and derives the local favorite flag (`isFavorite = stars ≥ 1`), upserting
+    /// a row if the clip isn't indexed yet. The body stays source of truth; this keeps the Media
+    /// page's local Favorites filter — which reads the index, not the camera — in agreement.
+    func mirrorRatingIntoIndex(cameraID: String, filename: String, stars: Int) {
+        mediaClipStore.update(cameraID: cameraID, filename: filename) {
+            $0.starRating = stars
+            $0.isFavorite = stars >= 1
+        }
+        refreshMediaClips()
+    }
+
+    /// Outcome of a rating write so the UI explains a refusal (with the body's wire code) rather
+    /// than rolling back silently.
+    enum RatingWriteOutcome: Equatable {
+        case confirmed(Int)
+        case refused(code: UInt16, message: String)
+        case offline
+    }
+
+    /// The single object-rating write against the body. Isolated so a future fix can bracket it
+    /// with a state-sequencing pre/post hook — some bodies refuse the property write while a
+    /// live-view/app-mode session holds a state that disallows it — without touching callers.
+    private func performRatingWrite(
+        session: NativeCameraSession, handle: UInt32, value: UInt16
+    ) async throws {
+        // ponytail: state-sequencing seam. If a refusal proves state-based, settle/prepare the
+        // body here before the write (and restore after), keeping this the only site that changes.
+        try await session.setObjectRating(handle: handle, value: value)
+    }
+
+    /// Reads the stored rating back so the index mirrors the body's confirmed value (the body
+    /// rounds off-step values down); falls back to the requested count if the readback is unreachable.
+    private func confirmedStars(
+        session: NativeCameraSession, handle: UInt32, requested: Int
+    ) async -> Int {
+        guard let value = try? await session.objectRating(handle: handle) else { return requested }
         return StillCapturePolicy.stars(fromRatingValue: value)
     }
 
-    /// Writes a 0–5 star rating to the clip; a RAW+JPEG pair writes both sides, tolerating
-    /// the RAW side's refusal (RAW stills don't carry the property). [verify-on-HW]
-    func setMediaStarRating(_ stars: Int, for clip: MediaClip) async -> Bool {
-        guard let handle = clip.handle, let session = cameraSession else { return false }
-        let value = StillCapturePolicy.ratingValue(forStars: stars)
-        guard (try? await session.setObjectRating(handle: handle, value: value)) != nil else {
-            return false
+    /// Records a refusal breadcrumb and builds the outcome carrying the exact wire code — the
+    /// discriminator between a state-based denial and an accepted-but-not-shown write.
+    private func refusalOutcome(_ error: Error) -> RatingWriteOutcome {
+        guard case NativeCameraSessionError.objectRatingRejected(let response, let rawCode) = error
+        else {
+            AppDiagnostics.shared.record(.ratingWriteRefused)
+            return .refused(code: 0, message: "Rating not saved — the camera didn't respond.")
         }
-        if let raw = rawSibling(of: clip), let rawHandle = raw.handle {
-            _ = try? await session.setObjectRating(handle: rawHandle, value: value)
-        }
-        return true
+        AppDiagnostics.shared.record(
+            response == .accessDenied ? .ratingWriteRefusedAccessDenied : .ratingWriteRefused)
+        let hex = String(format: "0x%04X", rawCode)
+        let reason =
+            response == .accessDenied
+            ? "Access Denied \(hex) — it may not accept ratings in this mode"
+            : "response \(hex)"
+        return .refused(code: rawCode, message: "Rating not saved — camera refused (\(reason)).")
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
@@ -8572,7 +8894,8 @@ extension NativeAppModel {
         case .photos:
             clips = clips.filter { MediaClipFilename.isPhoto($0.filename) }
         case .favorites:
-            clips = clips.filter(\.isFavorite)
+            // Local heart OR any camera star — shots rated during the shoot count as favorites.
+            clips = clips.filter(\.isFavorited)
         }
 
         if !mediaFormatFilters.isEmpty {
@@ -8593,7 +8916,9 @@ extension NativeAppModel {
         }
 
         if let slot = mediaStorageSlotFilter {
-            clips = clips.filter { $0.storageID == slot }
+            // A backup-mode shot lives on BOTH cards as one row with two locations — it must
+            // appear under either slot chip, not just its primary's.
+            clips = clips.filter { $0.isOn(storageID: slot) }
         }
 
         if !isConnected {
@@ -8606,7 +8931,34 @@ extension NativeAppModel {
         let jpegPairKeys = Set(clips.lazy.filter(\.isJPEGPhoto).map(\.rawPairKey))
         clips = clips.filter { !($0.isRawPhoto && jpegPairKeys.contains($0.rawPairKey)) }
 
+        // Collapse continuous-drive runs: render one representative cell per burst series and hide
+        // the other frames (the series view reaches them). Grouping runs on the displayed set, so
+        // an offline pass groups only cached frames. ponytail: computed once per list pass here and
+        // stashed for the grid's O(1) badge/series lookups — @ObservationIgnored, so no re-render.
+        let series = BurstSeriesGrouping.group(clips.map(\.burstFrame))
+        var byRepresentative: [String: BurstSeries] = [:]
+        var hiddenMemberIDs: Set<String> = []
+        for run in series {
+            byRepresentative[run.representativeID] = run
+            hiddenMemberIDs.formUnion(run.memberIDs.dropFirst())
+        }
+        burstByRepresentative = byRepresentative
+        if !hiddenMemberIDs.isEmpty {
+            clips = clips.filter { !hiddenMemberIDs.contains($0.id) }
+        }
+
         return MediaClipSorting.sort(clips, order: mediaSortOrder)
+    }
+
+    /// The burst series a representative clip stands for (nil for ordinary cells).
+    func burstSeries(for clip: MediaClip) -> BurstSeries? { burstByRepresentative[clip.id] }
+
+    /// The frames in a clip's burst series (representative first); empty when it isn't a series.
+    func burstMembers(of clip: MediaClip) -> [MediaClip] {
+        guard let series = burstByRepresentative[clip.id] else { return [] }
+        let byID = Dictionary(
+            mediaClips.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return series.memberIDs.compactMap { byID[$0] }
     }
 
     /// The same-shot `.NEF`/`.NRW`/`.DNG` behind a JPEG's grid item (nil for unpaired stills).
@@ -8805,12 +9157,14 @@ extension NativeAppModel {
         }
 
         let cached = mediaClipStore.list(cameraID: bucket)
-        let cachedByHandle = Dictionary(
-            uniqueKeysWithValues: cached.compactMap { clip in
-                clip.handle.map { ($0, clip) }
-            }
-        )
-        let cachedHandleSet = Set(cachedByHandle.keys)
+        // Identity is the (storageID, handle) pair: backup mode puts one filename on both
+        // cards as two objects, and one index row can carry several locations. A bare-handle
+        // key would let the second card's copy shadow (or crash into) the first's.
+        var cachedByLocation: [MediaObjectHandle: MediaClip] = [:]
+        for clip in cached {
+            for location in clip.allLocations { cachedByLocation[location] = clip }
+        }
+        let cachedLocationSet = Set(cachedByLocation.keys)
 
         let listedHandles = await session.listMediaObjectHandles()
         if Task.isCancelled { return }
@@ -8818,7 +9172,7 @@ extension NativeAppModel {
         // Removal detection always runs against the FULL listing — a scoped pass must never
         // read "absent from my category" as "deleted from the card".
         let delta = MediaClipDiscoveryDelta.compute(
-            cachedHandles: cachedHandleSet,
+            cachedHandles: cachedLocationSet,
             cameraHandles: listedHandles
         )
 
@@ -8828,7 +9182,7 @@ extension NativeAppModel {
         let cameraHandles = await scopedHandles(
             listedHandles,
             for: mediaCategoryTab,
-            cachedByHandle: cachedByHandle,
+            cachedByLocation: cachedByLocation,
             session: session
         )
         if Task.isCancelled { return }
@@ -8842,7 +9196,7 @@ extension NativeAppModel {
             if mediaBrowserSource == .camera, bucket == mediaBucketID {
                 applyRemovedClipsToMemory(
                     removedFilenames: removedFilenames,
-                    clearedHandles: delta.removedHandles
+                    clearedLocations: delta.removedHandles
                 )
             }
         }
@@ -8889,8 +9243,8 @@ extension NativeAppModel {
             if Task.isCancelled { break }
 
             let record: MediaClip
-            if delta.reuseHandles.contains(objectHandle.handle),
-                let cachedClip = cachedByHandle[objectHandle.handle]
+            if delta.reuseHandles.contains(objectHandle),
+                let cachedClip = cachedByLocation[objectHandle]
             {
                 record = cachedClip
             } else {
@@ -8952,8 +9306,8 @@ extension NativeAppModel {
             for objectHandle in videoHandles {
                 if Task.isCancelled { break }
                 guard !seenThisPass.contains(objectHandle),
-                    cachedByHandle[objectHandle.handle] == nil
-                        || delta.removedHandles.contains(objectHandle.handle)
+                    cachedByLocation[objectHandle] == nil
+                        || delta.removedHandles.contains(objectHandle)
                 else { continue }
                 guard
                     let camera = await session.fetchMediaClip(
@@ -9003,7 +9357,7 @@ extension NativeAppModel {
     private func scopedHandles(
         _ handles: [MediaObjectHandle],
         for tab: MediaCategoryTab,
-        cachedByHandle: [UInt32: MediaClip],
+        cachedByLocation: [MediaObjectHandle: MediaClip],
         session: NativeCameraSession
     ) async -> [MediaObjectHandle] {
         let newestFirst = handles.sorted { $0.handle > $1.handle }
@@ -9017,7 +9371,7 @@ extension NativeAppModel {
         var scoped: [MediaObjectHandle] = []
         var unknown: [MediaObjectHandle] = []
         for handle in newestFirst {
-            if let cached = cachedByHandle[handle.handle] {
+            if let cached = cachedByLocation[handle] {
                 if (cached.mediaKind == .video) == wantsVideo { scoped.append(handle) }
             } else {
                 unknown.append(handle)
@@ -9068,17 +9422,22 @@ extension NativeAppModel {
 
     private func applyRemovedClipsToMemory(
         removedFilenames: Set<String>,
-        clearedHandles: Set<UInt32>
+        clearedLocations: Set<MediaObjectHandle>
     ) {
         if !removedFilenames.isEmpty {
             mediaClips.removeAll { removedFilenames.contains($0.filename) }
         }
         for index in mediaClips.indices {
-            guard let handle = mediaClips[index].handle, clearedHandles.contains(handle) else {
-                continue
-            }
-            mediaClips[index].handle = nil
-            mediaClips[index].storageID = nil
+            let locations = mediaClips[index].allLocations
+            guard !locations.isEmpty else { continue }
+            let survivors = locations.filter { !clearedLocations.contains($0) }
+            guard survivors.count != locations.count else { continue }
+            let primary = survivors.min(by: {
+                MediaClipStore.locationRank($0) < MediaClipStore.locationRank($1)
+            })
+            mediaClips[index].handle = primary?.handle
+            mediaClips[index].storageID = primary?.storageID
+            mediaClips[index].storageLocations = survivors.isEmpty ? nil : survivors
         }
     }
 
@@ -9313,6 +9672,13 @@ extension NativeAppModel {
             if UIImage(data: data) != nil {
                 try? mediaClipStore.saveThumbnail(
                     cameraID: clip.cameraID, filename: clip.filename, data: data)
+                // A thumb that DOES carry EXIF answers the orientation for free — grid cells
+                // fall back to this row value when a later decode meets stripped bytes.
+                if clip.exifOrientation == nil,
+                    let orientation = MediaCellImageLoader.exifOrientation(in: data)
+                {
+                    cacheEXIFOrientation(orientation, for: clip)
+                }
             } else {
                 thumblessClipIDs.insert(clip.id)
             }
@@ -9390,12 +9756,21 @@ extension NativeAppModel {
         return isClipDownloaded(clip)
     }
 
-    /// Toggles a clip's favorite flag and persists it.
+    /// Toggles a clip's favorite flag and persists it. The heart and the camera star are one
+    /// signal here (Favorites reads `isFavorite || starRating ≥ 1`): favoriting sets ≥1 star,
+    /// un-favoriting clears it, and — when connected — writes the matching rating to the body so
+    /// the two agree. Best-effort: an offline clip just keeps the local flag until next sync.
     func toggleClipFavorite(_ clip: MediaClip) {
+        var stars = 0
         mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
             $0.isFavorite.toggle()
+            stars = $0.isFavorite ? max($0.starRating ?? 0, 1) : 0
+            $0.starRating = stars
         }
         refreshMediaClips()
+        if clip.handle != nil {
+            Task { _ = await setMediaStarRating(stars, for: clip) }
+        }
     }
 
     /// Resolves the operator's currently selected LUT to a colour cube, for baking onto media

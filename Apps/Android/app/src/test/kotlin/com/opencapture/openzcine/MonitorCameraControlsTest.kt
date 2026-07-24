@@ -597,6 +597,74 @@ class MonitorCameraControlsTest {
     }
 
     @Test
+    fun `top popdown centres under its own pill and quality gets the dual-drum room`() {
+        val viewport = ZoneFrame(0f, 0f, 848f, 393f)
+        val zones =
+            portraitZones(captureStrip = ZoneFrame(430f, 329f, 363f, 48f)).copy(
+                infoBar = ZoneFrame(80f, 8f, 690f, 46f),
+            )
+        val pill = ZoneFrame(600f, 14f, 90f, 30f)
+
+        val frame =
+            monitorTopBarPickerFrame(
+                viewport,
+                zones,
+                isCommandCenter = false,
+                kind = MonitorPickerKind.SIZE,
+                anchorPill = pill,
+            )
+        // Centred on the tapped pill (iOS cell.midX), dropped just below it.
+        assertEquals(pill.x + pill.width / 2f, frame.x + frame.width / 2f, 0.01f)
+        assertEquals(pill.y + pill.height + 8f, frame.y, 0.01f)
+
+        // The quality pair: 400 wide and the full space under the anchor, so
+        // the NEF chips and star toggle are never folded under a fixed cap.
+        val quality =
+            monitorTopBarPickerFrame(
+                viewport,
+                zones,
+                isCommandCenter = false,
+                kind = MonitorPickerKind.QUALITY,
+                anchorPill = pill,
+            )
+        assertEquals(400f, quality.width)
+        assertEquals(
+            viewport.height - quality.y - 8f,
+            quality.height,
+            0.01f,
+        )
+        assertTrue(quality.height > 300f)
+    }
+
+    @Test
+    fun `landscape picker centres over a wide capture bar at the 420 cap`() {
+        val viewport = ZoneFrame(0f, 0f, 900f, 400f)
+        val zones =
+            portraitZones(captureStrip = ZoneFrame(200f, 330f, 640f, 48f)).copy(
+                infoBar = ZoneFrame(80f, 8f, 740f, 46f),
+            )
+        val measured = ZoneFrame(220f, 334f, 600f, 44f)
+
+        val frame =
+            monitorPickerFrame(
+                viewport,
+                zones,
+                isPortrait = false,
+                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
+                measuredCaptureBar = measured,
+            )
+
+        // iOS bottomPickerBody: width = min(bar, 420), centred on bar.midX.
+        assertEquals(420f, frame.width)
+        assertEquals(
+            measured.x + measured.width / 2f,
+            frame.x + frame.width / 2f,
+            0.01f,
+        )
+        assertEquals(measured.y - 10f, frame.y + frame.height, 0.01f)
+    }
+
+    @Test
     fun `portrait fill rail stays inside feed and above capture strip`() {
         val zones = portraitZones(captureStrip = ZoneFrame(0f, 610f, 400f, 64f))
         val collapsed =

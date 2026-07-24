@@ -47,6 +47,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
     case unexpectedPacket(expected: String, actual: PTPIPPacketType)
     case initFailed(PTPIPInitFailReason)
     case operationRejected(PTPOperationCode, PTPResponseCode)
+    /// An object star-rating write the body refused, carrying the exact wire code so the UI can
+    /// name it (a state-based refusal like Access Denied is the discriminator we surface).
+    case objectRatingRejected(response: PTPResponseCode, rawCode: UInt16)
     case invalidPacketLength(UInt32)
     case localNetworkPermissionDenied
     case pairingRejected
@@ -69,6 +72,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
             return "Camera rejected \(operation) with response \(response)."
+        case .objectRatingRejected(let response, let rawCode):
+            return
+                "Camera refused the rating write (\(response), \(String(format: "0x%04X", rawCode)))."
         case .invalidPacketLength(let length):
             return "Invalid PTP-IP packet length \(length)."
         case .localNetworkPermissionDenied:
@@ -452,7 +458,7 @@ final class NativeCameraSession: @unchecked Sendable {
             .initFailed(.rejectedInitiator):
             return false
         case .connectionFailed, .connectionClosed, .timeout, .unexpectedPacket,
-            .invalidPacketLength, .operationRejected, .initFailed:
+            .invalidPacketLength, .operationRejected, .objectRatingRejected, .initFailed:
             return true
         }
     }
@@ -695,6 +701,46 @@ final class NativeCameraSession: @unchecked Sendable {
                 result.operationResponse.responseCode
             )
         }
+    }
+
+    /// One manual-focus drive outcome, classified from the activation + readiness poll.
+    enum MFDriveOutcome: Sendable, Equatable {
+        case complete
+        case endOfTravel
+        case stepTooSmall
+        case refused(PTPResponseCode)
+    }
+
+    /// Drives manual focus by `pulses` toward near or infinity — an activation command whose
+    /// completion is confirmed by the readiness poll (busy while the lens moves). End-of-travel
+    /// and amount-too-small are outcomes, not errors. A refusal is a transient state (the
+    /// stepping-motor lens still initializing, or autofocus momentarily active), not a lens
+    /// verdict — the caller requeues and retries. [verify-on-HW]
+    func mfDrive(towardNear: Bool, pulses: UInt32) async -> MFDriveOutcome {
+        let clamped = min(max(pulses, 1), 32767)
+        guard
+            let start = try? await transact(
+                operationCode: .mfDrive,
+                parameters: [towardNear ? 1 : 2, clamped],
+                dataPhase: .noDataOrDataIn
+            )
+        else { return .refused(.deviceBusy) }
+        guard start.operationResponse.responseCode == .ok else {
+            return .refused(start.operationResponse.responseCode)
+        }
+        for _ in 0..<25 {
+            guard let ready = try? await transact(operationCode: .deviceReady) else {
+                return .refused(.deviceBusy)
+            }
+            switch ready.operationResponse.responseCode {
+            case .ok: return .complete
+            case .deviceBusy: try? await Task.sleep(for: .milliseconds(120))
+            case .mfDriveStepEnd: return .endOfTravel
+            case .mfDriveStepInsufficiency: return .stepTooSmall
+            case let other: return .refused(other)
+            }
+        }
+        return .complete
     }
 
     func afDriveCancel() async throws {
@@ -1090,8 +1136,9 @@ final class NativeCameraSession: @unchecked Sendable {
             dataOut: Data([UInt8(value & 0xFF), UInt8(value >> 8)])
         )
         guard result.operationResponse.responseCode == .ok else {
-            throw NativeCameraSessionError.operationRejected(
-                .setObjectPropValue, result.operationResponse.responseCode)
+            throw NativeCameraSessionError.objectRatingRejected(
+                response: result.operationResponse.responseCode,
+                rawCode: result.operationResponse.rawResponseCode)
         }
     }
 

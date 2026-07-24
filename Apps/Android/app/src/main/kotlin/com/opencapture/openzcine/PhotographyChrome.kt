@@ -3,11 +3,11 @@ package com.opencapture.openzcine
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -37,132 +38,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraStorageStatus
 import java.util.Locale
 
-/**
- * Photography capture strip when the body reports photo mode (iOS
- * `MonitorCaptureStrip` while `isPhotography`): the SAME glass pill, cell
- * shape, and typography as the cinema capture strip, rendering the stills
- * readouts MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/METER. Stills pickers
- * are still stubs, so every tile
- * routes to [onOpenControl] with its label instead of a drum picker.
- */
-@Composable
-internal fun PhotographyCaptureStrip(
-    properties: CameraPropertySnapshot,
-    onOpenControl: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    maxContentWidth: Dp? = null,
-    /**
-     * Publishes the glass pill's root bounds in dp (iOS `captureBarFrame`),
-     * matching the cinema strip's reporting contract.
-     */
-    onBarBoundsInRoot: ((ZoneFrame) -> Unit)? = null,
-) {
-    val density = LocalDensity.current
-    // Same 58dp glass shell as MonitorCaptureStrip so the two bottom bars
-    // always align; when a width budget is given, only the CELLS scale down.
-    Box(
-        modifier =
-            modifier
-                .height(LiveDesign.CONTROL_HEIGHT_DP.dp)
-                .glass(ChromeShape)
-                .then(
-                    if (onBarBoundsInRoot != null) {
-                        Modifier.onGloballyPositioned { coords ->
-                            val b = coords.boundsInRoot()
-                            with(density) {
-                                onBarBoundsInRoot(
-                                    ZoneFrame(
-                                        x = b.left.toDp().value,
-                                        y = b.top.toDp().value,
-                                        width = b.width.toDp().value,
-                                        height = b.height.toDp().value,
-                                    ),
-                                )
-                            }
-                        }
-                    } else {
-                        Modifier
-                    },
-                )
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        val cells: @Composable () -> Unit = {
-            PhotographyStripCells(
-                properties = properties,
-                onOpenControl = onOpenControl,
-            )
-        }
-        if (maxContentWidth != null) {
-            FitScale(maxContentWidth - 24.dp) { cells() }
-        } else {
-            cells()
-        }
-    }
-}
-
-@Composable
-private fun PhotographyStripCells(
-    properties: CameraPropertySnapshot,
-    onOpenControl: (String) -> Unit,
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        photographyStripTiles(properties).forEach { tile ->
-            Box(
-                Modifier
-                    .chromeClickable { onOpenControl(tile.label) }
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = "${tile.label} ${tile.value}"
-                    },
-            ) {
-                CaptureSettingCell(
-                    label = tile.label,
-                    value = tile.value,
-                    widestValue = tile.widestValue,
-                    active = false,
-                    controlLocked = false,
-                    // WB presets render as icons like the movie tile; Kelvin stays numeric.
-                    wbIcon = if (tile.label == "WB") captureBarWbIcon(tile.value) else null,
-                )
-            }
-        }
-    }
-}
-
-/** One stills readout in the shared capture-cell shape. */
-private data class PhotographyStripTile(
-    val label: String,
-    val value: String,
-    val widestValue: String,
-)
-
-/** iOS `photographyCaptureValues`: same tiles, same order, same width pins. */
-private fun photographyStripTiles(
-    properties: CameraPropertySnapshot,
-): List<PhotographyStripTile> =
-    listOf(
-        PhotographyStripTile("MODE", properties.exposureMode ?: "—", "Auto"),
-        PhotographyStripTile("ISO", properties.iso?.toString() ?: "—", "25600"),
-        PhotographyStripTile("SHUTTER", properties.shutterSpeed ?: "—", "1/16000"),
-        PhotographyStripTile("IRIS", properties.iris ?: "—", "f/2.8"),
-        PhotographyStripTile("DRIVE", compactDriveLabel(properties.stillCaptureMode) ?: "—", "Single"),
-        PhotographyStripTile("FOCUS", properties.focusMode ?: "—", "Wide-L"),
-        PhotographyStripTile("WB", stillWhiteBalanceValue(properties), "5560K"),
-        PhotographyStripTile("METER", properties.meteringMode ?: "—", "Matrix"),
-        PhotographyStripTile(
-            "PROFILE",
-            compactPictureControlLabel(properties.pictureControl) ?: "—",
-            "Auto",
-        ),
-    )
+// The photography capture strip renders through the shared `MonitorCaptureStrip`
+// over `photographyCaptureSettings` (PhotographyPickers.kt) — iOS reuses
+// `CaptureSettingButton` for both chromes the same way.
 
 /** Drive-mode label compacted to strip width ("Continuous H" → "CH"). */
-private fun compactDriveLabel(stillCaptureMode: String?): String? =
+internal fun compactDriveLabel(stillCaptureMode: String?): String? =
     when (stillCaptureMode) {
         null -> null
         "Continuous H" -> "CH"
@@ -226,38 +110,111 @@ internal fun CameraPropertySnapshot.stillQualityCompactLabel(): String? {
 internal fun CameraPropertySnapshot.stillSizeCompactLabel(): String? =
     imageSize?.replace("Size ", "")
 
-/** iOS stub feedback for a not-yet-implemented photography control. */
-internal fun photographyControlStubMessage(label: String): String {
-    val capitalized =
-        label.lowercase(Locale.ROOT).replaceFirstChar { it.titlecase(Locale.ROOT) }
-    return "$capitalized control — coming next in photography mode."
+/**
+ * Top-bar SIZE readout: image area + size class ("FX · L"), ranked against the
+ * camera's enumerated ImageSize strings so the pill never shows a raw
+ * resolution (iOS `stillSizeAreaLabel`). Falls back to whichever half is known.
+ */
+internal fun CameraPropertySnapshot.stillSizeAreaLabel(): String? {
+    val size = stillSizeClassLabel()
+    return when {
+        imageArea != null && size != null -> "$imageArea · $size"
+        imageArea != null -> imageArea
+        else -> size
+    }
+}
+
+/**
+ * Ranks the current image-size string among the camera's enumerated sizes:
+ * largest pixel count = L, then M, then S. "Size L"-form strings pass through.
+ */
+internal fun CameraPropertySnapshot.stillSizeClassLabel(): String? {
+    if (imageSize == null) return null
+    val letters = listOf("L", "M", "S")
+    stillSizeCompactLabel()?.takeIf { it in letters }?.let { return it }
+    val ranked =
+        controlCapabilities.imageSizes
+            .mapNotNull { option -> stillSizePixelCount(option)?.let { option to it } }
+            .sortedByDescending { it.second }
+    val index = ranked.indexOfFirst { it.first == imageSize }
+    return letters.getOrNull(index.takeIf { it >= 0 } ?: return null)
+}
+
+/** "6048x4032" → 24_385_536; null for strings that aren't a WxH resolution. */
+private fun stillSizePixelCount(size: String): Long? {
+    val parts = size.lowercase(Locale.ROOT).split("x")
+    if (parts.size != 2) return null
+    val width = parts[0].trim().toLongOrNull() ?: return null
+    val height = parts[1].trim().toLongOrNull() ?: return null
+    return width * height
 }
 
 /**
  * Frames left on the card, in the timecode slot's typography (iOS
- * `ShotsRemainingReadout`). Counts above four digits compact to "12.3k" the
- * way camera bodies do.
+ * `ShotsRemainingReadout`) — a tap flips it to the remaining-storage readout
+ * (GB + percent), standing in for the MEDIA cell photo mode drops. Counts
+ * above four digits compact to "12.3k" the way camera bodies do.
  */
 @Composable
-internal fun ShotsRemainingReadout(shotsRemaining: Int?, modifier: Modifier = Modifier) {
-    val label = shotsRemaining?.let(::shotsRemainingCompactLabel) ?: "—"
+internal fun ShotsRemainingReadout(
+    shotsRemaining: Int?,
+    modifier: Modifier = Modifier,
+    storage: CameraStorageStatus? = null,
+    showsStorage: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+) {
+    val storageForm = showsStorage && storage != null && storage.totalCapacityBytes > 0
     Text(
         buildAnnotatedString {
-            withStyle(SpanStyle(color = LiveDesign.text)) { append(label) }
-            withStyle(
-                SpanStyle(
-                    color = LiveDesign.muted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-            ) { append(" SHOTS") }
+            if (storageForm && storage != null) {
+                withStyle(SpanStyle(color = LiveDesign.text)) {
+                    append("${storage.freeSpaceBytes / 1_000_000_000} GB")
+                }
+                withStyle(
+                    SpanStyle(
+                        color = LiveDesign.muted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                ) {
+                    append(
+                        " ${storage.freeSpaceBytes * 100 / storage.totalCapacityBytes}%",
+                    )
+                }
+            } else {
+                val label = shotsRemaining?.let(::shotsRemainingCompactLabel) ?: "—"
+                withStyle(SpanStyle(color = LiveDesign.text)) { append(label) }
+                withStyle(
+                    SpanStyle(
+                        color = LiveDesign.muted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                ) { append(" SHOTS") }
+            }
         },
         style = chromeStyle(20f, FontWeight.Medium, mono = true),
         maxLines = 1,
         softWrap = false,
-        modifier = modifier,
+        modifier =
+            if (onToggle != null) {
+                modifier.chromeClickable(onClick = onToggle)
+            } else {
+                modifier
+            },
     )
 }
+
+/** The instant review's settings line, captured at present time (iOS `presentInstantReview`). */
+internal fun photographyReviewInfoLine(properties: CameraPropertySnapshot): String? =
+    listOfNotNull(
+        properties.iso?.let { "ISO $it" },
+        properties.shutterSpeed,
+        properties.iris,
+        properties.compression,
+    )
+        .joinToString("   ")
+        .ifEmpty { null }
 
 /** "1234" up to four digits, "12.3k" beyond, like the camera's own counter. */
 internal fun shotsRemainingCompactLabel(count: Int): String =
@@ -267,37 +224,147 @@ internal fun shotsRemainingCompactLabel(count: Int): String =
         count.toString()
     }
 
-/** System-rail still shutter (replaces the red record control in photography mode). */
+/**
+ * System-rail still shutter (replaces the red record control in photography
+ * mode). Press-tracked (iOS `shutterButtonPressed`/`Released`): finger-down
+ * fires the release, and a hold in a continuous drive latches the burst until
+ * finger-up. Stays tappable while capturing so a second press can end a
+ * bulb/time exposure or cancel a countdown.
+ */
 @Composable
 internal fun PhotographyShutterButton(
     isCapturing: Boolean,
-    onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** Seconds left in a running app self-timer countdown (renders in the disc). */
+    timerRemaining: Int? = null,
+    onPressed: () -> Unit = {},
+    onReleased: () -> Unit = {},
 ) {
+    // iOS PhotographyShutterButton: a 4pt white ring at the record-button
+    // footprint with a SOLID white disc inset 17pt total (0.5 alpha while
+    // capturing). Everything scales off the caller's slot (the record zone is
+    // the shared 82.8dp module) — a fixed inner size against a bigger slot
+    // rendered as a hollow ring.
     Box(
         modifier
-            .size(54.dp)
-            .clip(CircleShape)
-            .border(3.dp, Color.White.copy(alpha = 0.92f), CircleShape)
-            .clickable(enabled = enabled && !isCapturing, onClick = onClick)
+            .pointerInput(enabled) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    if (!enabled) return@awaitEachGesture
+                    onPressed()
+                    // A cancelled pointer still releases the latch — iOS
+                    // backstops swallowed finger-ups the same way.
+                    waitForUpOrCancellation()
+                    onReleased()
+                }
+            }
             .semantics {
-                contentDescription = if (isCapturing) "Capturing" else "Shutter"
+                contentDescription =
+                    when {
+                        timerRemaining != null -> "Self-timer, $timerRemaining seconds"
+                        isCapturing -> "Capturing"
+                        else -> "Shutter"
+                    }
             },
         contentAlignment = Alignment.Center,
     ) {
         Box(
             Modifier
-                .size(42.dp)
+                .fillMaxSize()
+                .border(4.dp, Color.White.copy(alpha = 0.92f), CircleShape),
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(8.5.dp)
                 .clip(CircleShape)
                 .background(if (isCapturing) Color.White.copy(alpha = 0.5f) else Color.White),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            timerRemaining?.let { remaining ->
+                Text(
+                    "$remaining",
+                    style = chromeStyle(30f, FontWeight.Bold),
+                    color = Color.Black,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 
 /** Whether the shell should show photography chrome for this snapshot. */
 internal fun prefersPhotographyChrome(properties: CameraPropertySnapshot): Boolean =
     properties.captureSelector.equals("photo", ignoreCase = true)
+
+/** The live-view frame aspect for a photo image-area label (iOS `photographyFeedAspect`). */
+internal fun photographyFeedAspect(imageArea: String?): Float =
+    when (imageArea) {
+        "1:1" -> 1f
+        "16:9" -> 16f / 9f
+        // FX / DX / unknown: the 3:2 stills frame.
+        else -> 3f / 2f
+    }
+
+/**
+ * Photography's landscape feed frame (iOS `MonitorFeedLayout.frame(centered:)`):
+ * the still image area's shape at the FULL viewport height, letterboxed
+ * horizontally and centred between the SIDE lanes only — the lock/battery/rail
+ * lane and the right system rail sit on black, while the capture band's glass
+ * OVERLAYS the image bottom exactly like iOS. A 16:9 photo frame takes the
+ * cinema feed placement.
+ */
+// ponytail: the aspect-fit runs Kotlin-side because the reserved side lanes
+// are Android chrome frames the shared core map doesn't model; the core
+// `centered:` math is this fit's no-lane degenerate case.
+internal fun photographyFeedFrame(
+    cinemaFeed: ZoneFrame,
+    viewport: ZoneFrame,
+    imageArea: String?,
+    leadingLaneTrailing: Float,
+    trailingLaneLeading: Float,
+): ZoneFrame {
+    val aspect = photographyFeedAspect(imageArea)
+    if (aspect >= 16f / 9f - 0.001f) return cinemaFeed
+    val boxLeft = maxOf(viewport.x, leadingLaneTrailing)
+    val boxRight = minOf(viewport.x + viewport.width, trailingLaneLeading)
+    val boxWidth = maxOf(0f, boxRight - boxLeft)
+    var height = viewport.height
+    var width = height * aspect
+    if (width > boxWidth) {
+        // Side lanes constrain a wide box (1:1 on short-wide handsets): fit
+        // the width and centre the shorter frame vertically.
+        width = boxWidth
+        height = width / aspect
+    }
+    return ZoneFrame(
+        x = boxLeft + (boxWidth - width) / 2f,
+        y = viewport.y + (viewport.height - height) / 2f,
+        width = width,
+        height = height,
+    )
+}
+
+/**
+ * Hosts the photo capture strip in a band slice symmetric about the feed's
+ * centre, so `Alignment.Center` lands the strip centred under the centred
+ * feed exactly as iOS centres it (never the screen midpoint).
+ */
+internal fun photographyStripHostFrame(
+    band: ZoneFrame,
+    feedCenterX: Float,
+): ZoneFrame {
+    val halfSpan =
+        minOf(feedCenterX - band.x, band.x + band.width - feedCenterX)
+            .coerceAtLeast(0f)
+    return ZoneFrame(
+        x = feedCenterX - halfSpan,
+        y = band.y,
+        width = halfSpan * 2f,
+        height = band.height,
+    )
+}
 
 /** SF `photo` stand-in: rounded frame, sun dot, mountain line. */
 @Composable

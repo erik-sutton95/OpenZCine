@@ -1,5 +1,4 @@
-- Camera Wi‑Fi credential scan no longer crashes when on-device text recognition fails to start.
-- Shared diagnostics record closed connection phases and failure kinds (USB, Wi‑Fi join, PTP).
-- First-run and failed-connect screens offer Share diagnostics for support.
-- Fix immediate crash when connecting a camera over USB-C on release builds.
-- Playback and live desqueeze; Auto ISO On/Off for non-R3D formats.
+- Photography mode chrome: stills strip with WB and PROFILE tiles, shots/size/quality readouts, and a real shutter button.
+- EV meter assist fed by the camera's own exposure indicator; scopes and false color measure the stills preview correctly.
+- Media page: delete with multi-select, 1-5 star ratings written to the card, and pinch zoom that follows your fingers.
+- Deleted items stay deleted; battery gauges sit under the lock button; slot chips follow the physical card slots.
