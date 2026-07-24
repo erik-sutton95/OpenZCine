@@ -344,7 +344,8 @@ internal fun MonitorScreen(
     // MF focus-by-wire drive (on-feed vertical strip beside the system rail).
     val mfDrive = remember(session) { MFDriveController(session) }
     val mfDriveAtEnd by mfDrive.atEnd.collectAsState()
-    val mfDriveStats by mfDrive.driveStats.collectAsState()
+    val mfDriveNetPulses by mfDrive.netPulses.collectAsState()
+    val mfDriveDialFraction by mfDrive.dialFraction.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -2433,6 +2434,11 @@ internal fun MonitorScreen(
                 ) {
                     val rightRailLeading =
                         minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)
+                    // Re-arm the relative position when the dial (re)appears.
+                    DisposableEffect(Unit) {
+                        mfDrive.resetDial()
+                        onDispose {}
+                    }
                     MFDriveStrip(
                         atEnd = mfDriveAtEnd,
                         enabled = true,
@@ -2441,7 +2447,8 @@ internal fun MonitorScreen(
                             Modifier.zone(
                                 mfDriveStripFrame(physicalViewport, rightRailLeading),
                             ),
-                        driveStats = mfDriveStats,
+                        netPulses = mfDriveNetPulses,
+                        dialFraction = mfDriveDialFraction,
                     )
                 }
 

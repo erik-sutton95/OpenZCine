@@ -40,12 +40,45 @@ internal class MFDriveController(
     /** Debug caption counters: drives acknowledged vs retried. */
     val driveStats: StateFlow<Pair<Int, Int>> = _driveStats
 
+    private val _netPulses = MutableStateFlow(0)
+
+    /** Net acknowledged pulses since the dial was armed (+ toward infinity) — drives the drum. */
+    val netPulses: StateFlow<Int> = _netPulses
+
+    private val _dialFraction = MutableStateFlow<Float?>(null)
+
+    /** Relative focus position 0 (near) … 1 (infinity) once a full sweep pins both ends; null
+     * while uncalibrated. The camera exposes no absolute distance for AF lenses. */
+    val dialFraction: StateFlow<Float?> = _dialFraction
+
     /** Fired once per exhausted retry run (the body kept refusing), with the code. */
     var onRefusalExhausted: ((String) -> Unit)? = null
 
     private var pendingPulses = 0
     private var driveJob: Job? = null
     private var retries = 0
+    private var nearPulses: Int? = null
+    private var infinityPulses: Int? = null
+
+    /** Re-arms the relative position (call when the strip appears / lens or mode changes). */
+    fun resetDial() {
+        _netPulses.value = 0
+        _dialFraction.value = null
+        _atEnd.value = null
+        nearPulses = null
+        infinityPulses = null
+    }
+
+    private fun recalculateFraction() {
+        val near = nearPulses
+        val far = infinityPulses
+        _dialFraction.value =
+            if (near != null && far != null && far > near) {
+                ((_netPulses.value - near).toFloat() / (far - near)).coerceIn(0f, 1f)
+            } else {
+                null
+            }
+    }
 
     /** Queues a relative drive; coalesces while one is in flight. */
     fun drive(scope: CoroutineScope, pulses: Int) {
@@ -70,15 +103,23 @@ internal class MFDriveController(
             when (outcome) {
                 MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> {
                     retries = 0
-                    _driveStats.value = _driveStats.value.let { (ok, busy) -> ok + 1 to busy }
+                    _netPulses.value += pending
+                    recalculateFraction()
                     continue
                 }
                 MFDriveOutcome.EndOfTravel -> {
-                    // The reached limit lights its side; queued pulses toward
-                    // it are moot.
+                    // The reached limit lights its side and pins that end so the relative
+                    // position can calibrate; queued pulses toward it are moot.
                     retries = 0
-                    _driveStats.value = _driveStats.value.let { (ok, busy) -> ok + 1 to busy }
-                    _atEnd.value = if (pending < 0) -1 else 1
+                    _netPulses.value += pending
+                    if (pending < 0) {
+                        nearPulses = _netPulses.value
+                        _atEnd.value = -1
+                    } else {
+                        infinityPulses = _netPulses.value
+                        _atEnd.value = 1
+                    }
+                    recalculateFraction()
                     pendingPulses = 0
                 }
                 is MFDriveOutcome.Refused -> {

@@ -2092,8 +2092,10 @@ internal fun MFDriveStrip(
     enabled: Boolean,
     onDrive: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    /** Debug-build caption: cumulative acknowledged·busy drive counters. */
-    driveStats: Pair<Int, Int> = 0 to 0,
+    /** Net acknowledged pulses (+ toward infinity) — scrolls the drum ticks. */
+    netPulses: Int = 0,
+    /** Relative focus position 0…1 once both travel ends are pinned; null while uncalibrated. */
+    dialFraction: Float? = null,
 ) {
     // Drag feedback (iOS MFDriveVerticalScrub isDragging): the strip must
     // visibly react to touch even before the lens moves — a scrub against a
@@ -2152,16 +2154,36 @@ internal fun MFDriveStrip(
                 style = chromeStyle(12f, FontWeight.SemiBold, mono = true),
                 color = if (atEnd == 1) LiveDesign.accent else LiveDesign.muted,
             )
-            Box(Modifier.weight(1f))
-            // Centre tick — the strip is a relative ring, not a position bar.
-            Box(
-                Modifier.size(
-                    width = if (dragging) 22.dp else 16.dp,
-                    height = if (dragging) 3.dp else 2.dp,
+            // Scrolling tick drum: ticks move with the drive like a physical focus ring; a fixed
+            // centre line marks the current position.
+            val tickColor = LiveDesign.text
+            val centreColor = LiveDesign.accent
+            Canvas(Modifier.weight(1f).fillMaxWidth()) {
+                val tickSpacing = 11.dp.toPx()
+                val pulsesPerTick = 220f
+                val mid = size.height / 2f
+                val current = netPulses / pulsesPerTick
+                val span = (mid / tickSpacing).toInt() + 2
+                val base = Math.round(current)
+                for (offset in -span..span) {
+                    val index = base + offset
+                    val y = mid - (index - current) * tickSpacing
+                    if (y < 0f || y > size.height) continue
+                    val major = index % 5 == 0
+                    val w = (if (major) 0.72f else 0.4f) * size.width
+                    drawRect(
+                        color = tickColor.copy(alpha = if (major) 0.5f else 0.28f),
+                        topLeft = androidx.compose.ui.geometry.Offset((size.width - w) / 2f, y),
+                        size = androidx.compose.ui.geometry.Size(w, if (major) 1.5.dp.toPx() else 1f),
+                    )
+                }
+                val cw = (if (dragging) 26.dp else 20.dp).toPx()
+                drawRect(
+                    color = centreColor.copy(alpha = 0.95f),
+                    topLeft = androidx.compose.ui.geometry.Offset((size.width - cw) / 2f, mid - 1f),
+                    size = androidx.compose.ui.geometry.Size(cw, 2f),
                 )
-                    .background(LiveDesign.accent.copy(alpha = 0.9f)),
-            )
-            Box(Modifier.weight(1f))
+            }
             Text(
                 "NEAR",
                 style = chromeStyle(7f, FontWeight.SemiBold, mono = true),
@@ -2169,16 +2191,11 @@ internal fun MFDriveStrip(
                 maxLines = 1,
                 softWrap = false,
             )
-            // Live drive telemetry (acknowledged·busy) — the on-device
-            // discriminator for "strip moves but the glass doesn't" vs
-            // "drives never land". Debug builds only.
-            if (BuildConfig.DEBUG && driveStats.first + driveStats.second > 0) {
+            dialFraction?.let { fraction ->
                 Text(
-                    "${driveStats.first}·${driveStats.second}",
-                    style = chromeStyle(7f, FontWeight.Normal, mono = true),
-                    color = LiveDesign.faint,
-                    maxLines = 1,
-                    softWrap = false,
+                    "${Math.round(fraction * 100)}",
+                    style = chromeStyle(9f, FontWeight.SemiBold, mono = true),
+                    color = LiveDesign.text,
                 )
             }
         }
