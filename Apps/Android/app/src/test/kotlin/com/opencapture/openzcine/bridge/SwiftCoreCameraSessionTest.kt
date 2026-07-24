@@ -328,7 +328,16 @@ class SwiftCoreCameraSessionTest {
     @Test
     fun `camera control serializes with disconnect`() = runTest {
         val bridge = FakeBridge()
-        val session = SwiftCoreCameraSession("192.168.1.1", { _, _ -> }, bridge)
+        // Auto-refresh would bootstrap on Dispatchers.Default and contend for
+        // cameraCommandMutex; this test only exercises applyControl↔disconnect
+        // serialization, so keep that unrelated poller out of the mutex.
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                automaticallyRefreshProperties = false,
+            )
         val connecting = async { session.connect() }
         runCurrent()
         bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
@@ -341,8 +350,11 @@ class SwiftCoreCameraSessionTest {
             check(releaseControl.await(5, TimeUnit.SECONDS))
             SwiftCore.CONTROL_COMMAND_ACCEPTED
         }
-        val controlling = async { session.applyControl(CameraControl.ISO, "800") }
-        runCurrent()
+        // The blocked command must hold the mutex on a real thread so the
+        // wall-clock controlStarted.await below cannot deadlock the single test
+        // scheduler that the parked disconnect later needs pumped.
+        val controlling =
+            async(Dispatchers.Default) { session.applyControl(CameraControl.ISO, "800") }
         try {
             assertTrue(controlStarted.await(5, TimeUnit.SECONDS))
             val disconnecting = async { session.disconnect() }
