@@ -6146,15 +6146,16 @@ final class NativeAppModel {
 
     // MARK: - Manual focus drive (focus-by-wire scrub)
 
-    /// The live-view MF scrub shows whenever the focus mode is MF on a live session. There is
-    /// no drivability verdict: a focus-by-wire drive can be refused for transient state reasons
-    /// (the stepping-motor lens is still initializing after a mode change; autofocus is briefly
-    /// active) — none of which mean the lens can't be driven, so a single refusal must never
-    /// latch the strip off. Hidden while a panel is up: picking MF in the FOCUS popup must not
-    /// mount a new interactive overlay under the operator's finger mid-popup.
+    /// The live-view focus scrub drives the lens focus-by-wire motor with a remote drive. The
+    /// camera permits that ONLY in an AF focus mode — in MF the lens ring has exclusive control
+    /// and the body refuses every drive with Invalid_Status ("the focus mode is MF"). So the
+    /// strip shows in AF modes (AF-S / AF-C / AF-F / AF-A), NOT MF — the app scrub acts as a
+    /// manual-focus override, the way the lens ring overrides during AF. Hidden while a panel is
+    /// up so picking a mode in the FOCUS popup can't mount an overlay under the operator's finger.
+    /// [verify-on-HW: whether continuous AF fights the drive in AF-C vs AF-S]
     var showsMFDriveScrub: Bool {
-        cameraPropertySnapshot.focusMode == "MF"
-            && isConnected && !isDemoSession && activePanel == nil
+        guard let mode = cameraPropertySnapshot.focusMode else { return false }
+        return mode != "MF" && isConnected && !isDemoSession && activePanel == nil
     }
 
     @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
@@ -6203,11 +6204,11 @@ final class NativeAppModel {
                     retries = 0
                     self.mfDriveDebugOK += 1
                 case .refused(let code):
-                    // Every refusal is transient state, not a lens verdict: busy = the
-                    // stepping-motor lens is still initializing (or an acquisition is
-                    // running); access-denied = autofocus is momentarily active / settling.
-                    // Requeue and retry; a genuinely stuck state surfaces one message but
-                    // leaves the strip up so the next gesture tries again.
+                    // A refusal is transient while AF is momentarily driving (access-denied) or
+                    // the lens is still initialising (busy): requeue and retry. A sustained
+                    // refusal is a real state block — Invalid_Status means either an unusable
+                    // lens or that the focus mode slipped back to MF (the body refuses a remote
+                    // drive in MF). Surface one message and leave the strip up to retry.
                     self.mfDriveDebugBusy += 1
                     self.mfDriveLastCode = code.rawValue
                     retries += 1
@@ -6220,7 +6221,9 @@ final class NativeAppModel {
                     retries = 0
                     AppDiagnostics.shared.record(.mfDriveRefused)
                     self.connectionMessage =
-                        "Couldn't drive focus just now — make sure focus mode is MF and autofocus isn't running, then try again (\(String(format: "0x%04X", code.rawValue)))."
+                        code.rawValue == PTPResponseCode.invalidStatus.rawValue
+                        ? "Can't drive focus in MF — set the camera to an AF focus mode to scrub focus from the app."
+                        : "Couldn't drive focus just now — try again (\(String(format: "0x%04X", code.rawValue)))."
                 }
             }
         }

@@ -782,7 +782,7 @@ struct MediaBrowserView: View {
     }
 
     private var gridCells: some View {
-        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 8) {
+        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 4) {
             ForEach(displayedClips) { clip in
                 MediaClipCell(
                     clip: clip,
@@ -1966,7 +1966,7 @@ private struct MediaClipCell: View {
     private var isPhoto: Bool { clip.mediaKind == .photo }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             ZStack {
                 RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
                     .fill(LiveDesign.surface)
