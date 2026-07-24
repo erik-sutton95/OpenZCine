@@ -548,12 +548,16 @@ final class NativeCameraSession: @unchecked Sendable {
     /// Fires a still release. Activation-style: the OK response only confirms the release
     /// started — completion (including every frame of a burst, or a running bulb) is observed
     /// by polling ``pollStillReleaseReadiness()`` between live-view frames.
-    func initiateStillCapture() async throws {
+    func initiateStillCapture(preserveFocus: Bool = false) async throws {
         let op = operationPolicy.stillCaptureOperation
-        // Media capture: p1 selects AF-then-release (half-press-then-fire, like the body's
-        // shutter button), p2 targets the card. The standard-capture fallback has no params.
+        // Media capture, p1 = CaptureSort: 0xFFFFFFFE runs AF driving THEN releases (a
+        // half-press-then-fire, like the body's shutter button); 0xFFFFFFFF is a plain release
+        // with NO AF-driving step, used to hold the focus the operator set with the focus dial
+        // (an AF release would re-focus at the box and undo the manual pull). p2 targets the
+        // card. [verify-on-HW: 0xFFFFFFFF skips AF while the body is in an AF focus mode]
+        let captureSort: UInt32 = preserveFocus ? 0xFFFF_FFFF : 0xFFFF_FFFE
         let parameters: [UInt32] =
-            op == .initiateCaptureRecInMedia ? [0xFFFF_FFFE, 0x0000] : []
+            op == .initiateCaptureRecInMedia ? [captureSort, 0x0000] : []
         let result = try await transact(
             operationCode: op, parameters: parameters, dataPhase: .noDataOrDataIn)
         guard result.operationResponse.responseCode == .ok else {

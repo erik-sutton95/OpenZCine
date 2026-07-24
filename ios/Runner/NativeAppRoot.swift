@@ -4100,6 +4100,8 @@ final class NativeAppModel {
         // AF-point taps are interactive — service them first so focus follows the finger promptly.
         if let point = pendingFocusPoint {
             pendingFocusPoint = nil
+            // The operator chose to AF at a point — subsequent releases resume normal AF focus.
+            focusManuallyDialed = false
             do {
                 try await session.changeAfArea(x: point.x, y: point.y)
                 // Photography: moving the point alone never focuses (video's continuous AF
@@ -6225,7 +6227,9 @@ final class NativeAppModel {
     /// up so picking a mode in the FOCUS popup can't mount an overlay under the operator's finger.
     /// [verify-on-HW: whether continuous AF fights the drive in AF-C vs AF-S]
     var showsMFDriveScrub: Bool {
-        guard mfDriveScrubEnabled, let mode = cameraPropertySnapshot.focusMode else { return false }
+        guard mfDriveScrubEnabled, isPhotographyMode,
+            let mode = cameraPropertySnapshot.focusMode
+        else { return false }
         return mode != "MF" && isConnected && !isDemoSession && activePanel == nil
     }
 
@@ -6236,14 +6240,20 @@ final class NativeAppModel {
     @ObservationIgnored private var mfDrivePendingPulses = 0
     /// Travel-end feedback for the scrub UI: −1 near limit, +1 infinity limit, nil moving.
     private(set) var mfDriveAtEnd: Int?
-    /// Net acknowledged pulses since the dial was armed (+ toward infinity) — the camera exposes
-    /// no absolute focus distance for AF lenses, so the dial shows this as a RELATIVE position:
-    /// once a full near↔infinity sweep pins both ends, `mfDriveDialFraction` reads 0…1.
+    /// Net REQUESTED pulses since the dial was armed (+ toward infinity), advanced on the drag
+    /// itself — NOT on the camera's per-drive acknowledgement, so the dial tracks the finger
+    /// smoothly instead of stepping at the command round-trip rate. Clamped to the pinned travel
+    /// ends. The camera exposes no absolute focus distance for AF lenses, so the dial shows this
+    /// as a RELATIVE position: once a full near↔infinity sweep pins both ends,
+    /// `mfDriveDialFraction` reads 0…1.
     private(set) var mfDriveNetPulses = 0
     /// Pinned pulse offsets of the two travel ends once observed (near, infinity). Nil until hit.
     @ObservationIgnored private var mfDriveNearPulses: Int?
     @ObservationIgnored private var mfDriveInfinityPulses: Int?
     private(set) var mfDriveLastCode: UInt16 = 0
+    /// True once the operator drove focus with the dial and hasn't tapped to AF since — the still
+    /// release then fires WITHOUT AF so the manually-set focus is preserved.
+    @ObservationIgnored private var focusManuallyDialed = false
 
     /// Relative focus position 0 (near) … 1 (infinity) once both ends have been reached; nil while
     /// the travel isn't yet calibrated (the dial then just scrolls with motion).
@@ -6271,6 +6281,14 @@ final class NativeAppModel {
     func driveManualFocus(pulses: Int) {
         guard pulses != 0, !isDemoSession, cameraSession != nil else { return }
         mfDrivePendingPulses += pulses
+        // Focus is now operator-set; the next release preserves it (no AF) until a tap-to-AF.
+        focusManuallyDialed = true
+        // Advance the dial position on the DRAG, not the ack — the drum follows the finger
+        // smoothly instead of stepping at the command round-trip rate. Clamp to pinned ends so
+        // it can't scroll past a known travel limit.
+        mfDriveNetPulses += pulses
+        if let near = mfDriveNearPulses { mfDriveNetPulses = max(mfDriveNetPulses, near) }
+        if let far = mfDriveInfinityPulses { mfDriveNetPulses = min(mfDriveNetPulses, far) }
         mfDriveAtEnd = nil
         guard mfDriveTask == nil else { return }
         mfDriveTask = Task { [weak self] in
@@ -6287,11 +6305,11 @@ final class NativeAppModel {
                 )
                 switch outcome {
                 case .complete, .stepTooSmall:
+                    // Position already advanced optimistically on the drag (above).
                     retries = 0
-                    self.mfDriveNetPulses += pending
                 case .endOfTravel:
-                    self.mfDriveNetPulses += pending
-                    // Pin whichever end we reached so the relative position can calibrate.
+                    // Pin this end at the current (optimistic) position so the relative position
+                    // calibrates and the dial clamps here on further drives toward it.
                     if pending < 0 {
                         self.mfDriveNearPulses = self.mfDriveNetPulses
                         self.mfDriveAtEnd = -1
@@ -6769,7 +6787,10 @@ final class NativeAppModel {
                             property: .burstNumber, data: Data(ByteCoding.uint16LE(65535))))
                     remoteModeHeldForBurst = true
                 }
-                try await session.initiateStillCapture()
+                // Preserve the dial-set focus: fire without AF driving when the operator drove
+                // focus with the dial and hasn't tapped to AF since (an AF release would re-focus
+                // at the box and undo the manual pull).
+                try await session.initiateStillCapture(preserveFocus: focusManuallyDialed)
                 stillReleaseAwaitingReady = true
                 stillReleaseStartedAt = Date()
                 lastStillReadyPollAt = nil
