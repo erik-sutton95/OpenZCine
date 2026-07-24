@@ -1525,6 +1525,10 @@ struct BatteryIndicator: View {
                 Text("\(percent)")
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(batteryTint)
+                    // "100" plus the charging bolt is wider than the outline — shrink the
+                    // digits to keep the readout inside the battery body.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
             }
             .frame(width: 26, height: 15)
             .overlay {

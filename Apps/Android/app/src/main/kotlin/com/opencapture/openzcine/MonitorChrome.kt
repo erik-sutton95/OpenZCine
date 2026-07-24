@@ -673,9 +673,12 @@ private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean)
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (charging) BoltGlyph(tint, Modifier.size(5.dp, 9.dp))
+            // "100" plus the charging bolt is wider than the outline — step the digits
+            // down so the readout stays inside the battery body (iOS shrinks to fit).
+            val fits = !(charging && label.length >= 3)
             Text(
                 label,
-                style = chromeStyle(10.5f, FontWeight.SemiBold, mono = true),
+                style = chromeStyle(if (fits) 10.5f else 8.5f, FontWeight.SemiBold, mono = true),
                 color = tint,
                 maxLines = 1,
                 softWrap = false,
