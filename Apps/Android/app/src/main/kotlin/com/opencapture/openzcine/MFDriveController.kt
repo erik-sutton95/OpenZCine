@@ -6,6 +6,7 @@ import kotlin.math.abs
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -31,7 +32,11 @@ internal enum class MFDriveLensState {
  * (mechanical ring) surfaces ONCE with the body's answer.
  * [verify-on-HW: per-lens pulse feel]
  */
-internal class MFDriveController(private val session: CameraSession) {
+internal class MFDriveController(
+    private val session: CameraSession,
+    /** Injectable pacing for tests. */
+    private val busyRetryDelayMillis: Long = 80L,
+) {
     private val _atEnd = MutableStateFlow<Int?>(null)
 
     /** Travel-end feedback: −1 near limit, +1 infinity limit, null moving. */
@@ -39,6 +44,9 @@ internal class MFDriveController(private val session: CameraSession) {
 
     /** Fired once per session for a non-drivable lens, with the body's code. */
     var onNonDrivableLens: ((String) -> Unit)? = null
+
+    /** Fired once per exhausted busy-retry run (the body kept refusing). */
+    var onBusyExhausted: ((String) -> Unit)? = null
 
     private val _lensState = MutableStateFlow(MFDriveLensState.UNKNOWN)
 
@@ -50,6 +58,7 @@ internal class MFDriveController(private val session: CameraSession) {
     private var probeJob: Job? = null
     private var probedLens: String? = null
     private var refusalSurfaced = false
+    private var busyRetries = 0
 
     /**
      * Proves drivability once per lens identity when MF engages: a single
@@ -118,19 +127,39 @@ internal class MFDriveController(private val session: CameraSession) {
                     )
                 }.getOrElse { MFDriveOutcome.Refused(rawResponseCode = 0) }
             when (outcome) {
-                MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> continue
+                MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> {
+                    busyRetries = 0
+                    continue
+                }
                 MFDriveOutcome.EndOfTravel -> {
                     // The reached limit lights its side; queued pulses toward
                     // it are moot.
+                    busyRetries = 0
                     _atEnd.value = if (pending < 0) -1 else 1
                     pendingPulses = 0
                 }
                 is MFDriveOutcome.Refused -> {
-                    pendingPulses = 0
                     if (outcome.rawResponseCode == DEVICE_BUSY_RESPONSE) {
-                        // Busy channel: quiet — the next gesture retries.
+                        // The body answers busy at ACTIVATION while its
+                        // acquisition is mid-frame internally — continuous
+                        // scrubbing against a live feed hits this nearly every
+                        // time, so a silent drop made the strip totally inert.
+                        // Requeue the batch and retry shortly, bounded.
+                        if (busyRetries < MAX_BUSY_RETRIES) {
+                            busyRetries += 1
+                            pendingPulses += pending
+                            delay(busyRetryDelayMillis)
+                            continue
+                        }
+                        busyRetries = 0
+                        pendingPulses = 0
+                        onBusyExhausted?.invoke(
+                            "The camera kept refusing focus drives (busy).",
+                        )
                         continue
                     }
+                    busyRetries = 0
+                    pendingPulses = 0
                     if (!refusalSurfaced) {
                         refusalSurfaced = true
                         onNonDrivableLens?.invoke(
@@ -145,6 +174,9 @@ internal class MFDriveController(private val session: CameraSession) {
 
     private companion object {
         const val MAX_PULSES = 32767
+
+        /** Bounded activation-busy retries per run before surfacing once. */
+        const val MAX_BUSY_RETRIES = 12
 
         /** Standard busy answer on the shared channel. */
         const val DEVICE_BUSY_RESPONSE = 0x2019

@@ -2043,12 +2043,20 @@ internal fun MFDriveStrip(
     onDrive: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Drag feedback (iOS MFDriveVerticalScrub isDragging): the strip must
+    // visibly react to touch even before the lens moves — a scrub against a
+    // busy body otherwise reads as dead input.
+    var dragging by remember { mutableStateOf(false) }
     Box(
         modifier
             .alpha(if (enabled) 1f else 0.55f)
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
-                detectDragGestures { change, dragAmount ->
+                detectDragGestures(
+                    onDragStart = { dragging = true },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false },
+                ) { change, dragAmount ->
                     change.consume()
                     // Screen-up is negative y; up drives toward infinity (+).
                     val pulses =
@@ -2056,6 +2064,9 @@ internal fun MFDriveStrip(
                     if (pulses != 0) onDrive(pulses)
                 }
             }
+            // Absorb plain taps: the strip sits over the feed, and a tap that
+            // fell through would move the AF point under the scrub.
+            .pointerInput(Unit) { detectTapGestures(onTap = {}) }
             .semantics {
                 contentDescription =
                     "Manual focus drive. Drag up toward infinity or down toward near."
@@ -2067,7 +2078,15 @@ internal fun MFDriveStrip(
                 .width(28.dp)
                 .fillMaxHeight()
                 .glass(CircleShape)
-                .border(1.dp, LiveDesign.hairline, CircleShape)
+                .background(
+                    Color.White.copy(alpha = if (dragging) 0.14f else 0f),
+                    CircleShape,
+                )
+                .border(
+                    if (dragging) 1.5.dp else 1.dp,
+                    if (dragging) LiveDesign.accent else LiveDesign.hairline,
+                    CircleShape,
+                )
                 .padding(vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -2079,7 +2098,10 @@ internal fun MFDriveStrip(
             Box(Modifier.weight(1f))
             // Centre tick — the strip is a relative ring, not a position bar.
             Box(
-                Modifier.size(width = 16.dp, height = 2.dp)
+                Modifier.size(
+                    width = if (dragging) 22.dp else 16.dp,
+                    height = if (dragging) 3.dp else 2.dp,
+                )
                     .background(LiveDesign.accent.copy(alpha = 0.9f)),
             )
             Box(Modifier.weight(1f))

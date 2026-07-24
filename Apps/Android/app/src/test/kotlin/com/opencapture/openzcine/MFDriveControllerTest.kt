@@ -210,19 +210,68 @@ class MFDriveControllerTest {
     }
 
     @Test
-    fun `a busy channel stays quiet and the next gesture retries`() = runTest {
+    fun `busy activation requeues the batch and drives once busy clears`() = runTest {
         val session = FakeSession()
-        val controller = MFDriveController(session)
-        val messages = mutableListOf<String>()
-        controller.onNonDrivableLens = { messages += it }
+        val controller = MFDriveController(session, busyRetryDelayMillis = 1)
+        val busy = mutableListOf<String>()
+        controller.onBusyExhausted = { busy += it }
+        // The body refuses the first two activations mid-acquisition, then takes it.
         session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+        session.outcomes.add(MFDriveOutcome.Complete)
 
         controller.drive(this, 120)
         advanceUntilIdle()
-        controller.drive(this, 120)
-        advanceUntilIdle()
 
-        assertEquals(2, session.drives.size)
-        assertTrue(messages.isEmpty())
+        // Same batch retried until it landed — never silently dropped.
+        assertEquals(
+            listOf(false to 120, false to 120, false to 120),
+            session.drives,
+        )
+        assertTrue(busy.isEmpty())
     }
+
+    @Test
+    fun `busy requeue keeps pulses queued by gestures during the retry window`() = runTest {
+        val session = FakeSession()
+        val controller = MFDriveController(session, busyRetryDelayMillis = 50)
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+        session.outcomes.add(MFDriveOutcome.Complete)
+
+        controller.drive(this, 100)
+        testScheduler.runCurrent()
+        // More scrub movement lands during the 50 ms retry backoff.
+        controller.drive(this, 40)
+        advanceUntilIdle()
+
+        // The retry carries the requeued batch PLUS the new gesture pulses.
+        assertEquals(listOf(false to 100, false to 140), session.drives)
+    }
+
+    @Test
+    fun `exhausted busy retries surface once, clear pending, and reset for the next gesture`() =
+        runTest {
+            val session = FakeSession()
+            val controller = MFDriveController(session, busyRetryDelayMillis = 1)
+            val busy = mutableListOf<String>()
+            controller.onBusyExhausted = { busy += it }
+            repeat(13) {
+                session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+            }
+
+            controller.drive(this, 200)
+            advanceUntilIdle()
+
+            // First attempt + 12 bounded retries, then ONE explanation.
+            assertEquals(13, session.drives.size)
+            assertEquals(1, busy.size)
+
+            // The counter reset: a later gesture retries from scratch and lands.
+            session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+            session.outcomes.add(MFDriveOutcome.Complete)
+            controller.drive(this, 60)
+            advanceUntilIdle()
+            assertEquals(15, session.drives.size)
+            assertEquals(1, busy.size)
+        }
 }

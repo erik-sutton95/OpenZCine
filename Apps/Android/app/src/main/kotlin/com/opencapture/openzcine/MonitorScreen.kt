@@ -1024,6 +1024,10 @@ internal fun MonitorScreen(
     mfDrive.onNonDrivableLens = { message ->
         Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
     }
+    // An exhausted busy-retry run explains itself once per run.
+    mfDrive.onBusyExhausted = { message ->
+        Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+    }
     // Travel end: a firm tick as NEAR / ∞ lights (iOS impact haptic).
     val mfHapticView = LocalView.current
     LaunchedEffect(mfDriveAtEnd) {
