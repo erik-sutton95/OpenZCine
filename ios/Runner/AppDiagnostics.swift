@@ -65,6 +65,10 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     // user-facing toast.
     case mfDriveBusyExhausted = "error.mf.drive.busy-exhausted"
     case mfDriveRefused = "error.mf.drive.refused"
+
+    // A camera property write held the transaction gate unusually long (>1.5s) — the feed and
+    // queued writes stall behind it. The property rides the connection log, not the vocabulary.
+    case propertyWriteSlow = "camera.write.slow"
 }
 
 struct DiagnosticBreadcrumb: Codable, Equatable, Sendable {

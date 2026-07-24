@@ -4515,7 +4515,19 @@ final class NativeAppModel {
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
         do {
+            let writeStarted = ContinuousClock.now
             try await session.writeCameraProperty(pending.write)
+            // A body can sit on a write for seconds (e.g. a focus-mode motor handoff) while
+            // it holds the transaction gate — and with it the whole feed. Leave a trace so
+            // "the app stalled" reports become attributable to the property that stalled.
+            let writeSeconds = writeStarted.duration(to: .now) / .seconds(1)
+            if writeSeconds > 1.5 {
+                AppDiagnostics.shared.record(.propertyWriteSlow)
+                logConnection(
+                    String(
+                        format: "slow write %@: %.1fs",
+                        String(describing: pending.write.property), writeSeconds))
+            }
             if isShutterModeWrite || isBaseISOWrite || isISOAutoWrite || isFocusModeWrite
                 || isShutterLockWrite
             {
@@ -6139,9 +6151,11 @@ final class NativeAppModel {
     /// The live-view MF scrub shows with MF active unless this lens proved undrivable.
     /// There is no pre-probe: the FIRST real drive decides — a probe that answered busy
     /// used to wedge the gate shut, and connecting with MF already engaged never probed.
+    /// Hidden while any panel is up: picking MF in the FOCUS popup must not mount a new
+    /// interactive overlay under the operator's finger mid-popup.
     var showsMFDriveScrub: Bool {
         cameraPropertySnapshot.focusMode == "MF" && mfDriveLensSupport != .undrivable
-            && isConnected && !isDemoSession
+            && isConnected && !isDemoSession && activePanel == nil
     }
 
     /// Re-arms MF drivability when the mounted lens changes: an `.undrivable` latch belongs
