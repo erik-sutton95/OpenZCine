@@ -921,6 +921,13 @@ struct PickerPanel: View {
             && activePickerModes[selectedMode].title == "Tint"
     }
 
+    /// FOCUS's MF "Drive" tab renders the focus-by-wire scrub instead of a value drum.
+    private var isMFDriveMode: Bool {
+        (picker == .focus || picker == .stillFocus)
+            && activePickerModes.indices.contains(selectedMode)
+            && activePickerModes[selectedMode].title == "Drive"
+    }
+
     /// WB's "Kelvin" tab — dial ladder plus −10 / +10 beside the selected value.
     private var isKelvinMode: Bool {
         picker == .whiteBalance
@@ -956,6 +963,10 @@ struct PickerPanel: View {
                     // The WB Tint tab swaps the drum for the fine-tune pad.
                     WhiteBalanceTintPad()
                         .frame(maxWidth: .infinity, alignment: .leading)
+                } else if isMFDriveMode {
+                    // FOCUS's MF Drive tab swaps the drum for the focus-by-wire scrub.
+                    MFDriveScrub()
+                        .frame(maxWidth: .infinity)
                 } else {
                     AccentDrumWheel(
                         options: currentOptions,
@@ -5445,5 +5456,80 @@ struct SettingsLiveTile: View {
             lastFPSCommit = now
             displayedFPS = newValue
         }
+    }
+}
+
+/// Focus-by-wire scrub for MF: drag the strip toward NEAR / ∞ to drive the lens (relative
+/// pulses — there is no absolute position to seek), with fine and coarse step taps flanking
+/// it. Travel ends flash the reached side. [verify-on-HW: pulses-per-point feel per lens]
+struct MFDriveScrub: View {
+    @Environment(NativeAppModel.self) private var model
+    @State private var lastDragX: CGFloat?
+
+    /// Drag-to-pulse gain: a full strip sweep ≈ a few thousand pulses.
+    private static let pulsesPerPoint = 24
+    private static let fineStep = 60
+    private static let coarseStep = 400
+
+    var body: some View {
+        HStack(spacing: 12) {
+            stepButton("chevron.left.2", pulses: -Self.coarseStep)
+            stepButton("chevron.left", pulses: -Self.fineStep)
+            scrubTrack
+            stepButton("chevron.right", pulses: Self.fineStep)
+            stepButton("chevron.right.2", pulses: Self.coarseStep)
+        }
+        .padding(.vertical, 10)
+        .sensoryFeedback(.impact(weight: .medium), trigger: model.mfDriveAtEnd) { _, end in
+            end != nil
+        }
+    }
+
+    private func stepButton(_ systemName: String, pulses: Int) -> some View {
+        Button {
+            model.driveManualFocus(pulses: pulses)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+                .frame(width: 38, height: 38)
+                .liquidGlass(in: Circle())
+        }
+        .buttonStyle(.zcTapTarget)
+    }
+
+    private var scrubTrack: some View {
+        ZStack {
+            Capsule()
+                .fill(Color.white.opacity(0.07))
+                .overlay(Capsule().strokeBorder(LiveDesign.hairline, lineWidth: 1))
+            HStack {
+                Text("NEAR")
+                    .foregroundStyle(
+                        model.mfDriveAtEnd == -1 ? LiveDesign.accent : LiveDesign.muted)
+                Spacer()
+                Rectangle()
+                    .fill(LiveDesign.accent.opacity(0.9))
+                    .frame(width: 2, height: 16)
+                Spacer()
+                Text("∞")
+                    .foregroundStyle(
+                        model.mfDriveAtEnd == 1 ? LiveDesign.accent : LiveDesign.muted)
+            }
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 14)
+        }
+        .frame(height: 44)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    let delta = value.location.x - (lastDragX ?? value.startLocation.x)
+                    lastDragX = value.location.x
+                    let pulses = Int(delta * CGFloat(Self.pulsesPerPoint))
+                    model.driveManualFocus(pulses: pulses)
+                }
+                .onEnded { _ in lastDragX = nil }
+        )
     }
 }

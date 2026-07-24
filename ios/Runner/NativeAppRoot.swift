@@ -6120,6 +6120,51 @@ final class NativeAppModel {
         startInstantReviewCountdown()
     }
 
+    // MARK: - Manual focus drive (focus-by-wire scrub)
+
+    @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
+    /// Signed pulses awaiting dispatch (+ toward infinity, − toward near). Scrub gestures
+    /// accumulate here; a single in-flight drive drains it so gesture speed never floods
+    /// the command channel.
+    @ObservationIgnored private var mfDrivePendingPulses = 0
+    /// Travel-end feedback for the scrub UI: −1 near limit, +1 infinity limit, nil moving.
+    private(set) var mfDriveAtEnd: Int?
+
+    /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
+    /// while a drive is in flight; a mechanical (non-drivable) lens surfaces once as a
+    /// message. [verify-on-HW: per-lens pulse feel]
+    func driveManualFocus(pulses: Int) {
+        guard pulses != 0, !isDemoSession, cameraSession != nil else { return }
+        mfDrivePendingPulses += pulses
+        mfDriveAtEnd = nil
+        guard mfDriveTask == nil else { return }
+        mfDriveTask = Task { [weak self] in
+            defer { self?.mfDriveTask = nil }
+            while let self, let session = self.cameraSession,
+                self.mfDrivePendingPulses != 0, !Task.isCancelled
+            {
+                let pending = self.mfDrivePendingPulses
+                self.mfDrivePendingPulses = 0
+                let outcome = await session.mfDrive(
+                    towardNear: pending < 0,
+                    pulses: UInt32(min(abs(pending), 32767))
+                )
+                switch outcome {
+                case .complete, .stepTooSmall:
+                    continue
+                case .endOfTravel:
+                    self.mfDriveAtEnd = pending < 0 ? -1 : 1
+                    self.mfDrivePendingPulses = 0
+                case .refused(let code):
+                    self.mfDrivePendingPulses = 0
+                    if code == .deviceBusy { continue }
+                    self.connectionMessage =
+                        "The camera can't drive this lens's focus — its ring may be mechanical (\(String(format: "0x%04X", code.rawValue)))."
+                }
+            }
+        }
+    }
+
     /// Rates the reviewed shot in place (0–5 stars) — writes straight to the captured
     /// object so the culling decision is done before the next frame. [verify-on-HW]
     func rateInstantReview(stars: Int) async -> Bool {
@@ -6682,6 +6727,13 @@ final class NativeAppModel {
 
     /// Segmented mode tabs for a picker (ISO layout follows the active codec + mode).
     func pickerModes(for picker: CameraPicker) -> [PickerMode] {
+        // In MF the FOCUS pickers gain a Drive tab — the focus-by-wire scrub. The lens's
+        // actual drivability only shows on the first drive attempt. [verify-on-HW]
+        if picker == .focus || picker == .stillFocus,
+            cameraPropertySnapshot.focusMode == "MF"
+        {
+            return picker.modes + [PickerMode(title: "Drive")]
+        }
         guard picker == .iso else { return picker.modes }
         return ISOPickerPolicy.pickerModes(
             codec: cameraState.codec, exposureMode: commandExposureMode

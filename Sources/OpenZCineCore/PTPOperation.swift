@@ -243,6 +243,10 @@ public enum PTPResponseCode: UInt16, Sendable {
     // (names mirror their libgphoto2 `PTP_RC_NIKON_*` symbols).
     case outOfFocus = 0xA002
     case shutterSpeedBulb = 0xA008
+    // Manual-focus drive answers on the readiness poll: the drive hit the travel end, or
+    // the requested amount was below what the lens can move.
+    case mfDriveStepEnd = 0xA00C
+    case mfDriveStepInsufficiency = 0xA00E
     case bulbReleaseBusy = 0xA200
     case silentReleaseBusy = 0xA201
     case movieFrameReleaseBusy = 0xA202

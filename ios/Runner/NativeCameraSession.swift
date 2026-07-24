@@ -697,6 +697,45 @@ final class NativeCameraSession: @unchecked Sendable {
         }
     }
 
+    /// One manual-focus drive outcome, classified from the activation + readiness poll.
+    enum MFDriveOutcome: Sendable, Equatable {
+        case complete
+        case endOfTravel
+        case stepTooSmall
+        case refused(PTPResponseCode)
+    }
+
+    /// Drives manual focus by `pulses` toward near or infinity — an activation command whose
+    /// completion is confirmed by the readiness poll (busy while the lens moves). End-of-travel
+    /// and amount-too-small are outcomes, not errors. Requires a lens the body can drive in MF
+    /// (a mechanical ring refuses with an invalid-status answer). [verify-on-HW]
+    func mfDrive(towardNear: Bool, pulses: UInt32) async -> MFDriveOutcome {
+        let clamped = min(max(pulses, 1), 32767)
+        guard
+            let start = try? await transact(
+                operationCode: .mfDrive,
+                parameters: [towardNear ? 1 : 2, clamped],
+                dataPhase: .noDataOrDataIn
+            )
+        else { return .refused(.deviceBusy) }
+        guard start.operationResponse.responseCode == .ok else {
+            return .refused(start.operationResponse.responseCode)
+        }
+        for _ in 0..<25 {
+            guard let ready = try? await transact(operationCode: .deviceReady) else {
+                return .refused(.deviceBusy)
+            }
+            switch ready.operationResponse.responseCode {
+            case .ok: return .complete
+            case .deviceBusy: try? await Task.sleep(for: .milliseconds(120))
+            case .mfDriveStepEnd: return .endOfTravel
+            case .mfDriveStepInsufficiency: return .stepTooSmall
+            case let other: return .refused(other)
+            }
+        }
+        return .complete
+    }
+
     func afDriveCancel() async throws {
         let result = try await transact(
             operationCode: .afDriveCancel,
