@@ -1936,6 +1936,8 @@ struct MediaPhotoViewer: View {
     @State private var isDeleteConfirmPresented = false
     /// Camera-read star rating; nil until loaded (or unreachable — row hidden).
     @State private var ratingStars: Int?
+    /// Transient message shown when the body refuses a rating write (with its response code).
+    @State private var ratingToast: String?
     /// RAW side of the JPG/RAW toggle is active (paired stills only).
     @State private var showingRaw = false
 
@@ -1995,22 +1997,39 @@ struct MediaPhotoViewer: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 Spacer()
-                if let stars = ratingStars {
-                    StarRatingRow(stars: stars) { target in
-                        let previous = ratingStars
-                        ratingStars = target
-                        Task {
-                            // The camera stays source of truth: confirm the write with a
-                            // readback (the body rounds off-step values down).
-                            if await model.setMediaStarRating(target, for: clip) {
-                                ratingStars = await model.mediaStarRating(for: clip) ?? target
-                            } else {
-                                ratingStars = previous
+                VStack(spacing: 10) {
+                    if let ratingToast {
+                        Text(ratingToast)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(LiveDesign.text)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .liquidGlass(in: Capsule(), interactive: true)
+                            .padding(.horizontal, 24)
+                            .transition(.opacity)
+                    }
+                    if let stars = ratingStars {
+                        StarRatingRow(stars: stars) { target in
+                            let previous = ratingStars
+                            ratingStars = target
+                            Task {
+                                // The camera stays source of truth (the model confirms by
+                                // readback). A refusal shows the body's response code rather
+                                // than silently rolling the star back.
+                                switch await model.setMediaStarRating(target, for: clip) {
+                                case .confirmed(let confirmed):
+                                    ratingStars = confirmed
+                                case .refused(_, let message):
+                                    ratingStars = previous
+                                    showRatingToast(message)
+                                case .offline:
+                                    ratingStars = previous
+                                }
                             }
                         }
                     }
-                    .padding(.bottom, 18)
                 }
+                .padding(.bottom, 18)
             }
         }
         .statusBarHidden()
@@ -2126,6 +2145,15 @@ struct MediaPhotoViewer: View {
         loadTask?.cancel()
         model.cancelClipStream()
         loadTask = Task { await loadImage() }
+    }
+
+    /// Briefly shows a rating-write refusal (with the body's response code) above the star row.
+    private func showRatingToast(_ message: String) {
+        withAnimation { ratingToast = message }
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            withAnimation { ratingToast = nil }
+        }
     }
 
     private var loadingMessage: String {
@@ -2592,17 +2620,21 @@ struct MediaPlayerView: View {
                 Spacer()
                 if chromeVisible, let toastMessage { toastView(toastMessage) }
                 if chromeVisible, let stars = playerRatingStars {
-                    // Clip star rating, written to the card — the camera stays source of
-                    // truth (seeded by read, confirmed by readback after every write).
+                    // Clip star rating, written to the card — the camera stays source of truth
+                    // (the model confirms by readback). A refusal surfaces the body's response
+                    // code in a toast instead of a silent rollback.
                     StarRatingRow(stars: stars) { target in
                         let previous = playerRatingStars
                         playerRatingStars = target
                         let clip = activeClip
                         Task {
-                            if await model.setMediaStarRating(target, for: clip) {
-                                playerRatingStars =
-                                    await model.mediaStarRating(for: clip) ?? target
-                            } else {
+                            switch await model.setMediaStarRating(target, for: clip) {
+                            case .confirmed(let confirmed):
+                                playerRatingStars = confirmed
+                            case .refused(_, let message):
+                                playerRatingStars = previous
+                                showToast(message)
+                            case .offline:
                                 playerRatingStars = previous
                             }
                         }

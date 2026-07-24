@@ -6228,21 +6228,30 @@ final class NativeAppModel {
     }
 
     /// Rates the reviewed shot in place (0–5 stars) — writes straight to the captured
-    /// object so the culling decision is done before the next frame. [verify-on-HW]
+    /// object so the culling decision is done before the next frame. Mirrors only a
+    /// confirmed write into the index. [verify-on-HW]
     func rateInstantReview(stars: Int) async -> Bool {
         guard let handle = instantReview?.handle, let session = cameraSession else {
             return false
         }
-        guard
-            (try? await session.setObjectRating(
-                handle: handle, value: StillCapturePolicy.ratingValue(forStars: stars))) != nil
-        else { return false }
-        // Instant playback holds a raw object handle, not a MediaClip — resolve the JPEG's
-        // filename so the write mirrors into the media index (the review already fetched this
-        // ObjectInfo once; a second lookup here is off the hot capture path).
-        if let info = try? await session.getObjectInfo(handle: handle) {
-            mirrorRatingIntoIndex(cameraID: mediaBucketID, filename: info.filename, stars: stars)
+        AppDiagnostics.shared.record(.ratingWriteAttempted)
+        do {
+            try await performRatingWrite(
+                session: session, handle: handle,
+                value: StillCapturePolicy.ratingValue(forStars: stars))
+        } catch {
+            _ = refusalOutcome(error)  // records the refusal breadcrumb with its code
+            return false
         }
+        // Instant playback holds a raw object handle, not a MediaClip — resolve the JPEG's
+        // filename so the confirmed write mirrors into the media index (the review already
+        // fetched this ObjectInfo once; a second lookup here is off the hot capture path).
+        let confirmed = await confirmedStars(session: session, handle: handle, requested: stars)
+        if let info = try? await session.getObjectInfo(handle: handle) {
+            mirrorRatingIntoIndex(
+                cameraID: mediaBucketID, filename: info.filename, stars: confirmed)
+        }
+        AppDiagnostics.shared.record(.ratingWriteConfirmed)
         return true
     }
 
@@ -6295,25 +6304,33 @@ final class NativeAppModel {
         return stars
     }
 
-    /// Writes a 0–5 star rating to the clip; a RAW+JPEG pair writes both sides, tolerating
-    /// the RAW side's refusal (RAW stills don't carry the property). [verify-on-HW]
-    func setMediaStarRating(_ stars: Int, for clip: MediaClip) async -> Bool {
-        guard let handle = clip.handle, let session = cameraSession else { return false }
+    /// Writes a 0–5 star rating to the clip and confirms it with a readback; a RAW+JPEG pair
+    /// writes both sides, tolerating the RAW side's refusal (RAW stills carry no rating
+    /// property). Returns the outcome so the viewer can surface a refusal — with the body's raw
+    /// response code — instead of a silent rollback. The index mirror lands ONLY on a confirmed
+    /// write, so a refused write never leaves a Favorites ghost the card doesn't have. [verify-on-HW]
+    func setMediaStarRating(_ stars: Int, for clip: MediaClip) async -> RatingWriteOutcome {
+        guard let handle = clip.handle, let session = cameraSession else { return .offline }
+        AppDiagnostics.shared.record(.ratingWriteAttempted)
         let value = StillCapturePolicy.ratingValue(forStars: stars)
-        guard (try? await session.setObjectRating(handle: handle, value: value)) != nil else {
-            return false
+        do {
+            try await performRatingWrite(session: session, handle: handle, value: value)
+        } catch {
+            return refusalOutcome(error)
         }
         if let raw = rawSibling(of: clip), let rawHandle = raw.handle {
-            _ = try? await session.setObjectRating(handle: rawHandle, value: value)
+            try? await performRatingWrite(session: session, handle: rawHandle, value: value)
         }
-        // Mirror onto the JPEG-side row the grid renders so the Favorites filter agrees.
-        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: stars)
-        return true
+        // Confirm via readback and mirror ONLY the confirmed value onto the JPEG-side row.
+        let confirmed = await confirmedStars(session: session, handle: handle, requested: stars)
+        mirrorRatingIntoIndex(cameraID: clip.cameraID, filename: clip.filename, stars: confirmed)
+        AppDiagnostics.shared.record(.ratingWriteConfirmed)
+        return .confirmed(confirmed)
     }
 
-    /// Mirrors a camera star write (viewer or instant playback) into the media index: caches
-    /// the star and derives the local favorite flag (`isFavorite = stars ≥ 1`), upserting a row
-    /// if the clip isn't indexed yet. The body stays source of truth; this keeps the Media
+    /// Mirrors a CONFIRMED camera star write (viewer or instant playback) into the media index:
+    /// caches the star and derives the local favorite flag (`isFavorite = stars ≥ 1`), upserting
+    /// a row if the clip isn't indexed yet. The body stays source of truth; this keeps the Media
     /// page's local Favorites filter — which reads the index, not the camera — in agreement.
     func mirrorRatingIntoIndex(cameraID: String, filename: String, stars: Int) {
         mediaClipStore.update(cameraID: cameraID, filename: filename) {
@@ -6321,6 +6338,52 @@ final class NativeAppModel {
             $0.isFavorite = stars >= 1
         }
         refreshMediaClips()
+    }
+
+    /// Outcome of a rating write so the UI explains a refusal (with the body's wire code) rather
+    /// than rolling back silently.
+    enum RatingWriteOutcome: Equatable {
+        case confirmed(Int)
+        case refused(code: UInt16, message: String)
+        case offline
+    }
+
+    /// The single object-rating write against the body. Isolated so a future fix can bracket it
+    /// with a state-sequencing pre/post hook — some bodies refuse the property write while a
+    /// live-view/app-mode session holds a state that disallows it — without touching callers.
+    private func performRatingWrite(
+        session: NativeCameraSession, handle: UInt32, value: UInt16
+    ) async throws {
+        // ponytail: state-sequencing seam. If a refusal proves state-based, settle/prepare the
+        // body here before the write (and restore after), keeping this the only site that changes.
+        try await session.setObjectRating(handle: handle, value: value)
+    }
+
+    /// Reads the stored rating back so the index mirrors the body's confirmed value (the body
+    /// rounds off-step values down); falls back to the requested count if the readback is unreachable.
+    private func confirmedStars(
+        session: NativeCameraSession, handle: UInt32, requested: Int
+    ) async -> Int {
+        guard let value = try? await session.objectRating(handle: handle) else { return requested }
+        return StillCapturePolicy.stars(fromRatingValue: value)
+    }
+
+    /// Records a refusal breadcrumb and builds the outcome carrying the exact wire code — the
+    /// discriminator between a state-based denial and an accepted-but-not-shown write.
+    private func refusalOutcome(_ error: Error) -> RatingWriteOutcome {
+        guard case NativeCameraSessionError.objectRatingRejected(let response, let rawCode) = error
+        else {
+            AppDiagnostics.shared.record(.ratingWriteRefused)
+            return .refused(code: 0, message: "Rating not saved — the camera didn't respond.")
+        }
+        AppDiagnostics.shared.record(
+            response == .accessDenied ? .ratingWriteRefusedAccessDenied : .ratingWriteRefused)
+        let hex = String(format: "0x%04X", rawCode)
+        let reason =
+            response == .accessDenied
+            ? "Access Denied \(hex) — it may not accept ratings in this mode"
+            : "response \(hex)"
+        return .refused(code: rawCode, message: "Rating not saved — camera refused (\(reason)).")
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.

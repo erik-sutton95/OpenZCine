@@ -52,6 +52,13 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case guideCompleted = "live-guide.completed"
     case guideSkipped = "live-guide.skipped"
     case diagnosticsExported = "diagnostics.exported"
+    // Object star-rating writes. The vocabulary stays closed (no free-form codes leak into the
+    // support log); the exact wire code rides the user-facing toast instead. Access-Denied gets
+    // its own breadcrumb because it is the leading hypothesis for a state-based refusal.
+    case ratingWriteAttempted = "rating.write.attempted"
+    case ratingWriteConfirmed = "rating.write.confirmed"
+    case ratingWriteRefused = "error.rating.write.refused"
+    case ratingWriteRefusedAccessDenied = "error.rating.write.refused.access-denied"
 }
 
 struct DiagnosticBreadcrumb: Codable, Equatable, Sendable {

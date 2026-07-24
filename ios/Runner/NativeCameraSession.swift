@@ -47,6 +47,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
     case unexpectedPacket(expected: String, actual: PTPIPPacketType)
     case initFailed(PTPIPInitFailReason)
     case operationRejected(PTPOperationCode, PTPResponseCode)
+    /// An object star-rating write the body refused, carrying the exact wire code so the UI can
+    /// name it (a state-based refusal like Access Denied is the discriminator we surface).
+    case objectRatingRejected(response: PTPResponseCode, rawCode: UInt16)
     case invalidPacketLength(UInt32)
     case localNetworkPermissionDenied
     case pairingRejected
@@ -69,6 +72,9 @@ enum NativeCameraSessionError: Error, LocalizedError {
             return "The camera rejected the PTP-IP handshake: \(reason)."
         case .operationRejected(let operation, let response):
             return "Camera rejected \(operation) with response \(response)."
+        case .objectRatingRejected(let response, let rawCode):
+            return
+                "Camera refused the rating write (\(response), \(String(format: "0x%04X", rawCode)))."
         case .invalidPacketLength(let length):
             return "Invalid PTP-IP packet length \(length)."
         case .localNetworkPermissionDenied:
@@ -452,7 +458,7 @@ final class NativeCameraSession: @unchecked Sendable {
             .initFailed(.rejectedInitiator):
             return false
         case .connectionFailed, .connectionClosed, .timeout, .unexpectedPacket,
-            .invalidPacketLength, .operationRejected, .initFailed:
+            .invalidPacketLength, .operationRejected, .objectRatingRejected, .initFailed:
             return true
         }
     }
@@ -1129,8 +1135,9 @@ final class NativeCameraSession: @unchecked Sendable {
             dataOut: Data([UInt8(value & 0xFF), UInt8(value >> 8)])
         )
         guard result.operationResponse.responseCode == .ok else {
-            throw NativeCameraSessionError.operationRejected(
-                .setObjectPropValue, result.operationResponse.responseCode)
+            throw NativeCameraSessionError.objectRatingRejected(
+                response: result.operationResponse.responseCode,
+                rawCode: result.operationResponse.rawResponseCode)
         }
     }
 

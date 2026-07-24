@@ -239,6 +239,9 @@ public enum PTPResponseCode: UInt16, Sendable {
     // return this — the session is usable; the open didn't fail.
     case sessionAlreadyOpen = 0x201E
     case deviceBusy = 0x2019
+    // The body refuses the operation because its current state disallows it (a documented
+    // answer to an object-property write the camera won't take in the present mode).
+    case accessDenied = 0x2013
     // Vendor release-status codes DeviceReady returns while a still release runs
     // (names mirror their libgphoto2 `PTP_RC_NIKON_*` symbols).
     case outOfFocus = 0xA002
@@ -290,7 +293,8 @@ public struct PTPOperationResponse: Equatable, Sendable {
         guard bytes.count >= 6 else {
             throw PTPOperationResponseError.shortPayload(actualLength: bytes.count)
         }
-        responseCode = PTPResponseCode(rawValue: ByteCoding.readUInt16LE(bytes, at: 0)) ?? .unknown
+        rawResponseCode = ByteCoding.readUInt16LE(bytes, at: 0)
+        responseCode = PTPResponseCode(rawValue: rawResponseCode) ?? .unknown
         transactionID = ByteCoding.readUInt32LE(bytes, at: 2)
 
         var parsedParameters: [UInt32] = []
@@ -303,6 +307,9 @@ public struct PTPOperationResponse: Equatable, Sendable {
     }
 
     public let responseCode: PTPResponseCode
+    /// The exact wire value, kept even when it isn't a known `PTPResponseCode` — so an
+    /// unanticipated refusal (e.g. a state-based rejection) stays diagnosable in a report.
+    public let rawResponseCode: UInt16
     public let transactionID: UInt32
     public let parameters: [UInt32]
 }
