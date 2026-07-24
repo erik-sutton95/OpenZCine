@@ -344,14 +344,7 @@ internal fun MonitorScreen(
     // MF focus-by-wire drive (on-feed vertical strip beside the system rail).
     val mfDrive = remember(session) { MFDriveController(session) }
     val mfDriveAtEnd by mfDrive.atEnd.collectAsState()
-    val mfLensUndrivable by mfDrive.lensUndrivable.collectAsState()
     val mfDriveStats by mfDrive.driveStats.collectAsState()
-    // A lens swap re-arms drivability (an undrivable latch belongs to one
-    // lens). LaunchedEffect runs on FIRST composition with the current value,
-    // so connecting with MF already engaged is covered, not only changes.
-    LaunchedEffect(cameraProperties.lens) {
-        mfDrive.noteLensChanged(cameraProperties.lens)
-    }
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -1019,14 +1012,10 @@ internal fun MonitorScreen(
     stillCapture.onFailure = { message ->
         Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
     }
-    // A lens the body cannot drive surfaces once with the body's answer.
-    mfDrive.onNonDrivableLens = { message ->
+    // A sustained refusal (retries exhausted) explains itself once per run — the
+    // strip stays up so the next gesture tries again.
+    mfDrive.onRefusalExhausted = { message ->
         onDriveDiagnostic(AndroidDiagnosticEvent.MF_DRIVE_REFUSED)
-        Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
-    }
-    // An exhausted busy-retry run explains itself once per run.
-    mfDrive.onBusyExhausted = { message ->
-        onDriveDiagnostic(AndroidDiagnosticEvent.MF_DRIVE_BUSY_EXHAUSTED)
         Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
     }
     // Travel end: a firm tick as NEAR / ∞ lights (iOS impact haptic).
@@ -2387,15 +2376,15 @@ internal fun MonitorScreen(
                 }
 
                 // MF focus-by-wire strip: on the live view just left of the
-                // right system rail whenever MF is active on a live session —
-                // the FIRST real drive is the drivability verdict, and only a
-                // latched undrivable lens hides it (no pre-probe).
+                // right system rail whenever MF is active on a live session.
+                // There is no drivability verdict — a refused drive is transient
+                // state (stepping-motor lens initializing, autofocus settling),
+                // so the strip never hides on a refusal; it retries.
                 if (
                     !isClean && !locked &&
                     sessionState is CameraSessionState.Connected &&
                     !isDemoSession &&
-                    cameraProperties.focusMode == "MF" &&
-                    !mfLensUndrivable
+                    cameraProperties.focusMode == "MF"
                 ) {
                     val rightRailLeading =
                         minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)

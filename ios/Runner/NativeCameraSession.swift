@@ -713,8 +713,9 @@ final class NativeCameraSession: @unchecked Sendable {
 
     /// Drives manual focus by `pulses` toward near or infinity — an activation command whose
     /// completion is confirmed by the readiness poll (busy while the lens moves). End-of-travel
-    /// and amount-too-small are outcomes, not errors. Requires a lens the body can drive in MF
-    /// (a mechanical ring refuses with an invalid-status answer). [verify-on-HW]
+    /// and amount-too-small are outcomes, not errors. A refusal is a transient state (the
+    /// stepping-motor lens still initializing, or autofocus momentarily active), not a lens
+    /// verdict — the caller requeues and retries. [verify-on-HW]
     func mfDrive(towardNear: Bool, pulses: UInt32) async -> MFDriveOutcome {
         let clamped = min(max(pulses, 1), 32767)
         guard

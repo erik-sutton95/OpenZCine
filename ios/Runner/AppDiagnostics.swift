@@ -61,9 +61,8 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case ratingWriteRefusedAccessDenied = "error.rating.write.refused.access-denied"
 
     // Manual-focus drives (focus-by-wire scrub). Success stays off the log (a scrub is dozens
-    // of drives); only the two actionable failures leave a trace — the wire code rides the
-    // user-facing toast.
-    case mfDriveBusyExhausted = "error.mf.drive.busy-exhausted"
+    // of drives); only a sustained refusal (retries exhausted) leaves a trace — the wire code
+    // rides the user-facing toast.
     case mfDriveRefused = "error.mf.drive.refused"
 
     // A camera property write held the transaction gate unusually long (>1.5s) — the feed and

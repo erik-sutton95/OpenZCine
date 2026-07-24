@@ -6140,33 +6140,15 @@ final class NativeAppModel {
 
     // MARK: - Manual focus drive (focus-by-wire scrub)
 
-    /// Whether the mounted lens has proven itself drivable. Probed per lens identity.
-    enum MFDriveLensSupport {
-        case unknown, drivable, undrivable
-    }
-
-    private(set) var mfDriveLensSupport: MFDriveLensSupport = .unknown
-    @ObservationIgnored private var mfDriveLatchedLensIdentity: String?
-
-    /// The live-view MF scrub shows with MF active unless this lens proved undrivable.
-    /// There is no pre-probe: the FIRST real drive decides — a probe that answered busy
-    /// used to wedge the gate shut, and connecting with MF already engaged never probed.
-    /// Hidden while any panel is up: picking MF in the FOCUS popup must not mount a new
-    /// interactive overlay under the operator's finger mid-popup.
+    /// The live-view MF scrub shows whenever the focus mode is MF on a live session. There is
+    /// no drivability verdict: a focus-by-wire drive can be refused for transient state reasons
+    /// (the stepping-motor lens is still initializing after a mode change; autofocus is briefly
+    /// active) — none of which mean the lens can't be driven, so a single refusal must never
+    /// latch the strip off. Hidden while a panel is up: picking MF in the FOCUS popup must not
+    /// mount a new interactive overlay under the operator's finger mid-popup.
     var showsMFDriveScrub: Bool {
-        cameraPropertySnapshot.focusMode == "MF" && mfDriveLensSupport != .undrivable
+        cameraPropertySnapshot.focusMode == "MF"
             && isConnected && !isDemoSession && activePanel == nil
-    }
-
-    /// Re-arms MF drivability when the mounted lens changes: an `.undrivable` latch belongs
-    /// to one lens identity — swap the glass and the strip returns until the new lens
-    /// proves otherwise.
-    func noteMFDriveLensChanged() {
-        let identity = cameraPropertySnapshot.lens ?? "?"
-        if mfDriveLatchedLensIdentity != identity {
-            mfDriveLatchedLensIdentity = identity
-            mfDriveLensSupport = .unknown
-        }
     }
 
     @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
@@ -6176,13 +6158,16 @@ final class NativeAppModel {
     @ObservationIgnored private var mfDrivePendingPulses = 0
     /// Travel-end feedback for the scrub UI: −1 near limit, +1 infinity limit, nil moving.
     private(set) var mfDriveAtEnd: Int?
-    /// Strip debug caption counters (Debug builds): drives acknowledged vs busy-refused.
+    /// Strip debug caption counters (Debug builds): drives acknowledged vs retried.
     private(set) var mfDriveDebugOK = 0
     private(set) var mfDriveDebugBusy = 0
 
     /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
-    /// while a drive is in flight; a mechanical (non-drivable) lens surfaces once as a
-    /// message. [verify-on-HW: per-lens pulse feel]
+    /// while a drive is in flight. A refused drive is treated as transient — the stepping-motor
+    /// lens initializing after a mode change and momentary autofocus activity both refuse for a
+    /// beat — so the pulses requeue and retry; only a sustained refusal surfaces one message,
+    /// and the strip is never hidden. [verify-on-HW: per-lens pulse feel + which codes a given
+    /// lens answers]
     func driveManualFocus(pulses: Int) {
         guard pulses != 0, !isDemoSession, cameraSession != nil else { return }
         mfDrivePendingPulses += pulses
@@ -6190,7 +6175,7 @@ final class NativeAppModel {
         guard mfDriveTask == nil else { return }
         mfDriveTask = Task { [weak self] in
             defer { self?.mfDriveTask = nil }
-            var busyRetries = 0
+            var retries = 0
             while let self, let session = self.cameraSession,
                 self.mfDrivePendingPulses != 0, !Task.isCancelled
             {
@@ -6202,40 +6187,31 @@ final class NativeAppModel {
                 )
                 switch outcome {
                 case .complete, .stepTooSmall:
-                    busyRetries = 0
+                    retries = 0
                     self.mfDriveDebugOK += 1
                 case .endOfTravel:
                     self.mfDriveAtEnd = pending < 0 ? -1 : 1
                     self.mfDrivePendingPulses = 0
-                    busyRetries = 0
+                    retries = 0
                     self.mfDriveDebugOK += 1
                 case .refused(let code):
-                    if code == .deviceBusy {
-                        self.mfDriveDebugBusy += 1
-                        // A busy activation usually means the body was mid-frame — requeue
-                        // the pulses and retry shortly rather than dropping the gesture.
-                        busyRetries += 1
-                        if busyRetries <= 12 {
-                            self.mfDrivePendingPulses += pending
-                            try? await Task.sleep(for: .milliseconds(80))
-                            continue
-                        }
-                        self.mfDrivePendingPulses = 0
-                        AppDiagnostics.shared.record(.mfDriveBusyExhausted)
-                        self.connectionMessage =
-                            "The camera kept refusing focus drives (busy) — try again."
-                        busyRetries = 0
+                    // Every refusal is transient state, not a lens verdict: busy = the
+                    // stepping-motor lens is still initializing (or an acquisition is
+                    // running); access-denied = autofocus is momentarily active / settling.
+                    // Requeue and retry; a genuinely stuck state surfaces one message but
+                    // leaves the strip up so the next gesture tries again.
+                    self.mfDriveDebugBusy += 1
+                    retries += 1
+                    if retries <= 16 {
+                        self.mfDrivePendingPulses += pending
+                        try? await Task.sleep(for: .milliseconds(80))
                         continue
                     }
                     self.mfDrivePendingPulses = 0
-                    // A definitive refusal is the drivability verdict: latch this lens
-                    // undrivable (hides the strip) instead of pre-probing at mount time.
-                    // [verify-on-HW: which code a mechanical ring answers]
-                    self.mfDriveLensSupport = .undrivable
-                    self.mfDriveLatchedLensIdentity = self.cameraPropertySnapshot.lens ?? "?"
+                    retries = 0
                     AppDiagnostics.shared.record(.mfDriveRefused)
                     self.connectionMessage =
-                        "The camera can't drive this lens's focus — its ring may be mechanical (\(String(format: "0x%04X", code.rawValue)))."
+                        "Couldn't drive focus just now — make sure focus mode is MF and autofocus isn't running, then try again (\(String(format: "0x%04X", code.rawValue)))."
                 }
             }
         }

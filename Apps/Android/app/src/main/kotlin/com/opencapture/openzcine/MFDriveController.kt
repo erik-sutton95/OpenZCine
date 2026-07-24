@@ -16,62 +16,40 @@ import kotlinx.coroutines.launch
  * (+ toward infinity, − toward near) accumulate while a single in-flight
  * drive drains them, so gesture speed never floods the command channel.
  *
- * There is NO pre-probe: the FIRST real drive is the drivability verdict — a
- * probe whose 1-pulse drive answered busy used to wedge the strip off-screen
- * forever, and connecting with MF already engaged never probed at all. A
- * definitive (non-busy) refusal latches the lens undrivable (hides the strip,
- * surfaces the mechanical-ring toast with the wire code); busy activations
- * requeue and retry, bounded. The latch belongs to one lens identity and
- * re-arms on a swap. [verify-on-HW: per-lens pulse feel and refusal codes]
+ * There is NO drivability verdict. A focus-by-wire drive can be refused for
+ * transient state reasons — the stepping-motor lens is still initializing
+ * after a focus-mode change, or autofocus is momentarily active/settling —
+ * none of which mean the lens can't be driven. So every refusal (busy OR
+ * access-denied) requeues and retries, bounded; only a sustained refusal
+ * surfaces one message, and the strip is never hidden. The strip's own
+ * visibility depends solely on the focus mode being MF.
+ * [verify-on-HW: per-lens pulse feel and which codes a given lens answers]
  */
 internal class MFDriveController(
     private val session: CameraSession,
     /** Injectable pacing for tests. */
-    private val busyRetryDelayMillis: Long = 80L,
+    private val retryDelayMillis: Long = 80L,
 ) {
     private val _atEnd = MutableStateFlow<Int?>(null)
 
     /** Travel-end feedback: −1 near limit, +1 infinity limit, null moving. */
     val atEnd: StateFlow<Int?> = _atEnd
 
-    private val _lensUndrivable = MutableStateFlow(false)
-
-    /** Latched once this lens definitively refused a drive (strip hides). */
-    val lensUndrivable: StateFlow<Boolean> = _lensUndrivable
-
     private val _driveStats = MutableStateFlow(0 to 0)
 
-    /** Debug caption counters: drives acknowledged vs busy-refused. */
+    /** Debug caption counters: drives acknowledged vs retried. */
     val driveStats: StateFlow<Pair<Int, Int>> = _driveStats
 
-    /** Fired on the definitive refusal that latched the lens, with the code. */
-    var onNonDrivableLens: ((String) -> Unit)? = null
-
-    /** Fired once per exhausted busy-retry run (the body kept refusing). */
-    var onBusyExhausted: ((String) -> Unit)? = null
+    /** Fired once per exhausted retry run (the body kept refusing), with the code. */
+    var onRefusalExhausted: ((String) -> Unit)? = null
 
     private var pendingPulses = 0
     private var driveJob: Job? = null
-    private var knownLens: String? = null
-    private var busyRetries = 0
-
-    /**
-     * Re-arms drivability when the mounted lens changes: an undrivable latch
-     * belongs to one lens identity — swap the glass and the strip returns
-     * until the new lens proves otherwise. Callers invoke this with the
-     * CURRENT identity on first composition too, so connecting with MF
-     * already engaged is covered, not only changes.
-     */
-    fun noteLensChanged(lensIdentity: String?) {
-        if (knownLens == lensIdentity) return
-        knownLens = lensIdentity
-        _lensUndrivable.value = false
-        _atEnd.value = null
-    }
+    private var retries = 0
 
     /** Queues a relative drive; coalesces while one is in flight. */
     fun drive(scope: CoroutineScope, pulses: Int) {
-        if (pulses == 0 || _lensUndrivable.value) return
+        if (pulses == 0) return
         pendingPulses += pulses
         _atEnd.value = null
         if (driveJob?.isActive == true) return
@@ -91,47 +69,37 @@ internal class MFDriveController(
                 }.getOrElse { MFDriveOutcome.Refused(DEVICE_BUSY_RESPONSE) }
             when (outcome) {
                 MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> {
-                    busyRetries = 0
+                    retries = 0
                     _driveStats.value = _driveStats.value.let { (ok, busy) -> ok + 1 to busy }
                     continue
                 }
                 MFDriveOutcome.EndOfTravel -> {
                     // The reached limit lights its side; queued pulses toward
                     // it are moot.
-                    busyRetries = 0
+                    retries = 0
                     _driveStats.value = _driveStats.value.let { (ok, busy) -> ok + 1 to busy }
                     _atEnd.value = if (pending < 0) -1 else 1
                     pendingPulses = 0
                 }
                 is MFDriveOutcome.Refused -> {
-                    if (outcome.rawResponseCode == DEVICE_BUSY_RESPONSE) {
-                        // The body answers busy at ACTIVATION while its
-                        // acquisition is mid-frame internally — requeue the
-                        // batch and retry shortly, bounded.
-                        _driveStats.value =
-                            _driveStats.value.let { (ok, busy) -> ok to busy + 1 }
-                        if (busyRetries < MAX_BUSY_RETRIES) {
-                            busyRetries += 1
-                            pendingPulses += pending
-                            delay(busyRetryDelayMillis)
-                            continue
-                        }
-                        busyRetries = 0
-                        pendingPulses = 0
-                        onBusyExhausted?.invoke(
-                            "The camera kept refusing focus drives (busy).",
-                        )
+                    // Every refusal is transient state, not a lens verdict: busy = the
+                    // stepping-motor lens is still initializing (or an acquisition is
+                    // running); access-denied = autofocus is momentarily active. Requeue
+                    // and retry; a genuinely stuck state surfaces one message but leaves the
+                    // strip up so the next gesture tries again.
+                    _driveStats.value = _driveStats.value.let { (ok, busy) -> ok to busy + 1 }
+                    if (retries < MAX_RETRIES) {
+                        retries += 1
+                        pendingPulses += pending
+                        delay(retryDelayMillis)
                         continue
                     }
-                    // A definitive refusal IS the drivability verdict: latch
-                    // this lens undrivable instead of pre-probing at mount
-                    // time. [verify-on-HW: which code a mechanical ring answers]
-                    busyRetries = 0
+                    retries = 0
                     pendingPulses = 0
-                    _lensUndrivable.value = true
-                    onNonDrivableLens?.invoke(
-                        "The camera can't drive this lens's focus — its ring may be " +
-                            "mechanical (0x%04X).".format(outcome.rawResponseCode),
+                    onRefusalExhausted?.invoke(
+                        "Couldn't drive focus just now — make sure focus mode is MF and " +
+                            "autofocus isn't running, then try again (0x%04X)."
+                            .format(outcome.rawResponseCode),
                     )
                 }
             }
@@ -141,8 +109,8 @@ internal class MFDriveController(
     private companion object {
         const val MAX_PULSES = 32767
 
-        /** Bounded activation-busy retries per run before surfacing once. */
-        const val MAX_BUSY_RETRIES = 12
+        /** Bounded refusal retries per run before surfacing once. */
+        const val MAX_RETRIES = 16
 
         /** Standard busy answer on the shared channel. */
         const val DEVICE_BUSY_RESPONSE = 0x2019

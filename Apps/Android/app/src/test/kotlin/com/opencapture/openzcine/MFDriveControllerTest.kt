@@ -116,58 +116,36 @@ class MFDriveControllerTest {
     }
 
     @Test
-    fun `a definitive refusal latches the lens undrivable and surfaces the code`() = runTest {
+    fun `an access-denied refusal requeues and drives once the state clears`() = runTest {
+        // Erik's exact scenario: right after switching to MF, the stepping-motor lens is
+        // still initializing / autofocus is settling, so the first drive is refused with a
+        // non-busy code (access-denied 0x2013). It must NOT be treated as an undrivable lens —
+        // the pulses requeue and the drive lands once the state clears.
         val session = FakeSession()
-        val controller = MFDriveController(session, busyRetryDelayMillis = 1)
+        val controller = MFDriveController(session, retryDelayMillis = 1)
         val messages = mutableListOf<String>()
-        controller.onNonDrivableLens = { messages += it }
-        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x201F))
-
-        controller.drive(this, 200)
-        advanceUntilIdle()
-
-        assertTrue(controller.lensUndrivable.value)
-        assertEquals(1, messages.size)
-        assertTrue(messages.single().contains("0x201F"))
-
-        // Latched: further gestures never reach the wire (the strip is hidden,
-        // and even a stray call is inert).
-        controller.drive(this, 200)
-        advanceUntilIdle()
-        assertEquals(1, session.drives.size)
-    }
-
-    @Test
-    fun `a lens identity change re-arms the undrivable latch`() = runTest {
-        val session = FakeSession()
-        val controller = MFDriveController(session, busyRetryDelayMillis = 1)
-        // Connect-time initial identity — not a change — must arm cleanly.
-        controller.noteLensChanged("mechanical 50mm")
-        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x201F))
-
-        controller.drive(this, 100)
-        advanceUntilIdle()
-        assertTrue(controller.lensUndrivable.value)
-
-        // The same identity keeps the latch…
-        controller.noteLensChanged("mechanical 50mm")
-        assertTrue(controller.lensUndrivable.value)
-
-        // …and different glass re-arms it: the strip returns and drives flow.
-        controller.noteLensChanged("by-wire 35mm")
-        assertTrue(!controller.lensUndrivable.value)
+        controller.onRefusalExhausted = { messages += it }
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2013))
+        session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2013))
         session.outcomes.add(MFDriveOutcome.Complete)
-        controller.drive(this, 60)
+
+        controller.drive(this, 200)
         advanceUntilIdle()
-        assertEquals(2, session.drives.size)
+
+        // Same batch retried until it landed — no verdict, no message, strip stays up.
+        assertEquals(
+            listOf(false to 200, false to 200, false to 200),
+            session.drives,
+        )
+        assertTrue(messages.isEmpty())
     }
 
     @Test
     fun `busy activation requeues the batch and drives once busy clears`() = runTest {
         val session = FakeSession()
-        val controller = MFDriveController(session, busyRetryDelayMillis = 1)
-        val busy = mutableListOf<String>()
-        controller.onBusyExhausted = { busy += it }
+        val controller = MFDriveController(session, retryDelayMillis = 1)
+        val messages = mutableListOf<String>()
+        controller.onRefusalExhausted = { messages += it }
         // The body refuses the first two activations mid-acquisition, then takes it.
         session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
         session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
@@ -181,13 +159,13 @@ class MFDriveControllerTest {
             listOf(false to 120, false to 120, false to 120),
             session.drives,
         )
-        assertTrue(busy.isEmpty())
+        assertTrue(messages.isEmpty())
     }
 
     @Test
-    fun `busy requeue keeps pulses queued by gestures during the retry window`() = runTest {
+    fun `refusal requeue keeps pulses queued by gestures during the retry window`() = runTest {
         val session = FakeSession()
-        val controller = MFDriveController(session, busyRetryDelayMillis = 50)
+        val controller = MFDriveController(session, retryDelayMillis = 50)
         session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
         session.outcomes.add(MFDriveOutcome.Complete)
 
@@ -202,29 +180,31 @@ class MFDriveControllerTest {
     }
 
     @Test
-    fun `exhausted busy retries surface once, clear pending, and reset for the next gesture`() =
+    fun `exhausted retries surface once, clear pending, and reset for the next gesture`() =
         runTest {
             val session = FakeSession()
-            val controller = MFDriveController(session, busyRetryDelayMillis = 1)
-            val busy = mutableListOf<String>()
-            controller.onBusyExhausted = { busy += it }
-            repeat(13) {
-                session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
+            val controller = MFDriveController(session, retryDelayMillis = 1)
+            val messages = mutableListOf<String>()
+            controller.onRefusalExhausted = { messages += it }
+            // 17 straight refusals: first attempt + 16 bounded retries.
+            repeat(17) {
+                session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2013))
             }
 
             controller.drive(this, 200)
             advanceUntilIdle()
 
-            // First attempt + 12 bounded retries, then ONE explanation.
-            assertEquals(13, session.drives.size)
-            assertEquals(1, busy.size)
+            // First attempt + 16 bounded retries, then ONE explanation carrying the code.
+            assertEquals(17, session.drives.size)
+            assertEquals(1, messages.size)
+            assertTrue(messages.single().contains("0x2013"))
 
             // The counter reset: a later gesture retries from scratch and lands.
             session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0x2019))
             session.outcomes.add(MFDriveOutcome.Complete)
             controller.drive(this, 60)
             advanceUntilIdle()
-            assertEquals(15, session.drives.size)
-            assertEquals(1, busy.size)
+            assertEquals(19, session.drives.size)
+            assertEquals(1, messages.size)
         }
 }
