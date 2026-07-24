@@ -63,6 +63,22 @@ private val MediaClipRecord.filenameExtension: String
 internal fun MediaClipRecord.rawPairKey(ownerCameraID: String): String =
     "$ownerCameraID/$storageId/${filename.substringBeforeLast('.').lowercase(Locale.US)}"
 
+/**
+ * This clip as a burst-detection frame (iOS `MediaClip.burstFrame`): capture identity plus a
+ * format/dimensions signature, keyed by the object's library id so members map back to records.
+ * RAW and JPEG of one shot share the stem so a burst of pairs counts once.
+ */
+internal fun MediaClipRecord.burstFrame(ownerCameraID: String): BurstFrame =
+    BurstFrame(
+        id = libraryKey(ownerCameraID),
+        storageId = storageId,
+        handle = handle,
+        captureDate = captureDate,
+        stem = filename.substringBeforeLast('.').lowercase(Locale.US),
+        isRaw = isRawStill,
+        formatKey = "$filenameExtension|${pixelWidth}x$pixelHeight",
+    )
+
 /** The same-shot RAW behind a JPEG's item; null for unpaired stills. */
 internal fun rawSibling(
     catalog: List<MediaClipRecord>,

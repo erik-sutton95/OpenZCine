@@ -553,6 +553,8 @@ internal fun MediaBrowseScreen(
     var deleteConfirmTargets by remember { mutableStateOf<List<MediaClipRecord>?>(null) }
     var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
     var viewingPhoto by remember { mutableStateOf<MediaClipRecord?>(null) }
+    // The representative of a burst series whose members are being browsed (Manage series).
+    var seriesRepresentative by remember { mutableStateOf<MediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var autoPlayHandled by remember { mutableStateOf(false) }
     var isSelecting by remember { mutableStateOf(false) }
@@ -787,6 +789,27 @@ internal fun MediaBrowseScreen(
             libraryKey = ::clipKey,
             ownerOf = ::ownerCameraID,
         )
+    // Collapse continuous-drive runs into one representative cell per series (iOS
+    // filteredMediaClips burst step). Grouping runs on the displayed set, so an offline pass
+    // groups only cached frames; the series view reaches the hidden members.
+    val burstSeries =
+        remember(displayedClips) {
+            BurstSeriesGrouping.group(displayedClips.map { it.burstFrame(ownerCameraID(it)) })
+        }
+    val burstByRepresentative =
+        remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
+    val hiddenBurstIDs =
+        remember(burstSeries) { burstSeries.flatMapTo(hashSetOf()) { it.memberIDs.drop(1) } }
+    val gridClips =
+        remember(displayedClips, hiddenBurstIDs) {
+            if (hiddenBurstIDs.isEmpty()) displayedClips
+            else displayedClips.filter { clipKey(it) !in hiddenBurstIDs }
+        }
+    fun burstMembers(representative: MediaClipRecord): List<MediaClipRecord> {
+        val series = burstByRepresentative[clipKey(representative)] ?: return emptyList()
+        val byID = displayedClips.associateBy(::clipKey)
+        return series.memberIDs.mapNotNull { byID[it] }
+    }
     // Pair lookups scan the unfiltered catalog so the RAW side survives tab
     // and chip filters (iOS `rawSibling(of:)`).
     val rawStillPairKeys =
@@ -871,6 +894,11 @@ internal fun MediaBrowseScreen(
     }
 
     fun open(clip: MediaClipRecord) {
+        // A burst representative opens the series view (its other frames are hidden in the grid).
+        if (burstByRepresentative[clipKey(clip)] != null) {
+            seriesRepresentative = clip
+            return
+        }
         when (clip.contentKind) {
             MediaContentKind.PLAYABLE_PROXY -> playingClip = clip
             MediaContentKind.STILL_PHOTO -> viewingPhoto = clip
@@ -1350,7 +1378,7 @@ internal fun MediaBrowseScreen(
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         MediaLibraryBody(
                             state = state,
-                            clips = displayedClips,
+                            clips = gridClips,
                             source = librarySource,
                             layout = options.layout,
                             thumbnailSize = options.thumbnailSize,
@@ -1358,6 +1386,7 @@ internal fun MediaBrowseScreen(
                             cameraIDFor = ::ownerCameraID,
                             clipIdentity = ::clipKey,
                             hasRawSibling = ::hasRawSibling,
+                            burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
                             favorites = favorites,
@@ -1440,7 +1469,7 @@ internal fun MediaBrowseScreen(
                         )
                         MediaLibraryBody(
                             state = state,
-                            clips = displayedClips,
+                            clips = gridClips,
                             source = librarySource,
                             layout = options.layout,
                             thumbnailSize = options.thumbnailSize,
@@ -1448,6 +1477,7 @@ internal fun MediaBrowseScreen(
                             cameraIDFor = ::ownerCameraID,
                             clipIdentity = ::clipKey,
                             hasRawSibling = ::hasRawSibling,
+                            burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
                             favorites = favorites,
@@ -1533,6 +1563,75 @@ internal fun MediaBrowseScreen(
                 onFiltersChanged = ::updateFilters,
                 onDismiss = { filterDialogPresented = false },
             )
+        }
+
+        // Manage-series view: one burst run's frames in a grid, with per-frame open (rate / share /
+        // single-frame delete via the still viewer) and a destructive "Delete all" routed through
+        // the shared confirm + batch deletion (both pair sides). Dismisses when its frames are gone.
+        seriesRepresentative?.let { representative ->
+            val members = remember(representative, displayedClips) { burstMembers(representative) }
+            LaunchedEffect(members) { if (members.isEmpty()) seriesRepresentative = null }
+            Box(
+                Modifier.fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.98f))
+                    .chromeClickable {},
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            "Close",
+                            style = chromeStyle(13f, FontWeight.SemiBold),
+                            color = LiveDesign.accent,
+                            modifier = Modifier.chromeClickable { seriesRepresentative = null },
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Burst series",
+                                style = chromeStyle(14f, FontWeight.SemiBold),
+                                color = LiveDesign.text,
+                            )
+                            Text(
+                                "${members.size} frames",
+                                style = chromeStyle(11f, FontWeight.Medium),
+                                color = LiveDesign.muted,
+                            )
+                        }
+                        Text(
+                            "Delete all",
+                            style = chromeStyle(13f, FontWeight.SemiBold),
+                            color = Color(0xFFFF6B6B),
+                            modifier =
+                                Modifier.badgeBackground()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .chromeClickable {
+                                        if (members.isNotEmpty()) deleteConfirmTargets = members
+                                    },
+                        )
+                    }
+                    MediaClipGrid(
+                        clips = members,
+                        thumbnailSize = options.thumbnailSize,
+                        source = librarySource,
+                        cameraIDFor = ::ownerCameraID,
+                        clipIdentity = ::clipKey,
+                        hasRawSibling = ::hasRawSibling,
+                        cameraConnected = effectiveCameraConnected,
+                        cacheStore = cacheStore,
+                        favorites = favorites,
+                        isSelecting = false,
+                        selectedIDs = emptySet(),
+                        onOpen = { viewingPhoto = it },
+                        onBeginSelection = {},
+                        onToggleSelection = {},
+                        onSweepSelection = {},
+                        onToggleFavorite = ::toggleFavorite,
+                    )
+                }
+            }
         }
 
         deleteConfirmTargets?.let { targets ->
@@ -2490,6 +2589,8 @@ private fun MediaLibraryBody(
     clipIdentity: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
     /** A same-stem RAW rides behind this JPEG — the cell shows one item for the pair. */
     hasRawSibling: (MediaClipRecord) -> Boolean = { false },
+    /** Frame count when a clip represents a burst series (null for an ordinary clip). */
+    burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2521,6 +2622,7 @@ private fun MediaLibraryBody(
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
                         hasRawSibling = hasRawSibling,
+                        burstCountOf = burstCountOf,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2539,6 +2641,7 @@ private fun MediaLibraryBody(
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
                         hasRawSibling = hasRawSibling,
+                        burstCountOf = burstCountOf,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2571,6 +2674,7 @@ private fun MediaClipGrid(
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
     hasRawSibling: (MediaClipRecord) -> Boolean,
+    burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2622,6 +2726,7 @@ private fun MediaClipGrid(
                     source = source,
                     cameraID = cameraIDFor(clip),
                     hasRawSibling = hasRawSibling(clip),
+                    burstCount = burstCountOf(clip),
                     cameraConnected = cameraConnected,
                     cacheStore = cacheStore,
                     favorite = identity in favorites,
@@ -2680,6 +2785,7 @@ private fun MediaClipList(
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
     hasRawSibling: (MediaClipRecord) -> Boolean,
+    burstCountOf: (MediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2917,6 +3023,7 @@ private fun MediaClipCell(
     source: MediaLibrarySource,
     cameraID: String,
     hasRawSibling: Boolean,
+    burstCount: Int? = null,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorite: Boolean,
@@ -2983,6 +3090,20 @@ private fun MediaClipCell(
                         .badgeBackground()
                         .padding(horizontal = 6.dp, vertical = 3.dp),
             )
+            // Burst series: one cell stands for the run, badged with its frame count (like the
+            // body's series card). Tapping opens the Manage-series view.
+            if (burstCount != null && !isSelecting) {
+                Text(
+                    "⚡$burstCount",
+                    style = chromeStyle(9f, FontWeight.Bold, mono = true),
+                    color = LiveDesign.text,
+                    modifier =
+                        Modifier.align(Alignment.BottomStart)
+                            .padding(7.dp)
+                            .badgeBackground()
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                )
+            }
             // iOS has no "ON DEVICE" cell badge — offline is implied by the library source.
             if (isSelecting) {
                 SelectionMarker(selected = selected, modifier = Modifier.align(Alignment.TopEnd).padding(7.dp))
