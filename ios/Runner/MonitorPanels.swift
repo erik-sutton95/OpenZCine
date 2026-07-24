@@ -5482,6 +5482,15 @@ struct MFDriveVerticalScrub: View {
                 .foregroundStyle(LiveDesign.faint)
             Text("NEAR")
                 .foregroundStyle(model.mfDriveAtEnd == -1 ? LiveDesign.accent : LiveDesign.muted)
+            #if DEBUG
+                // Live drive telemetry (acknowledged·busy) — the on-device discriminator for
+                // "strip moves but the glass doesn't" vs "drives never land".
+                if model.mfDriveDebugOK + model.mfDriveDebugBusy > 0 {
+                    Text("\(model.mfDriveDebugOK)·\(model.mfDriveDebugBusy)")
+                        .font(.system(size: 7, weight: .regular, design: .monospaced))
+                        .foregroundStyle(LiveDesign.faint)
+                }
+            #endif
         }
         .font(.system(size: 9, weight: .semibold, design: .monospaced))
         .padding(.vertical, 10)
@@ -5494,8 +5503,11 @@ struct MFDriveVerticalScrub: View {
                     isDragging = true
                     let delta = (lastDragY ?? value.startLocation.y) - value.location.y
                     lastDragY = value.location.y
-                    // Upward drag drives toward infinity.
-                    model.driveManualFocus(pulses: Int(delta * CGFloat(Self.pulsesPerPoint)))
+                    // Upward drag drives toward infinity. Ring-like speed response: a slow
+                    // drag steps finely, a flick multiplies travel (up to ×6).
+                    let speedFactor = min(1 + abs(delta) / 3, 6)
+                    model.driveManualFocus(
+                        pulses: Int(delta * CGFloat(Self.pulsesPerPoint) * speedFactor))
                 }
                 .onEnded { _ in
                     lastDragY = nil

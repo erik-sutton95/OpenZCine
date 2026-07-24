@@ -6134,43 +6134,24 @@ final class NativeAppModel {
     }
 
     private(set) var mfDriveLensSupport: MFDriveLensSupport = .unknown
-    @ObservationIgnored private var mfProbeTask: Task<Void, Never>?
-    @ObservationIgnored private var mfProbedLensIdentity: String?
+    @ObservationIgnored private var mfDriveLatchedLensIdentity: String?
 
-    /// The live-view MF scrub shows only with MF active on a proven focus-by-wire lens.
+    /// The live-view MF scrub shows with MF active unless this lens proved undrivable.
+    /// There is no pre-probe: the FIRST real drive decides — a probe that answered busy
+    /// used to wedge the gate shut, and connecting with MF already engaged never probed.
     var showsMFDriveScrub: Bool {
-        cameraPropertySnapshot.focusMode == "MF" && mfDriveLensSupport == .drivable
+        cameraPropertySnapshot.focusMode == "MF" && mfDriveLensSupport != .undrivable
             && isConnected && !isDemoSession
     }
 
-    /// Probes the mounted lens's drivability when MF engages (and again when the lens
-    /// changes): a 1-pulse drive answers amount-too-small or completes on a drivable lens
-    /// (any completed pulse is driven straight back), and refuses on a mechanical ring.
-    /// Busy answers leave the gate unknown for the next trigger. [verify-on-HW]
-    func refreshMFDriveLensSupport() {
-        guard !isDemoSession, let session = cameraSession,
-            cameraPropertySnapshot.focusMode == "MF"
-        else { return }
+    /// Re-arms MF drivability when the mounted lens changes: an `.undrivable` latch belongs
+    /// to one lens identity — swap the glass and the strip returns until the new lens
+    /// proves otherwise.
+    func noteMFDriveLensChanged() {
         let identity = cameraPropertySnapshot.lens ?? "?"
-        if mfProbedLensIdentity == identity, mfDriveLensSupport != .unknown { return }
-        guard mfProbeTask == nil else { return }
-        mfProbeTask = Task { [weak self] in
-            defer { self?.mfProbeTask = nil }
-            guard let self else { return }
-            let outcome = await session.mfDrive(towardNear: true, pulses: 1)
-            switch outcome {
-            case .stepTooSmall, .endOfTravel:
-                self.mfDriveLensSupport = .drivable
-                self.mfProbedLensIdentity = identity
-            case .complete:
-                _ = await session.mfDrive(towardNear: false, pulses: 1)
-                self.mfDriveLensSupport = .drivable
-                self.mfProbedLensIdentity = identity
-            case .refused(let code):
-                if code == .deviceBusy { return }
-                self.mfDriveLensSupport = .undrivable
-                self.mfProbedLensIdentity = identity
-            }
+        if mfDriveLatchedLensIdentity != identity {
+            mfDriveLatchedLensIdentity = identity
+            mfDriveLensSupport = .unknown
         }
     }
 
@@ -6181,6 +6162,9 @@ final class NativeAppModel {
     @ObservationIgnored private var mfDrivePendingPulses = 0
     /// Travel-end feedback for the scrub UI: −1 near limit, +1 infinity limit, nil moving.
     private(set) var mfDriveAtEnd: Int?
+    /// Strip debug caption counters (Debug builds): drives acknowledged vs busy-refused.
+    private(set) var mfDriveDebugOK = 0
+    private(set) var mfDriveDebugBusy = 0
 
     /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
     /// while a drive is in flight; a mechanical (non-drivable) lens surfaces once as a
@@ -6205,12 +6189,15 @@ final class NativeAppModel {
                 switch outcome {
                 case .complete, .stepTooSmall:
                     busyRetries = 0
+                    self.mfDriveDebugOK += 1
                 case .endOfTravel:
                     self.mfDriveAtEnd = pending < 0 ? -1 : 1
                     self.mfDrivePendingPulses = 0
                     busyRetries = 0
+                    self.mfDriveDebugOK += 1
                 case .refused(let code):
                     if code == .deviceBusy {
+                        self.mfDriveDebugBusy += 1
                         // A busy activation usually means the body was mid-frame — requeue
                         // the pulses and retry shortly rather than dropping the gesture.
                         busyRetries += 1
@@ -6220,12 +6207,19 @@ final class NativeAppModel {
                             continue
                         }
                         self.mfDrivePendingPulses = 0
+                        AppDiagnostics.shared.record(.mfDriveBusyExhausted)
                         self.connectionMessage =
                             "The camera kept refusing focus drives (busy) — try again."
                         busyRetries = 0
                         continue
                     }
                     self.mfDrivePendingPulses = 0
+                    // A definitive refusal is the drivability verdict: latch this lens
+                    // undrivable (hides the strip) instead of pre-probing at mount time.
+                    // [verify-on-HW: which code a mechanical ring answers]
+                    self.mfDriveLensSupport = .undrivable
+                    self.mfDriveLatchedLensIdentity = self.cameraPropertySnapshot.lens ?? "?"
+                    AppDiagnostics.shared.record(.mfDriveRefused)
                     self.connectionMessage =
                         "The camera can't drive this lens's focus — its ring may be mechanical (\(String(format: "0x%04X", code.rawValue)))."
                 }

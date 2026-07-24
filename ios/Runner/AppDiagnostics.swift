@@ -59,6 +59,12 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case ratingWriteConfirmed = "rating.write.confirmed"
     case ratingWriteRefused = "error.rating.write.refused"
     case ratingWriteRefusedAccessDenied = "error.rating.write.refused.access-denied"
+
+    // Manual-focus drives (focus-by-wire scrub). Success stays off the log (a scrub is dozens
+    // of drives); only the two actionable failures leave a trace — the wire code rides the
+    // user-facing toast.
+    case mfDriveBusyExhausted = "error.mf.drive.busy-exhausted"
+    case mfDriveRefused = "error.mf.drive.refused"
 }
 
 struct DiagnosticBreadcrumb: Codable, Equatable, Sendable {

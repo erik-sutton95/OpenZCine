@@ -1122,12 +1122,9 @@ struct MonitorShell: View {
         }
         .animation(.easeInOut(duration: 0.18), value: model.displayMode)
         .animation(.easeOut(duration: 0.10), value: model.activePanel)
-        // The MF scrub's lens-drivability probe re-runs when MF engages or the lens changes.
-        .onChange(of: model.cameraPropertySnapshot.focusMode) { _, _ in
-            model.refreshMFDriveLensSupport()
-        }
-        .onChange(of: model.cameraPropertySnapshot.lens) { _, _ in
-            model.refreshMFDriveLensSupport()
+        // A lens swap re-arms MF drivability (an undrivable latch belongs to one lens).
+        .onChange(of: model.cameraPropertySnapshot.lens, initial: true) { _, _ in
+            model.noteMFDriveLensChanged()
         }
         // Scope the fit-mode 2-scope cap to the portrait tree; `initial: true` covers launch.
         .onChange(of: context.isPortrait, initial: true) { _, isPortrait in
@@ -1431,7 +1428,7 @@ struct MonitorShell: View {
             }
 
             // MF focus-by-wire scrub: beside the right system rail while MF is active on a
-            // proven drivable lens (probe-gated; see `refreshMFDriveLensSupport`).
+            // lens not yet proven undrivable (the first real drive is the verdict).
             if model.showsMFDriveScrub {
                 MFDriveVerticalScrub()
                     .environment(model)
