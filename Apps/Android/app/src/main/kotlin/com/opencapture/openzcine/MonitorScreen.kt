@@ -338,6 +338,9 @@ internal fun MonitorScreen(
     // Post-capture instant playback (PLAY view-assist tool).
     val instantReview = remember(session) { InstantReviewController(session) }
     val instantReviewState by instantReview.review.collectAsState()
+    // MF focus-by-wire drive (FOCUS picker Drive tab).
+    val mfDrive = remember(session) { MFDriveController(session) }
+    val mfDriveAtEnd by mfDrive.atEnd.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -1004,6 +1007,20 @@ internal fun MonitorScreen(
     // dead shutter (body refusal, busy channel, unsupported session).
     stillCapture.onFailure = { message ->
         Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+    }
+    // A lens the body cannot drive surfaces once with the body's answer.
+    mfDrive.onNonDrivableLens = { message ->
+        Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+    }
+    // Travel end: a firm tick as NEAR / ∞ lights (iOS impact haptic).
+    val mfHapticView = LocalView.current
+    LaunchedEffect(mfDriveAtEnd) {
+        if (mfDriveAtEnd != null) {
+            mfHapticView.performOperatorHaptic(
+                HapticFeedbackConstants.LONG_PRESS,
+                enabled = operatorSettings.hapticsEnabled.value,
+            )
+        }
     }
     // Body-fired shutter (iOS 5e366e7): the capture-complete event syncs the
     // app exactly as if it fired the release — instant playback against the
@@ -2636,6 +2653,13 @@ internal fun MonitorScreen(
                                     null
                                 },
                             nefCompression = cameraProperties.rawCompression,
+                            onDriveManualFocus =
+                                if (isDemoSession) {
+                                    null
+                                } else {
+                                    { pulses -> mfDrive.drive(recordScope, pulses) }
+                                },
+                            mfDriveAtEnd = mfDriveAtEnd,
                         )
                     }
                 }

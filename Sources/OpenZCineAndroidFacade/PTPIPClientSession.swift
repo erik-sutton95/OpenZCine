@@ -2818,6 +2818,49 @@ public final class PTPIPClientSession: @unchecked Sendable {
             dataOut: write.data)
     }
 
+    // MARK: - Manual focus drive (focus-by-wire)
+
+    /// One manual-focus drive outcome, classified from the activation + readiness poll.
+    public enum MFDriveOutcome: Equatable, Sendable {
+        case complete
+        case endOfTravel
+        case stepTooSmall
+        case refused(PTPResponseCode)
+    }
+
+    /// Drives manual focus by `pulses` toward near or infinity — an activation
+    /// command whose completion is confirmed by the readiness poll (busy while
+    /// the lens moves). End-of-travel and amount-too-small are outcomes, not
+    /// errors; a lens the body cannot drive (mechanical ring) refuses with an
+    /// invalid-status class answer. There is no absolute position readout —
+    /// the control is relative, like a follow-focus ring. [verify-on-HW]
+    public func mfDrive(towardNear: Bool, pulses: UInt32) -> MFDriveOutcome {
+        commandLifecycleLock.lock()
+        defer { commandLifecycleLock.unlock() }
+        guard !isMediaModeActive else { return .refused(.deviceBusy) }
+        let clamped = min(max(pulses, 1), 32767)
+        guard
+            let start = try? executeTransaction(
+                .mfDrive, parameters: [towardNear ? 1 : 2, clamped])
+        else { return .refused(.deviceBusy) }
+        guard start.operationResponse.responseCode == .ok else {
+            return .refused(start.operationResponse.responseCode)
+        }
+        for _ in 0..<25 {
+            guard let ready = try? executeTransaction(.deviceReady) else {
+                return .refused(.deviceBusy)
+            }
+            switch ready.operationResponse.responseCode {
+            case .ok: return .complete
+            case .deviceBusy: Thread.sleep(forTimeInterval: 0.12)
+            case .mfDriveStepEnd: return .endOfTravel
+            case .mfDriveStepInsufficiency: return .stepTooSmall
+            case let other: return .refused(other)
+            }
+        }
+        return .complete
+    }
+
     // MARK: - Autofocus area
 
     /// Moves the live-view AF area through Nikon `ChangeAfArea` while keeping

@@ -253,6 +253,27 @@ public enum class StillReleasePoll {
     FAILED,
 }
 
+/**
+ * One relative manual-focus drive outcome. There is no absolute position
+ * readout — the control is relative, like a follow-focus ring.
+ */
+public sealed interface MFDriveOutcome {
+    /** The lens finished moving the requested amount. */
+    public data object Complete : MFDriveOutcome
+
+    /** The drive hit the travel end (near or infinity limit). */
+    public data object EndOfTravel : MFDriveOutcome
+
+    /** The requested amount was below what the lens can move. */
+    public data object StepTooSmall : MFDriveOutcome
+
+    /**
+     * The body refused the drive — a busy channel retries silently; a lens
+     * the body cannot drive (mechanical ring) surfaces once with this code.
+     */
+    public data class Refused(val rawResponseCode: Int) : MFDriveOutcome
+}
+
 /** The camera's active movie-shutter display convention. */
 public enum class CameraShutterMode {
     /** The camera displays a reciprocal exposure time, such as `1/50`. */
@@ -857,6 +878,14 @@ public interface CameraSession {
     public suspend fun setStillBurstBracket(active: Boolean) {
         throw CameraControlException.UnsupportedSelection
     }
+
+    /**
+     * Drives manual focus by [pulses] toward near or infinity (focus-by-wire).
+     * Activation-style with a bounded readiness poll inside the native
+     * session; classified outcomes come back rather than exceptions.
+     */
+    public suspend fun mfDrive(towardNear: Boolean, pulses: Int): MFDriveOutcome =
+        MFDriveOutcome.Refused(rawResponseCode = 0)
 
     /**
      * Seeds the instant-review baseline (the card's current object handles)

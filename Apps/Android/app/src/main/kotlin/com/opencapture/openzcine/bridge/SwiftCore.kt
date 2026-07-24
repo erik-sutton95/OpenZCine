@@ -671,6 +671,13 @@ object SwiftCore {
     /** Opens/closes the continuous-burst remote-mode bracket. */
     external fun sessionSetStillBurstBracket(active: Boolean): Int
 
+    /**
+     * One relative manual-focus drive with its classified outcome: 0 complete,
+     * 1 end of travel, 2 amount too small, -1 no session, or
+     * `0x10000 or responseCode` for a body refusal. Blocking — call from IO.
+     */
+    external fun sessionMFDrive(towardNear: Boolean, pulses: Int): Int
+
     /** Snapshots the card's handle sets as the instant-review diff baseline. */
     external fun sessionSeedStillReviewBaseline(): Int
 

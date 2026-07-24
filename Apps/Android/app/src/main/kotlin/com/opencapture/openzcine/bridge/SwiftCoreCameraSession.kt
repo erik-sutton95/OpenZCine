@@ -16,6 +16,7 @@ import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.openzcine.core.MFDriveOutcome
 import com.opencapture.openzcine.core.StillReleasePoll
 import com.opencapture.openzcine.transport.UsbPtpTransport
 import kotlinx.coroutines.CancellationException
@@ -709,6 +710,30 @@ class SwiftCoreCameraSession internal constructor(
 
     override suspend fun setStillBurstBracket(active: Boolean) {
         runStillCommand { core.setStillBurstBracket(active) }
+    }
+
+    override suspend fun mfDrive(towardNear: Boolean, pulses: Int): MFDriveOutcome {
+        cameraCommandMutex.withLock {
+            if (_state.value !is CameraSessionState.Connected || !core.isAvailable) {
+                return MFDriveOutcome.Refused(rawResponseCode = 0)
+            }
+            val raw =
+                try {
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        SwiftCore.sessionMFDrive(towardNear, pulses)
+                    }
+                } catch (_: Throwable) {
+                    return MFDriveOutcome.Refused(rawResponseCode = 0)
+                }
+            updateRoundTripMeasurement(force = true)
+            return when {
+                raw == 0 -> MFDriveOutcome.Complete
+                raw == 1 -> MFDriveOutcome.EndOfTravel
+                raw == 2 -> MFDriveOutcome.StepTooSmall
+                raw >= 0x10000 -> MFDriveOutcome.Refused(rawResponseCode = raw and 0xFFFF)
+                else -> MFDriveOutcome.Refused(rawResponseCode = 0)
+            }
+        }
     }
 
     override suspend fun seedInstantReviewBaseline() {

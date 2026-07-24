@@ -1588,6 +1588,27 @@
         }
     }
 
+    /// `SwiftCore.sessionMFDrive(towardNear, pulses): Int` — one relative
+    /// manual-focus drive with its classified outcome: 0 complete,
+    /// 1 end of travel, 2 amount too small, -1 no session, or
+    /// `0x10000 | responseCode` for a body refusal (the shell surfaces a
+    /// non-drivable lens once with that code). Blocking; Kotlin calls it from
+    /// `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionMFDrive")
+    public func swiftCoreSessionMFDrive(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?,
+        towardNear: jboolean, pulses: jint
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        let bounded = UInt32(min(max(Int(pulses), 1), 32767))
+        switch session.mfDrive(towardNear: towardNear != 0, pulses: bounded) {
+        case .complete: return 0
+        case .endOfTravel: return 1
+        case .stepTooSmall: return 2
+        case .refused(let code): return jint(0x10000 | Int32(code.rawValue))
+        }
+    }
+
     /// `SwiftCore.sessionChangeAfArea(x, y): Int` — passes semantic scalar
     /// coordinates into the Swift-owned Nikon transaction layer.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionChangeAfArea")
