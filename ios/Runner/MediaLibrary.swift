@@ -48,6 +48,10 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
     /// On-card R3D filename paired with this proxy by stem (nil when unlinked).
     var linkedR3DFilename: String? = nil
     var isFavorite: Bool = false
+    /// EXIF orientation (1–8) of the full still, learned from the full file's header — the
+    /// camera's PTP thumbnails can be EXIF-stripped, so grid/filmstrip decodes use this as the
+    /// fallback to show portrait shots upright. Additive/Codable — nil until resolved.
+    var exifOrientation: Int? = nil
     /// Cached camera star rating (0–5), mirrored from the body on every rating write so the
     /// Favorites filter agrees with the shots starred during a shoot. Additive/Codable —
     /// decodes nil on index rows written before this field existed. Camera is source of truth.

@@ -6273,19 +6273,99 @@ final class NativeAppModel {
     // (The rating step table lives in shared core `StillCapturePolicy` — both shells map
     // stars ↔ raw property values through the same code.)
 
-    /// Deletes clips from the camera card (and any local copies). A RAW+JPEG pair deletes
-    /// both sides. Protected objects are refused by the body and stay listed. Returns the
-    /// number of items actually removed. [verify-on-HW]
+    /// Everything one deletion will actually remove, and why — so the confirm copy and the
+    /// delete run from the same expansion and can never disagree.
+    struct DeletionPlan {
+        /// Requested clips plus every companion object of the same shots, deduplicated.
+        let targets: [MediaClip]
+        /// RAW siblings pulled in behind requested JPEGs.
+        let pairCount: Int
+        /// Same-stem camera masters (R3D / NEV) pulled in behind requested proxies.
+        let masterCount: Int
+        /// Shots whose copy also lives on the other card (backup recording) — deleting the
+        /// shot clears both cards.
+        let backupCount: Int
+    }
+
+    /// Same-stem camera masters (`.R3D` / `.NEV`) on the same card as a playable proxy — the
+    /// grid hides them behind the proxy, so deleting the proxy must take them along.
+    private func linkedMasters(of clip: MediaClip) -> [MediaClip] {
+        guard MediaClipFilename.isPlayableProxy(clip.filename) else { return [] }
+        let stem = MediaClipFilename.stem(of: clip.filename)
+        return mediaClips.filter {
+            $0.id != clip.id && $0.cameraID == clip.cameraID && $0.storageID == clip.storageID
+                && ["r3d", "nev"].contains($0.fileExtension)
+                && MediaClipFilename.stem(of: $0.filename) == stem
+        }
+    }
+
+    /// Expands a deletion request to the full set of objects it honestly removes: each shot's
+    /// RAW sibling and its hidden camera master. Backup copies ride on the shot's own row (the
+    /// locations model folds both cards into one row), so they need no separate widening — they
+    /// go when `deleteMediaClips` walks the row's `allLocations`.
+    func deletionPlan(for clips: [MediaClip]) -> DeletionPlan {
+        var byID: [String: MediaClip] = [:]
+        var ordered: [MediaClip] = []
+        var pairs = 0
+        var masters = 0
+        var backups = 0
+        func insert(_ clip: MediaClip) -> Bool {
+            guard byID[clip.id] == nil else { return false }
+            byID[clip.id] = clip
+            ordered.append(clip)
+            if clip.allLocations.count > 1 { backups += 1 }
+            return true
+        }
+        for clip in clips {
+            var shot: [MediaClip] = [clip]
+            if let raw = rawSibling(of: clip), byID[raw.id] == nil { shot.append(raw) }
+            shot.append(contentsOf: linkedMasters(of: clip))
+            for (index, piece) in shot.enumerated() where insert(piece) {
+                if index > 0 {
+                    if piece.isRawPhoto { pairs += 1 } else { masters += 1 }
+                }
+            }
+        }
+        return DeletionPlan(
+            targets: ordered, pairCount: pairs, masterCount: masters, backupCount: backups)
+    }
+
+    /// Destructive-confirmation copy for a deletion, naming only what this request actually
+    /// removes: still wording for stills, master wording for proxies with hidden masters, and
+    /// the cross-card note only when backup copies really exist.
+    func deletionConfirmMessage(for clips: [MediaClip]) -> String {
+        let plan = deletionPlan(for: clips)
+        var message: String
+        if clips.count == 1, let only = clips.first {
+            message =
+                only.mediaKind == .photo
+                ? "Delete this photo from the camera card?"
+                : "Delete \(only.filename) from the camera card?"
+        } else {
+            message = "Delete \(clips.count) items from the camera card?"
+        }
+        if plan.pairCount > 0 {
+            message += " Both the RAW and JPEG files of a pair are removed."
+        }
+        if plan.masterCount > 0 {
+            message += " The camera master file is removed with its proxy."
+        }
+        if plan.backupCount > 0 {
+            message += " The backup copies on the other card are removed too."
+        }
+        return message
+    }
+
+    /// Deletes clips from the camera card (and any local copies). The request widens through
+    /// `deletionPlan` — RAW siblings and hidden camera masters go with their shots, and each
+    /// shot's own row deletes every card it lives on. Protected objects are refused by the body
+    /// and stay listed. Returns the number of items actually removed. [verify-on-HW]
     func deleteMediaClips(_ clips: [MediaClip]) async -> Int {
         // A camera list enumerated before the deletions would re-add the rows when it
         // lands — cancel it up front and re-list fresh once the deletions are done.
         mediaFetchTask?.cancel()
         mediaFetchTask = nil
-        var targets: [MediaClip] = []
-        for clip in clips {
-            targets.append(clip)
-            if let raw = rawSibling(of: clip) { targets.append(raw) }
-        }
+        let targets = deletionPlan(for: clips).targets
         var deleted = 0
         for clip in targets {
             let doomed = clip.allLocations
@@ -6322,6 +6402,25 @@ final class NativeAppModel {
         seedInstantReviewBaseline()
         if isConnected { scheduleFetchClipsFromCamera() }
         return deleted
+    }
+
+    /// Caches a still's EXIF orientation (1–8) on its index row — the camera's PTP thumbnails
+    /// can be EXIF-stripped, so grid/filmstrip decodes need the full file's answer without
+    /// re-fetching headers.
+    func cacheEXIFOrientation(_ orientation: Int, for clip: MediaClip) {
+        guard (1...8).contains(orientation), clip.exifOrientation != orientation else { return }
+        mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+            $0.exifOrientation = orientation
+        }
+        refreshMediaClips()
+    }
+
+    /// Learns a still's orientation from its on-disk bytes (a streamed full file always carries
+    /// the header) and caches it once; a no-op for videos and already-resolved rows.
+    func resolveEXIFOrientation(for clip: MediaClip, at url: URL) {
+        guard clip.mediaKind == .photo, clip.exifOrientation == nil else { return }
+        guard let orientation = MediaCellImageLoader.exifOrientation(atFile: url) else { return }
+        cacheEXIFOrientation(orientation, for: clip)
     }
 
     /// The clip's star rating from the camera (0–5); nil when unreachable (offline or a
@@ -9597,6 +9696,13 @@ extension NativeAppModel {
             if UIImage(data: data) != nil {
                 try? mediaClipStore.saveThumbnail(
                     cameraID: clip.cameraID, filename: clip.filename, data: data)
+                // A thumb that DOES carry EXIF answers the orientation for free — grid cells
+                // fall back to this row value when a later decode meets stripped bytes.
+                if clip.exifOrientation == nil,
+                    let orientation = MediaCellImageLoader.exifOrientation(in: data)
+                {
+                    cacheEXIFOrientation(orientation, for: clip)
+                }
             } else {
                 thumblessClipIDs.insert(clip.id)
             }

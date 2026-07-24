@@ -421,6 +421,42 @@ final class RunnerTests: XCTestCase {
     }
 
     @MainActor
+    func testDeletionConfirmMessageIsContextAware() {
+        let model = NativeAppModel()
+
+        // A video names the file and never shows stills (RAW+JPEG) wording — the exact
+        // regression Erik reported.
+        let video = MediaClip(
+            cameraID: "cam", filename: "C0001.MOV", handle: 10, storageID: 0x0001_0001,
+            sizeBytes: 1, captureDate: "20260724T120000")
+        let videoMessage = model.deletionConfirmMessage(for: [video])
+        XCTAssertTrue(videoMessage.contains("C0001.MOV"))
+        XCTAssertFalse(videoMessage.contains("RAW"))
+        XCTAssertFalse(videoMessage.contains("photo"))
+
+        // A lone still: "photo" wording, no companion notes.
+        let photo = MediaClip(
+            cameraID: "cam", filename: "DSC_0001.JPG", handle: 11, storageID: 0x0001_0001,
+            sizeBytes: 1, captureDate: "20260724T120001")
+        model.mediaClips = [photo]
+        let photoMessage = model.deletionConfirmMessage(for: [photo])
+        XCTAssertTrue(photoMessage.contains("photo"))
+        XCTAssertFalse(photoMessage.contains("other card"))
+
+        // A backup-mode still lives on both cards (one row, two locations) — the confirm names
+        // the cross-card removal.
+        var backup = MediaClip(
+            cameraID: "cam", filename: "DSC_0002.JPG", handle: 12, storageID: 0x0001_0001,
+            sizeBytes: 1, captureDate: "20260724T120002")
+        backup.storageLocations = [
+            MediaObjectHandle(storageID: 0x0001_0001, handle: 12),
+            MediaObjectHandle(storageID: 0x0002_0001, handle: 44),
+        ]
+        model.mediaClips = [backup]
+        XCTAssertTrue(model.deletionConfirmMessage(for: [backup]).contains("other card"))
+    }
+
+    @MainActor
     func testDemoStaticRendererAppliesLUTAndFalseColorWithoutMetal() async {
         let encodedSkinHighlight = ExposureToneCurve.redLog3G10.encode(linearLight: 0.18 * 2)
         let source = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 4)).image { context in
