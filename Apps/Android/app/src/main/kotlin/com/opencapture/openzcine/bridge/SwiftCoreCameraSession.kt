@@ -711,6 +711,44 @@ class SwiftCoreCameraSession internal constructor(
         runStillCommand { core.setStillBurstBracket(active) }
     }
 
+    override suspend fun seedInstantReviewBaseline() {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return
+        withContext(Dispatchers.IO) { SwiftCore.sessionSeedStillReviewBaseline() }
+    }
+
+    override suspend fun resolveNewestStillHandle(): Int? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        val handle =
+            withContext(Dispatchers.IO) { SwiftCore.sessionResolveNewestStillHandle() }
+        return handle.takeIf { it != 0 }
+    }
+
+    override suspend fun stillThumbnail(handle: Int): ByteArray? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        return withContext(Dispatchers.IO) { SwiftCore.sessionThumbnail(handle) }
+    }
+
+    // The chunked fetch serializes per-transaction inside the native session,
+    // interleaving with live-view frames — deliberately NOT under
+    // cameraCommandMutex so control writes/polls aren't starved for its
+    // multi-second duration.
+    override suspend fun stillFullImage(handle: Int): ByteArray? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        return withContext(Dispatchers.IO) { SwiftCore.sessionStillImage(handle) }
+    }
+
+    override fun cancelStillImageFetch() {
+        if (!core.isAvailable) return
+        SwiftCore.sessionCancelStillImage()
+    }
+
+    override suspend fun setStillRating(handle: Int, stars: Int): Int? {
+        if (_state.value !is CameraSessionState.Connected || !core.isAvailable) return null
+        val confirmed =
+            withContext(Dispatchers.IO) { SwiftCore.sessionSetObjectRating(handle, stars) }
+        return confirmed.takeIf { it >= 0 }
+    }
+
     /** Shared gate for the still-release command family. */
     private suspend fun runStillCommand(command: () -> Int) {
         cameraCommandMutex.withLock {

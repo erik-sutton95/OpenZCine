@@ -202,6 +202,17 @@ internal fun ShotsRemainingReadout(
     )
 }
 
+/** The instant review's settings line, captured at present time (iOS `presentInstantReview`). */
+internal fun photographyReviewInfoLine(properties: CameraPropertySnapshot): String? =
+    listOfNotNull(
+        properties.iso?.let { "ISO $it" },
+        properties.shutterSpeed,
+        properties.iris,
+        properties.compression,
+    )
+        .joinToString("   ")
+        .ifEmpty { null }
+
 /** "1234" up to four digits, "12.3k" beyond, like the camera's own counter. */
 internal fun shotsRemainingCompactLabel(count: Int): String =
     if (count > 9999) {

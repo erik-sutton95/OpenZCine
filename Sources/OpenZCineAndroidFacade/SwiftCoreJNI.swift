@@ -1909,6 +1909,66 @@
         MediaBrowseCursorRegistry.shared.cancel(handle: Int64(cursor))
     }
 
+    /// `SwiftCore.sessionSeedStillReviewBaseline(): Int` — snapshots the
+    /// card's object-handle sets as the instant-review diff baseline. 0 on
+    /// success.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSeedStillReviewBaseline")
+    public func swiftCoreSessionSeedStillReviewBaseline(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current() else { return -1 }
+        do {
+            try session.seedStillReviewBaseline()
+            return 0
+        } catch {
+            return -2
+        }
+    }
+
+    /// `SwiftCore.sessionResolveNewestStillHandle(): Int` — the just-captured
+    /// JPEG/HEIF handle from the post-capture baseline diff, or 0 when the
+    /// card hasn't listed it yet (caller retries).
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionResolveNewestStillHandle")
+    public func swiftCoreSessionResolveNewestStillHandle(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let handle = try? session.resolveNewestStillHandle()
+        else { return 0 }
+        return jint(bitPattern: UInt32(handle))
+    }
+
+    /// `SwiftCore.sessionStillImage(handle): ByteArray?` — the full captured
+    /// image, streamed in 1 MB chunks between live-view frames. Null when
+    /// cancelled or unavailable. Blocking; Kotlin calls it from
+    /// `Dispatchers.IO`.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionStillImage")
+    public func swiftCoreSessionStillImage(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, handle: jint
+    ) -> jbyteArray? {
+        guard let session = ActiveSessionSlot.shared.current(),
+            let image = session.stillReviewImage(handle: UInt32(bitPattern: handle))
+        else { return nil }
+        let fns = table(env)
+        guard let array = fns.NewByteArray!(env, jsize(image.count)) else { return nil }
+        image.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            fns.SetByteArrayRegion!(
+                env, array, 0, jsize(image.count),
+                base.assumingMemoryBound(to: jbyte.self))
+        }
+        return array
+    }
+
+    /// `SwiftCore.sessionCancelStillImage()` — aborts an in-flight review
+    /// fetch at its next chunk boundary.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionCancelStillImage")
+    public func swiftCoreSessionCancelStillImage(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) {
+        ActiveSessionSlot.shared.current()?.cancelStillReviewFetch()
+    }
+
     /// `SwiftCore.sessionThumbnail(handle): ByteArray?` — the camera's
     /// embedded thumbnail JPEG for one object (`GetThumb`). Null when
     /// disconnected, rejected, or the object has no thumbnail. Blocking;

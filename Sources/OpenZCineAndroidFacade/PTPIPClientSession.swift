@@ -588,6 +588,14 @@ public final class PTPIPClientSession: @unchecked Sendable {
     /// flight.
     private let mediaTransferCondition = NSCondition()
     private var mediaTransferActive = false
+    /// Last known object handles per storage — the instant-review baseline a
+    /// post-capture diff runs against. Maintained outside the shutter path so
+    /// the release itself never waits on enumeration; the Kotlin review flow
+    /// serializes access.
+    var stillReviewBaseline: [UInt32: Set<UInt32>] = [:]
+    /// Aborts an in-flight chunked review fetch so the shared channel is
+    /// released the moment the review is dismissed.
+    var stillReviewFetchCancelled = false
     private var mediaTransferStopRequested = false
 
     /// Camera identity resolved during `connect`. Written once by

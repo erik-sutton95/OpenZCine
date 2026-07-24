@@ -332,6 +332,9 @@ internal fun MonitorScreen(
     // and hold-to-burst with the remote-mode bracket). [verify-on-HW]
     val stillCapture = remember(session) { StillCaptureController(session) }
     val stillCapturing by stillCapture.isCapturing.collectAsState()
+    // Post-capture instant playback (PLAY view-assist tool).
+    val instantReview = remember(session) { InstantReviewController(session) }
+    val instantReviewState by instantReview.review.collectAsState()
     val propertyRefreshStatus by session.propertyRefreshStatus.collectAsState()
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
@@ -901,6 +904,31 @@ internal fun MonitorScreen(
         )
     }
     val photoShutterReleased: () -> Unit = { stillCapture.released(recordScope) }
+    // Arm the instant-review diff with the card's current handles the moment
+    // PLAY is on in photo mode (iOS seedInstantReviewBaseline call sites);
+    // leaving photo mode or losing the session drops any presented review.
+    LaunchedEffect(sessionState, isPhotographyMode, assist.instantReviewEnabled) {
+        if (
+            sessionState is CameraSessionState.Connected &&
+            isPhotographyMode &&
+            assist.instantReviewEnabled
+        ) {
+            instantReview.seedBaseline(this)
+        } else {
+            instantReview.dismiss()
+        }
+    }
+    // Completion is per-run, never per-frame — a held burst schedules exactly
+    // one review, of its last frame. Reassigned per composition so the hook
+    // reads current mode/quality state.
+    stillCapture.onRunCompleted = {
+        instantReview.onCaptureRunCompleted(
+            recordScope,
+            enabled = isPhotographyMode && assist.instantReviewEnabled,
+            compression = cameraProperties.compression,
+            infoLine = photographyReviewInfoLine(cameraProperties),
+        )
+    }
     // iOS shutter long-press (strip cell + open picker panel): toggle MovieTVLock.
     val shutterHapticView = LocalView.current
     val shutterLongPressToggle: () -> Unit = {
@@ -2012,7 +2040,8 @@ internal fun MonitorScreen(
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     visibleTools =
                                         frontPinnedAssistTools(
-                                            operatorSettings.visibleAssistToolbarTools,
+                                            operatorSettings.visibleAssistToolbarTools
+                                                .filterNot { it.isPhotographyOnly },
                                             photography = false,
                                         ),
                                     framingConfiguration = localFraming,
@@ -2410,6 +2439,16 @@ internal fun MonitorScreen(
                     }
                 }
             }
+        }
+
+        // Post-capture instant playback cover (photography PLAY tool): the
+        // just-captured still full-screen until the duration elapses or a tap.
+        instantReviewState?.let { review ->
+            InstantReviewOverlay(
+                review = review,
+                onDismiss = instantReview::dismiss,
+                onToggleStar = { starred -> instantReview.setStarred(recordScope, starred) },
+            )
         }
 
         // Recording tally border at the physical edge (iOS `RecordingBorderModule`).
@@ -2814,7 +2853,7 @@ private fun PortraitChrome(
     val photographyAssistTools =
         frontPinnedAssistTools(
             operatorSettings.visibleAssistToolbarTools.filter {
-                !isPhotography || it.appliesToPhotography
+                if (isPhotography) it.appliesToPhotography else !it.isPhotographyOnly
             },
             photography = isPhotography,
         )

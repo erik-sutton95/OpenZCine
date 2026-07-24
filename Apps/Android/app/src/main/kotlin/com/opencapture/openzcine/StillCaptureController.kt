@@ -34,6 +34,12 @@ internal class StillCaptureController(
     private val latchedContinuous = AtomicBoolean(false)
     private var runJob: Job? = null
 
+    /**
+     * Fired once per completed run — never per frame — so a held burst
+     * schedules exactly one instant review, of its last frame.
+     */
+    var onRunCompleted: (() -> Unit)? = null
+
     /** Frames chained in one hold — a hard cap backstops a swallowed finger-up. */
     private companion object {
         const val MAX_CHAINED_FRAMES = 30
@@ -123,6 +129,7 @@ internal class StillCaptureController(
             _isCapturing.value = false
             // The SHOTS pill re-reads through the regular refresh.
             runCatching { session.refreshProperties() }
+            runCatching { onRunCompleted?.invoke() }
         }
     }
 }

@@ -671,6 +671,25 @@ object SwiftCore {
     /** Opens/closes the continuous-burst remote-mode bracket. */
     external fun sessionSetStillBurstBracket(active: Boolean): Int
 
+    /** Snapshots the card's handle sets as the instant-review diff baseline. */
+    external fun sessionSeedStillReviewBaseline(): Int
+
+    /**
+     * The just-captured JPEG/HEIF handle from the post-capture baseline diff,
+     * or 0 while the card hasn't listed it yet (caller retries).
+     */
+    external fun sessionResolveNewestStillHandle(): Int
+
+    /**
+     * The full captured image, streamed in chunks between live-view frames.
+     * Long-running and blocking — call from IO; cancel via
+     * [sessionCancelStillImage].
+     */
+    external fun sessionStillImage(handle: Int): ByteArray?
+
+    /** Aborts an in-flight [sessionStillImage] at its next chunk boundary. */
+    external fun sessionCancelStillImage()
+
     /**
      * Applies one typed camera control selection on the active session. [control]
      * is a stable semantic selector owned by [CameraControl]; [label] is the

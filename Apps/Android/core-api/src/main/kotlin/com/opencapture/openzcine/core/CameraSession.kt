@@ -847,6 +847,36 @@ public interface CameraSession {
     }
 
     /**
+     * Seeds the instant-review baseline (the card's current object handles)
+     * so the first post-capture diff has something to diff against.
+     */
+    public suspend fun seedInstantReviewBaseline(): Unit = Unit
+
+    /**
+     * The just-captured photo's object handle from a post-capture baseline
+     * diff, or `null` while the card hasn't listed it yet (caller retries).
+     */
+    public suspend fun resolveNewestStillHandle(): Int? = null
+
+    /** The camera's embedded thumbnail for one object, or `null`. */
+    public suspend fun stillThumbnail(handle: Int): ByteArray? = null
+
+    /**
+     * The full captured image, streamed between live-view frames. Long-running;
+     * abort via [cancelStillImageFetch].
+     */
+    public suspend fun stillFullImage(handle: Int): ByteArray? = null
+
+    /** Aborts an in-flight [stillFullImage] at its next chunk boundary. */
+    public fun cancelStillImageFetch() {}
+
+    /**
+     * Writes a 0–5 star rating to one captured object; returns the confirmed
+     * star count, or `null` when the write was refused.
+     */
+    public suspend fun setStillRating(handle: Int, stars: Int): Int? = null
+
+    /**
      * Moves the camera autofocus area to [point].
      *
      * Implementations serialize this with recording, property writes, media ownership, and

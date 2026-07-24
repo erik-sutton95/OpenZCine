@@ -85,13 +85,17 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     /** Camera-fed exposure indicator (the body's own metering needle). */
     EV("EV", "EV Meter"),
     DESQ("DE-SQ", "Desqueeze"),
+    /** Photography-only instant playback of the just-captured still. */
+    PLAY("PLAY", "Instant Playback"),
     AUDIO("AUDIO", "Audio Levels"),
 
     ;
 
     /** Whether a long press opens the iOS-equivalent quick-configuration panel. */
     val hasConfiguration: Boolean
-        get() = this != AUDIO && this != EV
+        // ponytail: PLAY's iOS options drawer (AF box / info / duration) is a
+        // follow-up; the toggle alone covers the between-shots review.
+        get() = this != AUDIO && this != EV && this != PLAY
 
     /**
      * Assist tools that apply to still photography (iOS `appliesToPhotography`):
@@ -102,9 +106,13 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     val appliesToPhotography: Boolean
         get() =
             when (this) {
-                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV -> true
+                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV, PLAY -> true
                 else -> false
             }
+
+    /** Photography-only tools, hidden from the cinema toolbar entirely. */
+    val isPhotographyOnly: Boolean
+        get() = this == PLAY
 
     companion object {
         /**
@@ -133,8 +141,10 @@ internal fun frontPinnedAssistTools(
     photography: Boolean,
 ): List<AssistTool> {
     if (photography) {
-        if (AssistTool.EV !in tools) return tools
-        return listOf(AssistTool.EV) + tools.filterNot { it == AssistTool.EV }
+        // Photography leads with instant playback then the EV meter (iOS pins).
+        val pins = listOf(AssistTool.PLAY, AssistTool.EV).filter { it in tools }
+        if (pins.isEmpty()) return tools
+        return pins + tools.filterNot { it in pins }
     }
     val evIndex = tools.indexOf(AssistTool.EV)
     if (evIndex <= 1) return tools
@@ -215,6 +225,7 @@ internal fun AssistTool.labelResource(): Int =
         AssistTool.LEVEL -> R.string.assist_label_level
         AssistTool.EV -> R.string.assist_label_ev_meter
         AssistTool.DESQ -> R.string.assist_label_desqueeze
+        AssistTool.PLAY -> R.string.assist_label_play
         AssistTool.AUDIO -> R.string.assist_label_audio
     }
 
@@ -236,6 +247,7 @@ internal fun AssistTool.titleResource(): Int =
         AssistTool.LEVEL -> R.string.assist_title_horizon
         AssistTool.EV -> R.string.assist_title_ev_meter
         AssistTool.DESQ -> R.string.assist_title_desqueeze
+        AssistTool.PLAY -> R.string.assist_title_instant_playback
         AssistTool.AUDIO -> R.string.assist_title_audio_levels
     }
 
@@ -301,6 +313,13 @@ class AssistState(
         private set
 
     /**
+     * Whether photography's instant playback (PLAY) is armed. Session-local —
+     * arming also reseeds the capture baseline via the monitor's effect.
+     */
+    var instantReviewEnabled: Boolean by mutableStateOf(false)
+        private set
+
+    /**
      * Activates the process-local compatibility mirror after composition has
      * committed. Constructing this state often happens inside `remember`, so
      * writing another Compose state from the initializer can race an activity
@@ -323,6 +342,7 @@ class AssistState(
             AssistTool.VECTOR -> ScopeKind.VECTORSCOPE in selectedScopes
             AssistTool.LIGHTS -> ScopeKind.TRAFFIC_LIGHTS in selectedScopes
             AssistTool.AUDIO -> audioMetersEnabled
+            AssistTool.PLAY -> instantReviewEnabled
             // Framing tools are persisted by OperatorSettings instead of this
             // feed-effects state. AssistToolbar routes them through its local
             // framing callback; keeping this fallback false prevents an
@@ -377,6 +397,10 @@ class AssistState(
             AssistTool.AUDIO -> {
                 audioMetersEnabled = !audioMetersEnabled
                 persistState()
+                true
+            }
+            AssistTool.PLAY -> {
+                instantReviewEnabled = !instantReviewEnabled
                 true
             }
             // See isOn: monitor and settings framing controls are routed to
@@ -1287,6 +1311,26 @@ internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier =
                 drawLine(tint, Offset(inset, y), Offset(inset + head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
                 drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y - head), 1.7.dp.toPx(), StrokeCap.Round)
                 drawLine(tint, Offset(size.width - inset, y), Offset(size.width - inset - head, y + head), 1.7.dp.toPx(), StrokeCap.Round)
+            }
+            // SF `photo.badge.checkmark`: photo frame with a check tick.
+            AssistTool.PLAY -> {
+                val stroke2 = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                drawRoundRect(
+                    tint,
+                    topLeft = Offset(size.width * 0.06f, size.height * 0.14f),
+                    size = androidx.compose.ui.geometry.Size(
+                        size.width * 0.70f,
+                        size.height * 0.62f,
+                    ),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height * 0.12f),
+                    style = stroke2,
+                )
+                val check = Path().apply {
+                    moveTo(size.width * 0.62f, size.height * 0.78f)
+                    lineTo(size.width * 0.74f, size.height * 0.90f)
+                    lineTo(size.width * 0.96f, size.height * 0.62f)
+                }
+                drawPath(check, tint, style = stroke2)
             }
             // SF `slider.vertical.3`: three compact audio level bars.
             AssistTool.AUDIO -> {
