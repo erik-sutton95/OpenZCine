@@ -109,6 +109,8 @@ class PlaybackAssistState internal constructor(
             gridVisible = AssistTool.GRID in framingTools,
             centerCrosshairEnabled = AssistTool.CROSS in framingTools,
             levelEnabled = AssistTool.LEVEL in framingTools,
+            // Playback has no live camera indicator; the EV meter stays off.
+            evMeterEnabled = false,
             desqueezeEnabled = AssistTool.DESQ in framingTools,
         )
 

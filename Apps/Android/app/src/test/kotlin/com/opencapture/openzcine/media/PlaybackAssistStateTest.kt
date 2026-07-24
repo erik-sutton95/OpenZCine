@@ -91,16 +91,20 @@ class PlaybackAssistStateTest {
         val configurable = AssistTool.entries.filter(::hasPlaybackAssistOptions).toSet()
 
         assertEquals(
-            AssistTool.entries.toSet() - setOf(AssistTool.AUDIO, AssistTool.LEVEL),
+            AssistTool.entries.toSet() -
+                setOf(AssistTool.AUDIO, AssistTool.LEVEL, AssistTool.EV),
             configurable,
         )
         assertFalse(hasPlaybackAssistOptions(AssistTool.AUDIO))
         assertFalse(hasPlaybackAssistOptions(AssistTool.LEVEL))
+        // Tap-only camera-fed needle: no options panel, and playback (which
+        // has no live camera indicator) never lists it.
+        assertFalse(hasPlaybackAssistOptions(AssistTool.EV))
         assertTrue(hasPlaybackAssistOptions(AssistTool.CROSS))
         assertEquals(
             listOf(AssistTool.LUT, AssistTool.AUDIO),
             playbackAssistToolbarTools(
-                listOf(AssistTool.LUT, AssistTool.LEVEL, AssistTool.AUDIO),
+                listOf(AssistTool.LUT, AssistTool.LEVEL, AssistTool.EV, AssistTool.AUDIO),
             ),
         )
     }

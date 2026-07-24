@@ -80,6 +80,8 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     GRID("GRID", "Grid"),
     CROSS("CROSS", "Crosshair"),
     LEVEL("LEVEL", "Horizon"),
+    /** Camera-fed exposure indicator (the body's own metering needle). */
+    EV("EV", "EV Meter"),
     DESQ("DE-SQ", "Desqueeze"),
     AUDIO("AUDIO", "Audio Levels"),
 
@@ -87,7 +89,7 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
 
     /** Whether a long press opens the iOS-equivalent quick-configuration panel. */
     val hasConfiguration: Boolean
-        get() = this != AUDIO
+        get() = this != AUDIO && this != EV
 
     /**
      * Assist tools that apply to still photography (iOS `appliesToPhotography`):
@@ -98,13 +100,17 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
     val appliesToPhotography: Boolean
         get() =
             when (this) {
-                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL -> true
+                PEAK, FALSE, ZEBRA, HISTO, GRID, LEVEL, EV -> true
                 else -> false
             }
 
     companion object {
-        /** Local framing tools rendered from [OperatorSettings], never camera state. */
-        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, DESQ)
+        /**
+         * Tools whose toggle state lives in [OperatorSettings], never camera or
+         * feed-effect state. EV rides with the framing group: its visibility is
+         * a local presentation choice, while the value stays camera-fed.
+         */
+        val framingTools: Set<AssistTool> = setOf(GUIDES, GRID, CROSS, LEVEL, EV, DESQ)
 
         /** Independently selectable scope panels subject to the portrait fit-mode cap. */
         val scopeTools: Set<AssistTool> = setOf(WAVE, PARADE, HISTO, VECTOR, LIGHTS)
@@ -113,6 +119,27 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
         internal fun fromStoredName(value: String): AssistTool? =
             entries.firstOrNull { it.name == value }
     }
+}
+
+/**
+ * Front-pins the between-shots tools (iOS `MonitorAssistStrip.frontPinned`):
+ * photography leads with the EV meter (Android has no instant playback, so EV
+ * takes the lead slot); video keeps its leading tool and seats EV second.
+ */
+internal fun frontPinnedAssistTools(
+    tools: List<AssistTool>,
+    photography: Boolean,
+): List<AssistTool> {
+    if (photography) {
+        if (AssistTool.EV !in tools) return tools
+        return listOf(AssistTool.EV) + tools.filterNot { it == AssistTool.EV }
+    }
+    val evIndex = tools.indexOf(AssistTool.EV)
+    if (evIndex <= 1) return tools
+    val rest = tools.toMutableList()
+    rest.removeAt(evIndex)
+    rest.add(1, AssistTool.EV)
+    return rest
 }
 
 @StringRes
@@ -131,6 +158,7 @@ internal fun AssistTool.labelResource(): Int =
         AssistTool.GRID -> R.string.assist_label_grid
         AssistTool.CROSS -> R.string.assist_label_crosshair
         AssistTool.LEVEL -> R.string.assist_label_level
+        AssistTool.EV -> R.string.assist_label_ev_meter
         AssistTool.DESQ -> R.string.assist_label_desqueeze
         AssistTool.AUDIO -> R.string.assist_label_audio
     }
@@ -151,6 +179,7 @@ internal fun AssistTool.titleResource(): Int =
         AssistTool.GRID -> R.string.assist_title_composition_grid
         AssistTool.CROSS -> R.string.assist_title_centre_crosshair
         AssistTool.LEVEL -> R.string.assist_title_horizon
+        AssistTool.EV -> R.string.assist_title_ev_meter
         AssistTool.DESQ -> R.string.assist_title_desqueeze
         AssistTool.AUDIO -> R.string.assist_title_audio_levels
     }
@@ -247,6 +276,7 @@ class AssistState(
             AssistTool.GRID,
             AssistTool.CROSS,
             AssistTool.LEVEL,
+            AssistTool.EV,
             AssistTool.DESQ,
             -> false
         }
@@ -300,6 +330,7 @@ class AssistState(
             AssistTool.GRID,
             AssistTool.CROSS,
             AssistTool.LEVEL,
+            AssistTool.EV,
             AssistTool.DESQ,
             -> false
         }
@@ -826,6 +857,7 @@ private fun LocalFramingAssistConfiguration.isToolEnabled(tool: AssistTool): Boo
         AssistTool.GRID -> drawsGrid
         AssistTool.CROSS -> centerCrosshairEnabled
         AssistTool.LEVEL -> levelEnabled
+        AssistTool.EV -> evMeterEnabled
         AssistTool.DESQ -> desqueezeEnabled
         else -> false
     }
@@ -1108,6 +1140,34 @@ internal fun AssistToolGlyph(tool: AssistTool, tint: Color, modifier: Modifier =
                     StrokeCap.Round,
                 )
                 drawCircle(tint, size.minDimension * 0.08f, centre)
+            }
+            // SF `plusminus`: the camera's exposure indicator (± EV).
+            AssistTool.EV -> {
+                val strokeWidth = 1.7.dp.toPx()
+                val plusCentre = Offset(size.width * 0.5f, size.height * 0.30f)
+                val plusHalf = size.minDimension * 0.20f
+                drawLine(
+                    tint,
+                    Offset(plusCentre.x - plusHalf, plusCentre.y),
+                    Offset(plusCentre.x + plusHalf, plusCentre.y),
+                    strokeWidth,
+                    StrokeCap.Round,
+                )
+                drawLine(
+                    tint,
+                    Offset(plusCentre.x, plusCentre.y - plusHalf),
+                    Offset(plusCentre.x, plusCentre.y + plusHalf),
+                    strokeWidth,
+                    StrokeCap.Round,
+                )
+                val minusY = size.height * 0.78f
+                drawLine(
+                    tint,
+                    Offset(size.width * 0.5f - plusHalf, minusY),
+                    Offset(size.width * 0.5f + plusHalf, minusY),
+                    strokeWidth,
+                    StrokeCap.Round,
+                )
             }
             // SF `arrow.left.and.right`: local anamorphic de-squeeze.
             AssistTool.DESQ -> {

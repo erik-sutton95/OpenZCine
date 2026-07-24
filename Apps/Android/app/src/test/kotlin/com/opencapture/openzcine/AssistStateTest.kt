@@ -307,4 +307,50 @@ class AssistStateTest {
         assertTrue(overridden.effects.isIdentity)
         assertTrue(overridden.selectedScopes.isEmpty())
     }
+
+    @Test
+    fun `front pinning leads photography with EV and seats it second for video`() {
+        val order =
+            listOf(
+                AssistTool.PEAK,
+                AssistTool.FALSE,
+                AssistTool.HISTO,
+                AssistTool.GRID,
+                AssistTool.EV,
+                AssistTool.LEVEL,
+            )
+
+        // Photography: EV takes the lead slot (Android has no instant playback).
+        assertEquals(
+            listOf(
+                AssistTool.EV,
+                AssistTool.PEAK,
+                AssistTool.FALSE,
+                AssistTool.HISTO,
+                AssistTool.GRID,
+                AssistTool.LEVEL,
+            ),
+            frontPinnedAssistTools(order, photography = true),
+        )
+
+        // Video: the leading tool keeps its slot and EV seats second.
+        assertEquals(
+            listOf(
+                AssistTool.PEAK,
+                AssistTool.EV,
+                AssistTool.FALSE,
+                AssistTool.HISTO,
+                AssistTool.GRID,
+                AssistTool.LEVEL,
+            ),
+            frontPinnedAssistTools(order, photography = false),
+        )
+
+        // Already at or before slot 1: untouched. Hidden EV: untouched.
+        val evSecond = listOf(AssistTool.PEAK, AssistTool.EV, AssistTool.FALSE)
+        assertEquals(evSecond, frontPinnedAssistTools(evSecond, photography = false))
+        val noEv = listOf(AssistTool.PEAK, AssistTool.FALSE)
+        assertEquals(noEv, frontPinnedAssistTools(noEv, photography = true))
+        assertEquals(noEv, frontPinnedAssistTools(noEv, photography = false))
+    }
 }

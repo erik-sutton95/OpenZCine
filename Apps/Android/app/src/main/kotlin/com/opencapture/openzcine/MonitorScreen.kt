@@ -1143,6 +1143,15 @@ internal fun MonitorScreen(
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
         val localFraming = operatorSettings.localFramingAssistConfiguration
+        // While the EV meter tool is on, the session interleaves fast needle
+        // reads between regular property polls (dropped again on dispose so a
+        // dismissed monitor can't keep the extra camera traffic alive).
+        LaunchedEffect(session, localFraming.evMeterEnabled) {
+            session.setExposureIndicatorFastPolling(localFraming.evMeterEnabled)
+        }
+        DisposableEffect(session) {
+            onDispose { session.setExposureIndicatorFastPolling(false) }
+        }
         val liveFeedColorNoticeTopInset =
             liveFeedColorNoticeTopInsetDp(
                 feed = zones.feed,
@@ -1680,6 +1689,8 @@ internal fun MonitorScreen(
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
+                    evIndicatorSixths = cameraProperties.evIndicatorSixths,
+                    evIndicatorLit = cameraProperties.evIndicatorLit,
                 )
                 LiveFeedColorModeNotice(
                     colorMode = liveFeedPresentation.colorMode,
@@ -1870,9 +1881,12 @@ internal fun MonitorScreen(
                                     assist,
                                     Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
                                     visibleTools =
-                                        operatorSettings.visibleAssistToolbarTools.filter {
-                                            !isPhotography || it.appliesToPhotography
-                                        },
+                                        frontPinnedAssistTools(
+                                            operatorSettings.visibleAssistToolbarTools.filter {
+                                                !isPhotography || it.appliesToPhotography
+                                            },
+                                            photography = isPhotography,
+                                        ),
                                     framingConfiguration = localFraming,
                                     onToggleFramingTool = operatorSettings::toggleLocalFramingTool,
                                     hapticsEnabled = operatorSettings.hapticsEnabled.value,
@@ -2572,9 +2586,12 @@ private fun PortraitChrome(
     // glass pill off the screen edges, like iOS. Photography narrows the
     // tool list to the stills set (iOS `appliesToPhotography`).
     val photographyAssistTools =
-        operatorSettings.visibleAssistToolbarTools.filter {
-            !isPhotography || it.appliesToPhotography
-        }
+        frontPinnedAssistTools(
+            operatorSettings.visibleAssistToolbarTools.filter {
+                !isPhotography || it.appliesToPhotography
+            },
+            photography = isPhotography,
+        )
     if (!isCommand && operatorSettings.assistToolbarVisible.value) {
         zones.assistStrip?.let { strip ->
             AssistToolbar(

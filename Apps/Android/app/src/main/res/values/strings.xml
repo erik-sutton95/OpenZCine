@@ -205,6 +205,7 @@
     <string name="assist_label_grid">GRID</string>
     <string name="assist_label_crosshair">CROSS</string>
     <string name="assist_label_level">LEVEL</string>
+    <string name="assist_label_ev_meter">EV</string>
     <string name="assist_label_desqueeze">DE-SQ</string>
     <string name="assist_label_audio">AUDIO</string>
     <string name="assist_title_focus_peaking">Peaking</string>
@@ -219,6 +220,7 @@
     <string name="assist_title_composition_grid">Composition Grid</string>
     <string name="assist_title_centre_crosshair">Centre Crosshair</string>
     <string name="assist_title_horizon">Horizon</string>
+    <string name="assist_title_ev_meter">EV Meter</string>
     <string name="assist_title_desqueeze">Desqueeze</string>
     <string name="assist_title_audio_levels">Audio Levels</string>
     <string name="assist_view">VIEW</string>

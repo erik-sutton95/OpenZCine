@@ -97,9 +97,9 @@ import kotlinx.coroutines.launch
 internal fun hasPlaybackAssistOptions(tool: AssistTool): Boolean =
     tool.hasConfiguration && tool != AssistTool.LEVEL
 
-/** Mirrors iOS by keeping the live-only camera horizon out of playback's assist toolbar. */
+/** Mirrors iOS by keeping the live-only camera horizon and EV meter out of playback's toolbar. */
 internal fun playbackAssistToolbarTools(tools: List<AssistTool>): List<AssistTool> =
-    tools.filterNot { it == AssistTool.LEVEL }
+    tools.filterNot { it == AssistTool.LEVEL || it == AssistTool.EV }
 
 /** Returns whether a live quick-settings panel still belongs to the visible monitor lifecycle. */
 internal fun retainLiveAssistOptions(
@@ -394,6 +394,9 @@ private fun PlaybackAssistOptionsContent(
         AssistTool.CROSS ->
             OptionCopy("Tap the toolbar button to show or hide the centre crosshair.")
         AssistTool.LEVEL -> LevelOptions(actions, settings)
+        AssistTool.EV ->
+            // Tap-only tool (no configuration); defensive copy if ever routed here.
+            OptionCopy("Shows the camera body's own exposure indicator on the live monitor.")
         AssistTool.DESQ -> DesqueezeOptions(settings)
         AssistTool.AUDIO ->
             OptionCopy("Meters the playing clip's audio. Available during media playback.")

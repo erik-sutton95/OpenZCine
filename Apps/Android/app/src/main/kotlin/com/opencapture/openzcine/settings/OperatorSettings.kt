@@ -415,6 +415,8 @@ public data class LocalFramingAssistConfiguration(
     public val levelEnabled: Boolean = false,
     /** Operator-selected presentation for the camera-level overlay. */
     public val levelStyle: LocalLevelStyle = LocalLevelStyle.HORIZON,
+    /** Whether the camera-fed EV meter overlay is visible. */
+    public val evMeterEnabled: Boolean = false,
     /** Whether the local de-squeeze presentation is applied. */
     public val desqueezeEnabled: Boolean,
     /** Named chip when the factor matches a preset (UI highlight). */
@@ -529,6 +531,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val centerCrosshairEnabled: Toggle = Toggle("assist.local.centerCrosshair", default = false)
     /** Enables the local camera-level assist; it never writes a camera property. */
     public val levelAssistEnabled: Toggle = Toggle("assist.local.level", default = false)
+    public val evMeterAssistEnabled: Toggle = Toggle("assist.local.evMeter", default = false)
     public val desqueezeEnabled: Toggle =
         Toggle(DESQUEEZE_ENABLED_KEY, default = legacyDesqueezeWasEnabled())
     /** Shows the shared Swift meter's RGB edge blocks on the histogram. */
@@ -757,6 +760,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             }
             AssistTool.CROSS -> centerCrosshairEnabled.toggle()
             AssistTool.LEVEL -> levelAssistEnabled.toggle()
+            AssistTool.EV -> evMeterAssistEnabled.toggle()
             AssistTool.DESQ -> desqueezeEnabled.toggle()
             else -> Unit
         }
@@ -769,6 +773,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             AssistTool.GRID -> localGridVisible.value
             AssistTool.CROSS -> centerCrosshairEnabled.value
             AssistTool.LEVEL -> levelAssistEnabled.value
+            AssistTool.EV -> evMeterAssistEnabled.value
             AssistTool.DESQ -> desqueezeEnabled.value
             else -> false
         }
@@ -911,6 +916,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
                 centerCrosshairEnabled = centerCrosshairEnabled.value,
                 levelEnabled = levelAssistEnabled.value,
                 levelStyle = levelStyle,
+                evMeterEnabled = evMeterAssistEnabled.value,
                 desqueezeEnabled = desqueezeEnabled.value,
                 desqueezeRatio = desqueezeRatio,
                 desqueezeFactor = desqueezeFactor,
@@ -956,6 +962,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(LEVEL_VISIBILITY_MIGRATED_KEY, true)
+            .putBoolean(EV_METER_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -987,6 +994,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(LEVEL_VISIBILITY_MIGRATED_KEY, true)
+            .putBoolean(EV_METER_VISIBILITY_MIGRATED_KEY, true)
             .apply()
     }
 
@@ -1017,6 +1025,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             diagonalGridEnabled,
             centerCrosshairEnabled,
             levelAssistEnabled,
+            evMeterAssistEnabled,
             desqueezeEnabled,
         )
 
@@ -1111,6 +1120,13 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             // custom toolbar sees the new control, then retain manual hides.
             migrated += AssistTool.LEVEL
             editor.putBoolean(LEVEL_VISIBILITY_MIGRATED_KEY, true)
+            changed = true
+        }
+        if (!preferences.getBoolean(EV_METER_VISIBILITY_MIGRATED_KEY, false)) {
+            // The camera-fed EV meter lands as a new tap-only tool. Existing
+            // custom layouts see it once; a later manual hide stays hidden.
+            migrated += AssistTool.EV
+            editor.putBoolean(EV_METER_VISIBILITY_MIGRATED_KEY, true)
             changed = true
         }
         if (changed) {
@@ -1372,6 +1388,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             "display.assistToolbar.framing.visibility.migrated.v1"
         const val LEVEL_VISIBILITY_MIGRATED_KEY =
             "display.assistToolbar.level.visibility.migrated.v1"
+        const val EV_METER_VISIBILITY_MIGRATED_KEY =
+            "display.assistToolbar.evMeter.visibility.migrated.v1"
         const val GUIDES_VISIBLE_KEY = "assist.local.guides.visible.v2"
         const val GUIDE_FAMILY_KEY = "assist.local.guides.family.v2"
         const val GUIDE_RATIOS_KEY = "assist.local.guides.ratios.v2"
