@@ -2733,6 +2733,24 @@ public final class PTPIPClientSession: @unchecked Sendable {
             throw PTPIPClientSessionError.mediaModeActive
         }
         try changeAfAreaTransaction(x: x, y: y)
+        // Photography: moving the point alone never focuses (video's
+        // continuous AF does that part) — drive AF like a half-press, with a
+        // short DeviceReady drain so the body isn't left mid-drive. Subject
+        // tracking latches through the same area change, exactly as in video.
+        // Out-of-focus or a still-busy timeout stays silent; the AF box state
+        // in the header tells the story. [verify-on-HW]
+        if StillCapturePolicy.prefersPhotographyChrome(
+            selector: androidPropertySnapshot.captureSelector)
+        {
+            _ = try? transactExpectingOK(.afDrive)
+            for _ in 0..<4 {
+                guard let result = try? executeTransaction(.deviceReady),
+                    case .inProgress = StillCapturePolicy.releaseReadiness(
+                        result.operationResponse.responseCode)
+                else { break }
+                Thread.sleep(forTimeInterval: 0.12)
+            }
+        }
     }
 
     /// Recentres the AF area using only current camera-owned focus dimensions,

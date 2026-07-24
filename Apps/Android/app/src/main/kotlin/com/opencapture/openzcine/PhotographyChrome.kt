@@ -233,6 +233,8 @@ internal fun PhotographyShutterButton(
     isCapturing: Boolean,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** Seconds left in a running app self-timer countdown (renders in the disc). */
+    timerRemaining: Int? = null,
     onPressed: () -> Unit = {},
     onReleased: () -> Unit = {},
 ) {
@@ -253,7 +255,12 @@ internal fun PhotographyShutterButton(
                 }
             }
             .semantics {
-                contentDescription = if (isCapturing) "Capturing" else "Shutter"
+                contentDescription =
+                    when {
+                        timerRemaining != null -> "Self-timer, $timerRemaining seconds"
+                        isCapturing -> "Capturing"
+                        else -> "Shutter"
+                    }
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -262,7 +269,17 @@ internal fun PhotographyShutterButton(
                 .size(42.dp)
                 .clip(CircleShape)
                 .background(if (isCapturing) Color.White.copy(alpha = 0.5f) else Color.White),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            timerRemaining?.let { remaining ->
+                Text(
+                    "$remaining",
+                    style = chromeStyle(20f, FontWeight.Bold, mono = true),
+                    color = Color.Black.copy(alpha = 0.82f),
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 

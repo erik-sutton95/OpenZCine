@@ -64,6 +64,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.platform.testTag
 import androidx.core.view.WindowCompat
@@ -118,6 +119,7 @@ import com.opencapture.openzcine.wear.androidWatchRelayState
 import com.opencapture.openzcine.wear.executeWearRecordCommand
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.conflate
@@ -894,9 +896,82 @@ internal fun MonitorScreen(
                 }
             }
         }
+    // App self-timer (iOS startStillTimer/fireTimerShots): a per-second beep
+    // through usage-media playback so it stays audible per the device's silent
+    // behaviour, a white tally pulse per tick, and the shots run chained after
+    // the countdown. A second press cancels the countdown or remaining run.
+    var photoTimerRemaining by remember { mutableStateOf<Int?>(null) }
+    var photoTimerJob by remember { mutableStateOf<Job?>(null) }
+    val photoTimerTone =
+        remember { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 80) }
+    DisposableEffect(Unit) { onDispose { photoTimerTone.release() } }
+    fun firePhotoTimerShots(): Job =
+        recordScope.launch {
+            repeat(maxOf(1, photoTimerShotCount)) { index ->
+                if (index > 0) {
+                    // Each shot waits out the previous one's completion.
+                    var waitedMillis = 0
+                    while (stillCapture.isCapturing.value && waitedMillis < 20_000) {
+                        delay(150)
+                        waitedMillis += 150
+                    }
+                    if (stillCapture.isCapturing.value) return@launch
+                }
+                stillCapture.pressed(recordScope, continuousDrive = false)
+                delay(150)
+            }
+        }
     // Photography shutter press/release (iOS shutterButtonPressed/Released):
-    // continuous drives latch the burst for the duration of the hold.
-    val photoShutterPressed: () -> Unit = {
+    // countdown/timer runs first; continuous drives latch the burst for the
+    // duration of the hold.
+    val photoShutterPressed: () -> Unit = pressed@{
+        if (photoTimerJob?.isActive == true) {
+            // Second press cancels a running countdown (or the remaining shot
+            // run), matching body behaviour.
+            photoTimerJob?.cancel()
+            photoTimerJob = null
+            photoTimerRemaining = null
+            return@pressed
+        }
+        if (photoTimerDelaySeconds > 0 && !stillCapturing) {
+            photoTimerJob =
+                recordScope.launch {
+                    try {
+                        var remaining = photoTimerDelaySeconds
+                        photoTimerRemaining = remaining
+                        photoTimerTone.startTone(
+                            android.media.ToneGenerator.TONE_PROP_BEEP, 70,
+                        )
+                        while (remaining > 0) {
+                            delay(1000)
+                            remaining -= 1
+                            photoTimerRemaining = remaining
+                            if (remaining > 0) {
+                                photoTimerTone.startTone(
+                                    android.media.ToneGenerator.TONE_PROP_BEEP, 70,
+                                )
+                            }
+                        }
+                        photoTimerTone.startTone(
+                            android.media.ToneGenerator.TONE_PROP_BEEP2, 200,
+                        )
+                        photoTimerRemaining = null
+                        firePhotoTimerShots().join()
+                    } finally {
+                        photoTimerRemaining = null
+                    }
+                }
+            return@pressed
+        }
+        if (
+            photoTimerShotCount > 1 && !stillCapturing &&
+            cameraProperties.stillCaptureMode == StillPickerPolicy.SELF_TIMER_LABEL
+        ) {
+            // Built-in timer engaged: its countdown never runs for command
+            // releases, so the shots field drives a straight run from the press.
+            photoTimerJob = firePhotoTimerShots()
+            return@pressed
+        }
         stillCapture.pressed(
             recordScope,
             continuousDrive =
@@ -1875,6 +1950,7 @@ internal fun MonitorScreen(
                     stillCapturing = stillCapturing,
                     onShutterPressed = photoShutterPressed,
                     onShutterReleased = photoShutterReleased,
+                    photoTimerRemaining = photoTimerRemaining,
                     onLock = { locked = !locked },
                     recordEnabled = recordControlEnabled,
                     onRecord = requestRecordToggle,
@@ -2205,6 +2281,7 @@ internal fun MonitorScreen(
                         PhotographyShutterButton(
                             isCapturing = stillCapturing,
                             modifier = Modifier.zone(zones.record),
+                            timerRemaining = photoTimerRemaining,
                             onPressed = photoShutterPressed,
                             onReleased = photoShutterReleased,
                         )
@@ -2231,6 +2308,7 @@ internal fun MonitorScreen(
                             PhotographyShutterButton(
                                 isCapturing = stillCapturing,
                                 modifier = Modifier.zone(zones.record),
+                                timerRemaining = photoTimerRemaining,
                                 onPressed = photoShutterPressed,
                                 onReleased = photoShutterReleased,
                             )
@@ -2439,6 +2517,23 @@ internal fun MonitorScreen(
                     }
                 }
             }
+        }
+
+        // App self-timer tally: a white border pulse at the physical edge per
+        // countdown tick (iOS timer tally), fading within each second.
+        photoTimerRemaining?.let { remaining ->
+            val pulse = remember(remaining) { Animatable(1f) }
+            LaunchedEffect(remaining) {
+                pulse.animateTo(0.2f, animationSpec = tween(durationMillis = 900))
+            }
+            Box(
+                Modifier.fillMaxSize()
+                    .border(
+                        4.dp,
+                        Color.White.copy(alpha = pulse.value),
+                        RoundedCornerShape(24.dp),
+                    ),
+            )
         }
 
         // Post-capture instant playback cover (photography PLAY tool): the
@@ -2778,6 +2873,7 @@ private fun PortraitChrome(
     stillCapturing: Boolean,
     onShutterPressed: () -> Unit,
     onShutterReleased: () -> Unit,
+    photoTimerRemaining: Int? = null,
     onLock: () -> Unit,
     recordEnabled: Boolean,
     onRecord: () -> Unit,
@@ -3006,6 +3102,7 @@ private fun PortraitChrome(
             PhotographyShutterButton(
                 isCapturing = stillCapturing,
                 modifier = Modifier.size(83.dp),
+                timerRemaining = photoTimerRemaining,
                 onPressed = onShutterPressed,
                 onReleased = onShutterReleased,
             )
