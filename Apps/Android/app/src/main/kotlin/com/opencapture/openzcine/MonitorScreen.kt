@@ -435,7 +435,16 @@ internal fun MonitorScreen(
     // Recording is owned by the CameraSession; the shell only renders its
     // state and asks it to send a Nikon command.
     var displayMode by remember { mutableStateOf(MonitorDisplayMode.LIVE) }
-    val effectiveDisplayMode = operatorSettings.reconciledDisplayMode(displayMode)
+    // Photography hides the command monitor (its dashboard is still
+    // movie-shaped); the DISP indicator and cycle follow this filtered order
+    // (iOS `displayOrder`).
+    val displayModeOrder =
+        photographyDisplayModeOrder(
+            operatorSettings.enabledDisplayModeOrder,
+            photography = prefersPhotographyChrome(cameraProperties),
+        )
+    val effectiveDisplayMode =
+        displayMode.takeIf(displayModeOrder::contains) ?: displayModeOrder.first()
     var locked by remember { mutableStateOf(false) }
     var focusPointLocked by remember(session) { mutableStateOf(false) }
     var focusLockHolding by remember(session) { mutableStateOf(false) }
@@ -559,6 +568,14 @@ internal fun MonitorScreen(
             activeCommandControl = null
             activeMonitorPickerKind = null
             activeAssistOptions = null
+            // Photography has no command dashboard — flipping to photo while
+            // it is up snaps back to live (iOS flip handler).
+            if (
+                prefersPhotographyChrome(cameraProperties) &&
+                displayMode == MonitorDisplayMode.COMMAND
+            ) {
+                displayMode = MonitorDisplayMode.LIVE
+            }
         }
     }
     val analysisPanelPlacementStore =
@@ -1481,7 +1498,9 @@ internal fun MonitorScreen(
                     if (!focusGestureContext.canRecognizeDisplayGesture) {
                         return@handleFocusFeedAction
                     }
-                    operatorSettings.displayModeForExplicitRequest(action.mode)?.let { next ->
+                    operatorSettings.displayModeForExplicitRequest(action.mode)
+                        ?.takeIf(displayModeOrder::contains)
+                        ?.let { next ->
                         if (next != effectiveDisplayMode) {
                             displayMode = next
                             if (operatorSettings.hapticsEnabled.value) {
@@ -1723,7 +1742,7 @@ internal fun MonitorScreen(
                     commandControlsEnabled = commandControlsEnabled,
                     pendingCommandControl = pendingCommandControl,
                     displayMode = effectiveDisplayMode,
-                    enabledDisplayModeOrder = operatorSettings.enabledDisplayModeOrder,
+                    enabledDisplayModeOrder = displayModeOrder,
                     cameraProperties = cameraProperties,
                     stillCapturing = stillCapturing,
                     onShutter = { stillCapturing = true },
@@ -1732,7 +1751,7 @@ internal fun MonitorScreen(
                     onRecord = requestRecordToggle,
                     onDisp = {
                         activeAssistOptions = null
-                        displayMode = operatorSettings.nextDisplayMode(effectiveDisplayMode)
+                        displayMode = nextDisplayModeInOrder(displayModeOrder, effectiveDisplayMode)
                     },
                     onOpenMedia = {
                         activeAssistOptions = null
@@ -2000,15 +2019,14 @@ internal fun MonitorScreen(
                             onClick = requestRecordToggle,
                         )
                     }
-                    val enabledOrder = operatorSettings.enabledDisplayModeOrder
                     DispButton(
-                        activeIndex = enabledOrder.indexOf(effectiveDisplayMode),
-                        modeCount = enabledOrder.size,
+                        activeIndex = displayModeOrder.indexOf(effectiveDisplayMode),
+                        modeCount = displayModeOrder.size,
                         isLiveActive = effectiveDisplayMode == MonitorDisplayMode.LIVE,
                         modifier = Modifier.zone(zones.disp),
                     ) {
                         activeAssistOptions = null
-                        displayMode = operatorSettings.nextDisplayMode(effectiveDisplayMode)
+                        displayMode = nextDisplayModeInOrder(displayModeOrder, effectiveDisplayMode)
                     }
                 } else {
                     if (railPlan.recordingSafetyVisible) {
@@ -2928,3 +2946,27 @@ internal fun batteryRowStackFrame(anchor: ZoneFrame, lock: ZoneFrame): ZoneFrame
         width = BATTERY_STACK_WIDTH_DP,
         height = BATTERY_STACK_HEIGHT_DP,
     )
+
+/**
+ * Photography hides the command display mode — its dashboard is still
+ * movie-shaped (iOS `displayOrder` filter). Empty results (COMMAND-only
+ * preference in photo mode) recover to the always-safe live mode.
+ */
+internal fun photographyDisplayModeOrder(
+    order: List<MonitorDisplayMode>,
+    photography: Boolean,
+): List<MonitorDisplayMode> {
+    if (!photography) return order
+    return order.filterNot { it == MonitorDisplayMode.COMMAND }
+        .ifEmpty { listOf(MonitorDisplayMode.LIVE) }
+}
+
+/** The next mode after [current] in the effective DISP order, wrapping. */
+internal fun nextDisplayModeInOrder(
+    order: List<MonitorDisplayMode>,
+    current: MonitorDisplayMode,
+): MonitorDisplayMode {
+    if (order.isEmpty()) return current
+    val index = order.indexOf(current)
+    return if (index < 0) order.first() else order[(index + 1) % order.size]
+}

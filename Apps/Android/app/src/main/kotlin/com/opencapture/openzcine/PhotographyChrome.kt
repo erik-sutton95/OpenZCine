@@ -154,6 +154,11 @@ private fun photographyStripTiles(
         PhotographyStripTile("FOCUS", properties.focusMode ?: "—", "Wide-L"),
         PhotographyStripTile("WB", stillWhiteBalanceValue(properties), "5560K"),
         PhotographyStripTile("METER", properties.meteringMode ?: "—", "Matrix"),
+        PhotographyStripTile(
+            "PROFILE",
+            compactPictureControlLabel(properties.pictureControl) ?: "—",
+            "Auto",
+        ),
     )
 
 /** Drive-mode label compacted to strip width ("Continuous H" → "CH"). */
@@ -165,6 +170,27 @@ private fun compactDriveLabel(stillCaptureMode: String?): String? =
         "Continuous H+" -> "CH+"
         "Self-timer" -> "Timer"
         else -> stillCaptureMode
+    }
+
+/**
+ * Picture-control label compacted to strip width (iOS
+ * `compactPictureControlLabel`): body-style codes for the built-ins; Auto and
+ * the creative names are short enough to show whole.
+ */
+internal fun compactPictureControlLabel(pictureControl: String?): String? =
+    when (pictureControl) {
+        null -> null
+        "Standard" -> "SD"
+        "Neutral" -> "NL"
+        "Vivid" -> "VI"
+        "Monochrome" -> "MC"
+        "Portrait" -> "PT"
+        "Landscape" -> "LS"
+        "Flat" -> "FL"
+        "Flat Mono" -> "FM"
+        "Deep Tone Mono" -> "DTM"
+        "Rich Tone Portrait" -> "RTP"
+        else -> pictureControl
     }
 
 /**
