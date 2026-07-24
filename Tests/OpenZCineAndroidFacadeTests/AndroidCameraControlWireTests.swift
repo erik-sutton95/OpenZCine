@@ -60,6 +60,34 @@ struct AndroidCameraControlWireTests {
                 == PTPIPClientSession.androidMonitorPollOrder(isRecording: false))
     }
 
+    @Test func photoModeDescriptorRoutingTargetsTheStillsProperties() {
+        // The aperture enum for the mounted lens comes from the STANDARD
+        // aperture property while the photo selector is active — the movie
+        // enum is not authoritative there (iOS refreshLensApertures).
+        #expect(
+            PTPIPClientSession.apertureDescriptorProperty(captureSelector: .photo)
+                == .fNumber)
+        #expect(
+            PTPIPClientSession.apertureDescriptorProperty(captureSelector: .video)
+                == .movieFNumber)
+        #expect(
+            PTPIPClientSession.apertureDescriptorProperty(captureSelector: nil)
+                == .movieFNumber)
+        // The photo option enums pin to their stills properties.
+        #expect(PTPIPClientSession.stillShutterOptionsProperty == .stillShutterSpeed)
+        #expect(PTPIPClientSession.stillWhiteBalanceOptionsProperty == .whiteBalance)
+        #expect(PTPIPClientSession.stillImageSizeOptionsProperty == .imageSize)
+    }
+
+    @Test func modeFlipBurstDrainsInBoundedChunks() {
+        // The flip queue must span several ticks (frames interleave between
+        // them) rather than one blocking burst: chunk < the photo set size,
+        // and big enough that a few fast polls land the whole set.
+        let chunk = PTPIPClientSession.androidModeFlipBurstChunk
+        #expect(chunk >= 4)
+        #expect(chunk < StillCapturePolicy.photoMonitorPollOrder.count)
+    }
+
     @Test func stillControlsSkipCapabilityValidationAndMapSharedEncoders() {
         for control in [
             AndroidCameraControl.stillISO, .stillISOAuto, .stillShutter, .stillIris,

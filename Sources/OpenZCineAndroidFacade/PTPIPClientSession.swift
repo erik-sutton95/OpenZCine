@@ -544,6 +544,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private var androidEVIndicatorPollTick = 0
     private var androidLastStorageRefreshAt: Date?
     private var androidLastDescriptorRefreshAt: Date?
+    /// Remaining property reads of a photo↔video flip's value burst, drained
+    /// in bounded chunks per poll tick so frames keep interleaving.
+    private var androidPendingModeFlipBurst: [PTPPropertyCode] = []
+    /// A flip marked the descriptor domains stale; the pass runs once after
+    /// the value queue drains.
+    private var androidDescriptorsDueForModeFlip = false
     private var nextTransactionID: UInt32 = 1
     private var isClosed = false
 
@@ -1244,17 +1250,49 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 result == .accepted,
                 androidPropertySnapshot.captureSelector != previousSelector
             {
-                // Photo ↔ video flip: burst the new mode's full property set
-                // back-to-back so the strip fills in seconds instead of
-                // trickling one property per poll tick (~90 s for a full
-                // photo cycle). One visible live-view hitch, same as connect.
-                for extra in Self.androidBootstrapPollOrder(
-                    captureSelector: androidPropertySnapshot.captureSelector)
-                where extra != .liveViewSelector {
-                    result = mergedAndroidPropertyRefreshResult(
-                        result, refreshAndroidProperty(extra))
-                    if result == .transportFailed { break }
-                }
+                // Photo ↔ video flip: QUEUE the new mode's property set instead
+                // of bursting it synchronously — a blocked tick held the
+                // selector readback hostage for the whole burst, so the chrome
+                // itself swapped seconds late. The queue drains in bounded
+                // chunks on the following ticks, interleaving with live-view
+                // frames; the stream itself is never restarted. Single-flight:
+                // a second flip simply replaces the queue.
+                androidPendingModeFlipBurst =
+                    Self.androidBootstrapPollOrder(
+                        captureSelector: androidPropertySnapshot.captureSelector
+                    )
+                    .filter { $0 != .liveViewSelector }
+                // Descriptor domains (apertures for the mounted lens, stills
+                // speed enum, photo WB presets, image sizes) are NOT refreshed
+                // at flip time — mark them due; the maintenance pass below
+                // picks them up once the value queue drains.
+                androidDescriptorsDueForModeFlip = true
+            }
+            // Drain a bounded slice of a pending flip queue each tick — frames
+            // keep flowing between ticks and the whole set lands within a few
+            // fast Kotlin polls (~1-2 s).
+            var flipBudget = Self.androidModeFlipBurstChunk
+            while !androidPendingModeFlipBurst.isEmpty,
+                flipBudget > 0,
+                result != .transportFailed
+            {
+                let extra = androidPendingModeFlipBurst.removeFirst()
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidProperty(extra))
+                flipBudget -= 1
+            }
+            // The flip's descriptor pass runs ONCE, only after the value queue
+            // drained (chrome + readouts are already live), so the flip itself
+            // never blocks on ~24 descriptor reads. [verify-on-HW: pass length
+            // vs frame cadence on-body]
+            if androidPendingModeFlipBurst.isEmpty,
+                androidDescriptorsDueForModeFlip,
+                result != .transportFailed,
+                !isRecording
+            {
+                androidDescriptorsDueForModeFlip = false
+                result = mergedAndroidPropertyRefreshResult(
+                    result, refreshAndroidControlDescriptors())
             }
             if property == .movieFileType,
                 result == .accepted,
@@ -1563,15 +1601,21 @@ public final class PTPIPClientSession: @unchecked Sendable {
     private func refreshAndroidApertureDescriptor() throws {
         androidControlCatalog.apertures = []
         androidControlCatalog.allowsApertureFallback = false
+        // Photo mode describes the STANDARD aperture property for the mounted
+        // lens; the movie enum is not authoritative there (iOS
+        // refreshLensApertures routing). A flip marks descriptors due, so the
+        // list refetches for the new mode. [verify-on-HW]
+        let property = Self.apertureDescriptorProperty(
+            captureSelector: androidPropertySnapshot.captureSelector)
         do {
-            let raw = try descriptorEnumValues(.movieFNumber, valueByteCount: 2)
+            let raw = try descriptorEnumValues(property, valueByteCount: 2)
             let modes = uniqueUInt16Modes(raw) { value in
                 let label = PTPCameraPropertyDecoders.irisFNumber(value)
                 return label == "—" ? nil : label
             }
             guard raw.isEmpty || !modes.isEmpty else {
                 throw PTPIPClientSessionError.unwritablePropertyDescriptor(
-                    PTPPropertyCode.movieFNumber.rawValue)
+                    property.rawValue)
             }
             androidControlCatalog.apertures = modes
             androidControlCatalog.allowsApertureFallback = raw.isEmpty && usesNikonZRFallbacks
@@ -1761,7 +1805,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         // state (fraction-packed `ShutterSpeed` plus the Bulb/Time sentinels).
         // Sentinels a picker cannot re-encode are dropped like iOS. [verify-on-HW]
         androidControlCatalog.stillShutterSpeeds = []
-        let raw = try descriptorEnumValues(.stillShutterSpeed, valueByteCount: 4)
+        let raw = try descriptorEnumValues(Self.stillShutterOptionsProperty, valueByteCount: 4)
         androidControlCatalog.stillShutterSpeeds = uniqueUInt32Modes(raw) { value in
             let label = PTPCameraPropertyDecoders.stillShutterLabel(value)
             guard PTPCameraPropertyDecoders.stillShutterRaw(for: label) != nil else {
@@ -1775,7 +1819,8 @@ public final class PTPIPClientSession: @unchecked Sendable {
         // Photo WB preset enum (`WhiteBalance` 0x5005) — the photography popup's
         // Preset drum follows it, mirroring iOS's stills WB option source.
         androidControlCatalog.stillWhiteBalanceModes = []
-        let raw = try descriptorEnumValues(.whiteBalance, valueByteCount: 2)
+        let raw = try descriptorEnumValues(
+            Self.stillWhiteBalanceOptionsProperty, valueByteCount: 2)
         androidControlCatalog.stillWhiteBalanceModes = uniqueUInt16Modes(raw) { value in
             let label = PTPCameraPropertyDecoders.whiteBalanceMode(value)
             return label.hasPrefix("0x") ? nil : label
@@ -1786,7 +1831,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
         // `ImageSize` is a string enumeration ("Size L" / resolution strings);
         // the SIZE picker offers the exact strings and writes them verbatim.
         androidControlCatalog.imageSizes = []
-        let descriptor = try readPropertyDescriptor(.imageSize)
+        let descriptor = try readPropertyDescriptor(Self.stillImageSizeOptionsProperty)
         androidControlCatalog.imageSizes =
             PTPCameraPropertyDecoders.devicePropDescStringEnumValues(data: descriptor)
     }
@@ -2038,6 +2083,28 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) -> [PTPPropertyCode] {
         androidMonitorPollOrder(isRecording: false, captureSelector: captureSelector)
     }
+
+    /// Reads per tick while a flip's value queue drains: large enough that a
+    /// few fast Kotlin polls land the whole set in ~1-2 s, small enough that
+    /// live-view frames interleave between ticks.
+    static let androidModeFlipBurstChunk = 8
+
+    /// The aperture enum property for the active selector: photo mode
+    /// describes the STANDARD aperture property — the movie enum is not
+    /// authoritative there (iOS `refreshLensApertures`). [verify-on-HW]
+    static func apertureDescriptorProperty(
+        captureSelector: CameraCaptureSelector?
+    ) -> PTPPropertyCode {
+        StillCapturePolicy.prefersPhotographyChrome(selector: captureSelector)
+            ? .fNumber : .movieFNumber
+    }
+
+    /// Photo-mode option-enum sources, pinned so tests and refreshers can
+    /// never drift apart: the stills speed enum, the photo WB preset enum,
+    /// and the image-size string enum.
+    static let stillShutterOptionsProperty: PTPPropertyCode = .stillShutterSpeed
+    static let stillWhiteBalanceOptionsProperty: PTPPropertyCode = .whiteBalance
+    static let stillImageSizeOptionsProperty: PTPPropertyCode = .imageSize
 
     /// Full live-monitor property set used for both the post-connect bootstrap
     /// burst and the steady-state round-robin. Each entry is still one PTP

@@ -1074,6 +1074,8 @@ class SwiftCoreCameraSession internal constructor(
                     }
                 }
                 var fastTick = 0
+                var lastCaptureSelector = _cameraProperties.value.captureSelector
+                var flipFastTicksRemaining = 0
                 while (isActive && ownsConnectedAttempt(attempt)) {
                     // While the EV meter tool is visible (and not recording),
                     // the needle reads at its own fast cadence between the
@@ -1093,6 +1095,14 @@ class SwiftCoreCameraSession internal constructor(
                         )
                         fastTick += 1
                         if (fastTick % EV_TICKS_PER_PROPERTY_POLL != 0) continue
+                    } else if (flipFastTicksRemaining > 0) {
+                        // Photo↔video flip: the facade queued the new mode's
+                        // value burst — a short fast-poll run drains it (and
+                        // its follow-up descriptor pass) in ~1-2 s while
+                        // frames keep interleaving, then the slow cadence
+                        // resumes.
+                        flipFastTicksRemaining -= 1
+                        delay(MODE_FLIP_FAST_POLL_INTERVAL_MILLIS)
                     } else {
                         delay(propertyPollIntervalMillis.coerceAtLeast(1L))
                     }
@@ -1102,6 +1112,11 @@ class SwiftCoreCameraSession internal constructor(
                         request = SwiftCore.PROPERTY_REFRESH_NEXT,
                         propertyCode = 0L,
                     )
+                    val selector = _cameraProperties.value.captureSelector
+                    if (selector != lastCaptureSelector) {
+                        lastCaptureSelector = selector
+                        flipFastTicksRemaining = MODE_FLIP_FAST_POLL_TICKS
+                    }
                 }
             }
         synchronized(propertyRefreshJobLock) {
@@ -1335,6 +1350,18 @@ class SwiftCoreCameraSession internal constructor(
          * frames. 3 s keeps battery/ISO fresh enough without punching the feed.
          */
         const val PROPERTY_POLL_INTERVAL_MILLIS: Long = 3_000L
+
+        /**
+         * Fast-poll cadence after a photo↔video flip while the facade drains
+         * the new mode's queued value burst; frames interleave between ticks.
+         */
+        const val MODE_FLIP_FAST_POLL_INTERVAL_MILLIS: Long = 250L
+
+        /**
+         * Fast ticks per flip: chunk (8) × ticks comfortably covers the full
+         * photo/video set plus the follow-up descriptor pass.
+         */
+        const val MODE_FLIP_FAST_POLL_TICKS: Int = 8
         /**
          * Fast EV-needle gap while the meter tool is visible. A single-byte
          * indicator read is the cheapest possible transaction, but it still
