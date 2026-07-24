@@ -6186,6 +6186,7 @@ final class NativeAppModel {
         guard mfDriveTask == nil else { return }
         mfDriveTask = Task { [weak self] in
             defer { self?.mfDriveTask = nil }
+            var busyRetries = 0
             while let self, let session = self.cameraSession,
                 self.mfDrivePendingPulses != 0, !Task.isCancelled
             {
@@ -6197,13 +6198,28 @@ final class NativeAppModel {
                 )
                 switch outcome {
                 case .complete, .stepTooSmall:
-                    continue
+                    busyRetries = 0
                 case .endOfTravel:
                     self.mfDriveAtEnd = pending < 0 ? -1 : 1
                     self.mfDrivePendingPulses = 0
+                    busyRetries = 0
                 case .refused(let code):
+                    if code == .deviceBusy {
+                        // A busy activation usually means the body was mid-frame — requeue
+                        // the pulses and retry shortly rather than dropping the gesture.
+                        busyRetries += 1
+                        if busyRetries <= 12 {
+                            self.mfDrivePendingPulses += pending
+                            try? await Task.sleep(for: .milliseconds(80))
+                            continue
+                        }
+                        self.mfDrivePendingPulses = 0
+                        self.connectionMessage =
+                            "The camera kept refusing focus drives (busy) — try again."
+                        busyRetries = 0
+                        continue
+                    }
                     self.mfDrivePendingPulses = 0
-                    if code == .deviceBusy { continue }
                     self.connectionMessage =
                         "The camera can't drive this lens's focus — its ring may be mechanical (\(String(format: "0x%04X", code.rawValue)))."
                 }

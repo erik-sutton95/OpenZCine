@@ -5455,6 +5455,7 @@ struct SettingsLiveTile: View {
 struct MFDriveVerticalScrub: View {
     @Environment(NativeAppModel.self) private var model
     @State private var lastDragY: CGFloat?
+    @State private var isDragging = false
 
     /// Drag-to-pulse gain: a full strip sweep ≈ a few thousand pulses.
     private static let pulsesPerPoint = 24
@@ -5465,14 +5466,18 @@ struct MFDriveVerticalScrub: View {
                 .foregroundStyle(model.mfDriveAtEnd == 1 ? LiveDesign.accent : LiveDesign.muted)
             ZStack {
                 Capsule()
-                    .fill(Color.white.opacity(0.07))
-                    .overlay(Capsule().strokeBorder(LiveDesign.hairline, lineWidth: 1))
+                    .fill(Color.white.opacity(isDragging ? 0.16 : 0.07))
+                    .overlay(
+                        Capsule().strokeBorder(
+                            isDragging ? LiveDesign.accent.opacity(0.7) : LiveDesign.hairline,
+                            lineWidth: 1))
                 Rectangle()
                     .fill(LiveDesign.accent.opacity(0.9))
-                    .frame(width: 14, height: 2)
+                    .frame(width: isDragging ? 20 : 14, height: 2)
             }
             .frame(width: 30)
             .frame(maxHeight: .infinity)
+            .animation(.easeOut(duration: 0.12), value: isDragging)
             Text("MF")
                 .foregroundStyle(LiveDesign.faint)
             Text("NEAR")
@@ -5486,12 +5491,16 @@ struct MFDriveVerticalScrub: View {
         .gesture(
             DragGesture(minimumDistance: 2)
                 .onChanged { value in
+                    isDragging = true
                     let delta = (lastDragY ?? value.startLocation.y) - value.location.y
                     lastDragY = value.location.y
                     // Upward drag drives toward infinity.
                     model.driveManualFocus(pulses: Int(delta * CGFloat(Self.pulsesPerPoint)))
                 }
-                .onEnded { _ in lastDragY = nil }
+                .onEnded { _ in
+                    lastDragY = nil
+                    isDragging = false
+                }
         )
         .sensoryFeedback(.impact(weight: .medium), trigger: model.mfDriveAtEnd) { _, end in
             end != nil
