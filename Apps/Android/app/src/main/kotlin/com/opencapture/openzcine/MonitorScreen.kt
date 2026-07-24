@@ -1580,16 +1580,12 @@ internal fun MonitorScreen(
                     }
                 val rightRailLeading =
                     minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x) - 8f
-                val bandTop =
-                    listOfNotNull(zones.assistStrip?.y, zones.captureStrip?.y).minOrNull()
-                        ?: (viewportHeight - safeBottom)
                 photographyFeedFrame(
                     cinemaFeed = zones.feed,
                     viewport = physicalViewport,
                     imageArea = cameraProperties.imageArea,
                     leadingLaneTrailing = railLaneTrailing,
                     trailingLaneLeading = rightRailLeading,
-                    bottomBandTop = bandTop,
                 )
             } else {
                 null
@@ -2083,8 +2079,22 @@ internal fun MonitorScreen(
                     // the lock, so the band always clears it — same as iPhone
                     // geometry.
                     if (operatorSettings.statusBarVisible.value) {
-                        Box(Modifier.zone(zones.infoBar), contentAlignment = Alignment.Center) {
-                            FitScale(zones.infoBar.width.dp) {
+                        // Photography centres the deck pill group over the
+                        // centred FEED, not the band (iOS centres the deck
+                        // over the feed) — a band slice symmetric about the
+                        // feed midpoint makes Center land there.
+                        val deckHost =
+                            if (isPhotography) {
+                                photographyStripHostFrame(
+                                    band = zones.infoBar,
+                                    feedCenterX =
+                                        effectiveFeed.x + effectiveFeed.width / 2f,
+                                )
+                            } else {
+                                zones.infoBar
+                            }
+                        Box(Modifier.zone(deckHost), contentAlignment = Alignment.Center) {
+                            FitScale(deckHost.width.dp) {
                                 InfoPill(
                                     compact = isClean,
                                     recording = recording,

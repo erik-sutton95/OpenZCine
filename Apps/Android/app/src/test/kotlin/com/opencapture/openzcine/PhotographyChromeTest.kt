@@ -70,12 +70,11 @@ class PhotographyChromeTest {
         assertEquals(laneCentre - ASSIST_RAIL_COLLAPSED_PILL_DP / 2f, frame.x)
     }
     @Test
-    fun `photo feed letterboxes inside the reserved chrome lanes`() {
+    fun `photo feed spans the full height between the reserved side lanes`() {
         val viewport = ZoneFrame(0f, 0f, 914f, 384f)
         val cinema = ZoneFrame(59f, 0f, 683f, 384f)
         val railLane = 56f + 12f + ASSIST_RAIL_EXPANDED_WIDTH_DP + 8f // 136
         val rightRail = 914f - 70f
-        val bandTop = 318f
 
         val fx =
             photographyFeedFrame(
@@ -84,31 +83,30 @@ class PhotographyChromeTest {
                 imageArea = "FX",
                 leadingLaneTrailing = railLane,
                 trailingLaneLeading = rightRail,
-                bottomBandTop = bandTop,
             )
-        // 3:2 at the clear-box height, centred — never under the rail lane,
-        // right system rail, or the capture band.
+        // 3:2 at the FULL viewport height (the capture band's glass overlays
+        // the image bottom, like iOS), letterboxed between the SIDE lanes.
         assertEquals(3f / 2f, fx.width / fx.height, 0.01f)
+        assertEquals(viewport.height, fx.height, 0.01f)
+        assertEquals(0f, fx.y, 0.01f)
         assertTrue(fx.x >= railLane)
         assertTrue(fx.x + fx.width <= rightRail)
-        assertTrue(fx.y + fx.height <= bandTop)
-        // Centred in the clear box.
+        // Centred in the side-lane clear box.
         assertEquals(
             railLane + (rightRail - railLane) / 2f,
             fx.x + fx.width / 2f,
             0.5f,
         )
 
-        // 1:1 keeps the square shape inside the same box.
-        val square =
-            photographyFeedFrame(cinema, viewport, "1:1", railLane, rightRail, bandTop)
+        // 1:1 keeps the square shape at full height inside the same lanes.
+        val square = photographyFeedFrame(cinema, viewport, "1:1", railLane, rightRail)
         assertEquals(1f, square.width / square.height, 0.01f)
-        assertEquals(square.height, bandTop.coerceAtMost(viewport.height), 0.01f)
+        assertEquals(viewport.height, square.height, 0.01f)
 
         // 16:9 takes the cinema placement exactly (iOS video-mode placement).
         assertEquals(
             cinema,
-            photographyFeedFrame(cinema, viewport, "16:9", railLane, rightRail, bandTop),
+            photographyFeedFrame(cinema, viewport, "16:9", railLane, rightRail),
         )
     }
 

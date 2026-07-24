@@ -308,15 +308,15 @@ internal fun photographyFeedAspect(imageArea: String?): Float =
     }
 
 /**
- * Photography's landscape feed frame (iOS `MonitorFeedLayout.frame(centered:)`
- * + Erik's reserved-lane hard requirement): the still image area's shape,
- * centred in the clear box between the lock/battery/rail lane, the right
- * system rail, and above the bottom capture band — so the vertical assist rail
- * and the capture strip never overlap the image. A 16:9 photo frame takes the
- * cinema feed placement exactly like iOS.
+ * Photography's landscape feed frame (iOS `MonitorFeedLayout.frame(centered:)`):
+ * the still image area's shape at the FULL viewport height, letterboxed
+ * horizontally and centred between the SIDE lanes only — the lock/battery/rail
+ * lane and the right system rail sit on black, while the capture band's glass
+ * OVERLAYS the image bottom exactly like iOS. A 16:9 photo frame takes the
+ * cinema feed placement.
  */
-// ponytail: the aspect-fit runs Kotlin-side because the no-overlap lanes are
-// Android chrome frames the shared core map doesn't model; the core
+// ponytail: the aspect-fit runs Kotlin-side because the reserved side lanes
+// are Android chrome frames the shared core map doesn't model; the core
 // `centered:` math is this fit's no-lane degenerate case.
 internal fun photographyFeedFrame(
     cinemaFeed: ZoneFrame,
@@ -324,25 +324,23 @@ internal fun photographyFeedFrame(
     imageArea: String?,
     leadingLaneTrailing: Float,
     trailingLaneLeading: Float,
-    bottomBandTop: Float,
 ): ZoneFrame {
     val aspect = photographyFeedAspect(imageArea)
     if (aspect >= 16f / 9f - 0.001f) return cinemaFeed
     val boxLeft = maxOf(viewport.x, leadingLaneTrailing)
     val boxRight = minOf(viewport.x + viewport.width, trailingLaneLeading)
-    val boxTop = viewport.y
-    val boxBottom = minOf(viewport.y + viewport.height, bottomBandTop)
     val boxWidth = maxOf(0f, boxRight - boxLeft)
-    val boxHeight = maxOf(0f, boxBottom - boxTop)
-    var height = boxHeight
+    var height = viewport.height
     var width = height * aspect
     if (width > boxWidth) {
+        // Side lanes constrain a wide box (1:1 on short-wide handsets): fit
+        // the width and centre the shorter frame vertically.
         width = boxWidth
         height = width / aspect
     }
     return ZoneFrame(
         x = boxLeft + (boxWidth - width) / 2f,
-        y = boxTop + (boxHeight - height) / 2f,
+        y = viewport.y + (viewport.height - height) / 2f,
         width = width,
         height = height,
     )
