@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,9 +15,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -40,6 +48,7 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraStorageStatus
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 // The photography capture strip renders through the shared `MonitorCaptureStrip`
 // over `photographyCaptureSettings` (PhotographyPickers.kt) — iOS reuses
@@ -238,9 +247,28 @@ internal fun PhotographyShutterButton(
     enabled: Boolean = true,
     /** Seconds left in a running app self-timer countdown (renders in the disc). */
     timerRemaining: Int? = null,
+    /** Counter bumped when a shutter fires ON THE BODY — a bump dips the button briefly. */
+    bodyShutterPulse: Int = 0,
     onPressed: () -> Unit = {},
     onReleased: () -> Unit = {},
 ) {
+    // A shutter fired on the camera BODY pulses the button (a quick dip-and-release) so an
+    // off-app capture visibly registers — mirrors the app-fired press feedback (iOS
+    // `bodyShutterPulse` / `bodyShutterFlash`). Instant playback already fires separately.
+    var bodyShutterFlash by remember { mutableStateOf(false) }
+    val pulseScale by
+        animateFloatAsState(
+            targetValue = if (bodyShutterFlash) 0.88f else 1f,
+            animationSpec = tween(durationMillis = 120),
+            label = "bodyShutterPulse",
+        )
+    LaunchedEffect(bodyShutterPulse) {
+        if (bodyShutterPulse > 0) {
+            bodyShutterFlash = true
+            delay(130)
+            bodyShutterFlash = false
+        }
+    }
     // iOS PhotographyShutterButton: a 4pt white ring at the record-button
     // footprint with a SOLID white disc inset 17pt total (0.5 alpha while
     // capturing). Everything scales off the caller's slot (the record zone is
@@ -248,6 +276,7 @@ internal fun PhotographyShutterButton(
     // rendered as a hollow ring.
     Box(
         modifier
+            .scale(pulseScale)
             .pointerInput(enabled) {
                 awaitEachGesture {
                     awaitFirstDown()

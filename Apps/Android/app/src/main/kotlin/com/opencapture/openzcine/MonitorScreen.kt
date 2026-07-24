@@ -1028,6 +1028,9 @@ internal fun MonitorScreen(
             )
         }
     }
+    // Bumped when a shutter fires ON THE BODY reaches the app, so the shutter button can pulse
+    // in acknowledgement (iOS `bodyShutterPulse`); the app-fired path animates via its press.
+    var bodyShutterPulse by remember { mutableIntStateOf(0) }
     // Body-fired shutter (iOS 5e366e7): the capture-complete event syncs the
     // app exactly as if it fired the release — instant playback against the
     // fresh card diff plus a shots-remaining refresh — gated to photo mode
@@ -1045,6 +1048,9 @@ internal fun MonitorScreen(
                     appReleaseInFlight = stillCapture.isCapturing.value,
                 )
             if (action == BodyCaptureSync.IGNORE) return@collect
+            // A body capture reached the app: pulse the shutter button so it visibly registers
+            // (iOS `bodyShutterPulse &+= 1`), then run the shots refresh / instant review.
+            bodyShutterPulse++
             recordScope.launch { runCatching { session.refreshProperties() } }
             if (action == BodyCaptureSync.REVIEW_AND_SHOTS) {
                 instantReview.onCaptureRunCompleted(
@@ -2057,6 +2063,7 @@ internal fun MonitorScreen(
                     enabledDisplayModeOrder = displayModeOrder,
                     cameraProperties = cameraProperties,
                     stillCapturing = stillCapturing,
+                    bodyShutterPulse = bodyShutterPulse,
                     onShutterPressed = photoShutterPressed,
                     onShutterReleased = photoShutterReleased,
                     photoTimerRemaining = photoTimerRemaining,
@@ -2489,6 +2496,7 @@ internal fun MonitorScreen(
                             isCapturing = stillCapturing,
                             modifier = Modifier.zone(zones.record),
                             timerRemaining = photoTimerRemaining,
+                            bodyShutterPulse = bodyShutterPulse,
                             onPressed = photoShutterPressed,
                             onReleased = photoShutterReleased,
                         )
@@ -3101,6 +3109,7 @@ private fun PortraitChrome(
     enabledDisplayModeOrder: List<MonitorDisplayMode>,
     cameraProperties: CameraPropertySnapshot,
     stillCapturing: Boolean,
+    bodyShutterPulse: Int = 0,
     onShutterPressed: () -> Unit,
     onShutterReleased: () -> Unit,
     photoTimerRemaining: Int? = null,
@@ -3343,6 +3352,7 @@ private fun PortraitChrome(
                 isCapturing = stillCapturing,
                 modifier = Modifier.size(83.dp),
                 timerRemaining = photoTimerRemaining,
+                bodyShutterPulse = bodyShutterPulse,
                 onPressed = onShutterPressed,
                 onReleased = onShutterReleased,
             )

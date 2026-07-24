@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -813,6 +814,22 @@ internal fun MediaBrowseScreen(
         val byID = displayedClips.associateBy(::clipKey)
         return series.memberIDs.mapNotNull { byID[it] }
     }
+    // A grid burst cell stands for its whole series (iOS `burstExpanded`): expand each selected
+    // representative to every member so a multiselect delete/share acts on the whole set, not
+    // just the representative. Non-series clips pass through; deduped, order preserved.
+    fun burstExpanded(clips: List<MediaClipRecord>): List<MediaClipRecord> {
+        if (clips.isEmpty()) return clips
+        val byID = displayedClips.associateBy(::clipKey)
+        val seen = HashSet<String>()
+        val result = ArrayList<MediaClipRecord>(clips.size)
+        for (clip in clips) {
+            val members =
+                burstByRepresentative[clipKey(clip)]?.memberIDs?.mapNotNull { byID[it] }
+                    ?.takeIf { it.isNotEmpty() } ?: listOf(clip)
+            for (member in members) if (seen.add(clipKey(member))) result.add(member)
+        }
+        return result
+    }
     // Pair lookups scan the unfiltered catalog so the RAW side survives tab
     // and chip filters (iOS `rawSibling(of:)`).
     val rawStillPairKeys =
@@ -825,6 +842,9 @@ internal fun MediaBrowseScreen(
         clip.isJpegStill && clip.rawPairKey(ownerCameraID(clip)) in rawStillPairKeys
     val selectedClips =
         displayedClips.filter { clip -> clipKey(clip) in selectedIDs }
+    // Delete/share act on the whole burst series behind a selected representative (iOS
+    // `burstExpanded`); the selection COUNT stays on the representatives, mirroring iOS.
+    val selectedSeriesClips = burstExpanded(selectedClips)
     val visibleIDs = displayedClips.map { clip -> clipKey(clip) }.toSet()
 
     LaunchedEffect(visibleIDs) {
@@ -926,7 +946,7 @@ internal fun MediaBrowseScreen(
 
     fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedClips
+        val selectionSnapshot = selectedSeriesClips
         val coordinator = mediaDeliveryCoordinator
         if (coordinator != null) {
             scope.launch {
@@ -958,7 +978,7 @@ internal fun MediaBrowseScreen(
             }
             return
         }
-        val selectionSnapshotLegacy = selectedClips
+        val selectionSnapshotLegacy = selectedSeriesClips
         shareInProgress = true
         shareMessage = null
         shareJob =
@@ -1069,7 +1089,7 @@ internal fun MediaBrowseScreen(
 
     fun beginBatchGallerySave(configuration: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedClips
+        val selectionSnapshot = selectedSeriesClips
         // Gallery accepts playable proxies AND still photos; only R3D masters
         // and unsupported objects are omitted.
         val savableSelection =
@@ -1208,7 +1228,7 @@ internal fun MediaBrowseScreen(
 
     fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
         if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedClips
+        val selectionSnapshot = selectedSeriesClips
         frameioDeliveryPresented = false
         shareInProgress = true
         frameioPreparationInProgress = true
@@ -1370,7 +1390,7 @@ internal fun MediaBrowseScreen(
                             librarySource == MediaLibrarySource.CAMERA &&
                                 effectiveCameraConnected,
                         onExitSelection = ::cancelActiveShareOrExitSelection,
-                        onDelete = { deleteConfirmTargets = selectedClips },
+                        onDelete = { deleteConfirmTargets = selectedSeriesClips },
                         onShare = {
                             // Unified Share sheet (native + Frame.io), like iOS.
                             presentNativeDelivery()
@@ -1465,7 +1485,7 @@ internal fun MediaBrowseScreen(
                                 librarySource == MediaLibrarySource.CAMERA &&
                                     effectiveCameraConnected,
                             onExitSelection = ::cancelActiveShareOrExitSelection,
-                            onDelete = { deleteConfirmTargets = selectedClips },
+                            onDelete = { deleteConfirmTargets = selectedSeriesClips },
                             onShare = { presentNativeDelivery() },
                             onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
                             onShowFilters = { filterDialogPresented = true },
@@ -2699,9 +2719,10 @@ private fun MediaClipGrid(
             columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
-            // iOS LazyVGrid spacing: 16.
+            // Column gap unchanged; tighter row gap for a denser vertical rhythm (iOS
+            // LazyVGrid spacing 16→8 — less dead space between rows).
             horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
             // Overlay owns movement while selecting; plain scroll resumes after exit.
             userScrollEnabled = !isSelecting,
@@ -3033,7 +3054,8 @@ private fun MediaClipCell(
                 onLongClickLabel = "Select ${clip.filename}",
             )
         }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    // Tight thumbnail↔filename gap (iOS cell spacing 8→4): less dead space under the frame.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Box(
             Modifier.fillMaxWidth()
                 .aspectRatio(16f / 9f)
@@ -3198,9 +3220,11 @@ private fun MediaClipListRow(
 }
 
 /**
- * iPhone-Photos-style burst scrubber (iOS `BurstFilmstrip`): dragging scrolls the strip with
- * the centered thumb becoming the displayed frame; tapping a thumb jumps to it. External
- * selection changes (tap, deletion fallback) re-center the strip when the finger is up.
+ * iPhone-Photos-style burst scrubber (iOS `BurstFilmstrip`): dragging scrolls the strip with the
+ * centered thumb highlighting live; the displayed frame commits only when the scroll SETTLES, not
+ * on every intermediate frame. The viewer re-streams each frame, so committing on every thumb that
+ * crossed centre was the lag + reload storm (and the programmatic-scroll rubber-band). Tapping a
+ * thumb jumps to it immediately; external selection changes (deletion advance) re-center the strip.
  */
 @Composable
 private fun BurstFilmstrip(
@@ -3210,53 +3234,78 @@ private fun BurstFilmstrip(
     onSelect: (String) -> Unit,
     thumb: @Composable (MediaClipRecord, Modifier) -> Unit,
 ) {
+    // Widest a thumb gets (selected). Half of it is subtracted from the side inset so the
+    // first/last frame can sit dead-centre; the inset math and the item width must stay in sync.
+    val maxThumbWidth = 46.dp
     val listState = rememberLazyListState()
     val currentSelected by rememberUpdatedState(selectedKey)
     val currentOnSelect by rememberUpdatedState(onSelect)
-    LaunchedEffect(selectedKey, members) {
-        val index = members.indexOfFirst { keyOf(it) == selectedKey }
-        if (index >= 0 && !listState.isScrollInProgress) {
-            listState.animateScrollToItem(index)
-        }
+    // The thumb under the centre line — drives the live highlight only, NOT the heavy viewer
+    // (which commits when the scrub settles). Reset when the series changes.
+    var centeredKey by remember(members) { mutableStateOf(selectedKey) }
+
+    fun centeredKeyNow(): String? {
+        val info = listState.layoutInfo
+        val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
+        val index = info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - center) }?.index
+        return index?.let { members.getOrNull(it) }?.let(keyOf)
     }
-    // Finger scrubbing: while the strip is being dragged, the centered thumb is the selection.
+
+    // Cheap live highlight: track the centred thumb continuously (no viewer reload).
     LaunchedEffect(listState, members) {
-        snapshotFlow {
-            val info = listState.layoutInfo
-            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
-            info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - center) }?.index
-        }.collect { index ->
-            if (listState.isScrollInProgress && index != null) {
-                members.getOrNull(index)?.let { member ->
-                    val key = keyOf(member)
-                    if (key != currentSelected) currentOnSelect(key)
-                }
+        snapshotFlow { centeredKeyNow() }.collect { key -> if (key != null) centeredKey = key }
+    }
+    // Commit the displayed frame only after the scrub SETTLES (idle after a real drag/fling).
+    // Reading layoutInfo at settle time picks the actually-rested thumb, so a programmatic
+    // re-center (which rests on the already-selected frame) never commits back — no rubber-band.
+    LaunchedEffect(listState, members) {
+        var wasScrolling = false
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (wasScrolling && !scrolling) {
+                val key = centeredKeyNow()
+                if (key != null && key != currentSelected) currentOnSelect(key)
             }
+            wasScrolling = scrolling
         }
     }
-    LazyRow(
-        state = listState,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        // Lets the first/last frame reach the center so they are scrubbable too.
-        contentPadding = PaddingValues(horizontal = 130.dp),
-        modifier = Modifier.height(56.dp),
-    ) {
-        items(members, key = { keyOf(it) }) { member ->
-            val isSelected = keyOf(member) == selectedKey
-            Box(
-                Modifier
-                    .width(if (isSelected) 46.dp else 30.dp)
-                    .height(44.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .border(
-                        if (isSelected) 1.5.dp else 0.dp,
-                        if (isSelected) LiveDesign.accent else Color.Transparent,
-                        RoundedCornerShape(4.dp),
-                    )
-                    .chromeClickable { onSelect(keyOf(member)) },
-            ) {
-                thumb(member, Modifier.fillMaxSize())
+    // External selection (tap, deletion advance) re-centers the strip; a settle-commit already
+    // left centeredKey == selectedKey, so this no-ops for scrubs (iOS `guard scrolledID != …`).
+    LaunchedEffect(selectedKey, members) {
+        if (centeredKey == selectedKey) return@LaunchedEffect
+        centeredKey = selectedKey
+        val index = members.indexOfFirst { keyOf(it) == selectedKey }
+        if (index >= 0 && !listState.isScrollInProgress) listState.animateScrollToItem(index)
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth().height(56.dp)) {
+        // Half the viewport (minus half a max-width thumb) so ANY thumb — first and last
+        // included — can reach the centre anchor (was a fixed 130, unreachable on a wide
+        // landscape screen). With this inset, start-aligned snapping lands a thumb centred.
+        val sideInset = ((maxWidth - maxThumbWidth) / 2f).coerceAtLeast(0.dp)
+        LazyRow(
+            state = listState,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            contentPadding = PaddingValues(horizontal = sideInset),
+            // .viewAligned snapping: the scrub lands cleanly on a frame instead of drifting.
+            flingBehavior = rememberSnapFlingBehavior(listState),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            items(members, key = { keyOf(it) }) { member ->
+                val isSelected = keyOf(member) == centeredKey
+                Box(
+                    Modifier
+                        .width(if (isSelected) maxThumbWidth else 30.dp)
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .border(
+                            if (isSelected) 1.5.dp else 0.dp,
+                            if (isSelected) LiveDesign.accent else Color.Transparent,
+                            RoundedCornerShape(4.dp),
+                        )
+                        .chromeClickable { onSelect(keyOf(member)) },
+                ) {
+                    thumb(member, Modifier.fillMaxSize())
+                }
             }
         }
     }
