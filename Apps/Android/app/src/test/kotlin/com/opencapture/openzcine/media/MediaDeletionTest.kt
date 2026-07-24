@@ -87,6 +87,60 @@ class MediaDeletionTest {
     }
 
     @Test
+    fun `deletion widens to cross-card backup twins and says so`() {
+        val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
+        val raw = still(handle = 2, filename = "DSC_0001.NEF")
+        val backupJpeg = still(handle = 21, filename = "DSC_0001.JPG", storageId = 2)
+        val backupRaw = still(handle = 22, filename = "DSC_0001.NEF", storageId = 2)
+        val bystander = still(handle = 3, filename = "DSC_0002.JPG", captureDate = "20260714T110000")
+        val catalog = listOf(jpeg, raw, backupJpeg, backupRaw, bystander)
+
+        val plan = deletionPlan(catalog, listOf(jpeg), oneBucket)
+
+        assertEquals(setOf(jpeg, raw, backupJpeg, backupRaw), plan.targets.toSet())
+        assertEquals(1, plan.pairCount)
+        assertEquals(2, plan.backupCount)
+        val message = deleteConfirmationMessage(catalog, listOf(jpeg), oneBucket)
+        assertTrue("backup copies on the other card" in message)
+        assertTrue("RAW and JPEG" in message)
+    }
+
+    @Test
+    fun `deleting a proxy takes its hidden camera master and uses video wording`() {
+        val proxy = still(handle = 5, filename = "A001_0001.MP4")
+        val master = still(handle = 6, filename = "A001_0001.NEV")
+        val otherProxy = still(handle = 7, filename = "A001_0002.MP4", captureDate = "20260714T111000")
+        val catalog = listOf(proxy, master, otherProxy)
+
+        val plan = deletionPlan(catalog, listOf(proxy), oneBucket)
+
+        assertEquals(listOf(proxy, master), plan.targets)
+        assertEquals(1, plan.masterCount)
+        assertEquals(0, plan.pairCount)
+        val message = deleteConfirmationMessage(catalog, listOf(proxy), oneBucket)
+        assertTrue("A001_0001.MP4" in message)
+        assertTrue("master" in message)
+        assertTrue("RAW and JPEG" !in message)
+        assertTrue("backup copies" !in message)
+    }
+
+    @Test
+    fun `undated clips never twin and plain singles keep the plain copy`() {
+        val jpeg = still(handle = 1, filename = "DSC_0003.JPG", captureDate = "")
+        val elsewhere = still(handle = 2, filename = "DSC_0003.NEF", storageId = 2, captureDate = "")
+        val catalog = listOf(jpeg, elsewhere)
+
+        val plan = deletionPlan(catalog, listOf(jpeg), oneBucket)
+
+        assertEquals(listOf(jpeg), plan.targets)
+        assertEquals(0, plan.backupCount)
+        assertEquals(
+            "Delete this photo from the camera card?",
+            deleteConfirmationMessage(catalog, listOf(jpeg), oneBucket),
+        )
+    }
+
+    @Test
     fun `purgeClip drops the index row and the favorite`() {
         val preferences = MemoryMediaPreferences()
         val index = MediaLibraryIndex(preferences)
@@ -140,28 +194,32 @@ class MediaDeletionTest {
         handle: Long,
         filename: String,
         storageId: Long = 1,
-    ): MediaClipRecord =
-        MediaClipRecord(
+        captureDate: String = "20260714T101010",
+    ): MediaClipRecord {
+        val kind =
+            when (filename.substringAfterLast('.').lowercase()) {
+                "mov", "mp4" -> MediaContentKind.PLAYABLE_PROXY
+                "r3d" -> MediaContentKind.R3D_MASTER
+                "nev" -> MediaContentKind.UNSUPPORTED
+                else -> MediaContentKind.STILL_PHOTO
+            }
+        return MediaClipRecord(
             handle = handle,
             storageId = storageId,
             sizeBytes = 100,
-            captureDate = "20260714T101010",
+            captureDate = captureDate,
             pixelWidth = 3840,
             pixelHeight = 2160,
             filename = filename,
-            contentKind =
-                if (filename.endsWith(".MOV", ignoreCase = true)) {
-                    MediaContentKind.PLAYABLE_PROXY
-                } else {
-                    MediaContentKind.STILL_PHOTO
-                },
+            contentKind = kind,
             stillPhoto =
-                if (filename.endsWith(".MOV", ignoreCase = true)) {
-                    null
-                } else {
+                if (kind == MediaContentKind.STILL_PHOTO) {
                     StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE)
+                } else {
+                    null
                 },
         )
+    }
 
     private class MemoryMediaPreferences : MediaLibraryPreferences {
         private val values = mutableMapOf<String, String>()

@@ -23,6 +23,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencapture.openzcine.core.CameraSession
+import com.opencapture.openzcine.media.MediaExifOrientation
+import com.opencapture.openzcine.media.upright
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -183,7 +185,11 @@ private fun decodeReviewBitmap(bytes: ByteArray): ImageBitmap? {
         sample *= 2
     }
     val options = BitmapFactory.Options().apply { inSampleSize = sample }
-    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+    // BitmapFactory ignores EXIF — honor it so a portrait capture reviews upright (the full
+    // image carries the tag; a stripped embedded thumb stays as-shot until the upgrade).
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        ?.upright(MediaExifOrientation.fromBytes(bytes))
+        ?.asImageBitmap()
 }
 
 private const val REVIEW_MAX_PIXEL = 4096

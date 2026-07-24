@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -106,8 +107,14 @@ internal fun MediaStillViewer(
     rawSibling: MediaClipRecord? = null,
     /** Camera-card deletion offered only while the camera source is live. */
     deleteAvailable: Boolean = false,
+    /** Plan-derived confirm copy naming everything the deletion touches (null = local fallback). */
+    deleteConfirmMessage: String? = null,
     /** Post-confirmation deletion; the browse screen owns the card operations. */
     onDelete: () -> Unit = {},
+    /** Burst-series hosting: shows a "Delete all" action for the whole set in the chrome. */
+    onDeleteAll: (() -> Unit)? = null,
+    /** Burst-series hosting: the scrubber strip rendered along the bottom edge. */
+    filmstrip: (@Composable () -> Unit)? = null,
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
     onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
     /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
@@ -192,7 +199,13 @@ internal fun MediaStillViewer(
             withContext(Dispatchers.IO) {
                 if (cameraTransferAvailable && SwiftCore.isAvailable) {
                     SwiftCore.sessionThumbnail(displayClip.handle.toInt())?.let { jpeg ->
-                        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                        // Stripped thumb bytes fall back to the session-learned orientation.
+                        val key = displayClip.libraryKey(cameraID)
+                        val orientation =
+                            MediaExifOrientation.fromBytes(jpeg)
+                                ?.also { MediaExifOrientation.learn(key, it) }
+                                ?: MediaExifOrientation.learned(key)
+                        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.upright(orientation)
                     }
                 } else {
                     null
@@ -223,6 +236,14 @@ internal fun MediaStillViewer(
                     },
                     onCompleteEntry = { entry ->
                         if (loadGate.accepts(requestGeneration)) shareableEntry = entry
+                        // The landed full file answers the object's orientation for the whole
+                        // session — the connected grid's stripped camera thumbs rotate from it.
+                        val learnedKey = displayClip.libraryKey(cameraID)
+                        viewerScope.launch(Dispatchers.IO) {
+                            MediaExifOrientation.fromFile(entry.finalPath)?.let {
+                                MediaExifOrientation.learn(learnedKey, it)
+                            }
+                        }
                     },
                 )
             is MediaTransferPreparation.Failed ->
@@ -300,6 +321,7 @@ internal fun MediaStillViewer(
                 }
             },
             onDelete = { deleteConfirmPresented = true },
+            onDeleteAll = onDeleteAll,
             // Shares the currently-viewed side of the still (JPEG/HEIF/NEF
             // alike) once its camera download completes (iOS `shareButton`).
             shareEnabled = shareableEntry != null && !closeRequested,
@@ -347,7 +369,8 @@ internal fun MediaStillViewer(
                             WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
                         ),
                     )
-                    .padding(bottom = 18.dp),
+                    // The scrubber strip owns the bottom edge in burst hosting.
+                    .padding(bottom = if (filmstrip != null) 82.dp else 18.dp),
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 StarRatingRow(stars = stars) { target ->
@@ -395,16 +418,34 @@ internal fun MediaStillViewer(
             }
         }
         StillPreviewStatus(previewState, shareMessage)
+        // Burst scrubber along the bottom edge, above the gesture-nav inset (landscape-safe).
+        filmstrip?.let { strip ->
+            Box(
+                Modifier.fillMaxSize()
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                        ),
+                    )
+                    .padding(bottom = 10.dp),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                strip()
+            }
+        }
     }
     if (deleteConfirmPresented) {
         MediaDeleteConfirmDialog(
+            // The browse screen supplies plan-derived copy (pair/backup notes only when those
+            // companions actually exist); the local fallback covers direct viewer embeddings.
             message =
-                if (rawSibling != null) {
-                    "Delete this photo from the camera card? " +
-                        "Both the RAW and JPEG files are removed."
-                } else {
-                    "Delete this photo from the camera card?"
-                },
+                deleteConfirmMessage
+                    ?: if (rawSibling != null) {
+                        "Delete this photo from the camera card? " +
+                            "Both the RAW and JPEG files are removed."
+                    } else {
+                        "Delete this photo from the camera card?"
+                    },
             onDelete = {
                 deleteConfirmPresented = false
                 onDelete()
@@ -507,7 +548,10 @@ private fun decodeBitmap(path: Path): Bitmap? {
                 inSampleSize = previewSampleSize(bounds.outWidth, bounds.outHeight)
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
+        // `BitmapFactory` ignores EXIF — the file's own header (present once the leading
+        // bytes of a progressive stream have landed) supplies the upright rotation.
         BitmapFactory.decodeFile(path.toString(), options)
+            ?.upright(MediaExifOrientation.fromFile(path))
     } catch (_: OutOfMemoryError) {
         null
     } catch (_: RuntimeException) {
@@ -654,6 +698,8 @@ private fun StillViewerChrome(
     showingRaw: Boolean?,
     onSelectSide: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    /** Burst-series hosting: destructive whole-set deletion; null hides the pill. */
+    onDeleteAll: (() -> Unit)? = null,
     shareEnabled: Boolean,
     shareInProgress: Boolean,
     onShare: () -> Unit,
@@ -685,6 +731,20 @@ private fun StillViewerChrome(
         }
         if (showingRaw != null) {
             StillViewerSideToggle(showingRaw = showingRaw, onSelectSide = onSelectSide)
+        }
+        if (onDeleteAll != null && deleteAvailable) {
+            Text(
+                "Delete all",
+                style = chromeStyle(13f, FontWeight.SemiBold),
+                color = Color(0xFFFF5A54),
+                modifier =
+                    Modifier.glass(CircleShape)
+                        .semantics {
+                            contentDescription = "Delete the whole burst series"
+                            role = Role.Button
+                        }.chromeClickable(onClick = onDeleteAll)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
         }
         if (deleteAvailable) {
             StillViewerDeleteButton(onClick = onDelete)

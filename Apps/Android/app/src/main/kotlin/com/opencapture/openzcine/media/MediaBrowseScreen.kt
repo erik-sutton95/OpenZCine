@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -72,6 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -128,6 +130,7 @@ import com.opencapture.openzcine.core.CameraStorageSlotStatus
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -1565,84 +1568,66 @@ internal fun MediaBrowseScreen(
             )
         }
 
-        // Manage-series view: one burst run's frames in a grid, with per-frame open (rate / share /
-        // single-frame delete via the still viewer) and a destructive "Delete all" routed through
-        // the shared confirm + batch deletion (both pair sides). Dismisses when its frames are gone.
+        // Manage-series view, iPhone-Photos burst style: the selected frame full-screen through
+        // the still viewer (streaming decode, zoom, rating, RAW toggle, share, single-frame
+        // delete all keep working) with a bottom scrubber strip; "Delete all" routes the whole
+        // set through the shared confirm + batch deletion. Dismisses when its frames are gone.
         seriesRepresentative?.let { representative ->
             val members = remember(representative, displayedClips) { burstMembers(representative) }
             LaunchedEffect(members) { if (members.isEmpty()) seriesRepresentative = null }
-            Box(
-                Modifier.fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.98f))
-                    .chromeClickable {},
-            ) {
-                Column(Modifier.fillMaxSize()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text(
-                            "Close",
-                            style = chromeStyle(13f, FontWeight.SemiBold),
-                            color = LiveDesign.accent,
-                            modifier = Modifier.chromeClickable { seriesRepresentative = null },
+            var selectedFrameKey by remember(representative) { mutableStateOf<String?>(null) }
+            val selected =
+                members.firstOrNull { clipKey(it) == selectedFrameKey } ?: members.firstOrNull()
+            selected?.let { clip ->
+                val owner = ownerCameraID(clip)
+                MediaStillViewer(
+                    clip = clip,
+                    cameraID = owner,
+                    cameraTransferAvailable = cameraConnected,
+                    rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
+                    deleteAvailable =
+                        librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
+                    deleteConfirmMessage =
+                        deleteConfirmationMessage(loadedClips, listOf(clip), ::ownerCameraID),
+                    onDelete = { requestDeletion(listOf(clip)) },
+                    onDeleteAll = { if (members.isNotEmpty()) deleteConfirmTargets = members },
+                    onRatingMirrored = ::mirrorRating,
+                    onRatingDiagnostic = onRatingDiagnostic,
+                    onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                        libraryIndex.rememberResolvedObjectSize(
+                            ownerCameraID(resolvedClip),
+                            resolvedClip,
+                            resolvedSize,
                         )
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "Burst series",
-                                style = chromeStyle(14f, FontWeight.SemiBold),
-                                color = LiveDesign.text,
-                            )
-                            Text(
-                                "${members.size} frames",
-                                style = chromeStyle(11f, FontWeight.Medium),
-                                color = LiveDesign.muted,
-                            )
-                        }
-                        Text(
-                            "Delete all",
-                            style = chromeStyle(13f, FontWeight.SemiBold),
-                            color = Color(0xFFFF6B6B),
-                            modifier =
-                                Modifier.badgeBackground()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    .chromeClickable {
-                                        if (members.isNotEmpty()) deleteConfirmTargets = members
-                                    },
+                    },
+                    filmstrip = {
+                        BurstFilmstrip(
+                            members = members,
+                            selectedKey = clipKey(clip),
+                            keyOf = ::clipKey,
+                            onSelect = { selectedFrameKey = it },
+                            thumb = { member, thumbModifier ->
+                                ClipArtwork(
+                                    clip = member,
+                                    source = librarySource,
+                                    cameraID = ownerCameraID(member),
+                                    cameraConnected = effectiveCameraConnected,
+                                    cacheStore = cacheStore,
+                                    modifier = thumbModifier,
+                                )
+                            },
                         )
-                    }
-                    MediaClipGrid(
-                        clips = members,
-                        thumbnailSize = options.thumbnailSize,
-                        source = librarySource,
-                        cameraIDFor = ::ownerCameraID,
-                        clipIdentity = ::clipKey,
-                        hasRawSibling = ::hasRawSibling,
-                        cameraConnected = effectiveCameraConnected,
-                        cacheStore = cacheStore,
-                        favorites = favorites,
-                        isSelecting = false,
-                        selectedIDs = emptySet(),
-                        onOpen = { viewingPhoto = it },
-                        onBeginSelection = {},
-                        onToggleSelection = {},
-                        onSweepSelection = {},
-                        onToggleFavorite = ::toggleFavorite,
-                    )
-                }
+                    },
+                    onClose = { seriesRepresentative = null },
+                )
             }
         }
 
         deleteConfirmTargets?.let { targets ->
             MediaDeleteConfirmDialog(
-                message =
-                    deleteConfirmationMessage(
-                        targets,
-                        hasRawPair =
-                            targets.size == 1 &&
-                                rawSibling(loadedClips, targets.single(), ::ownerCameraID) != null,
-                    ),
+                // Context-aware: pair/master/backup notes appear only when this selection
+                // actually pulls those companions in (videos never see stills wording).
+                message = deleteConfirmationMessage(loadedClips, targets, ::ownerCameraID),
                 onDelete = { requestDeletion(targets) },
                 onDismiss = { deleteConfirmTargets = null },
             )
@@ -1690,6 +1675,8 @@ internal fun MediaBrowseScreen(
                 rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
                 deleteAvailable =
                     librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
+                deleteConfirmMessage =
+                    deleteConfirmationMessage(loadedClips, listOf(clip), ::ownerCameraID),
                 onDelete = { requestDeletion(listOf(clip)) },
                 onRatingMirrored = ::mirrorRating,
                 onRatingDiagnostic = onRatingDiagnostic,
@@ -3210,6 +3197,71 @@ private fun MediaClipListRow(
     }
 }
 
+/**
+ * iPhone-Photos-style burst scrubber (iOS `BurstFilmstrip`): dragging scrolls the strip with
+ * the centered thumb becoming the displayed frame; tapping a thumb jumps to it. External
+ * selection changes (tap, deletion fallback) re-center the strip when the finger is up.
+ */
+@Composable
+private fun BurstFilmstrip(
+    members: List<MediaClipRecord>,
+    selectedKey: String,
+    keyOf: (MediaClipRecord) -> String,
+    onSelect: (String) -> Unit,
+    thumb: @Composable (MediaClipRecord, Modifier) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    val currentSelected by rememberUpdatedState(selectedKey)
+    val currentOnSelect by rememberUpdatedState(onSelect)
+    LaunchedEffect(selectedKey, members) {
+        val index = members.indexOfFirst { keyOf(it) == selectedKey }
+        if (index >= 0 && !listState.isScrollInProgress) {
+            listState.animateScrollToItem(index)
+        }
+    }
+    // Finger scrubbing: while the strip is being dragged, the centered thumb is the selection.
+    LaunchedEffect(listState, members) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
+            info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - center) }?.index
+        }.collect { index ->
+            if (listState.isScrollInProgress && index != null) {
+                members.getOrNull(index)?.let { member ->
+                    val key = keyOf(member)
+                    if (key != currentSelected) currentOnSelect(key)
+                }
+            }
+        }
+    }
+    LazyRow(
+        state = listState,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        // Lets the first/last frame reach the center so they are scrubbable too.
+        contentPadding = PaddingValues(horizontal = 130.dp),
+        modifier = Modifier.height(56.dp),
+    ) {
+        items(members, key = { keyOf(it) }) { member ->
+            val isSelected = keyOf(member) == selectedKey
+            Box(
+                Modifier
+                    .width(if (isSelected) 46.dp else 30.dp)
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .border(
+                        if (isSelected) 1.5.dp else 0.dp,
+                        if (isSelected) LiveDesign.accent else Color.Transparent,
+                        RoundedCornerShape(4.dp),
+                    )
+                    .chromeClickable { onSelect(keyOf(member)) },
+            ) {
+                thumb(member, Modifier.fillMaxSize())
+            }
+        }
+    }
+}
+
 /** Thumbnail policy: camera thumbnails when connected, final cached stills only otherwise. */
 @Composable
 private fun ClipArtwork(
@@ -3227,7 +3279,16 @@ private fun ClipArtwork(
                 val cameraThumbnail =
                     if (source == MediaLibrarySource.CAMERA && cameraConnected && SwiftCore.isAvailable) {
                         SwiftCore.sessionThumbnail(clip.handle.toInt())?.let { jpeg ->
-                            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.asImageBitmap()
+                            // The body's thumb bytes may be EXIF-stripped — fall back to the
+                            // orientation this session learned from the object's full file.
+                            val key = clip.libraryKey(cameraID)
+                            val orientation =
+                                MediaExifOrientation.fromBytes(jpeg)
+                                    ?.also { MediaExifOrientation.learn(key, it) }
+                                    ?: MediaExifOrientation.learned(key)
+                            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                ?.upright(orientation)
+                                ?.asImageBitmap()
                         }
                     } else {
                         null
@@ -3272,13 +3333,19 @@ private fun cachedStillThumbnail(
         while (bounds.outWidth / sampleSize > 640 || bounds.outHeight / sampleSize > 640) {
             sampleSize *= 2
         }
+        // The full file carries the orientation header — learn it for the object so the
+        // connected grid's (possibly EXIF-stripped) camera thumbs rotate too.
+        val orientation =
+            MediaExifOrientation.fromFile(entry.finalPath)?.also {
+                MediaExifOrientation.learn(clip.libraryKey(cameraID), it)
+            }
         BitmapFactory.decodeFile(
             entry.finalPath.toString(),
             BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             },
-        )?.asImageBitmap()
+        )?.upright(orientation)?.asImageBitmap()
     } catch (_: OutOfMemoryError) {
         null
     } catch (_: RuntimeException) {

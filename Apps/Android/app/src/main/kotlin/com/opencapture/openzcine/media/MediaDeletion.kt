@@ -101,36 +101,141 @@ internal fun stillViewerDisplaySide(
     showingRaw: Boolean,
 ): MediaClipRecord = if (showingRaw) rawSibling ?: clip else clip
 
+private val masterExtensions = setOf("r3d", "nev")
+
+private fun MediaClipRecord.stemLowercase(): String =
+    filename.substringBeforeLast('.').lowercase(Locale.US)
+
 /**
- * Expands a deletion selection with each JPEG's RAW sibling (a RAW+JPEG pair
- * deletes both sides, like iOS `deleteMediaClips`), de-duplicated by object
- * identity in selection order.
+ * Cross-card copies of the same shot: same bucket + case-insensitive stem + capture second on
+ * ANOTHER card. Backup recording writes the shot to both cards; series membership is
+ * same-storage by design, so a delete must widen to the twins itself. An undated clip never
+ * matches (every undated file would twin). [verify-on-HW: backup-mode capture dates match]
+ */
+internal fun crossCardTwins(
+    catalog: List<MediaClipRecord>,
+    clip: MediaClipRecord,
+    ownerCameraID: (MediaClipRecord) -> String,
+): List<MediaClipRecord> {
+    if (clip.captureDate.isEmpty()) return emptyList()
+    val owner = ownerCameraID(clip)
+    val stem = clip.stemLowercase()
+    return catalog.filter {
+        it.storageId != clip.storageId &&
+            ownerCameraID(it) == owner &&
+            it.captureDate == clip.captureDate &&
+            it.stemLowercase() == stem
+    }
+}
+
+/**
+ * Same-stem camera masters (`.R3D` / `.NEV`) on the same card as a playable proxy — the grid
+ * hides them behind the proxy, so deleting the proxy must take them along.
+ */
+internal fun linkedMasters(
+    catalog: List<MediaClipRecord>,
+    clip: MediaClipRecord,
+    ownerCameraID: (MediaClipRecord) -> String,
+): List<MediaClipRecord> {
+    if (clip.contentKind != MediaContentKind.PLAYABLE_PROXY) return emptyList()
+    val owner = ownerCameraID(clip)
+    val stem = clip.stemLowercase()
+    return catalog.filter {
+        MediaObjectIdentity(it) != MediaObjectIdentity(clip) &&
+            it.storageId == clip.storageId &&
+            ownerCameraID(it) == owner &&
+            it.filenameExtension in masterExtensions &&
+            it.stemLowercase() == stem
+    }
+}
+
+/**
+ * Everything one deletion will actually remove, and why — the confirm copy and the delete run
+ * from the same expansion so they can never disagree (iOS `DeletionPlan`).
+ */
+internal data class DeletionPlan(
+    val targets: List<MediaClipRecord>,
+    /** RAW siblings pulled in behind requested JPEGs. */
+    val pairCount: Int,
+    /** Same-stem camera masters pulled in behind requested proxies. */
+    val masterCount: Int,
+    /** Cross-card copies of the same shots (backup recording, split RAW) pulled in. */
+    val backupCount: Int,
+)
+
+/**
+ * Expands a deletion request to the full set of objects it honestly removes: each shot's RAW
+ * sibling, its hidden camera master, and the cross-card twins of all of those.
+ */
+internal fun deletionPlan(
+    catalog: List<MediaClipRecord>,
+    selection: List<MediaClipRecord>,
+    ownerCameraID: (MediaClipRecord) -> String,
+): DeletionPlan {
+    val targets = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
+    var pairs = 0
+    var masters = 0
+    var backups = 0
+    fun insert(clip: MediaClipRecord): Boolean {
+        val identity = MediaObjectIdentity(clip)
+        if (targets.containsKey(identity)) return false
+        targets[identity] = clip
+        return true
+    }
+    selection.forEach { clip ->
+        val shot = buildList {
+            add(clip)
+            rawSibling(catalog, clip, ownerCameraID)?.let(::add)
+            addAll(linkedMasters(catalog, clip, ownerCameraID))
+        }
+        shot.forEachIndexed { index, piece ->
+            if (insert(piece) && index > 0) {
+                if (piece.isRawStill) pairs += 1 else masters += 1
+            }
+            crossCardTwins(catalog, piece, ownerCameraID).forEach { twin ->
+                if (insert(twin)) backups += 1
+            }
+        }
+    }
+    return DeletionPlan(targets.values.toList(), pairs, masters, backups)
+}
+
+/**
+ * Expands a deletion selection to every companion object of the same shots (RAW siblings,
+ * hidden camera masters, cross-card backup twins), de-duplicated in selection order.
  */
 internal fun cameraDeletionTargets(
     catalog: List<MediaClipRecord>,
     selection: List<MediaClipRecord>,
     ownerCameraID: (MediaClipRecord) -> String,
-): List<MediaClipRecord> {
-    val targets = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
-    selection.forEach { clip ->
-        targets[MediaObjectIdentity(clip)] = clip
-        rawSibling(catalog, clip, ownerCameraID)?.let { raw ->
-            targets[MediaObjectIdentity(raw)] = raw
-        }
-    }
-    return targets.values.toList()
-}
+): List<MediaClipRecord> = deletionPlan(catalog, selection, ownerCameraID).targets
 
-/** iOS confirmation copy for a batch or single camera-card deletion. */
-internal fun deleteConfirmationMessage(selection: List<MediaClipRecord>, hasRawPair: Boolean): String {
-    if (selection.size == 1) {
-        return if (hasRawPair) {
-            "Delete this photo from the camera card? Both the RAW and JPEG files are removed."
+/**
+ * Destructive-confirmation copy naming only what this request actually removes: still wording
+ * for stills, master wording for proxies with hidden masters, and the cross-card note only
+ * when backup twins really exist (iOS `deletionConfirmMessage`).
+ */
+internal fun deleteConfirmationMessage(
+    catalog: List<MediaClipRecord>,
+    selection: List<MediaClipRecord>,
+    ownerCameraID: (MediaClipRecord) -> String,
+): String {
+    val plan = deletionPlan(catalog, selection, ownerCameraID)
+    var message =
+        if (selection.size == 1) {
+            val only = selection.single()
+            if (only.contentKind == MediaContentKind.STILL_PHOTO) {
+                "Delete this photo from the camera card?"
+            } else {
+                "Delete ${only.filename} from the camera card?"
+            }
         } else {
-            "Delete ${selection.single().filename} from the camera card?"
+            "Delete ${selection.size} items from the camera card?"
         }
-    }
-    return "Delete ${selection.size} items from the camera card? RAW+JPEG pairs delete both files."
+    if (plan.pairCount > 0) message += " Both the RAW and JPEG files of a pair are removed."
+    if (plan.masterCount > 0) message += " The camera master file is removed with its proxy."
+    if (plan.backupCount > 0) message += " The backup copies on the other card are removed too."
+    return message
 }
 
 /**
