@@ -5,6 +5,11 @@ import Foundation
 /// Provenance: libgphoto2 `PTP_EC_NIKON_*` in `camlibs/ptp2/ptp.h`
 /// (<https://github.com/gphoto/libgphoto2>).
 public enum PTPEventCode: UInt16, Sendable {
+    /// Standard PIMA 15740 event: a new object landed on the card (one per file — a
+    /// RAW+JPEG pair emits two). Fires for body-fired and remote releases alike.
+    case objectAdded = 0x4002
+    /// Standard PIMA 15740 event: the capture run finished writing (one per destination).
+    case captureComplete = 0x400D
     case movieRecordInterrupted = 0xC105
     case movieRecordComplete = 0xC108
     case movieRecordStarted = 0xC10A
@@ -66,7 +71,7 @@ public struct PTPEvent: Equatable, Sendable {
             return .recording
         case .movieRecordComplete, .movieRecordInterrupted:
             return .standby
-        case .unknown:
+        case .objectAdded, .captureComplete, .unknown:
             return nil
         }
     }

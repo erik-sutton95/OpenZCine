@@ -3643,7 +3643,20 @@ final class NativeAppModel {
                 guard let self, self.cameraSession === session else { return }
                 do {
                     let event = try await session.nextEvent()
-                    if event.eventCode == .movieRecordInterrupted {
+                    if event.eventCode == .captureComplete {
+                        // A body-fired release finished writing (the app path schedules its
+                        // own review on completion, so only react when no app release is in
+                        // flight): sync the app — instant playback of the new shot and a
+                        // fresh shots-remaining readout. [verify-on-HW]
+                        if !self.isStillCapturing, !self.pendingStillCapture,
+                            StillCapturePolicy.prefersPhotographyChrome(
+                                selector: self.cameraPropertySnapshot.captureSelector)
+                        {
+                            self.scheduleInstantReview(session: session)
+                            await self.readAndApplyCameraProperty(
+                                session: session, property: .exposureRemaining)
+                        }
+                    } else if event.eventCode == .movieRecordInterrupted {
                         // An interruption is authoritative even while an optimistic app record
                         // command is in its brief readback-suppression window.
                         self.applyCameraRecordState(isRecording: false, force: true)
