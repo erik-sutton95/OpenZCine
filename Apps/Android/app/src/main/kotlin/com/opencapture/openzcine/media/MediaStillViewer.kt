@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -98,8 +99,8 @@ internal fun MediaStillViewer(
     clip: MediaClipRecord,
     cameraID: String,
     cameraTransferAvailable: Boolean = true,
-    /** The grid item hides a same-stem RAW behind this JPEG (delete removes both). */
-    hasRawSibling: Boolean = false,
+    /** The grid item hides this same-stem RAW behind the JPEG (delete removes both). */
+    rawSibling: MediaClipRecord? = null,
     /** Camera-card deletion offered only while the camera source is live. */
     deleteAvailable: Boolean = false,
     /** Post-confirmation deletion; the browse screen owns the card operations. */
@@ -108,8 +109,14 @@ internal fun MediaStillViewer(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    // RAW side of the JPG/RAW toggle is active (paired stills only). The
+    // displayed side is what the viewer loads, names, and shares; the JPEG
+    // stays the item's identity for ratings and deletion (iOS `displayClip`).
+    var showingRaw by remember(clip.handle) { mutableStateOf(false) }
+    var sideSwitchInFlight by remember(clip.handle) { mutableStateOf(false) }
+    val displayClip = stillViewerDisplaySide(clip, rawSibling, showingRaw)
     val classification =
-        clip.stillPhoto
+        displayClip.stillPhoto
             ?: StillPhotoClassification("Photo", StillPreviewStrategy.THUMBNAIL_ONLY)
     val cacheStore =
         remember(context) {
@@ -117,18 +124,18 @@ internal fun MediaStillViewer(
         }
     val currentOnResolvedObjectSize by rememberUpdatedState(onResolvedObjectSize)
     val coordinator =
-        remember(cacheStore, cameraID, clip, cameraTransferAvailable) {
+        remember(cacheStore, cameraID, displayClip, cameraTransferAvailable) {
             MediaTransferCoordinator(
                 prepareTransfer = {
                     withContext(Dispatchers.IO) {
                         prepareMediaObjectTransfer(
                             cacheStore = cacheStore,
                             cameraID = cameraID,
-                            clip = clip,
+                            clip = displayClip,
                             objectLabel = "image",
                             cameraTransferAvailable = cameraTransferAvailable,
                             onResolvedSize = { resolvedSize ->
-                                currentOnResolvedObjectSize(clip, resolvedSize)
+                                currentOnResolvedObjectSize(displayClip, resolvedSize)
                             },
                         )
                     }
@@ -140,10 +147,10 @@ internal fun MediaStillViewer(
                 },
             )
         }
-    val loadGate = remember(clip.handle) { StillViewerLoadGate() }
-    var thumbnail by remember(clip.handle) { mutableStateOf<Bitmap?>(null) }
-    var fullPreview by remember(clip.handle) { mutableStateOf<Bitmap?>(null) }
-    var previewState by remember(clip.handle) {
+    val loadGate = remember(displayClip.handle) { StillViewerLoadGate() }
+    var thumbnail by remember(displayClip.handle) { mutableStateOf<Bitmap?>(null) }
+    var fullPreview by remember(displayClip.handle) { mutableStateOf<Bitmap?>(null) }
+    var previewState by remember(displayClip.handle) {
         mutableStateOf<StillPreviewUiState>(StillPreviewStates.initial())
     }
     var closeRequested by remember { mutableStateOf(false) }
@@ -158,14 +165,14 @@ internal fun MediaStillViewer(
             withContext(Dispatchers.IO) { SwiftCore.sessionObjectRating(clip.handle.toInt()) }
         if (read >= 0) ratingStars = read
     }
-    val ratingScope = rememberCoroutineScope()
+    val viewerScope = rememberCoroutineScope()
 
     LaunchedEffect(coordinator, classification) {
         val requestGeneration = loadGate.begin()
         val cameraThumbnail =
             withContext(Dispatchers.IO) {
                 if (cameraTransferAvailable && SwiftCore.isAvailable) {
-                    SwiftCore.sessionThumbnail(clip.handle.toInt())?.let { jpeg ->
+                    SwiftCore.sessionThumbnail(displayClip.handle.toInt())?.let { jpeg ->
                         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
                     }
                 } else {
@@ -175,11 +182,9 @@ internal fun MediaStillViewer(
         if (!loadGate.accepts(requestGeneration)) return@LaunchedEffect
         thumbnail = cameraThumbnail
 
-        if (classification.previewStrategy == StillPreviewStrategy.THUMBNAIL_ONLY) {
-            previewState = StillPreviewStates.decoderUnavailable(classification, thumbnail != null)
-            return@LaunchedEffect
-        }
-
+        // THUMBNAIL_ONLY (Nikon RAW) still transfers the full file — iOS
+        // streams the RAW side too so it can be shared/kept offline — while
+        // the honest thumbnail-fallback message stands in for the preview.
         when (val preparation = coordinator.prepare()) {
             is MediaTransferPreparation.Ready ->
                 observeStillPreview(
@@ -245,7 +250,7 @@ internal fun MediaStillViewer(
         if (displayedImage != null) {
             ZoomableStillPreview(
                 bitmap = displayedImage,
-                filename = clip.filename,
+                filename = displayClip.filename,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -253,9 +258,25 @@ internal fun MediaStillViewer(
         }
 
         StillViewerChrome(
-            filename = clip.filename,
+            filename = displayClip.filename,
             closeEnabled = !closeRequested,
             deleteAvailable = deleteAvailable && !closeRequested,
+            // JPG ⇄ RAW toggle for a same-stem pair (iOS `sideToggle`).
+            showingRaw = if (rawSibling != null) showingRaw else null,
+            onSelectSide = { raw ->
+                if (raw != showingRaw && !sideSwitchInFlight && !closeRequested) {
+                    sideSwitchInFlight = true
+                    loadGate.invalidate()
+                    viewerScope.launch {
+                        // iOS `showSide` cancels the active stream before the
+                        // other side loads; the same join order the deletion
+                        // path keeps, so the card never sees two transfers.
+                        coordinator.close()
+                        showingRaw = raw
+                        sideSwitchInFlight = false
+                    }
+                }
+            },
             onDelete = { deleteConfirmPresented = true },
             onClose = { closeRequested = true },
         )
@@ -280,10 +301,21 @@ internal fun MediaStillViewer(
                 StarRatingRow(stars = stars) { target ->
                     val previous = ratingStars
                     ratingStars = target
-                    ratingScope.launch {
+                    viewerScope.launch {
                         val confirmed =
                             withContext(Dispatchers.IO) {
-                                SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                                val written =
+                                    SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
+                                if (written >= 0 && rawSibling != null) {
+                                    // iOS parity: a pair writes both sides, tolerating
+                                    // the RAW side's refusal; the JPEG handle stays the
+                                    // confirming identity. [verify-on-HW]
+                                    SwiftCore.sessionSetObjectRating(
+                                        rawSibling.handle.toInt(),
+                                        target,
+                                    )
+                                }
+                                written
                             }
                         ratingStars = if (confirmed >= 0) confirmed else previous
                     }
@@ -295,7 +327,7 @@ internal fun MediaStillViewer(
     if (deleteConfirmPresented) {
         MediaDeleteConfirmDialog(
             message =
-                if (hasRawSibling) {
+                if (rawSibling != null) {
                     "Delete this photo from the camera card? " +
                         "Both the RAW and JPEG files are removed."
                 } else {
@@ -542,6 +574,9 @@ private fun StillViewerChrome(
     filename: String,
     closeEnabled: Boolean,
     deleteAvailable: Boolean,
+    /** Active side of a RAW+JPEG pair; null hides the toggle (unpaired stills). */
+    showingRaw: Boolean?,
+    onSelectSide: (Boolean) -> Unit,
     onDelete: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -569,10 +604,51 @@ private fun StillViewerChrome(
                 overflow = TextOverflow.Clip,
             )
         }
+        if (showingRaw != null) {
+            StillViewerSideToggle(showingRaw = showingRaw, onSelectSide = onSelectSide)
+        }
         if (deleteAvailable) {
             StillViewerDeleteButton(onClick = onDelete)
         }
     }
+}
+
+/** Compact JPG ⇄ RAW switch for a same-stem pair (iOS viewer `sideToggle`). */
+@Composable
+private fun StillViewerSideToggle(showingRaw: Boolean, onSelectSide: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .background(Color.Black.copy(alpha = 0.35f), CircleShape)
+            .border(1.dp, LiveDesign.hairline, CircleShape)
+            .padding(2.dp)
+            .semantics {
+                contentDescription = "Photo format"
+                stateDescription = if (showingRaw) "RAW" else "JPG"
+            },
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StillViewerSideSegment("JPG", active = !showingRaw) { onSelectSide(false) }
+        StillViewerSideSegment("RAW", active = showingRaw) { onSelectSide(true) }
+    }
+}
+
+@Composable
+private fun StillViewerSideSegment(title: String, active: Boolean, onClick: () -> Unit) {
+    Text(
+        title,
+        style = chromeStyle(10f, FontWeight.Bold, mono = true),
+        color = if (active) LiveDesign.accent else LiveDesign.muted,
+        modifier =
+            Modifier
+                .background(if (active) LiveDesign.accentDim else Color.Transparent, CircleShape)
+                .semantics {
+                    contentDescription = "Show $title"
+                    role = Role.Button
+                }
+                .chromeClickable { onClick() }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
 }
 
 /** Trash circle (iOS viewer `deleteButton`): destructive confirmation follows. */

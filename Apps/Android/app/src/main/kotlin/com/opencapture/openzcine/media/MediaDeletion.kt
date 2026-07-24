@@ -54,21 +54,36 @@ private val MediaClipRecord.filenameExtension: String
     get() = filename.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.US)
 
 /**
- * Same-shot pair identity: storage slot + case-insensitive stem. The slot is
- * part of the key on purpose — split recording writes RAW and JPEG to
- * different cards, and those must stay separate items (iOS `rawPairKey`).
+ * Same-shot pair identity: cache bucket + storage slot + case-insensitive
+ * stem (iOS `rawPairKey`). The slot is part of the key on purpose — split
+ * recording writes RAW and JPEG to different cards, and those must stay
+ * separate items. The bucket keeps two cameras' formulaic `DSC_0001` stems
+ * apart in the offline multi-camera library.
  */
-private val MediaClipRecord.rawPairKey: String
-    get() = "$storageId/${filename.substringBeforeLast('.').lowercase(Locale.US)}"
+internal fun MediaClipRecord.rawPairKey(ownerCameraID: String): String =
+    "$ownerCameraID/$storageId/${filename.substringBeforeLast('.').lowercase(Locale.US)}"
 
 /** The same-shot RAW behind a JPEG's item; null for unpaired stills. */
 internal fun rawSibling(
     catalog: List<MediaClipRecord>,
     clip: MediaClipRecord,
+    ownerCameraID: (MediaClipRecord) -> String,
 ): MediaClipRecord? {
     if (!clip.isJpegStill) return null
-    return catalog.firstOrNull { it.isRawStill && it.rawPairKey == clip.rawPairKey }
+    val pairKey = clip.rawPairKey(ownerCameraID(clip))
+    return catalog.firstOrNull { it.isRawStill && it.rawPairKey(ownerCameraID(it)) == pairKey }
 }
+
+/**
+ * The pair side the still viewer loads, names, and shares for a JPG ⇄ RAW
+ * toggle state (iOS viewer `displayClip`). Ratings and deletion stay keyed on
+ * the JPEG side regardless of the toggle.
+ */
+internal fun stillViewerDisplaySide(
+    clip: MediaClipRecord,
+    rawSibling: MediaClipRecord?,
+    showingRaw: Boolean,
+): MediaClipRecord = if (showingRaw) rawSibling ?: clip else clip
 
 /**
  * Expands a deletion selection with each JPEG's RAW sibling (a RAW+JPEG pair
@@ -78,11 +93,14 @@ internal fun rawSibling(
 internal fun cameraDeletionTargets(
     catalog: List<MediaClipRecord>,
     selection: List<MediaClipRecord>,
+    ownerCameraID: (MediaClipRecord) -> String,
 ): List<MediaClipRecord> {
     val targets = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
     selection.forEach { clip ->
         targets[MediaObjectIdentity(clip)] = clip
-        rawSibling(catalog, clip)?.let { raw -> targets[MediaObjectIdentity(raw)] = raw }
+        rawSibling(catalog, clip, ownerCameraID)?.let { raw ->
+            targets[MediaObjectIdentity(raw)] = raw
+        }
     }
     return targets.values.toList()
 }

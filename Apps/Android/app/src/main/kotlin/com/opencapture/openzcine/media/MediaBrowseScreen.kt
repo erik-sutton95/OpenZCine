@@ -753,7 +753,7 @@ internal fun MediaBrowseScreen(
         val catalog = (state as? BrowseState.Loaded)?.clips.orEmpty()
         deleteConfirmTargets = null
         viewingPhoto = null
-        pendingDeletion = cameraDeletionTargets(catalog, selection)
+        pendingDeletion = cameraDeletionTargets(catalog, selection, ::ownerCameraID)
     }
 
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
@@ -782,7 +782,18 @@ internal fun MediaBrowseScreen(
             sortOrder = options.sortOrder,
             filters = filters,
             libraryKey = ::clipKey,
+            ownerOf = ::ownerCameraID,
         )
+    // Pair lookups scan the unfiltered catalog so the RAW side survives tab
+    // and chip filters (iOS `rawSibling(of:)`).
+    val rawStillPairKeys =
+        remember(loadedClips, offlineClipOwners) {
+            loadedClips.mapNotNullTo(hashSetOf()) { clip ->
+                if (clip.isRawStill) clip.rawPairKey(ownerCameraID(clip)) else null
+            }
+        }
+    fun hasRawSibling(clip: MediaClipRecord): Boolean =
+        clip.isJpegStill && clip.rawPairKey(ownerCameraID(clip)) in rawStillPairKeys
     val selectedClips =
         displayedClips.filter { clip -> clipKey(clip) in selectedIDs }
     val visibleIDs = displayedClips.map { clip -> clipKey(clip) }.toSet()
@@ -1323,6 +1334,7 @@ internal fun MediaBrowseScreen(
                             cameraID = cameraID,
                             cameraIDFor = ::ownerCameraID,
                             clipIdentity = ::clipKey,
+                            hasRawSibling = ::hasRawSibling,
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
                             favorites = favorites,
@@ -1412,6 +1424,7 @@ internal fun MediaBrowseScreen(
                             cameraID = cameraID,
                             cameraIDFor = ::ownerCameraID,
                             clipIdentity = ::clipKey,
+                            hasRawSibling = ::hasRawSibling,
                             cameraConnected = cameraConnected,
                             cacheStore = cacheStore,
                             favorites = favorites,
@@ -1506,7 +1519,7 @@ internal fun MediaBrowseScreen(
                         targets,
                         hasRawPair =
                             targets.size == 1 &&
-                                rawSibling(loadedClips, targets.single()) != null,
+                                rawSibling(loadedClips, targets.single(), ::ownerCameraID) != null,
                     ),
                 onDelete = { requestDeletion(targets) },
                 onDismiss = { deleteConfirmTargets = null },
@@ -1550,7 +1563,7 @@ internal fun MediaBrowseScreen(
                 clip = clip,
                 cameraID = owner,
                 cameraTransferAvailable = cameraConnected,
-                hasRawSibling = rawSibling(loadedClips, clip) != null,
+                rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
                 deleteAvailable =
                     librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
                 onDelete = { requestDeletion(listOf(clip)) },
@@ -2448,6 +2461,8 @@ private fun MediaLibraryBody(
     cameraID: String,
     cameraIDFor: (MediaClipRecord) -> String = { cameraID },
     clipIdentity: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
+    /** A same-stem RAW rides behind this JPEG — the cell shows one item for the pair. */
+    hasRawSibling: (MediaClipRecord) -> Boolean = { false },
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2478,6 +2493,7 @@ private fun MediaLibraryBody(
                         source = source,
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
+                        hasRawSibling = hasRawSibling,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2495,6 +2511,7 @@ private fun MediaLibraryBody(
                         source = source,
                         cameraIDFor = cameraIDFor,
                         clipIdentity = clipIdentity,
+                        hasRawSibling = hasRawSibling,
                         cameraConnected = cameraConnected,
                         cacheStore = cacheStore,
                         favorites = favorites,
@@ -2526,6 +2543,7 @@ private fun MediaClipGrid(
     source: MediaLibrarySource,
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
+    hasRawSibling: (MediaClipRecord) -> Boolean,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2576,6 +2594,7 @@ private fun MediaClipGrid(
                     clip = clip,
                     source = source,
                     cameraID = cameraIDFor(clip),
+                    hasRawSibling = hasRawSibling(clip),
                     cameraConnected = cameraConnected,
                     cacheStore = cacheStore,
                     favorite = identity in favorites,
@@ -2633,6 +2652,7 @@ private fun MediaClipList(
     source: MediaLibrarySource,
     cameraIDFor: (MediaClipRecord) -> String,
     clipIdentity: (MediaClipRecord) -> String,
+    hasRawSibling: (MediaClipRecord) -> Boolean,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
@@ -2677,6 +2697,7 @@ private fun MediaClipList(
                     clip = clip,
                     source = source,
                     cameraID = cameraIDFor(clip),
+                    hasRawSibling = hasRawSibling(clip),
                     cameraConnected = cameraConnected,
                     cacheStore = cacheStore,
                     favorite = identity in favorites,
@@ -2868,6 +2889,7 @@ private fun MediaClipCell(
     clip: MediaClipRecord,
     source: MediaLibrarySource,
     cameraID: String,
+    hasRawSibling: Boolean,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorite: Boolean,
@@ -2925,7 +2947,7 @@ private fun MediaClipCell(
                         .padding(horizontal = 6.dp, vertical = 3.dp),
             )
             Text(
-                clip.badgeLabel,
+                pairAwareBadgeLabel(clip, hasRawSibling),
                 style = chromeStyle(9f, FontWeight.Bold, mono = true),
                 color = LiveDesign.text,
                 modifier =
@@ -2962,6 +2984,7 @@ private fun MediaClipListRow(
     clip: MediaClipRecord,
     source: MediaLibrarySource,
     cameraID: String,
+    hasRawSibling: Boolean,
     cameraConnected: Boolean,
     cacheStore: MediaCacheStore,
     favorite: Boolean,
@@ -3026,7 +3049,7 @@ private fun MediaClipListRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${clip.badgeLabel} · ${clipActionLabel(clip)}",
+                "${pairAwareBadgeLabel(clip, hasRawSibling)} · ${clipActionLabel(clip)}",
                 style = chromeStyle(10f, FontWeight.Medium, mono = true),
                 color = LiveDesign.muted,
                 maxLines = 1,
@@ -3325,6 +3348,10 @@ private fun clipActionLabel(clip: MediaClipRecord): String =
         MediaContentKind.R3D_MASTER -> "MASTER"
         MediaContentKind.UNSUPPORTED -> "MEDIA"
     }
+
+/** A paired still's one cell announces both sides (iOS `RAW+J` badge). */
+private fun pairAwareBadgeLabel(clip: MediaClipRecord, hasRawSibling: Boolean): String =
+    if (hasRawSibling) "${clip.sizeLabel} · RAW+J" else clip.badgeLabel
 
 private fun clipAccessibilityLabel(
     clip: MediaClipRecord,

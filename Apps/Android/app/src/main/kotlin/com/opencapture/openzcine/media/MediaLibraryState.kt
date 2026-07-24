@@ -419,6 +419,8 @@ internal object MediaLibraryFiltering {
         todayToken: String = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
         /** Offline multi-camera libraries resolve favorites with the owning bucket. */
         libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
+        /** Offline multi-camera libraries pair RAW+JPEG within the owning bucket. */
+        ownerOf: (MediaClipRecord) -> String = { _ -> cameraID },
     ): List<MediaClipRecord> {
         var filtered =
             when (category) {
@@ -445,6 +447,18 @@ internal object MediaLibraryFiltering {
         filters.storageId?.let { selectedStorage ->
             filtered = filtered.filter { clip -> clip.storageId == selectedStorage }
         }
+        // One item per RAW+JPEG pair: the JPEG carries the still (badge +
+        // viewer toggle), the same-shot RAW never renders its own cell. Keyed
+        // on the filter survivors so an offline pass can still surface a
+        // cached NEF whose JPEG side was filtered away (iOS `displayedClips`).
+        val jpegPairKeys =
+            filtered.mapNotNullTo(hashSetOf()) { clip ->
+                if (clip.isJpegStill) clip.rawPairKey(ownerOf(clip)) else null
+            }
+        filtered =
+            filtered.filterNot { clip ->
+                clip.isRawStill && clip.rawPairKey(ownerOf(clip)) in jpegPairKeys
+            }
         return sort(filtered, sortOrder)
     }
 

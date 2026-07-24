@@ -473,6 +473,66 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `raw cell collapses into its jpeg pair and one item survives per pair`() {
+        val cameraID = "camera"
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+        val lonelyRaw =
+            clip(handle = 3, filename = "DSC_0002.NEF", kind = MediaContentKind.STILL_PHOTO)
+        val clips = listOf(jpeg, raw, lonelyRaw)
+
+        // One item per pair: the JPEG carries the cell, the same-shot RAW
+        // never renders its own; an unpaired RAW keeps its cell.
+        assertEquals(
+            listOf(jpeg, lonelyRaw),
+            MediaLibraryFiltering.displayed(
+                clips,
+                MediaLibraryCategory.ALL,
+                emptySet(),
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+            ),
+        )
+        // Suppression is keyed on the filter survivors: when a chip keeps only
+        // the cached NEF (its JPEG side filtered away), the RAW surfaces its
+        // own cell instead of vanishing entirely.
+        assertEquals(
+            listOf(raw),
+            MediaLibraryFiltering.displayed(
+                listOf(jpeg, raw),
+                MediaLibraryCategory.FAVORITES,
+                setOf(raw.libraryKey(cameraID)),
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+            ),
+        )
+        // Offline multi-camera library: two cameras' formulaic DSC_0001 stems
+        // never pair across owning buckets.
+        assertEquals(
+            listOf(jpeg, raw),
+            MediaLibraryFiltering.displayed(
+                listOf(jpeg, raw),
+                MediaLibraryCategory.ALL,
+                emptySet(),
+                cameraID,
+                MediaLibrarySortOrder.NAME,
+                ownerOf = { if (it.handle == 1L) "camera-a" else "camera-b" },
+            ),
+        )
+    }
+
+    @Test
+    fun `viewer displays the toggled pair side while identity stays on the jpeg`() {
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+
+        assertEquals(jpeg, stillViewerDisplaySide(jpeg, raw, showingRaw = false))
+        assertEquals(raw, stillViewerDisplaySide(jpeg, raw, showingRaw = true))
+        // Unpaired stills ignore a stray RAW request.
+        assertEquals(jpeg, stillViewerDisplaySide(jpeg, rawSibling = null, showingRaw = true))
+    }
+
+    @Test
     fun `sweep selection only adds items and visibility changes prune safely`() {
         val first = MediaLibrarySelection.begin("one")
         val swept = MediaLibrarySelection.addSweep(first, listOf("one", "two", "three"))
