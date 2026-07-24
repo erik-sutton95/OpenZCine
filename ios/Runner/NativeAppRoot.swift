@@ -3659,6 +3659,9 @@ final class NativeAppModel {
                             await self.readAndApplyCameraProperty(
                                 session: session, property: .exposureRemaining)
                         }
+                        // The card object set changed (backup mode adds a second-card copy
+                        // that fires no event of its own) — the next media pass must re-list.
+                        self.mediaFetchCompletedTab = nil
                     } else if event.eventCode == .movieRecordInterrupted {
                         // An interruption is authoritative even while an optimistic app record
                         // command is in its brief readback-suppression window.
@@ -6277,10 +6280,27 @@ final class NativeAppModel {
         }
         var deleted = 0
         for clip in targets {
-            if let handle = clip.handle {
-                guard let session = cameraSession,
-                    (try? await session.deleteObject(handle: handle)) != nil
-                else { continue }
+            let doomed = clip.allLocations
+            if !doomed.isEmpty {
+                guard let session = cameraSession else { continue }
+                // Backup mode: one shot is a distinct object on EACH card — delete every
+                // copy, not just the primary. [verify-on-HW: cross-card handle delete]
+                var survivors: [MediaObjectHandle] = []
+                for location in doomed
+                where (try? await session.deleteObject(handle: location.handle)) == nil {
+                    survivors.append(location)
+                }
+                if !survivors.isEmpty {
+                    // The body refused a copy (protected object) — the row lives on with
+                    // what remains instead of the app pretending the shot is gone.
+                    mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+                        row in
+                        row.storageLocations = survivors
+                        row.handle = survivors.first?.handle
+                        row.storageID = survivors.first?.storageID
+                    }
+                    continue
+                }
             }
             // Purge every trace the list scan could resurrect an item from: cached
             // bytes, thumbnail, and the index row.
@@ -8813,7 +8833,9 @@ extension NativeAppModel {
         }
 
         if let slot = mediaStorageSlotFilter {
-            clips = clips.filter { $0.storageID == slot }
+            // A backup-mode shot lives on BOTH cards as one row with two locations — it must
+            // appear under either slot chip, not just its primary's.
+            clips = clips.filter { $0.isOn(storageID: slot) }
         }
 
         if !isConnected {
@@ -9052,12 +9074,14 @@ extension NativeAppModel {
         }
 
         let cached = mediaClipStore.list(cameraID: bucket)
-        let cachedByHandle = Dictionary(
-            uniqueKeysWithValues: cached.compactMap { clip in
-                clip.handle.map { ($0, clip) }
-            }
-        )
-        let cachedHandleSet = Set(cachedByHandle.keys)
+        // Identity is the (storageID, handle) pair: backup mode puts one filename on both
+        // cards as two objects, and one index row can carry several locations. A bare-handle
+        // key would let the second card's copy shadow (or crash into) the first's.
+        var cachedByLocation: [MediaObjectHandle: MediaClip] = [:]
+        for clip in cached {
+            for location in clip.allLocations { cachedByLocation[location] = clip }
+        }
+        let cachedLocationSet = Set(cachedByLocation.keys)
 
         let listedHandles = await session.listMediaObjectHandles()
         if Task.isCancelled { return }
@@ -9065,7 +9089,7 @@ extension NativeAppModel {
         // Removal detection always runs against the FULL listing — a scoped pass must never
         // read "absent from my category" as "deleted from the card".
         let delta = MediaClipDiscoveryDelta.compute(
-            cachedHandles: cachedHandleSet,
+            cachedHandles: cachedLocationSet,
             cameraHandles: listedHandles
         )
 
@@ -9075,7 +9099,7 @@ extension NativeAppModel {
         let cameraHandles = await scopedHandles(
             listedHandles,
             for: mediaCategoryTab,
-            cachedByHandle: cachedByHandle,
+            cachedByLocation: cachedByLocation,
             session: session
         )
         if Task.isCancelled { return }
@@ -9089,7 +9113,7 @@ extension NativeAppModel {
             if mediaBrowserSource == .camera, bucket == mediaBucketID {
                 applyRemovedClipsToMemory(
                     removedFilenames: removedFilenames,
-                    clearedHandles: delta.removedHandles
+                    clearedLocations: delta.removedHandles
                 )
             }
         }
@@ -9136,8 +9160,8 @@ extension NativeAppModel {
             if Task.isCancelled { break }
 
             let record: MediaClip
-            if delta.reuseHandles.contains(objectHandle.handle),
-                let cachedClip = cachedByHandle[objectHandle.handle]
+            if delta.reuseHandles.contains(objectHandle),
+                let cachedClip = cachedByLocation[objectHandle]
             {
                 record = cachedClip
             } else {
@@ -9199,8 +9223,8 @@ extension NativeAppModel {
             for objectHandle in videoHandles {
                 if Task.isCancelled { break }
                 guard !seenThisPass.contains(objectHandle),
-                    cachedByHandle[objectHandle.handle] == nil
-                        || delta.removedHandles.contains(objectHandle.handle)
+                    cachedByLocation[objectHandle] == nil
+                        || delta.removedHandles.contains(objectHandle)
                 else { continue }
                 guard
                     let camera = await session.fetchMediaClip(
@@ -9250,7 +9274,7 @@ extension NativeAppModel {
     private func scopedHandles(
         _ handles: [MediaObjectHandle],
         for tab: MediaCategoryTab,
-        cachedByHandle: [UInt32: MediaClip],
+        cachedByLocation: [MediaObjectHandle: MediaClip],
         session: NativeCameraSession
     ) async -> [MediaObjectHandle] {
         let newestFirst = handles.sorted { $0.handle > $1.handle }
@@ -9264,7 +9288,7 @@ extension NativeAppModel {
         var scoped: [MediaObjectHandle] = []
         var unknown: [MediaObjectHandle] = []
         for handle in newestFirst {
-            if let cached = cachedByHandle[handle.handle] {
+            if let cached = cachedByLocation[handle] {
                 if (cached.mediaKind == .video) == wantsVideo { scoped.append(handle) }
             } else {
                 unknown.append(handle)
@@ -9315,17 +9339,22 @@ extension NativeAppModel {
 
     private func applyRemovedClipsToMemory(
         removedFilenames: Set<String>,
-        clearedHandles: Set<UInt32>
+        clearedLocations: Set<MediaObjectHandle>
     ) {
         if !removedFilenames.isEmpty {
             mediaClips.removeAll { removedFilenames.contains($0.filename) }
         }
         for index in mediaClips.indices {
-            guard let handle = mediaClips[index].handle, clearedHandles.contains(handle) else {
-                continue
-            }
-            mediaClips[index].handle = nil
-            mediaClips[index].storageID = nil
+            let locations = mediaClips[index].allLocations
+            guard !locations.isEmpty else { continue }
+            let survivors = locations.filter { !clearedLocations.contains($0) }
+            guard survivors.count != locations.count else { continue }
+            let primary = survivors.min(by: {
+                MediaClipStore.locationRank($0) < MediaClipStore.locationRank($1)
+            })
+            mediaClips[index].handle = primary?.handle
+            mediaClips[index].storageID = primary?.storageID
+            mediaClips[index].storageLocations = survivors.isEmpty ? nil : survivors
         }
     }
 

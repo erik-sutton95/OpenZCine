@@ -23,10 +23,16 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
     var cameraID: String
     /// On-card filename, e.g. `C0001.MOV`.
     var filename: String
-    /// Object handle on the camera — present when discovered on the card, nil for local-only clips.
+    /// Primary object handle on the camera — present when discovered on the card, nil for
+    /// local-only clips. When the shot lives on both cards this is the lowest-slot copy.
     var handle: UInt32?
-    /// Owning storage volume on the camera (nil for local-only clips).
+    /// Storage volume of the primary handle (nil for local-only clips).
     var storageID: UInt32?
+    /// Every card location this shot occupies: backup mode writes the same filename to both
+    /// cards as two distinct objects, and the index keeps ONE row per filename — so the row
+    /// carries all its locations. Additive/Codable; nil on rows indexed before this field
+    /// existed (`allLocations` falls back to the primary pair).
+    var storageLocations: [MediaObjectHandle]? = nil
     /// On-card size in bytes (PTP `ObjectCompressedSize`; 0 when unknown).
     var sizeBytes: UInt64
     /// PTP capture date string (`YYYYMMDDThhmmss`) or empty.
@@ -52,6 +58,21 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
     var exportStatus: ExportStatus = .none
 
     var id: String { "\(cameraID)/\(filename)" }
+
+    /// All card locations of this shot, falling back to the primary pair for legacy rows.
+    var allLocations: [MediaObjectHandle] {
+        if let storageLocations, !storageLocations.isEmpty { return storageLocations }
+        if let handle, let storageID {
+            return [MediaObjectHandle(storageID: storageID, handle: handle)]
+        }
+        return []
+    }
+
+    /// Whether any copy of this shot lives on the given storage volume (slot filter).
+    func isOn(storageID target: UInt32) -> Bool {
+        if allLocations.contains(where: { $0.storageID == target }) { return true }
+        return storageID == target
+    }
 
     /// Lowercased file extension without the dot, e.g. `mov`.
     var fileExtension: String {
@@ -589,11 +610,30 @@ struct MediaClipStore {
 
     // MARK: - Index persistence
 
+    /// Sort rank for choosing a row's primary location: real slot words first, slot 1 before
+    /// slot 2, stable on ties.
+    static func locationRank(_ location: MediaObjectHandle) -> (UInt32, UInt32) {
+        let slot = (location.storageID >> 16) & 0xFF
+        return (slot > 0 ? slot : 0xFF, location.storageID)
+    }
+
     /// Merges camera-discovered fields into an existing index entry, preserving operator flags.
+    /// Backup mode surfaces one shot as an object per card sharing the filename — the
+    /// locations union instead of the newest discovery clobbering the row's identity.
     static func mergeCameraDiscovery(existing: MediaClip, incoming: MediaClip) -> MediaClip {
         var merged = existing
-        merged.handle = incoming.handle
-        merged.storageID = incoming.storageID
+        var locations = existing.allLocations
+        for location in incoming.allLocations where !locations.contains(location) {
+            locations.append(location)
+        }
+        if let primary = locations.min(by: { locationRank($0) < locationRank($1) }) {
+            merged.handle = primary.handle
+            merged.storageID = primary.storageID
+            merged.storageLocations = locations
+        } else {
+            merged.handle = incoming.handle
+            merged.storageID = incoming.storageID
+        }
         merged.sizeBytes = incoming.sizeBytes
         merged.captureDate = incoming.captureDate
         merged.pixelWidth = incoming.pixelWidth
@@ -679,18 +719,41 @@ struct MediaClipStore {
     /// - Returns: Filenames removed entirely from the index.
     func applyCameraRemoval(
         cameraID: String,
-        removedHandles: Set<UInt32>,
+        removedHandles: Set<MediaObjectHandle>,
         hasLocalFile: (MediaClip) -> Bool
     ) -> Set<String> {
         guard !removedHandles.isEmpty else { return [] }
         var clips = loadIndex(cameraID: cameraID)
         var removedFilenames = Set<String>()
+        var shrunkCount = 0
         clips = clips.compactMap { clip in
-            guard let handle = clip.handle, removedHandles.contains(handle) else { return clip }
+            let locations = clip.allLocations
+            let survivors: [MediaObjectHandle]
+            if locations.isEmpty {
+                // Legacy row (handle without a storage) — match by bare handle.
+                guard let bare = clip.handle,
+                    removedHandles.contains(where: { $0.handle == bare })
+                else { return clip }
+                survivors = []
+            } else {
+                survivors = locations.filter { !removedHandles.contains($0) }
+                if survivors.count == locations.count { return clip }
+            }
+            if let primary = survivors.min(by: { Self.locationRank($0) < Self.locationRank($1) }) {
+                // One card's copy vanished (e.g. deleted in-camera) — the row lives on the rest.
+                var updated = clip
+                updated.handle = primary.handle
+                updated.storageID = primary.storageID
+                updated.storageLocations = survivors
+                shrunkCount += 1
+                return updated
+            }
             if hasLocalFile(clip) {
                 var updated = clip
                 updated.handle = nil
                 updated.storageID = nil
+                updated.storageLocations = nil
+                shrunkCount += 1
                 return updated
             }
             removedFilenames.insert(clip.filename)
@@ -698,7 +761,7 @@ struct MediaClipStore {
         }
         saveIndex(clips, cameraID: cameraID)
         mediaLibraryLogger.info(
-            "delta sync removed \(removedFilenames.count, privacy: .public) index row(s), cleared \(removedHandles.count - removedFilenames.count, privacy: .public) local handle(s) for \(cameraID, privacy: .private(mask: .hash))"
+            "delta sync removed \(removedFilenames.count, privacy: .public) index row(s), shrank \(shrunkCount, privacy: .public) row(s) for \(cameraID, privacy: .private(mask: .hash))"
         )
         return removedFilenames
     }
