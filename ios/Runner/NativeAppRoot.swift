@@ -6236,11 +6236,31 @@ final class NativeAppModel {
     @ObservationIgnored private var mfDrivePendingPulses = 0
     /// Travel-end feedback for the scrub UI: −1 near limit, +1 infinity limit, nil moving.
     private(set) var mfDriveAtEnd: Int?
-    /// Strip debug caption counters (Debug builds): drives acknowledged vs retried, plus the
-    /// last refusal wire code — the discriminator for why a drive is being refused on HW.
-    private(set) var mfDriveDebugOK = 0
-    private(set) var mfDriveDebugBusy = 0
+    /// Net acknowledged pulses since the dial was armed (+ toward infinity) — the camera exposes
+    /// no absolute focus distance for AF lenses, so the dial shows this as a RELATIVE position:
+    /// once a full near↔infinity sweep pins both ends, `mfDriveDialFraction` reads 0…1.
+    private(set) var mfDriveNetPulses = 0
+    /// Pinned pulse offsets of the two travel ends once observed (near, infinity). Nil until hit.
+    @ObservationIgnored private var mfDriveNearPulses: Int?
+    @ObservationIgnored private var mfDriveInfinityPulses: Int?
     private(set) var mfDriveLastCode: UInt16 = 0
+
+    /// Relative focus position 0 (near) … 1 (infinity) once both ends have been reached; nil while
+    /// the travel isn't yet calibrated (the dial then just scrolls with motion).
+    var mfDriveDialFraction: Double? {
+        guard let near = mfDriveNearPulses, let far = mfDriveInfinityPulses, far > near else {
+            return nil
+        }
+        return min(1, max(0, Double(mfDriveNetPulses - near) / Double(far - near)))
+    }
+
+    /// Re-arms the dial's relative position (call when the strip appears / lens or mode changes).
+    func resetMFDriveDial() {
+        mfDriveNetPulses = 0
+        mfDriveNearPulses = nil
+        mfDriveInfinityPulses = nil
+        mfDriveAtEnd = nil
+    }
 
     /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
     /// while a drive is in flight. A refused drive is treated as transient — the stepping-motor
@@ -6268,19 +6288,25 @@ final class NativeAppModel {
                 switch outcome {
                 case .complete, .stepTooSmall:
                     retries = 0
-                    self.mfDriveDebugOK += 1
+                    self.mfDriveNetPulses += pending
                 case .endOfTravel:
-                    self.mfDriveAtEnd = pending < 0 ? -1 : 1
+                    self.mfDriveNetPulses += pending
+                    // Pin whichever end we reached so the relative position can calibrate.
+                    if pending < 0 {
+                        self.mfDriveNearPulses = self.mfDriveNetPulses
+                        self.mfDriveAtEnd = -1
+                    } else {
+                        self.mfDriveInfinityPulses = self.mfDriveNetPulses
+                        self.mfDriveAtEnd = 1
+                    }
                     self.mfDrivePendingPulses = 0
                     retries = 0
-                    self.mfDriveDebugOK += 1
                 case .refused(let code):
                     // A refusal is transient while AF is momentarily driving (access-denied) or
                     // the lens is still initialising (busy): requeue and retry. A sustained
                     // refusal is a real state block — Invalid_Status means either an unusable
                     // lens or that the focus mode slipped back to MF (the body refuses a remote
                     // drive in MF). Surface one message and leave the strip up to retry.
-                    self.mfDriveDebugBusy += 1
                     self.mfDriveLastCode = code.rawValue
                     retries += 1
                     if retries <= 16 {

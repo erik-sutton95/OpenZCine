@@ -196,7 +196,8 @@ enum ImageEffectsCompositor {
         for i in 0...4 {
             let x = Double(i) / 4
             deLog["inputPoint\(i)"] = CIVector(
-                x: x, y: ExposureScale.referenceIRE(signalNative: x * 255, curve: .redLog3G10) / 100
+                x: x,
+                y: ExposureScale.referenceIRE(signalNative: x * 255, curve: settings.curve) / 100
             )
         }
         let deLogged = grey.applyingFilter("CIToneCurve", parameters: deLog)

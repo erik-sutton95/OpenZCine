@@ -1258,7 +1258,7 @@ struct PickerPanel: View {
     private var mfScrubToggleRow: some View {
         @Bindable var model = model
         return Toggle(isOn: $model.mfDriveScrubEnabled) {
-            Text("Live-view focus scrub")
+            Text("Focus dial")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(LiveDesign.text)
         }
@@ -5520,54 +5520,37 @@ struct SettingsLiveTile: View {
     }
 }
 
-/// Vertical focus-by-wire scrub, living on the live view beside the right system rail —
-/// only while MF is active on a proven drivable lens. Drag up toward ∞, down toward NEAR
-/// (relative pulses; there is no absolute position to seek); travel ends light their label
-/// with a haptic. [verify-on-HW: pulses-per-point feel per lens]
+/// The "Focus dial": a thin vertical drum on the live view beside the right system rail, shown
+/// while an AF focus mode is active on a focus-by-wire lens. Drag up toward ∞, down toward NEAR;
+/// the drum's ticks scroll with the drive so it reads like a physical focus ring, and — once a
+/// full near↔∞ sweep calibrates the travel — a relative position (0 = near, 100 = ∞) is shown
+/// (the camera exposes no absolute distance for AF lenses). Travel ends light their label with a
+/// haptic. [verify-on-HW: pulses-per-point feel per lens]
 struct MFDriveVerticalScrub: View {
     @Environment(NativeAppModel.self) private var model
     @State private var lastDragY: CGFloat?
     @State private var isDragging = false
 
-    /// Drag-to-pulse gain — deliberately gentle so a full strip sweep is a controllable focus
-    /// pull, not a slam to the stop (was 24/pt, ~6-8× too twitchy on a real lens).
+    /// Drag-to-pulse gain — deliberately gentle so a full sweep is a controllable focus pull.
     private static let pulsesPerPoint = 4
+    /// Drum geometry: one tick every `pulsesPerTick` pulses, `tickSpacing` points apart.
+    private static let tickSpacing: CGFloat = 11
+    private static let pulsesPerTick: CGFloat = 220
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
             Text("∞")
                 .foregroundStyle(model.mfDriveAtEnd == 1 ? LiveDesign.accent : LiveDesign.muted)
-            ZStack {
-                Capsule()
-                    .fill(Color.white.opacity(isDragging ? 0.16 : 0.07))
-                    .overlay(
-                        Capsule().strokeBorder(
-                            isDragging ? LiveDesign.accent.opacity(0.7) : LiveDesign.hairline,
-                            lineWidth: 1))
-                Rectangle()
-                    .fill(LiveDesign.accent.opacity(0.9))
-                    .frame(width: isDragging ? 20 : 14, height: 2)
-            }
-            .frame(width: 30)
-            .frame(maxHeight: .infinity)
-            .animation(.easeOut(duration: 0.12), value: isDragging)
-            Text("MF")
-                .foregroundStyle(LiveDesign.faint)
+            drum
+                .frame(width: 30)
+                .frame(maxHeight: .infinity)
             Text("NEAR")
                 .foregroundStyle(model.mfDriveAtEnd == -1 ? LiveDesign.accent : LiveDesign.muted)
-            #if DEBUG
-                // Live drive telemetry (acknowledged·refused + last refusal code) — the
-                // on-device discriminator for why a drive is refused (e.g. 2013 = Access_Denied
-                // → AF is active / AF-F set; 2019 = Busy → lens still initializing).
-                if model.mfDriveDebugOK + model.mfDriveDebugBusy > 0 {
-                    Text(
-                        "\(model.mfDriveDebugOK)·\(model.mfDriveDebugBusy) "
-                            + String(format: "%04X", model.mfDriveLastCode)
-                    )
-                    .font(.system(size: 7, weight: .regular, design: .monospaced))
-                    .foregroundStyle(LiveDesign.faint)
-                }
-            #endif
+            if let fraction = model.mfDriveDialFraction {
+                Text("\(Int((fraction * 100).rounded()))")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(LiveDesign.text)
+            }
         }
         .font(.system(size: 9, weight: .semibold, design: .monospaced))
         .padding(.vertical, 10)
@@ -5593,6 +5576,47 @@ struct MFDriveVerticalScrub: View {
         )
         .sensoryFeedback(.impact(weight: .medium), trigger: model.mfDriveAtEnd) { _, end in
             end != nil
+        }
+        // Re-arm the relative position each time the dial appears (new lens/mode/session).
+        .onAppear { model.resetMFDriveDial() }
+    }
+
+    /// The scrolling tick drum with a fixed centre reference line marking the current position.
+    private var drum: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            ZStack {
+                Capsule()
+                    .fill(Color.white.opacity(isDragging ? 0.14 : 0.06))
+                    .overlay(
+                        Capsule().strokeBorder(
+                            isDragging ? LiveDesign.accent.opacity(0.7) : LiveDesign.hairline,
+                            lineWidth: 1))
+                Canvas { ctx, canvas in
+                    let mid = canvas.height / 2
+                    let current = CGFloat(model.mfDriveNetPulses) / Self.pulsesPerTick
+                    let span = Int(mid / Self.tickSpacing) + 2
+                    let base = Int(current.rounded())
+                    for offset in -span...span {
+                        let index = base + offset
+                        let y = mid - (CGFloat(index) - current) * Self.tickSpacing
+                        guard y >= 0, y <= canvas.height else { continue }
+                        let major = index % 5 == 0
+                        let w = (major ? 0.72 : 0.4) * canvas.width
+                        let rect = CGRect(
+                            x: (canvas.width - w) / 2, y: y, width: w, height: major ? 1.5 : 1)
+                        ctx.fill(
+                            Path(rect),
+                            with: .color(.white.opacity(major ? 0.5 : 0.28)))
+                    }
+                }
+                // Fixed centre line = the current focus position.
+                Rectangle()
+                    .fill(LiveDesign.accent.opacity(0.95))
+                    .frame(width: isDragging ? 26 : 20, height: 2)
+                    .position(x: size.width / 2, y: size.height / 2)
+            }
+            .animation(.easeOut(duration: 0.12), value: isDragging)
         }
     }
 }

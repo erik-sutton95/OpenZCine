@@ -1793,6 +1793,13 @@ private struct MediaBurstSeriesView: View {
                 )
                 .id(selected.id)
             }
+            // Delete-all runs over this fullScreenCover, so the progress bar mounts here too
+            // (the browser-level overlay is behind the cover).
+            if let progress = model.mediaDeletionProgress {
+                MediaDeletionProgressOverlay(progress: progress)
+                    .transition(.opacity)
+                    .zIndex(6)
+            }
         }
         .safeAreaInset(edge: .bottom) {
             // The scrubber sits above the home indicator via the safe-area inset; the viewer's
