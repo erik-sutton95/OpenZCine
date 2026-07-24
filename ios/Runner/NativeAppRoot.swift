@@ -6107,28 +6107,12 @@ final class NativeAppModel {
         }
         return
             (try? await session.setObjectRating(
-                handle: handle, value: Self.ratingValue(forStars: stars))) != nil
+                handle: handle, value: StillCapturePolicy.ratingValue(forStars: stars))) != nil
     }
 
     // MARK: - Media delete + star rating
-
-    /// The rating property's step table: index == stars.
-    private static let ratingSteps: [UInt16] = [0, 1, 25, 50, 75, 100]
-
-    static func ratingValue(forStars stars: Int) -> UInt16 {
-        ratingSteps[max(0, min(5, stars))]
-    }
-
-    static func stars(fromRatingValue value: UInt16) -> Int {
-        switch value {
-        case 100...: 5
-        case 75...: 4
-        case 50...: 3
-        case 25...: 2
-        case 1...: 1
-        default: 0
-        }
-    }
+    // (The rating step table lives in shared core `StillCapturePolicy` — both shells map
+    // stars ↔ raw property values through the same code.)
 
     /// Deletes clips from the camera card (and any local copies). A RAW+JPEG pair deletes
     /// both sides. Protected objects are refused by the body and stay listed. Returns the
@@ -6169,14 +6153,14 @@ final class NativeAppModel {
     func mediaStarRating(for clip: MediaClip) async -> Int? {
         guard let handle = clip.handle, let session = cameraSession else { return nil }
         guard let value = try? await session.objectRating(handle: handle) else { return nil }
-        return Self.stars(fromRatingValue: value)
+        return StillCapturePolicy.stars(fromRatingValue: value)
     }
 
     /// Writes a 0–5 star rating to the clip; a RAW+JPEG pair writes both sides, tolerating
     /// the RAW side's refusal (RAW stills don't carry the property). [verify-on-HW]
     func setMediaStarRating(_ stars: Int, for clip: MediaClip) async -> Bool {
         guard let handle = clip.handle, let session = cameraSession else { return false }
-        let value = Self.ratingValue(forStars: stars)
+        let value = StillCapturePolicy.ratingValue(forStars: stars)
         guard (try? await session.setObjectRating(handle: handle, value: value)) != nil else {
             return false
         }
