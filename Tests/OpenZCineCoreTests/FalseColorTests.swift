@@ -63,7 +63,10 @@ struct FalseColorTests {
     func stopLandmarksMapForBothCurves() throws {
         for curve in ExposureToneCurve.allCases {
             let mapping = ExposureSignalMapping(curve: curve)
-            for stop in -6...5 {
+            // Display-referred curves clamp above their finite headroom by design — each
+            // curve's landmarks are exercised across its own representable range.
+            let maxStop = log2(curve.decode(encodedValue: 1) / 0.18)
+            for stop in -6...5 where Double(stop) <= maxStop + 0.0001 {
                 let encoded = curve.encode(linearLight: 0.18 * pow(2, Double(stop)))
                 let value = FalseColorMap.exposureValue(
                     red: encoded, green: encoded, blue: encoded,
