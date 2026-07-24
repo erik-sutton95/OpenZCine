@@ -3747,6 +3747,9 @@ final class NativeAppModel {
         lastBodyCaptureSyncAt = now
         // Pulse the app's shutter button so a body-fired shutter visibly registers, then review.
         bodyShutterPulse &+= 1
+        // Freeze the focus box at detection time — the review reads this, not the live value the
+        // fetch window keeps overwriting.
+        capturedFocusForReview = liveViewFocus
         scheduleInstantReview(session: session)
         Task { [weak self] in
             await self?.readAndApplyCameraProperty(session: session, property: .exposureRemaining)
@@ -6037,6 +6040,11 @@ final class NativeAppModel {
     /// Last known object handles per storage — the baseline a post-capture diff runs against.
     /// Maintained outside the shutter path so the release itself never waits on enumeration.
     @ObservationIgnored private var knownObjectHandles: [UInt32: Set<UInt32>] = [:]
+    /// The focus box frozen at capture time (shutter press / body-capture detect). The review's
+    /// focus overlay uses THIS, not live `liveViewFocus` — incoming frames overwrite the live
+    /// value during the post-shutter fetch window, so a box moved before the preview lands would
+    /// otherwise drag the reviewed shot's reticle with it.
+    @ObservationIgnored private var capturedFocusForReview: PTPLiveViewFocusInfo?
 
     func presentInstantReview(
         _ image: UIImage, isFullResolution: Bool = true, handle: UInt32? = nil
@@ -6053,7 +6061,7 @@ final class NativeAppModel {
         withAnimation(.easeInOut(duration: 0.18)) {
             instantReview = InstantReviewState(
                 image: image,
-                focus: liveViewFocus,
+                focus: capturedFocusForReview ?? liveViewFocus,
                 infoLine: info.isEmpty ? nil : info,
                 isFullResolution: isFullResolution,
                 handle: handle)
@@ -6078,6 +6086,7 @@ final class NativeAppModel {
     func dismissInstantReview() {
         instantReviewDismissTask?.cancel()
         instantReviewDismissTask = nil
+        capturedFocusForReview = nil
         withAnimation(.easeInOut(duration: 0.18)) { instantReview = nil }
     }
 
@@ -6661,6 +6670,9 @@ final class NativeAppModel {
         }
         isStillCapturing = true
         pendingStillCapture = true
+        // Freeze the shot's focus box NOW (press time) — the review overlay reads this, so a box
+        // moved during the post-shutter fetch window can't rewrite the reviewed shot's reticle.
+        capturedFocusForReview = liveViewFocus
     }
 
     /// Queued image-area (sensor crop) write, consumed at the next safe point.
