@@ -131,3 +131,27 @@ func assistToolbarIsZeroHeightInCleanAndCommand(mode: DispMode) {
     #expect(z.systemBar.maxY < 300)
     for r in [z.topBar, z.scopes, z.controls, z.systemBar] { #expect(r.height >= 0) }
 }
+
+@Test func photographyAspectRatioReshapesFitFeedAndClosesTheBandGap() {
+    let sa = MonitorEdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0)
+    // 3:2 stills feed, no photo-visible scopes, toolbar present — the exact portrait
+    // photography stack: feed directly under the top bar, toolbar directly under the feed,
+    // tiles from the toolbar down to the system band. No dead band anywhere.
+    let z = MonitorPortraitLayout.zones(
+        viewportWidth: 390, viewportHeight: 844, safeArea: sa, mode: .live,
+        aspect: .fit16x9, scopeCount: 0, assistToolbarHeight: 58, feedAspectRatio: 1.5)
+    #expect(abs(z.feed.height - 390 / 1.5) < 0.5)
+    #expect(abs(z.feed.y - z.topBar.maxY) < 0.5)
+    #expect(z.scopes.height == 0)
+    #expect(abs(z.assistToolbar.y - (z.feed.y + z.feed.height)) < 0.5)
+    #expect(abs(z.controls.y - z.assistToolbar.maxY) < 0.5)
+    #expect(abs(z.controls.maxY - z.systemBar.y) < 0.5)
+}
+
+@Test func defaultAspectRatioKeepsThe16x9FitFeed() {
+    let sa = MonitorEdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0)
+    let z = MonitorPortraitLayout.zones(
+        viewportWidth: 390, viewportHeight: 844, safeArea: sa, mode: .live,
+        aspect: .fit16x9, scopeCount: 0)
+    #expect(abs(z.feed.height - 390 * 9 / 16) < 0.5)
+}

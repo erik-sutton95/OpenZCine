@@ -1475,8 +1475,18 @@ struct MonitorShell: View {
         // Command wants a full-height control grid regardless of the persisted aspect; `.fit16x9`
         // for the zone maths yields the topBar→systemBar span it needs.
         let persistedAspect = model.preferences.portraitFeedAspect
+        // Photography always lays out as fit: the stills frame is 3:2/1:1/16:9 per image area
+        // (passed as the ratio below), and a 16:9 centre-crop "fill" of a still makes no sense.
+        let isPhotography = model.isPhotographyMode
         let zoneAspect: PortraitFeedAspect =
-            model.displayMode == .command ? .fit16x9 : persistedAspect
+            model.displayMode == .command || isPhotography ? .fit16x9 : persistedAspect
+        // The stacked-scopes zone must bill only what photography will actually render —
+        // `PortraitScopesStack` drops cinema-only scopes, and a zone sized to the unfiltered
+        // count leaves a dead band between the feed and the toolbar.
+        let zoneScopeCount =
+            isPhotography
+            ? model.preferences.displayedFitScopes.filter(\.appliesToPhotography).count
+            : scopeCount
         let map = MonitorZoneLayout.map(
             viewportWidth: context.viewportWidth,
             viewportHeight: context.viewportHeight,
@@ -1484,15 +1494,17 @@ struct MonitorShell: View {
             mode: model.displayMode,
             isPortrait: true,
             aspect: zoneAspect,
-            scopeCount: scopeCount,
+            scopeCount: zoneScopeCount,
             horizontalDirection: context.horizontalDirection,
             // Fit-mode assist toolbar (R6): the core emits an `assistStrip` zone only when this is
             // non-zero (and only for fit + live). Fill/clean/command collapse it to nothing.
             bottomBarHeight: model.preferences.displayChrome.assistToolbarVisible
-                ? MonitorPortraitLayout.assistToolbarHeight : 0
+                ? MonitorPortraitLayout.assistToolbarHeight : 0,
+            portraitFeedAspectRatio: isPhotography
+                ? model.cameraPropertySnapshot.photographyFeedAspect : 16.0 / 9.0
         )
         let feed = map.feed
-        let isFill = persistedAspect == .fill
+        let isFill = persistedAspect == .fill && !isPhotography
         // The zone map hands us the feed FRAME; the content aspect-fills within it: over-widen to
         // the source's 16:9 at the frame's height, center via the outer frame, clip to the frame.
         // Fit passes the frame width straight through (16:9 frame == 16:9 content, no crop).

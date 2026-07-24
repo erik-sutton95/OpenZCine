@@ -74,10 +74,12 @@ public enum MonitorPortraitLayout {
         mode: DispMode,
         aspect: PortraitFeedAspect,
         scopeCount: Int,
-        assistToolbarHeight: Double = 0
+        assistToolbarHeight: Double = 0,
+        feedAspectRatio: Double = 16.0 / 9.0
     ) -> MonitorPortraitZones {
         let viewportWidth = max(0, viewportWidth)
         let viewportHeight = max(0, viewportHeight)
+        let feedAspectRatio = feedAspectRatio > 0 ? feedAspectRatio : 16.0 / 9.0
 
         let topBar = MonitorLayoutRegion(
             x: 0,
@@ -100,7 +102,9 @@ public enum MonitorPortraitLayout {
         switch aspect {
         case .fit16x9:
             // The feed starts at the bar's bottom edge — the bar no longer overlays it.
-            let feedHeight = viewportWidth * 9 / 16
+            // `.fit16x9` names the MODE (full-width fit, bands below); the frame follows the
+            // content's actual ratio — photography passes its 3:2 / 1:1 / 16:9 image area.
+            let feedHeight = viewportWidth / feedAspectRatio
             let feed = MonitorFeedFrame(
                 x: 0, y: topBar.maxY, width: viewportWidth, height: feedHeight)
 
