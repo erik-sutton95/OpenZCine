@@ -36,6 +36,7 @@
 		46C255DF9F950970DD29C3C8 /* LiveFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705C589D7D31926D41CEF6A /* LiveFrameProcessor.swift */; };
 		4D5E6F708192A3B4C5D6E7F8 /* ImageEffectsCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6F708192A3B4C5D6E7F809 /* ImageEffectsCompositor.swift */; };
 		503189555B5DB867F6C29F0F /* FalseColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0205F75CD14D96A1E9B884E9 /* FalseColor.swift */; };
+		B0757000000000000000FE02 /* BurstSeriesGrouping.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0757000000000000000FE01 /* BurstSeriesGrouping.swift */; };
 		65B3F5B581BF634D6C8247CD /* TrafficLightsMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBD5D243C94FA3B8F8BEE3C5 /* TrafficLightsMeter.swift */; };
 		6A455A5E5D850A48FD899BF4 /* AssistToolActivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A371B3334DBAAA71593727B /* AssistToolActivation.swift */; };
 		7182A6D4C55420DE0C30F08E /* CubeLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08D59A4E8FE339FD74256B9 /* CubeLUT.swift */; };
@@ -183,6 +184,7 @@
 
 /* Begin PBXFileReference section */
 		0205F75CD14D96A1E9B884E9 /* FalseColor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FalseColor.swift; path = ../Sources/OpenZCineCore/FalseColor.swift; sourceTree = SOURCE_ROOT; };
+		B0757000000000000000FE01 /* BurstSeriesGrouping.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BurstSeriesGrouping.swift; path = ../Sources/OpenZCineCore/BurstSeriesGrouping.swift; sourceTree = SOURCE_ROOT; };
 		0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InternetReachability.swift; sourceTree = "<group>"; };
 		1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackAssists.swift; sourceTree = "<group>"; };
 		1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonitorLUT.swift; path = ../Sources/OpenZCineCore/MonitorLUT.swift; sourceTree = SOURCE_ROOT; };
@@ -489,6 +491,7 @@
 				FEEDC0DEC0FFEE00BAADF001 /* ThermalLoadPolicy.swift */,
 				2B3C4D5E6F708192A3B4C5D6 /* ScopeDisplayScale.swift */,
 				0205F75CD14D96A1E9B884E9 /* FalseColor.swift */,
+				B0757000000000000000FE01 /* BurstSeriesGrouping.swift */,
 				D329D509E000B93B59AE9A11 /* ScopeSampler.swift */,
 				D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */,
 				CF7929C792624D92E4643373 /* FocusAssist.swift */,
@@ -746,6 +749,7 @@
 				FEEDC0DEC0FFEE00BAADF002 /* ThermalLoadPolicy.swift in Sources */,
 				3C4D5E6F708192A3B4C5D6E7 /* ScopeDisplayScale.swift in Sources */,
 				503189555B5DB867F6C29F0F /* FalseColor.swift in Sources */,
+				B0757000000000000000FE02 /* BurstSeriesGrouping.swift in Sources */,
 				3B2081943B1D2A36C4DA228C /* ScopeSampler.swift in Sources */,
 				3B2081943B1D2A36C4DA228D /* AudioLevelMeter.swift in Sources */,
 				B61762BD19CC1640C62FBF9E /* FocusAssist.swift in Sources */,

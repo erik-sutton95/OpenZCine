@@ -846,6 +846,9 @@ final class NativeAppModel {
     /// On-disk cache + index for camera clips (Media page), and the current library list.
     let mediaClipStore = MediaClipStore()
     var mediaClips: [MediaClip] = []
+    /// Burst-series lookup keyed by representative clip id, refreshed as a side effect of
+    /// `filteredMediaClips` (the grid renders one cell per series; the series view reaches the rest).
+    @ObservationIgnored private(set) var burstByRepresentative: [String: BurstSeries] = [:]
     var mediaFetchInProgress = false
     /// Movie clips discovered so far during an in-flight `fetchClipsFromCamera` listing pass.
     var mediaFetchListedCount = 0
@@ -8823,7 +8826,34 @@ extension NativeAppModel {
         let jpegPairKeys = Set(clips.lazy.filter(\.isJPEGPhoto).map(\.rawPairKey))
         clips = clips.filter { !($0.isRawPhoto && jpegPairKeys.contains($0.rawPairKey)) }
 
+        // Collapse continuous-drive runs: render one representative cell per burst series and hide
+        // the other frames (the series view reaches them). Grouping runs on the displayed set, so
+        // an offline pass groups only cached frames. ponytail: computed once per list pass here and
+        // stashed for the grid's O(1) badge/series lookups — @ObservationIgnored, so no re-render.
+        let series = BurstSeriesGrouping.group(clips.map(\.burstFrame))
+        var byRepresentative: [String: BurstSeries] = [:]
+        var hiddenMemberIDs: Set<String> = []
+        for run in series {
+            byRepresentative[run.representativeID] = run
+            hiddenMemberIDs.formUnion(run.memberIDs.dropFirst())
+        }
+        burstByRepresentative = byRepresentative
+        if !hiddenMemberIDs.isEmpty {
+            clips = clips.filter { !hiddenMemberIDs.contains($0.id) }
+        }
+
         return MediaClipSorting.sort(clips, order: mediaSortOrder)
+    }
+
+    /// The burst series a representative clip stands for (nil for ordinary cells).
+    func burstSeries(for clip: MediaClip) -> BurstSeries? { burstByRepresentative[clip.id] }
+
+    /// The frames in a clip's burst series (representative first); empty when it isn't a series.
+    func burstMembers(of clip: MediaClip) -> [MediaClip] {
+        guard let series = burstByRepresentative[clip.id] else { return [] }
+        let byID = Dictionary(
+            mediaClips.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return series.memberIDs.compactMap { byID[$0] }
     }
 
     /// The same-shot `.NEF`/`.NRW`/`.DNG` behind a JPEG's grid item (nil for unpaired stills).

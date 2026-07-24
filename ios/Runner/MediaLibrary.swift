@@ -199,6 +199,21 @@ extension MediaClip {
     var rawPairKey: String {
         "\(cameraID)/\(storageID.map(String.init) ?? "-")/\(MediaClipFilename.stem(of: filename))"
     }
+
+    /// This clip as a burst-detection frame: capture identity plus a format/dimensions signature
+    /// (RAW and JPEG of one shot share the stem so a burst of pairs counts once).
+    var burstFrame: BurstFrame {
+        BurstFrame(
+            id: id,
+            storageID: storageID,
+            handle: handle,
+            captureDate: captureDate,
+            stem: MediaClipFilename.stem(of: filename).lowercased(),
+            isRaw: isRawPhoto,
+            formatKey:
+                "\(fileExtension)|\(pixelWidth.map(String.init) ?? "?")x\(pixelHeight.map(String.init) ?? "?")"
+        )
+    }
 }
 
 /// One camera card slot surfaced in the Media browser storage row.

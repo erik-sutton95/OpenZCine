@@ -122,6 +122,8 @@ struct MediaBrowserView: View {
     @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
     @State private var playingClip: MediaClip?
     @State private var viewingPhoto: MediaClip?
+    /// The representative of a burst series whose members are being browsed (Manage series view).
+    @State private var seriesRepresentative: MediaClip?
     /// Transient explanation shown when a proxy-less R3D master is tapped.
     @State private var masterNotice: String?
     @State private var masterNoticeDismissTask: Task<Void, Never>?
@@ -314,6 +316,9 @@ struct MediaBrowserView: View {
         }
         .fullScreenCover(item: $viewingPhoto) { clip in
             MediaPhotoViewer(clip: clip).environment(model)
+        }
+        .fullScreenCover(item: $seriesRepresentative) { clip in
+            MediaBurstSeriesView(representative: clip).environment(model)
         }
         .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
         .animation(.easeInOut(duration: 0.2), value: model.mediaThumbnailSize)
@@ -744,6 +749,7 @@ struct MediaBrowserView: View {
                         ?? model.clipBufferedFraction(clip),
                     isStreaming: model.isClipStreaming(clip),
                     hasRawSibling: model.rawSibling(of: clip) != nil,
+                    burstCount: model.burstSeries(for: clip)?.count,
                     isSelecting: isSelecting,
                     isSelected: selectedClipIDs.contains(clip.id),
                     onOpen: { open(clip) },
@@ -934,6 +940,11 @@ struct MediaBrowserView: View {
     private func open(_ clip: MediaClip) {
         if isSelecting {
             toggleSelection(clip)
+            return
+        }
+        // A burst representative opens the series view (its other frames are hidden in the grid).
+        if model.burstSeries(for: clip) != nil {
+            seriesRepresentative = clip
             return
         }
         if clip.mediaKind == .photo {
@@ -1671,6 +1682,115 @@ private struct MediaCellFramesKey: PreferenceKey {
     }
 }
 
+/// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
+/// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
+/// action. A series that loses frames until one remains degrades back to a normal grid cell.
+private struct MediaBurstSeriesView: View {
+    @Environment(NativeAppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let representative: MediaClip
+    @State private var members: [MediaClip] = []
+    @State private var viewingPhoto: MediaClip?
+    @State private var confirmDeleteAll = false
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 16)]
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 0) {
+                header
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                        ForEach(members) { clip in
+                            MediaClipCell(
+                                clip: clip,
+                                isDownloaded: model.isClipDownloaded(clip),
+                                localURL: model.clipLocalURL(clip),
+                                thumbnailURL: model.clipThumbnailURL(clip),
+                                cacheProgress: model.mediaDownloadProgress[clip.id]
+                                    ?? model.clipBufferedFraction(clip),
+                                isStreaming: model.isClipStreaming(clip),
+                                hasRawSibling: model.rawSibling(of: clip) != nil,
+                                onOpen: { viewingPhoto = clip },
+                                onToggleFavorite: { model.toggleClipFavorite(clip) }
+                            )
+                            .environment(model)
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+        }
+        .statusBarHidden()
+        .onAppear { members = model.burstMembers(of: representative) }
+        .fullScreenCover(
+            item: $viewingPhoto,
+            onDismiss: {
+                // A single-frame delete inside the viewer drops it from the card — reflect it here.
+                members = members.filter { member in
+                    model.mediaClips.contains { $0.id == member.id }
+                }
+                if members.isEmpty { dismiss() }
+            }
+        ) { clip in
+            MediaPhotoViewer(clip: clip).environment(model)
+        }
+        .confirmationDialog(
+            "Delete this burst of \(members.count) frames?",
+            isPresented: $confirmDeleteAll, titleVisibility: .visible
+        ) {
+            Button("Delete \(members.count) frames", role: .destructive) {
+                let targets = members
+                Task {
+                    _ = await model.deleteMediaClips(targets)
+                    dismiss()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes every frame in the series from the card. This can't be undone.")
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Button {
+                dismiss()
+            } label: {
+                CircleIconButton(systemName: "xmark", size: 34).contentShape(Circle())
+            }
+            .buttonStyle(.zcTapTarget)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Burst series")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(LiveDesign.text)
+                Text("\(members.count) frames")
+                    .font(.system(size: 11))
+                    .foregroundStyle(LiveDesign.muted)
+            }
+            Spacer()
+            Button {
+                confirmDeleteAll = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "trash")
+                    Text("Delete all")
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .liquidGlass(in: Capsule(), interactive: true)
+            }
+            .buttonStyle(.zcTapTarget)
+            .disabled(members.isEmpty)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+    }
+}
+
 private struct MediaClipCell: View {
     let clip: MediaClip
     let isDownloaded: Bool
@@ -1681,6 +1801,8 @@ private struct MediaClipCell: View {
     let isStreaming: Bool
     /// A same-stem RAW rides behind this JPEG — the cell shows one item for the pair.
     var hasRawSibling: Bool = false
+    /// Frame count when this cell represents a burst series (nil for an ordinary clip).
+    var burstCount: Int?
     var isSelecting: Bool = false
     var isSelected: Bool = false
     let onOpen: () -> Void
@@ -1744,6 +1866,22 @@ private struct MediaClipCell: View {
                         )
                         .padding(8)
                         .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 1)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                // Burst series: one cell stands for the run, badged with its frame count (like
+                // the body's series card). Tapping the cell opens the series view.
+                if let burstCount, !isSelecting {
+                    HStack(spacing: 2) {
+                        Image(systemName: "square.stack.3d.up.fill").font(.system(size: 9))
+                        Text("\(burstCount)")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    }
+                    .foregroundStyle(LiveDesign.text)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(8)
                 }
             }
             .contentShape(
