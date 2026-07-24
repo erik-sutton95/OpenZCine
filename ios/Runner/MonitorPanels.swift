@@ -5530,12 +5530,16 @@ struct MFDriveVerticalScrub: View {
             Text("NEAR")
                 .foregroundStyle(model.mfDriveAtEnd == -1 ? LiveDesign.accent : LiveDesign.muted)
             #if DEBUG
-                // Live drive telemetry (acknowledged·busy) — the on-device discriminator for
-                // "strip moves but the glass doesn't" vs "drives never land".
+                // Live drive telemetry (acknowledged·refused + last refusal code) — the
+                // on-device discriminator for why a drive is refused (e.g. 2013 = Access_Denied
+                // → AF is active / AF-F set; 2019 = Busy → lens still initializing).
                 if model.mfDriveDebugOK + model.mfDriveDebugBusy > 0 {
-                    Text("\(model.mfDriveDebugOK)·\(model.mfDriveDebugBusy)")
-                        .font(.system(size: 7, weight: .regular, design: .monospaced))
-                        .foregroundStyle(LiveDesign.faint)
+                    Text(
+                        "\(model.mfDriveDebugOK)·\(model.mfDriveDebugBusy) "
+                            + String(format: "%04X", model.mfDriveLastCode)
+                    )
+                    .font(.system(size: 7, weight: .regular, design: .monospaced))
+                    .foregroundStyle(LiveDesign.faint)
                 }
             #endif
         }

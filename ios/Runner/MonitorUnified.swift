@@ -784,6 +784,8 @@ struct MonitorSystemCluster: View {
     /// swallow a finger-up (gesture-gate timeouts), and gesture state resets even then — a
     /// stranded latch once chained an endless burst.
     @GestureState private var shutterHeld = false
+    /// Brief pulse when a shutter fires on the camera body (see `bodyShutterPulse`).
+    @State private var bodyShutterFlash = false
 
     var body: some View {
         switch axis {
@@ -960,8 +962,18 @@ struct MonitorSystemCluster: View {
                 countdown: model.stillTimerRemaining,
                 timerArmed: model.photoTimerDelaySeconds > 0
             )
-            .scaleEffect(shutterHeld ? 0.93 : 1)
+            .scaleEffect(shutterHeld ? 0.93 : (bodyShutterFlash ? 0.88 : 1))
             .animation(.easeOut(duration: 0.12), value: shutterHeld)
+            .animation(.easeOut(duration: 0.12), value: bodyShutterFlash)
+            // A shutter fired on the camera body pulses the button (a quick dip-and-release),
+            // so an off-app capture visibly registers — mirrors the app-fired press feedback.
+            .onChange(of: model.bodyShutterPulse) { _, _ in
+                bodyShutterFlash = true
+                Task {
+                    try? await Task.sleep(for: .milliseconds(130))
+                    bodyShutterFlash = false
+                }
+            }
             .contentShape(Circle())
             // Zero-distance drag, not a zero-duration long-press: the latter recognizes
             // instantly and never reports `onPressingChanged(true)`, swallowing the press.

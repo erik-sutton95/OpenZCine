@@ -2336,6 +2336,9 @@ final class NativeAppModel {
     private(set) var cameraPropertySnapshot = PTPCameraPropertySnapshot()
     /// True while a still release is in flight (optimistic UI lock on the shutter).
     private(set) var isStillCapturing = false
+    /// Bumped each time a shutter fired ON THE CAMERA BODY is detected, so the app's shutter
+    /// button can pulse in acknowledgement (the app-fired path animates via the press gesture).
+    private(set) var bodyShutterPulse = 0
     private var propertyPollIndex = 0
     /// The `LiveViewImageSize` byte last written to the camera, so a thermal/warning step-down only
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
@@ -3655,6 +3658,9 @@ final class NativeAppModel {
                             StillCapturePolicy.prefersPhotographyChrome(
                                 selector: self.cameraPropertySnapshot.captureSelector)
                         {
+                            // Pulse the app's shutter button so a shutter fired ON THE BODY
+                            // visibly registers in the app, then run instant playback.
+                            self.bodyShutterPulse &+= 1
                             self.scheduleInstantReview(session: session)
                             await self.readAndApplyCameraProperty(
                                 session: session, property: .exposureRemaining)
@@ -6158,9 +6164,11 @@ final class NativeAppModel {
     @ObservationIgnored private var mfDrivePendingPulses = 0
     /// Travel-end feedback for the scrub UI: −1 near limit, +1 infinity limit, nil moving.
     private(set) var mfDriveAtEnd: Int?
-    /// Strip debug caption counters (Debug builds): drives acknowledged vs retried.
+    /// Strip debug caption counters (Debug builds): drives acknowledged vs retried, plus the
+    /// last refusal wire code — the discriminator for why a drive is being refused on HW.
     private(set) var mfDriveDebugOK = 0
     private(set) var mfDriveDebugBusy = 0
+    private(set) var mfDriveLastCode: UInt16 = 0
 
     /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
     /// while a drive is in flight. A refused drive is treated as transient — the stepping-motor
@@ -6201,6 +6209,7 @@ final class NativeAppModel {
                     // Requeue and retry; a genuinely stuck state surfaces one message but
                     // leaves the strip up so the next gesture tries again.
                     self.mfDriveDebugBusy += 1
+                    self.mfDriveLastCode = code.rawValue
                     retries += 1
                     if retries <= 16 {
                         self.mfDrivePendingPulses += pending
@@ -8959,6 +8968,22 @@ extension NativeAppModel {
         let byID = Dictionary(
             mediaClips.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return series.memberIDs.compactMap { byID[$0] }
+    }
+
+    /// Expands any burst representative in `clips` to its full series — a grid burst cell stands
+    /// for every frame it collapses, so a multiselect delete/share must act on the whole series,
+    /// not just the representative. Non-series clips pass through; deduped, order preserved.
+    func burstExpanded(_ clips: [MediaClip]) -> [MediaClip] {
+        var seen = Set<String>()
+        var result: [MediaClip] = []
+        for clip in clips {
+            let members = burstMembers(of: clip)
+            for member in (members.isEmpty ? [clip] : members)
+            where seen.insert(member.id).inserted {
+                result.append(member)
+            }
+        }
+        return result
     }
 
     /// The same-shot `.NEF`/`.NRW`/`.DNG` behind a JPEG's grid item (nil for unpaired stills).

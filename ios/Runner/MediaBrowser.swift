@@ -197,7 +197,9 @@ struct MediaBrowserView: View {
     private var displayedClips: [MediaClip] { model.filteredMediaClips }
 
     private var selectedClips: [MediaClip] {
-        displayedClips.filter { selectedClipIDs.contains($0.id) }
+        // A selected burst cell stands for its whole series — expand so delete/share act on
+        // every frame, not just the representative (Erik: "delete only removed 1 of the burst").
+        model.burstExpanded(displayedClips.filter { selectedClipIDs.contains($0.id) })
     }
 
     private var headerTitle: String {
@@ -780,7 +782,7 @@ struct MediaBrowserView: View {
     }
 
     private var gridCells: some View {
-        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 16) {
+        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 8) {
             ForEach(displayedClips) { clip in
                 MediaClipCell(
                     clip: clip,
@@ -1822,34 +1824,64 @@ private struct MediaBurstSeriesView: View {
 }
 
 /// iPhone-Photos-style burst scrubber: dragging scrolls the strip with the centered thumb
-/// becoming the displayed frame; tapping a thumb jumps to it. Selection changes from outside
-/// (deletion advance) re-center the strip.
+/// highlighting live; the displayed frame commits when the scroll SETTLES, not on every
+/// intermediate frame. The full viewer is heavy (it re-streams the frame), so committing on
+/// every thumb that passes center used to recreate it dozens of times per drag — the lag and
+/// "Preparing image…" storm Erik saw. Tapping a thumb jumps to it immediately.
 private struct BurstFilmstrip: View {
     let members: [MediaClip]
     let selectedID: String
     let onSelect: (String) -> Void
+    /// The thumb currently under the centre line — drives the live highlight only, NOT the
+    /// heavy viewer (which commits when the scrub settles).
     @State private var scrolledID: String?
+    /// Debounces the commit so the frame lands once the scrub stops, not on every thumb that
+    /// crosses centre. Cancelled on each intermediate move.
+    @State private var commitTask: Task<Void, Never>?
+
+    /// Widest a thumb gets (selected). Half of it is subtracted from the side inset so the
+    /// first/last frame can sit dead-centre.
+    private static let maxThumbWidth: CGFloat = 46
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 4) {
-                ForEach(members) { member in
-                    FilmstripThumb(clip: member, isSelected: member.id == selectedID)
+        GeometryReader { proxy in
+            // Enough leading/trailing space that ANY thumb — including the first and last —
+            // can scroll to the centre anchor (was a fixed 130, far too little on a wide
+            // landscape screen, so the edge frames were unreachable by scrubbing).
+            let sideInset = max(0, proxy.size.width / 2 - Self.maxThumbWidth / 2)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 4) {
+                    ForEach(members) { member in
+                        FilmstripThumb(
+                            clip: member, isSelected: member.id == (scrolledID ?? selectedID)
+                        )
                         .onTapGesture { onSelect(member.id) }
                         .id(member.id)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
+            .scrollPosition(id: $scrolledID, anchor: .center)
+            .scrollTargetBehavior(.viewAligned)
+            .contentMargins(.horizontal, sideInset, for: .scrollContent)
         }
-        .scrollPosition(id: $scrolledID, anchor: .center)
-        // Lets the first/last frame reach the center anchor so they are scrubbable too.
-        .contentMargins(.horizontal, 130, for: .scrollContent)
         .frame(height: 56)
         .onAppear { scrolledID = selectedID }
+        // Commit the displayed frame only after the scrub settles (~140ms idle): the heavy
+        // viewer re-streams each frame, so committing on every thumb that crosses centre was
+        // the lag + "Preparing image…" storm. Each intermediate move cancels the prior commit.
         .onChange(of: scrolledID) { _, newValue in
-            if let newValue, newValue != selectedID { onSelect(newValue) }
+            commitTask?.cancel()
+            guard let newValue, newValue != selectedID else { return }
+            commitTask = Task {
+                try? await Task.sleep(for: .milliseconds(140))
+                guard !Task.isCancelled else { return }
+                onSelect(newValue)
+            }
         }
         .onChange(of: selectedID) { _, newValue in
+            // External selection (tap, deletion advance) re-centres the strip; a settle-commit
+            // already has scrolledID == newValue, so this no-ops for scrubs.
             guard scrolledID != newValue else { return }
             withAnimation(.easeOut(duration: 0.2)) { scrolledID = newValue }
         }
@@ -1934,7 +1966,7 @@ private struct MediaClipCell: View {
     private var isPhoto: Bool { clip.mediaKind == .photo }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             ZStack {
                 RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
                     .fill(LiveDesign.surface)
