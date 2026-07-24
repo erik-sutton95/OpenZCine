@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Photography (stills) mode** (iOS + Android): dedicated stills chrome with a real shutter
+  (hold-to-burst in continuous drives, tap-to-AF, bulb/time), built-in and app self-timers, and
+  capture-bar pickers for mode (incl. U1–U3), ISO Auto, focus mode/area/subject, drive, white
+  balance, size, quality (RAW + JPEG/HEIF), and picture profile (incl. downloaded cloud profiles).
+  Portrait photography layout, an EV meter fed by the body's exposure indicator, and photo-mode
+  scopes/false color that read the stills preview (sRGB or HLG).
+- **Focus dial**: on-feed manual focus-by-wire pull in photo mode — a relative near↔infinity drum,
+  toggled in the FOCUS popup, decoupled from the command tick so it tracks the finger. The release
+  preserves the dialed focus (no re-AF) on iOS; the Android mirror is pending.
+- **Burst series**: continuous-drive frames group into one stack that opens to a full-screen
+  scrubbing pager with multi-select delete/share, spanning both cards.
+- **Body-fired capture sync**: shots released on the camera body register in the app (shutter
+  animation + instant playback), read via the camera's event poll rather than the PTP-IP event
+  socket.
+- **Instant playback** assist (iOS + Android): the last shot reviews full screen — thumb first,
+  full image streaming in — with an optional focus point frozen at capture, capture info, and an
+  in-place favorite star written to the card.
 - Playback and live **desqueeze**: scales the picture (not only guides), with 1.6× and custom
   1.00–2.00× (0.01 steps) on iOS and Android.
 - **Auto ISO** for non-R3D movie codecs (N-RAW / ProRes / H.26x): Auto On/Off controls movie ISO
@@ -34,6 +51,16 @@ All notable changes to this project are documented here. The format is based on
   successful apply (see `docs/android-control-writes.md`).
 - TestFlight notes are now reviewed, tester-written copy with concrete test steps. CI rejects stale
   notes, commit titles, and common implementation jargon before an iOS build can ship.
+
+### Fixed
+
+- Focus peaking de-logs with the active mode's tone curve, so it looks identical in photo and video
+  (was hardcoded to the movie log curve).
+- Media: backup (two-card) shots appear under both slots and delete every copy; context-aware
+  delete copy and companion handling (RAW+JPEG pairs; a video plus its R3D/NEV master); EXIF
+  auto-rotation; and a batch-delete progress bar that refreshes the grid once at the end.
+- Instant playback freezes the reviewed shot's focus box at capture time, so it no longer drifts if
+  the AF point moves while the preview loads.
 
 ### Security
 

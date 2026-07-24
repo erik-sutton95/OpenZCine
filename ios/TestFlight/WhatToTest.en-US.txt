@@ -1,14 +1,14 @@
 What's changed
 
-- Full photography mode: dedicated stills chrome with a real shutter (hold for burst in continuous drives, tap-to-AF, bulb/time), built-in and app self-timers (the app timer beeps through the silent switch and pulses a white screen-edge tally), and pickers for mode (incl. U1–U3 with their inner program), ISO Auto, focus mode/area/subject, drive, white balance, size, quality (RAW + JPEG/HEIF drums), and picture profile — including downloaded cloud profiles.
-- Instant playback assist: the last shot appears full screen right after capture (sharpening in as the full image streams), with optional focus point and capture info, plus a one-tap favorite star.
-- Media page: delete photos and videos (single or multi-select; RAW+JPEG pairs go together), 1–5 star ratings written to the card with the camera as source of truth, RAW+JPEG pairs shown as one item with a viewer toggle, and pinch zoom that stays under your fingers.
-- New EV meter assist fed by the camera's own exposure indicator; scopes and false color in photo mode now measure the stills preview correctly (sRGB, or HLG when set). EV meter and focus recenter stay available in DISP 2.
-- Fixed: the live feed no longer freezes or flickers when starting a video recording; deleted items no longer reappear; battery gauges redesigned under the lock button; popups close when switching photo/video.
+- Photography mode: a real shutter (tap to shoot, hold for a burst in CL/CH continuous drives, tap-to-AF, bulb/time), built-in and app self-timers (the app timer beeps through the silent switch and pulses a white screen-edge tally), and capture-bar pickers for mode (incl. U1-U3), ISO Auto, focus mode/area/subject, drive, white balance, size, quality (RAW + JPEG/HEIF), and picture profile including downloaded cloud profiles. Portrait is redone: a full 3:2 feed with the tiles below it and no edge cropping.
+- Focus dial (new): a thin dial on the live view drives the lens focus for a manual pull - photo mode only, switched on and off in the FOCUS popup. It tracks your finger and shows a relative near-to-infinity position, and once you dial focus the shutter keeps it instead of re-focusing on the box.
+- Shots fired on the camera body now register in the app - the shutter animates and the frame appears in instant playback, just like an app-fired shot. Instant playback shows the last shot full screen with an optional focus point (now frozen at the moment of capture) and capture info, plus a one-tap favorite star.
+- Burst stacks (new): a continuous-drive burst groups into one stack that opens to a full-screen pager with a scrubbing filmstrip; multi-select to delete or share frames, and "Delete all" clears the burst on both cards.
+- Media page: delete photos (RAW+JPEG together) or videos (the MP4 plus its R3D/NEV master) with a progress bar and a single refresh at the end; two-card backup shots appear under both slots and delete every copy; 1-5 star ratings written to the card, RAW+JPEG shown as one item, images auto-rotate, and pinch zoom stays under your fingers. The EV meter, photo-mode scopes and false color, and matched photo/video focus peaking round out assist.
 
 Please test
 
-- Photo mode: try the capture bar's pickers on your body — especially SHUTTER and IRIS (should only offer what the lens/mode allows, and gray out in P/A/Auto), WB (Kelvin, presets, tint pad), and PROFILE with a downloaded cloud profile.
-- Hold the shutter in CL/CH for a burst; try both timers (listen for the beep with the mute switch on); review the instant playback and tap the favorite star.
-- In the media page: rate a few shots 1–5 stars and confirm the stars match on the camera body; delete a shot (and a RAW+JPEG pair), then wait for the list to refresh — nothing should come back.
-- Turn on the EV meter and compare the needle with the body's meter (it stays in DISP 2, dropping to the bottom edge); then start/stop a video recording from the app and the body — the feed should dip for under a second, with steady readouts.
+- Focus dial: switch it on in the FOCUS popup (photo mode), pull focus with it, then take a shot - the focus should hold, not snap back to the AF box.
+- Fire the shutter on the camera body - the app should flash the shutter and show that frame in instant playback.
+- Shoot a burst (hold the shutter in CL/CH), open the stack in the media page, scrub the filmstrip, and multi-select frames to delete - confirm they clear on both cards and the progress count reads right; also delete a video (its MP4 plus master) and a RAW+JPEG photo.
+- Rotate to portrait in photo mode (the feed fills with the tiles below and the EV meter at the bottom), and compare focus peaking between photo and video - it should match.
