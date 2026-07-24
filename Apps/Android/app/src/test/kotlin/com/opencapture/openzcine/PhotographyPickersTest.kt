@@ -272,4 +272,28 @@ class PhotographyPickersTest {
         assertEquals(0, photoTimerSeconds("Off"))
         assertEquals(10, photoTimerSeconds("10s"))
     }
+
+    @Test
+    fun `size pill ranks camera resolution strings and passes size letters through`() {
+        // "Size L"-form strings pass through directly.
+        assertEquals("FX · L", snapshot.stillSizeAreaLabel())
+
+        // Raw resolutions rank by pixel count against the camera's enum.
+        val ranked =
+            snapshot.copy(
+                imageSize = "4528x3024",
+                controlCapabilities =
+                    CameraControlCapabilities(
+                        imageSizes = listOf("6048x4032", "4528x3024", "3024x2016"),
+                    ),
+            )
+        assertEquals("FX · M", ranked.stillSizeAreaLabel())
+
+        // Unknown size domain: the area half still shows.
+        assertEquals(
+            "DX",
+            snapshot.copy(imageArea = "DX", imageSize = "9999x9999").stillSizeAreaLabel(),
+        )
+        assertNull(snapshot.copy(imageArea = null, imageSize = null).stillSizeAreaLabel())
+    }
 }

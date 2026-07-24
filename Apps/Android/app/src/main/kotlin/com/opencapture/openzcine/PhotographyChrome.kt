@@ -35,8 +35,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraStorageStatus
 import java.util.Locale
 
 // The photography capture strip renders through the shared `MonitorCaptureStrip`
@@ -109,28 +109,97 @@ internal fun CameraPropertySnapshot.stillSizeCompactLabel(): String? =
     imageSize?.replace("Size ", "")
 
 /**
+ * Top-bar SIZE readout: image area + size class ("FX · L"), ranked against the
+ * camera's enumerated ImageSize strings so the pill never shows a raw
+ * resolution (iOS `stillSizeAreaLabel`). Falls back to whichever half is known.
+ */
+internal fun CameraPropertySnapshot.stillSizeAreaLabel(): String? {
+    val size = stillSizeClassLabel()
+    return when {
+        imageArea != null && size != null -> "$imageArea · $size"
+        imageArea != null -> imageArea
+        else -> size
+    }
+}
+
+/**
+ * Ranks the current image-size string among the camera's enumerated sizes:
+ * largest pixel count = L, then M, then S. "Size L"-form strings pass through.
+ */
+internal fun CameraPropertySnapshot.stillSizeClassLabel(): String? {
+    if (imageSize == null) return null
+    val letters = listOf("L", "M", "S")
+    stillSizeCompactLabel()?.takeIf { it in letters }?.let { return it }
+    val ranked =
+        controlCapabilities.imageSizes
+            .mapNotNull { option -> stillSizePixelCount(option)?.let { option to it } }
+            .sortedByDescending { it.second }
+    val index = ranked.indexOfFirst { it.first == imageSize }
+    return letters.getOrNull(index.takeIf { it >= 0 } ?: return null)
+}
+
+/** "6048x4032" → 24_385_536; null for strings that aren't a WxH resolution. */
+private fun stillSizePixelCount(size: String): Long? {
+    val parts = size.lowercase(Locale.ROOT).split("x")
+    if (parts.size != 2) return null
+    val width = parts[0].trim().toLongOrNull() ?: return null
+    val height = parts[1].trim().toLongOrNull() ?: return null
+    return width * height
+}
+
+/**
  * Frames left on the card, in the timecode slot's typography (iOS
- * `ShotsRemainingReadout`). Counts above four digits compact to "12.3k" the
- * way camera bodies do.
+ * `ShotsRemainingReadout`) — a tap flips it to the remaining-storage readout
+ * (GB + percent), standing in for the MEDIA cell photo mode drops. Counts
+ * above four digits compact to "12.3k" the way camera bodies do.
  */
 @Composable
-internal fun ShotsRemainingReadout(shotsRemaining: Int?, modifier: Modifier = Modifier) {
-    val label = shotsRemaining?.let(::shotsRemainingCompactLabel) ?: "—"
+internal fun ShotsRemainingReadout(
+    shotsRemaining: Int?,
+    modifier: Modifier = Modifier,
+    storage: CameraStorageStatus? = null,
+    showsStorage: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+) {
+    val storageForm = showsStorage && storage != null && storage.totalCapacityBytes > 0
     Text(
         buildAnnotatedString {
-            withStyle(SpanStyle(color = LiveDesign.text)) { append(label) }
-            withStyle(
-                SpanStyle(
-                    color = LiveDesign.muted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-            ) { append(" SHOTS") }
+            if (storageForm && storage != null) {
+                withStyle(SpanStyle(color = LiveDesign.text)) {
+                    append("${storage.freeSpaceBytes / 1_000_000_000} GB")
+                }
+                withStyle(
+                    SpanStyle(
+                        color = LiveDesign.muted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                ) {
+                    append(
+                        " ${storage.freeSpaceBytes * 100 / storage.totalCapacityBytes}%",
+                    )
+                }
+            } else {
+                val label = shotsRemaining?.let(::shotsRemainingCompactLabel) ?: "—"
+                withStyle(SpanStyle(color = LiveDesign.text)) { append(label) }
+                withStyle(
+                    SpanStyle(
+                        color = LiveDesign.muted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                ) { append(" SHOTS") }
+            }
         },
         style = chromeStyle(20f, FontWeight.Medium, mono = true),
         maxLines = 1,
         softWrap = false,
-        modifier = modifier,
+        modifier =
+            if (onToggle != null) {
+                modifier.chromeClickable(onClick = onToggle)
+            } else {
+                modifier
+            },
     )
 }
 

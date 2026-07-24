@@ -89,6 +89,7 @@ import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.core.CameraControl
 import com.opencapture.openzcine.core.CameraControlException
 import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.openzcine.core.CameraStorageStatus
 import com.opencapture.openzcine.core.CameraFocusException
 import com.opencapture.openzcine.core.CameraFocusPoint
 import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
@@ -670,6 +671,8 @@ internal fun MonitorScreen(
     var photoTimerDelaySeconds by remember { mutableIntStateOf(0) }
     var photoTimerShotCount by remember { mutableIntStateOf(1) }
     var driveBeforeBuiltInTimer by remember { mutableStateOf<String?>(null) }
+    // iOS `photoPillShowsStorage`: the SHOTS pill's storage flip-side.
+    var photoPillShowsStorage by remember { mutableStateOf(false) }
     // The photo strip's nine tiles + stills pickers; WB reuses the movie
     // presentation (identical popup, writes routed to the stills properties
     // by the facade's selector).
@@ -1940,8 +1943,15 @@ internal fun MonitorScreen(
                                     sessionState = sessionState,
                                     isPhotography = isPhotography,
                                     shotsRemaining = cameraProperties.shotsRemaining,
-                                    stillSize = cameraProperties.stillSizeCompactLabel(),
+                                    stillSize =
+                                        cameraProperties.stillSizeAreaLabel()
+                                            ?: cameraProperties.stillSizeCompactLabel(),
                                     stillQuality = cameraProperties.stillQualityCompactLabel(),
+                                    photoStorage = cameraProperties.storage,
+                                    photoPillShowsStorage = photoPillShowsStorage,
+                                    onTogglePhotoPill = {
+                                        photoPillShowsStorage = !photoPillShowsStorage
+                                    },
                                     recReadoutVisible = operatorSettings.recReadoutVisible.value,
                                     codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
                                     mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
@@ -2584,6 +2594,9 @@ private fun InfoPill(
     shotsRemaining: Int? = null,
     stillSize: String? = null,
     stillQuality: String? = null,
+    photoStorage: CameraStorageStatus? = null,
+    photoPillShowsStorage: Boolean = false,
+    onTogglePhotoPill: (() -> Unit)? = null,
     activePicker: MonitorPickerKind? = null,
     resolutionPickerAvailable: Boolean = false,
     codecPickerAvailable: Boolean = false,
@@ -2598,23 +2611,39 @@ private fun InfoPill(
     ) {
         // Photography swaps the movie readouts for stills ones in the same
         // pill (iOS InfoPillContent): shots remaining takes the timecode slot,
-        // image size and quality take resolution and codec, as plain pills.
+        // image size and quality take resolution and codec as popup buttons.
         if (isPhotography) {
-            ShotsRemainingReadout(shotsRemaining)
+            ShotsRemainingReadout(
+                shotsRemaining,
+                storage = photoStorage,
+                showsStorage = photoPillShowsStorage,
+                onToggle = onTogglePhotoPill,
+            )
             if (!compact) {
-                ReadoutPill(stillSize ?: "—") { tint ->
+                // The SIZE pill drops the Area | Size drum down exactly like
+                // the cinema resolution/codec pills (iOS imageAreaButton).
+                ReadoutPill(
+                    stillSize ?: "—",
+                    active = activePicker == MonitorPickerKind.SIZE,
+                    onClick = {
+                        if (pickersEnabled) onOpenPicker(MonitorPickerKind.SIZE)
+                    },
+                ) { tint ->
                     PhotoGlyph(tint, Modifier.size(14.dp, 11.dp))
                 }
                 if (codecReadoutVisible) {
-                    ReadoutPill(stillQuality ?: "—") { tint ->
+                    ReadoutPill(
+                        stillQuality ?: "—",
+                        active = activePicker == MonitorPickerKind.QUALITY,
+                        onClick = {
+                            if (pickersEnabled) onOpenPicker(MonitorPickerKind.QUALITY)
+                        },
+                    ) { tint ->
                         ApertureGlyph(tint, Modifier.size(12.dp))
                     }
                 }
-                if (mediaReadoutVisible) {
-                    ReadoutPill(media, onClick = onToggleMediaReadout) { tint ->
-                        SdCardGlyph(tint)
-                    }
-                }
+                // No MEDIA cell in photo mode — the SHOTS readout tap-toggles
+                // to the storage form instead (iOS).
             }
             if (fpsReadoutVisible) {
                 FpsChip(signalBars, fps)

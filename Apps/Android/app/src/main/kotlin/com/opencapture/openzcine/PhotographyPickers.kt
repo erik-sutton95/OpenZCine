@@ -2,6 +2,8 @@ package com.opencapture.openzcine
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -778,7 +780,10 @@ internal fun QualityPickerPanelBody(
             PanelCloseButton(onDismiss)
         }
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                // Short landscape panels scroll rather than clipping the chips.
+                .verticalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // RAW half: On/Off drum + NEF compression, parked while RAW is off.
