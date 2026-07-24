@@ -1316,8 +1316,12 @@ internal fun MonitorScreen(
         val isCommand = effectiveDisplayMode == MonitorDisplayMode.COMMAND
         // Command always uses the fit zone, matching iOS. The persisted fill
         // choice returns unchanged when the operator cycles back to Live.
+        // Photography always lays out as fit too — its feed is the still image
+        // area (3:2/1:1/16:9), and a 16:9 centre-crop "fill" of a still makes no
+        // sense (iOS `isFill = persistedAspect == .fill && !isPhotography`).
         val portraitAspect = operatorSettings.portraitFeedAspect
-        val isPortraitFill = isPortrait && !isCommand && portraitAspect.fillsViewport
+        val isPortraitFill =
+            isPortrait && !isCommand && !isPhotographyMode && portraitAspect.fillsViewport
 
         val statusBarVisible = operatorSettings.statusBarVisible.value
         val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
@@ -1391,15 +1395,27 @@ internal fun MonitorScreen(
         // two newest activations, then canonical presentation order.
         val portraitScopes =
             if (isPortrait && !isPortraitFill && effectiveDisplayMode == MonitorDisplayMode.LIVE) {
-                assist.displayedPortraitScopes
+                // Photography suppresses the cinema-only scopes at render, so the
+                // zone must bill only the photography-visible ones (just the
+                // histogram) — a band sized to the full set opens a dead gap
+                // between feed and toolbar (iOS
+                // `displayedFitScopes.filter(appliesToPhotography)`).
+                assist.displayedPortraitScopes.let { scopes ->
+                    if (isPhotographyMode) scopes.filter { it.appliesToPhotography } else scopes
+                }
             } else {
                 emptyList()
             }
         val scopeCount = portraitScopes.size
+        // Photography passes its still image-area ratio (3:2/1:1/16:9) so the
+        // portrait fit feed renders whole under the top bar; video keeps 16:9.
+        val portraitFeedAspectRatio =
+            if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f
         val zones =
             remember(
                 viewportWidth, viewportHeight, safeTop, safeLeading, safeBottom, safeTrailing,
                 isPortrait, effectiveDisplayMode, isPortraitFill, scopeCount, bottomBarHeight,
+                portraitFeedAspectRatio,
             ) {
                 MonitorZones.parse(
                     SwiftCore.monitorZoneMap(
@@ -1415,6 +1431,7 @@ internal fun MonitorScreen(
                         scopeCount = scopeCount,
                         mirrored = false,
                         bottomBarHeight = bottomBarHeight,
+                        portraitFeedAspectRatio = portraitFeedAspectRatio,
                     ),
                 )
             }
@@ -1998,6 +2015,7 @@ internal fun MonitorScreen(
                     cleanMode = isClean,
                     isPortrait = isPortrait,
                     aspectFill = isPortraitFill,
+                    isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
@@ -2384,7 +2402,16 @@ internal fun MonitorScreen(
                     !isClean && !locked &&
                     sessionState is CameraSessionState.Connected &&
                     !isDemoSession &&
-                    cameraProperties.focusMode == "MF"
+                    cameraProperties.focusMode == "MF" &&
+                    // The strip absorbs taps (it drives on drag, swallows plain taps
+                    // so they can't move the AF point under it). Mounting it over an
+                    // open picker/popup would eat the popup's dismiss taps — picking
+                    // MF in the FOCUS popup flips focusMode while that popup is still
+                    // up, so it waits for every panel to close (iOS `showsMFDriveScrub
+                    // … && activePanel == nil`).
+                    activeCommandControl == null &&
+                    activeMonitorPickerKind == null &&
+                    activeAssistOptions == null
                 ) {
                     val rightRailLeading =
                         minOf(zones.record.x, zones.disp.x, zones.media.x, zones.settings.x)
@@ -2402,8 +2429,16 @@ internal fun MonitorScreen(
 
                 if (railPlan.fullRailsVisible) {
                     // Persistent side rails: lock + authoritative batteries +
-                    // record / configured DISP / media / settings.
-                    LockButton(locked, Modifier.zone(zones.lock)) { locked = !locked }
+                    // record / configured DISP / media / settings. The whole
+                    // leading cluster nudges left off the feed edge; the lock and
+                    // the battery shift by the SAME amount so their deliberate gap
+                    // is preserved.
+                    LockButton(
+                        locked,
+                        Modifier.zone(
+                            zones.lock.copy(x = zones.lock.x - LEADING_RAIL_LEFT_NUDGE_DP),
+                        ),
+                    ) { locked = !locked }
                     // Like iOS seating the combined indicator directly under the
                     // lock button, the two battery rows stack at the top of the
                     // leading lane, just below the lock's clearance.
@@ -2413,7 +2448,13 @@ internal fun MonitorScreen(
                             cameraPercent = cameraReadouts.batteryPercent,
                             modifier =
                                 Modifier.zone(
-                                    batteryRowStackFrame(anchor = anchor, lock = zones.lock),
+                                    batteryRowStackFrame(
+                                        anchor =
+                                            anchor.copy(
+                                                x = anchor.x - LEADING_RAIL_LEFT_NUDGE_DP,
+                                            ),
+                                        lock = zones.lock,
+                                    ),
                                 ),
                             phoneExternalPower = phoneBatteryReadout.externalPower,
                             cameraExternalPower = cameraReadouts.externalPower,
@@ -3186,11 +3227,21 @@ private fun PortraitChrome(
             )
         } else {
             CommandGrid(
-                tiles = commandPresentation.tiles,
+                // Photography renders the stills strip tile-for-tile (MODE ISO
+                // SHUTTER IRIS DRIVE FOCUS WB METER PROFILE) instead of the movie
+                // RESOLUTION/CODEC/VR grid (iOS CommandPrimaryGrid). Taps route to
+                // the same stills pickers via the mapping below.
+                tiles =
+                    if (isPhotography) {
+                        photographyCommandTiles(photographySettings)
+                    } else {
+                        commandPresentation.tiles
+                    },
                 controlsEnabled = commandControlsEnabled,
                 pendingControl = pendingCommandControl,
                 onOpenControl = { request ->
-                    monitorPickerKindForRequest(captureSettings, request)
+                    val pickerSource = if (isPhotography) photographySettings else captureSettings
+                    monitorPickerKindForRequest(pickerSource, request)
                         ?.let(onOpenMonitorPicker)
                         ?: onOpenCommandControl(request)
                 },

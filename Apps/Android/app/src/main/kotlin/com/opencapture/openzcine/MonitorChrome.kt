@@ -563,6 +563,12 @@ internal const val BATTERY_OUTLINE_WIDTH_DP = 28f
 internal const val BATTERY_STACK_WIDTH_DP = 45f
 internal const val BATTERY_STACK_HEIGHT_DP = BATTERY_ROW_HEIGHT_DP * 2 + BATTERY_ROW_GAP_DP
 
+// The landscape leading rail (lock button + battery stack) sits a touch tight to
+// the feed edge; nudge the whole cluster left by this much. Applied to BOTH the
+// lock and the battery so the deliberate gap between them is preserved.
+// ponytail: a tuning knob — bump if the rail still crowds the feed on a given handset.
+internal const val LEADING_RAIL_LEFT_NUDGE_DP = 8f
+
 /**
  * Stacked phone + camera battery rows for the leading rail (iOS combined
  * indicator): two bare rows — muted device glyph beside a battery-shaped

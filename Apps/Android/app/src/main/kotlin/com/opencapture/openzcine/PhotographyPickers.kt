@@ -579,6 +579,32 @@ internal fun photographyCaptureSettings(
 }
 
 /**
+ * Projects the photography capture strip ([photographyCaptureSettings], iOS
+ * `photographyCaptureValues`) into the DISP-grid tile shape, so the portrait fit
+ * control grid renders the stills settings — MODE ISO SHUTTER IRIS DRIVE FOCUS WB
+ * METER PROFILE — tile-for-tile instead of the movie RESOLUTION/CODEC/VR tiles.
+ *
+ * Fixed order, never reorderable (`kind = null`, mirroring iOS). Each tap opens
+ * the SAME stills picker the strip does: the tile carries the picker's own
+ * `CommandControlRequest`, which the grid routes back to its [MonitorPickerKind]
+ * via [monitorPickerKindForRequest] against these same settings. A tile with no
+ * picker keeps its readout but is inert.
+ */
+internal fun photographyCommandTiles(
+    settings: List<MonitorCaptureSettingPresentation>,
+): List<CommandTilePresentation> =
+    settings.map { cell ->
+        CommandTilePresentation(
+            kind = null,
+            title = cell.label,
+            value = cell.value,
+            request = cell.picker?.modes?.firstOrNull()?.request,
+            unavailableReason = if (cell.picker == null) cell.unavailableReason else null,
+            muted = cell.dimmed,
+        )
+    }
+
+/**
  * The photo top-deck pill pickers (iOS `CameraPicker.isTopBar` stills set):
  * SIZE (Area | Size tabs) and QUALITY (the dual-drum panel).
  */

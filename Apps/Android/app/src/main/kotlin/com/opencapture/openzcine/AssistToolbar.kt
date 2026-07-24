@@ -110,9 +110,14 @@ enum class AssistTool(val label: String, val settingsTitle: String) {
                 else -> false
             }
 
-    /** Photography-only tools, hidden from the cinema toolbar entirely. */
+    /**
+     * Photography-only tools, hidden from the cinema toolbar entirely. The EV
+     * meter mirrors the body's stills exposure indicator, so it belongs to the
+     * photo toolset only — the cinema strip never offers it (iOS
+     * `MonitorAssistTool.isPhotographyOnly`).
+     */
     val isPhotographyOnly: Boolean
-        get() = this == PLAY
+        get() = this == PLAY || this == EV
 
     companion object {
         /**

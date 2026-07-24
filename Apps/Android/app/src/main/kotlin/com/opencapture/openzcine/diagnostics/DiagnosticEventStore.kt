@@ -50,6 +50,11 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     // trace — the wire code rides the user-facing toast.
     MF_DRIVE_BUSY_EXHAUSTED("error.mf.drive.busy-exhausted"),
     MF_DRIVE_REFUSED("error.mf.drive.refused"),
+
+    // A camera property write held the transaction gate unusually long (>1.5s) — the
+    // feed and queued writes stall behind it. The property name rides the connection
+    // log, not the vocabulary.
+    PROPERTY_WRITE_SLOW("camera.write.slow"),
     ;
 
     companion object {
@@ -85,6 +90,7 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 -> CONNECTION_EVENT_CHANNEL_ENDED
                 "liveViewFailed" -> LIVE_VIEW_FAILED
                 "liveViewStalled" -> LIVE_VIEW_STALLED
+                "propertyWriteSlow" -> PROPERTY_WRITE_SLOW
                 else -> null
             }
 

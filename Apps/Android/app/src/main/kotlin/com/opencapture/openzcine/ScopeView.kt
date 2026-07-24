@@ -129,6 +129,15 @@ enum class ScopeKind(val token: String) {
     TRAFFIC_LIGHTS("lights"),
     ;
 
+    /**
+     * Whether this scope is offered in still photography. Only the histogram is
+     * (mirrors `MonitorAssistTool.appliesToPhotography` on iOS, where among the
+     * scope tools HISTO alone is photography-visible); the cinema scopes are
+     * suppressed, so a photography scope band must not bill them.
+     */
+    val appliesToPhotography: Boolean
+        get() = this == HISTOGRAM
+
     companion object {
         /** Canonical presentation order, matching `MonitorAssistTool.scopeTools` on iOS. */
         val canonical: List<ScopeKind> = entries.toList()

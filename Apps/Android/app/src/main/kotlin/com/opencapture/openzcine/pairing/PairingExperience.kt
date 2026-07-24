@@ -279,6 +279,9 @@ internal fun cameraSessionDiagnosticMessage(phase: String, detail: String): Stri
         "failed.reconnect",
         "eventChannelEnded",
         "eventChannelCleanupFailed",
+        // The detail is a closed CameraControl name plus an elapsed-millis figure —
+        // no pairing credential can ride it.
+        "propertyWriteSlow",
         -> "$phase: $detail"
         else -> null
     }

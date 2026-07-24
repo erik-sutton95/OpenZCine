@@ -358,7 +358,8 @@
         viewportWidth: jfloat, viewportHeight: jfloat,
         safeTop: jfloat, safeLeading: jfloat, safeBottom: jfloat, safeTrailing: jfloat,
         mode: jint, isPortrait: jboolean, aspectFill: jboolean,
-        scopeCount: jint, mirrored: jboolean, bottomBarHeight: jfloat
+        scopeCount: jint, mirrored: jboolean, bottomBarHeight: jfloat,
+        portraitFeedAspectRatio: jfloat
     ) -> jfloatArray? {
         let flat = MonitorZoneMapWire.flattened(
             viewportWidth: Double(viewportWidth),
@@ -372,7 +373,8 @@
             aspectFill: aspectFill != 0,
             scopeCount: Int(scopeCount),
             mirrored: mirrored != 0,
-            bottomBarHeight: Double(bottomBarHeight)
+            bottomBarHeight: Double(bottomBarHeight),
+            portraitFeedAspectRatio: Double(portraitFeedAspectRatio)
         )
         let fns = table(env)
         guard let array = fns.NewFloatArray!(env, jsize(flat.count)) else { return nil }
@@ -1253,6 +1255,8 @@
             refreshRequest = .propertyChanged(UInt32(propertyCode))
         case 3:
             refreshRequest = .evIndicator
+        case 4:
+            refreshRequest = .selector
         default:
             return javaString(
                 env,

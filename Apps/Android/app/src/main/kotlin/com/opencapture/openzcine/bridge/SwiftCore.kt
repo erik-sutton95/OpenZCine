@@ -138,6 +138,9 @@ object SwiftCore {
      * @param mode DispMode ordinal: 0 live, 1 clean, 2 command.
      * @param aspectFill portrait feed aspect; false = fit 16:9.
      * @param mirrored true for the mirrored landscape-right chrome.
+     * @param portraitFeedAspectRatio fit-mode feed content ratio: photography
+     *   passes its image area (3:2 / 1:1 / 16:9) so the portrait feed renders
+     *   whole under the top bar; video passes 16:9. Ignored in fill.
      */
     external fun monitorZoneMap(
         viewportWidth: Float,
@@ -152,6 +155,7 @@ object SwiftCore {
         scopeCount: Int,
         mirrored: Boolean,
         bottomBarHeight: Float,
+        portraitFeedAspectRatio: Float,
     ): FloatArray
 
     /**
@@ -495,6 +499,13 @@ object SwiftCore {
      */
     const val PROPERTY_REFRESH_EV_INDICATOR: Int = 3
 
+    /**
+     * One fast read of the photo/video capture selector only, so the chrome
+     * swaps within ~1s of the body's lever (iOS polls it off the frame loop).
+     * Never advances the round-robin — the heavy set keeps its slow cadence.
+     */
+    const val PROPERTY_REFRESH_SELECTOR: Int = 4
+
     /** `sessionSetRecording` completed and the camera accepted the command. */
     const val RECORDING_COMMAND_ACCEPTED: Int = 0
 
@@ -613,7 +624,8 @@ object SwiftCore {
      * Refreshes semantic Android camera state through the Swift core and
      * returns a flat semantic record consumed by `SwiftCoreCameraSession`. [request]
      * must be one of [PROPERTY_REFRESH_BOOTSTRAP], [PROPERTY_REFRESH_NEXT],
-     * or [PROPERTY_REFRESH_EVENT]. [recording] informs the core's shared
+     * [PROPERTY_REFRESH_EVENT], [PROPERTY_REFRESH_EV_INDICATOR], or
+     * [PROPERTY_REFRESH_SELECTOR]. [recording] informs the core's shared
      * low-rate poll policy. [propertyCode] is only a raw value forwarded from
      * an existing `DevicePropChanged` event; Kotlin never creates or decodes a
      * Nikon property identifier. Null is reserved for an unavailable native

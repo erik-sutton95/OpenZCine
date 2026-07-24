@@ -16,6 +16,10 @@ public enum AndroidCameraPropertyRefreshRequest: Sendable {
     /// Fast needle read while the EV meter tool is visible: the body's exposure
     /// indicator only (lit-state gate on a slow stride), no round-robin advance.
     case evIndicator
+    /// Fast read of the photo/video capture selector only, so the chrome swaps
+    /// within ~1s of the body's lever (iOS polls it off the frame loop). No
+    /// round-robin advance — the heavy property set keeps its slow cadence.
+    case selector
 }
 
 /// Non-terminal result of one Android camera-property refresh.

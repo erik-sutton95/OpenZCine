@@ -303,6 +303,7 @@ class SwiftCoreCameraSession internal constructor(
     private val propertyRefreshDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val propertyPollIntervalMillis: Long = PROPERTY_POLL_INTERVAL_MILLIS,
     private val evIndicatorPollIntervalMillis: Long = EV_INDICATOR_POLL_INTERVAL_MILLIS,
+    private val selectorPollIntervalMillis: Long = SELECTOR_POLL_INTERVAL_MILLIS,
     private val propertyEventDebounceMillis: Long = PROPERTY_EVENT_DEBOUNCE_MILLIS,
     private val automaticallyRefreshProperties: Boolean = true,
     private val usbTransport: UsbPtpTransport? = null,
@@ -661,10 +662,19 @@ class SwiftCoreCameraSession internal constructor(
             }
 
             try {
+                val writeStartedNanos = System.nanoTime()
                 val nativeResult =
                     withContext(Dispatchers.IO + NonCancellable) {
                         core.applyControl(control, label)
                     }
+                // A body can sit on a property write for seconds (e.g. a focus-mode
+                // motor handoff) while it holds the transaction gate — and with it
+                // the feed and every queued write. Leave a trace so "the app stalled"
+                // reports become attributable to the property that stalled.
+                val writeMillis = (System.nanoTime() - writeStartedNanos) / 1_000_000L
+                if (writeMillis > SLOW_WRITE_THRESHOLD_MILLIS) {
+                    phaseLogger("propertyWriteSlow", "$control ${writeMillis}ms")
+                }
                 updateRoundTripMeasurement(force = true)
                 nativeResult.throwIfControlCommandFailed()
             } catch (error: CameraControlException) {
@@ -1108,6 +1118,7 @@ class SwiftCoreCameraSession internal constructor(
                     }
                 }
                 var fastTick = 0
+                var selectorElapsedMillis = 0L
                 var lastCaptureSelector = _cameraProperties.value.captureSelector
                 var flipFastTicksRemaining = 0
                 while (isActive && ownsConnectedAttempt(attempt)) {
@@ -1137,6 +1148,29 @@ class SwiftCoreCameraSession internal constructor(
                         // resumes.
                         flipFastTicksRemaining -= 1
                         delay(MODE_FLIP_FAST_POLL_INTERVAL_MILLIS)
+                    } else if (selectorPollIntervalMillis < propertyPollIntervalMillis) {
+                        // The physical stills/movie lever only surfaces via a
+                        // property read; the 3 s round-robin left the chrome ~6 s
+                        // behind it. Sub-poll the selector alone at a sub-second gap
+                        // BETWEEN heavy ticks so the chrome flips within ~1 s (iOS
+                        // polls it off its frame loop) WITHOUT changing the heavy
+                        // round-robin cadence — a heavy NEXT still lands once every
+                        // propertyPollIntervalMillis.
+                        delay(selectorPollIntervalMillis.coerceAtLeast(1L))
+                        if (!isActive || !ownsConnectedAttempt(attempt)) break
+                        refreshCameraProperties(
+                            attempt = attempt,
+                            request = SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                            propertyCode = 0L,
+                        )
+                        val fastSelector = _cameraProperties.value.captureSelector
+                        if (fastSelector != lastCaptureSelector) {
+                            lastCaptureSelector = fastSelector
+                            flipFastTicksRemaining = MODE_FLIP_FAST_POLL_TICKS
+                        }
+                        selectorElapsedMillis += selectorPollIntervalMillis
+                        if (selectorElapsedMillis < propertyPollIntervalMillis) continue
+                        selectorElapsedMillis = 0L
                     } else {
                         delay(propertyPollIntervalMillis.coerceAtLeast(1L))
                     }
@@ -1405,6 +1439,17 @@ class SwiftCoreCameraSession internal constructor(
         const val EV_INDICATOR_POLL_INTERVAL_MILLIS: Long = 750L
         /** Fast EV ticks per regular round-robin property poll (750 ms × 4 = 3 s). */
         const val EV_TICKS_PER_PROPERTY_POLL: Int = 4
+        /**
+         * Steady-state photo/video selector poll gap. The physical stills/movie
+         * lever only surfaces via a property read; iOS detects it in ~0.5 s off
+         * its frame loop, but the Android 3 s round-robin left the chrome ~6 s
+         * behind. A single-byte selector read at this cadence flips the chrome
+         * within ~1 s while the heavy set keeps its 3 s gap (the same trade the
+         * EV needle already makes). [verify-on-HW]
+         */
+        const val SELECTOR_POLL_INTERVAL_MILLIS: Long = 750L
+        /** A property write slower than this stalls the feed behind the transaction gate. */
+        const val SLOW_WRITE_THRESHOLD_MILLIS: Long = 1_500L
         const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
         /** Max rate for command RTT StateFlow updates (LV frames fire every present). */
         const val ROUND_TRIP_PUBLISH_INTERVAL_NANOS: Long = 250_000_000L

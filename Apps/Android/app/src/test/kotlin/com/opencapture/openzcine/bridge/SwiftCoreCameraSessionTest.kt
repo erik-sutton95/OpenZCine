@@ -629,6 +629,7 @@ class SwiftCoreCameraSessionTest {
                 propertyRefreshScope = this,
                 propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
                 propertyPollIntervalMillis = 60_000,
+                selectorPollIntervalMillis = 60_000,
             )
         val connecting = async { session.connect() }
         runCurrent()
@@ -739,44 +740,52 @@ class SwiftCoreCameraSessionTest {
         runCurrent()
         bridge.clearRefreshRequests()
 
-        // Off: one regular tick per 3 s and no EV reads.
+        // Off (but connected): the photo/video selector fast-polls every 750 ms so
+        // the chrome flips ~1 s after the body's lever, with a round-robin NEXT every
+        // 4th tick (holding the ~3 s heavy cadence). No EV needle reads.
         advanceTimeBy(3_100)
         runCurrent()
         assertEquals(
-            listOf(SwiftCore.PROPERTY_REFRESH_NEXT),
+            listOf(
+                SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                SwiftCore.PROPERTY_REFRESH_SELECTOR,
+                SwiftCore.PROPERTY_REFRESH_NEXT,
+            ),
             bridge.refreshRequests().map { it.request },
         )
 
-        // On: the flip engages after the in-flight regular delay, then the
-        // needle reads every 750 ms with the round-robin kept at its stride.
+        // On: the fast lane switches from the selector to the EV needle after the
+        // in-flight delay, then the needle reads every 750 ms with the round-robin
+        // kept at its stride.
         session.setExposureIndicatorFastPolling(true)
         advanceTimeBy(3_100)
         runCurrent()
         bridge.clearRefreshRequests()
         advanceTimeBy(3_100)
         runCurrent()
-        assertEquals(
-            listOf(
-                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
-                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
-                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
-                SwiftCore.PROPERTY_REFRESH_EV_INDICATOR,
-                SwiftCore.PROPERTY_REFRESH_NEXT,
-            ),
-            bridge.refreshRequests().map { it.request },
-        )
+        // The needle reads every 750 ms and the heavy round-robin lands once per
+        // 3 s window — four EV reads interleaved with a single NEXT, and the
+        // selector fast-lane yields to the needle (no selector reads).
+        val evPhase = bridge.refreshRequests().map { it.request }
+        assertEquals(4, evPhase.count { it == SwiftCore.PROPERTY_REFRESH_EV_INDICATOR })
+        assertEquals(1, evPhase.count { it == SwiftCore.PROPERTY_REFRESH_NEXT })
+        assertTrue(evPhase.none { it == SwiftCore.PROPERTY_REFRESH_SELECTOR })
 
-        // Off again: after the residual fast tick flushes, plain cadence only.
+        // Off again: the fast lane returns to the selector — no EV reads, the
+        // selector polls fast, and the heavy round-robin runs at its 3 s stride
+        // (two NEXT ticks across 6.2 s).
         session.setExposureIndicatorFastPolling(false)
         advanceTimeBy(800)
         runCurrent()
         bridge.clearRefreshRequests()
         advanceTimeBy(6_200)
         runCurrent()
-        assertEquals(
-            listOf(SwiftCore.PROPERTY_REFRESH_NEXT, SwiftCore.PROPERTY_REFRESH_NEXT),
-            bridge.refreshRequests().map { it.request },
-        )
+        val offAgain = bridge.refreshRequests().map { it.request }
+        assertTrue(offAgain.none { it == SwiftCore.PROPERTY_REFRESH_EV_INDICATOR })
+        assertTrue(offAgain.any { it == SwiftCore.PROPERTY_REFRESH_SELECTOR })
+        assertEquals(2, offAgain.count { it == SwiftCore.PROPERTY_REFRESH_NEXT })
 
         session.disconnect()
     }
@@ -799,6 +808,7 @@ class SwiftCoreCameraSessionTest {
                 propertyRefreshScope = this,
                 propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
                 propertyPollIntervalMillis = 60_000,
+                selectorPollIntervalMillis = 60_000,
                 propertyEventDebounceMillis = 250,
             )
         val connecting = async { session.connect() }

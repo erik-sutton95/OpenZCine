@@ -1346,6 +1346,27 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 result: refreshAndroidProperty(
                     androidEVIndicatorPollTick.isMultiple(of: 8)
                         ? .exposureIndicateLightup : .exposureIndicateStatus))
+        case .selector:
+            // Read only the photo/video selector at a sub-second Kotlin cadence so
+            // the chrome flips ~1s after the body's lever without the 3s heavy-poll
+            // wait. On a flip, QUEUE the new mode's value burst exactly as the
+            // `.next` path does — otherwise this fast read updates the cached
+            // selector first and the round-robin never sees the change, so the new
+            // mode's aperture/metering/quality readouts would never refresh. The
+            // queue drains on the following (Kotlin-accelerated) `.next` ticks.
+            let previousSelector = androidPropertySnapshot.captureSelector
+            let result = refreshAndroidProperty(.liveViewSelector)
+            if result == .accepted,
+                androidPropertySnapshot.captureSelector != previousSelector
+            {
+                androidPendingModeFlipBurst =
+                    Self.androidBootstrapPollOrder(
+                        captureSelector: androidPropertySnapshot.captureSelector
+                    )
+                    .filter { $0 != .liveViewSelector }
+                androidDescriptorsDueForModeFlip = true
+            }
+            return androidPropertyReadback(result: result)
         case .propertyChanged(let rawCode):
             guard let property = PTPPropertyCode(rawValue: rawCode),
                 PTPPropertyCode.liveMonitorPollOrder.contains(property)

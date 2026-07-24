@@ -62,6 +62,45 @@ class PhotographyPickersTest {
     }
 
     @Test
+    fun `portrait command grid shows the stills strip tile-for-tile, not the movie tiles`() {
+        val settings = settings()
+        val tiles = photographyCommandTiles(settings)
+
+        // The nine stills tiles in fixed order — never the movie RESOLUTION/CODEC/VR grid.
+        assertEquals(
+            listOf("MODE", "ISO", "SHUTTER", "IRIS", "DRIVE", "FOCUS", "WB", "METER", "PROFILE"),
+            tiles.map { it.title },
+        )
+        assertEquals(settings.map { it.value }, tiles.map { it.value })
+        // Fixed order: photography tiles never reorder (iOS CommandPrimaryGrid).
+        assertTrue(tiles.all { it.kind == null })
+    }
+
+    @Test
+    fun `each photography grid tile tap routes back to its own stills picker`() {
+        val settings = settings()
+        val tiles = photographyCommandTiles(settings)
+
+        // A tile carrying a request must resolve — through the same settings the
+        // grid maps against — to the SAME picker kind as the strip cell it mirrors.
+        settings.zip(tiles).forEach { (cell, tile) ->
+            val request = tile.request ?: return@forEach
+            assertEquals(cell.kind, monitorPickerKindForRequest(settings, request))
+        }
+    }
+
+    @Test
+    fun `only the histogram scope is billed in photography`() {
+        // The cinema scopes are suppressed at render, so a photography scope band
+        // must bill only the histogram — otherwise a dead gap opens under the feed.
+        assertTrue(ScopeKind.HISTOGRAM.appliesToPhotography)
+        assertEquals(
+            listOf(ScopeKind.HISTOGRAM),
+            ScopeKind.entries.filter { it.appliesToPhotography },
+        )
+    }
+
+    @Test
     fun `iso picker seeds auto and manual tabs from camera truth`() {
         val manual = settings().first { it.kind == MonitorPickerKind.ISO }.picker
         assertNotNull(manual)

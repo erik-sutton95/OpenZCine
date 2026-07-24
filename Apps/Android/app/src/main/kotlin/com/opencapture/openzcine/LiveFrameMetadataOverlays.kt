@@ -363,6 +363,8 @@ internal fun LiveFrameMetadataOverlay(
     cleanMode: Boolean,
     isPortrait: Boolean,
     aspectFill: Boolean = false,
+    /** The EV meter is a photography-only tool; a persisted set may still carry it. */
+    isPhotography: Boolean = false,
     /** Local-pixel height of monitor chrome covering the feed's bottom edge. */
     gaugeBottomChromeInset: Float = 0f,
     focusPointLocked: Boolean = false,
@@ -435,10 +437,13 @@ internal fun LiveFrameMetadataOverlay(
             }
             // The EV meter SURVIVES clean mode (iOS DISP 2 rule): exposure
             // truth is exactly what a stripped-down operator view still needs.
-            // Hidden while the body reports its indicator unlit (the value is
-            // undefined there) or before the first needle read lands.
+            // Photography-only — the render guards the mode as well as the
+            // toolset, since a persisted visibility set from an older build may
+            // still carry the tool. Hidden while the body reports its indicator
+            // unlit (the value is undefined there) or before the first read lands.
             if (
                 configuration.evMeterEnabled &&
+                isPhotography &&
                 evIndicatorSixths != null &&
                 evIndicatorLit != false
             ) {
@@ -447,6 +452,10 @@ internal fun LiveFrameMetadataOverlay(
                     feed = feed,
                     visibleBounds = viewport,
                     cleanMode = cleanMode,
+                    // Photography always lays out fit, so the portrait feed bottom
+                    // is free — the needle drops to the edge instead of lifting into
+                    // a capture bar's lane (only landscape overlays a bar there).
+                    feedBottomFree = isPortrait,
                 )
             }
             DebugMetadataBadge(show = debugFixtureShown, feed = feed)
@@ -575,9 +584,12 @@ private fun EVMeterOverlay(
     feed: LiveOverlayRect,
     visibleBounds: LiveOverlayRect,
     cleanMode: Boolean,
+    feedBottomFree: Boolean = false,
 ) {
     val density = LocalDensity.current
-    val lift = with(density) { (if (cleanMode) 28 else 92).dp.toPx() }
+    // Lift above a capture bar only where one actually overlays the feed bottom;
+    // clean mode and portrait-fit leave the bottom free, so the needle sits at the edge.
+    val lift = with(density) { (if (cleanMode || feedBottomFree) 28 else 92).dp.toPx() }
     var meterSize by remember { mutableStateOf(IntSize.Zero) }
     val visible = intersectLiveOverlayRects(feed, visibleBounds) ?: feed
     val ev = sixths / 6.0
