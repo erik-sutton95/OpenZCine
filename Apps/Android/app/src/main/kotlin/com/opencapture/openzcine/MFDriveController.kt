@@ -16,14 +16,14 @@ import kotlinx.coroutines.launch
  * (+ toward infinity, − toward near) accumulate while a single in-flight
  * drive drains them, so gesture speed never floods the command channel.
  *
- * There is NO drivability verdict. A focus-by-wire drive can be refused for
- * transient state reasons — the stepping-motor lens is still initializing
- * after a focus-mode change, or autofocus is momentarily active/settling —
- * none of which mean the lens can't be driven. So every refusal (busy OR
- * access-denied) requeues and retries, bounded; only a sustained refusal
- * surfaces one message, and the strip is never hidden. The strip's own
- * visibility depends solely on the focus mode being MF.
- * [verify-on-HW: per-lens pulse feel and which codes a given lens answers]
+ * A focus-by-wire drive can be refused for transient reasons — the stepping-motor lens is still
+ * initializing after a mode change, or autofocus is momentarily active/settling — none of which
+ * mean the lens can't be driven, so every refusal requeues and retries, bounded; only a sustained
+ * refusal surfaces one message, and the strip is never hidden. The camera permits a remote drive
+ * ONLY in an AF focus mode — in MF the lens ring has exclusive control and the body refuses every
+ * drive with Invalid_Status ("the focus mode is MF"). So the strip is gated on an AF mode (NOT MF)
+ * and the app scrub acts as a manual-focus override, the way the lens ring overrides during AF.
+ * [verify-on-HW: per-lens pulse feel, and whether continuous AF fights the drive in AF-C vs AF-S]
  */
 internal class MFDriveController(
     private val session: CameraSession,
@@ -82,11 +82,11 @@ internal class MFDriveController(
                     pendingPulses = 0
                 }
                 is MFDriveOutcome.Refused -> {
-                    // Every refusal is transient state, not a lens verdict: busy = the
-                    // stepping-motor lens is still initializing (or an acquisition is
-                    // running); access-denied = autofocus is momentarily active. Requeue
-                    // and retry; a genuinely stuck state surfaces one message but leaves the
-                    // strip up so the next gesture tries again.
+                    // A refusal is transient while AF is momentarily driving (access-denied) or
+                    // the lens is still initializing (busy): requeue and retry. A sustained
+                    // refusal is a real state block — Invalid_Status means either an unusable lens
+                    // or that the focus mode slipped back to MF (the body refuses a remote drive in
+                    // MF). Surface one message and leave the strip up so the next gesture retries.
                     _driveStats.value = _driveStats.value.let { (ok, busy) -> ok to busy + 1 }
                     if (retries < MAX_RETRIES) {
                         retries += 1
@@ -97,9 +97,13 @@ internal class MFDriveController(
                     retries = 0
                     pendingPulses = 0
                     onRefusalExhausted?.invoke(
-                        "Couldn't drive focus just now — make sure focus mode is MF and " +
-                            "autofocus isn't running, then try again (0x%04X)."
-                            .format(outcome.rawResponseCode),
+                        if (outcome.rawResponseCode == INVALID_STATUS_RESPONSE) {
+                            "Can't drive focus in MF — set the camera to an AF focus mode to " +
+                                "scrub focus from the app."
+                        } else {
+                            "Couldn't drive focus just now — try again (0x%04X)."
+                                .format(outcome.rawResponseCode)
+                        },
                     )
                 }
             }
@@ -114,5 +118,11 @@ internal class MFDriveController(
 
         /** Standard busy answer on the shared channel. */
         const val DEVICE_BUSY_RESPONSE = 0x2019
+
+        /**
+         * The body's "remote focus drive refused because the focus mode is MF" status — in MF the
+         * lens ring has exclusive control. Gets its own actionable message. [verify-on-HW]
+         */
+        const val INVALID_STATUS_RESPONSE = 0xA004
     }
 }

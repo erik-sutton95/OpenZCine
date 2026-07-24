@@ -2400,16 +2400,17 @@ internal fun MonitorScreen(
                     }
                 }
 
-                // MF focus-by-wire strip: on the live view just left of the
-                // right system rail whenever MF is active on a live session.
-                // There is no drivability verdict — a refused drive is transient
-                // state (stepping-motor lens initializing, autofocus settling),
-                // so the strip never hides on a refusal; it retries.
+                // Focus-by-wire scrub strip: on the live view just left of the right system rail
+                // in an AF focus mode. The camera refuses a remote drive in MF (Invalid_Status) —
+                // the lens ring owns focus there — so the scrub shows in AF modes (AF-S/AF-C/AF-F/
+                // AF-A) and acts as a manual-focus override. A refused drive is transient, so the
+                // strip never hides on a refusal; it retries.
                 if (
                     !isClean && !locked &&
                     sessionState is CameraSessionState.Connected &&
                     !isDemoSession &&
-                    cameraProperties.focusMode == "MF" &&
+                    cameraProperties.focusMode != null &&
+                    cameraProperties.focusMode != "MF" &&
                     // The strip absorbs taps (it drives on drag, swallows plain taps
                     // so they can't move the AF point under it). Mounting it over an
                     // open picker/popup would eat the popup's dismiss taps — picking

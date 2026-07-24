@@ -6,6 +6,7 @@ import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.MFDriveOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -207,4 +208,23 @@ class MFDriveControllerTest {
             assertEquals(19, session.drives.size)
             assertEquals(1, messages.size)
         }
+
+    @Test
+    fun `an Invalid_Status refusal points the operator to an AF focus mode`() = runTest {
+        // Doc-confirmed root cause: the body refuses a remote focus drive in MF with
+        // Invalid_Status (0xA004). The exhaustion message must send the operator to an AF mode
+        // (not the old "make sure focus mode is MF" copy) and it carries no raw code.
+        val session = FakeSession()
+        val controller = MFDriveController(session, retryDelayMillis = 1)
+        val messages = mutableListOf<String>()
+        controller.onRefusalExhausted = { messages += it }
+        repeat(17) { session.outcomes.add(MFDriveOutcome.Refused(rawResponseCode = 0xA004)) }
+
+        controller.drive(this, 200)
+        advanceUntilIdle()
+
+        assertEquals(1, messages.size)
+        assertTrue(messages.single().contains("AF focus mode"))
+        assertFalse(messages.single().contains("0x"))
+    }
 }

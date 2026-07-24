@@ -2719,10 +2719,10 @@ private fun MediaClipGrid(
             columns = GridCells.Adaptive(minSize = thumbnailSize.minimumCellWidthDp.dp),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
-            // Column gap unchanged; tighter row gap for a denser vertical rhythm (iOS
-            // LazyVGrid spacing 16→8 — less dead space between rows).
+            // Column gap unchanged; tight row gap for a dense vertical rhythm (iOS LazyVGrid
+            // spacing 16→8→4 — less dead space between rows).
             horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
             // Overlay owns movement while selecting; plain scroll resumes after exit.
             userScrollEnabled = !isSelecting,
@@ -3054,8 +3054,8 @@ private fun MediaClipCell(
                 onLongClickLabel = "Select ${clip.filename}",
             )
         }
-    // Tight thumbnail↔filename gap (iOS cell spacing 8→4): less dead space under the frame.
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // Tight thumbnail↔filename gap (iOS cell spacing 8→4→2): less dead space under the frame.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Box(
             Modifier.fillMaxWidth()
                 .aspectRatio(16f / 9f)
