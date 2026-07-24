@@ -32,6 +32,7 @@ class StillCaptureControllerTest {
         var refreshes = 0
         var polls: ArrayDeque<StillReleasePoll> = ArrayDeque()
         var failInitiate = false
+        var refreshDelayMillis = 0L
 
         override suspend fun connect() = Unit
 
@@ -58,6 +59,7 @@ class StillCaptureControllerTest {
         }
 
         override suspend fun refreshProperties() {
+            if (refreshDelayMillis > 0) kotlinx.coroutines.delay(refreshDelayMillis)
             refreshes += 1
         }
     }
@@ -120,6 +122,26 @@ class StillCaptureControllerTest {
         assertEquals(1, session.initiates)
         assertEquals(1, session.terminates)
         assertEquals(listOf(true, false), session.bracketCalls)
+    }
+
+    @Test
+    fun `timer chain fires the next shot while the previous run's refresh drags`() = runTest {
+        val session = FakeSession()
+        // The post-run property refresh takes seconds on a real body — it must
+        // never swallow the timer chain's next press (the on-device once-and-
+        // stop bug).
+        session.refreshDelayMillis = 5_000
+        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        session.polls.addAll(listOf(StillReleasePoll.COMPLETE, StillReleasePoll.COMPLETE))
+
+        controller.pressed(this, continuousDrive = false)
+        // The fireTimerShots wait loop: poll capturing every 150 ms.
+        while (controller.isCapturing.value) testScheduler.advanceTimeBy(150)
+        controller.pressed(this, continuousDrive = false)
+        advanceUntilIdle()
+
+        assertEquals(2, session.initiates)
+        assertFalse(controller.isCapturing.value)
     }
 
     @Test

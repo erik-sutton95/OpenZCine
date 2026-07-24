@@ -51,7 +51,11 @@ internal class StillCaptureController(
      * open ends it instead.
      */
     fun pressed(scope: CoroutineScope, continuousDrive: Boolean) {
-        if (runJob?.isActive == true) {
+        // Gate on the CAPTURING state, not the job handle: the previous run's
+        // job stays briefly active while its post-run refresh detaches, and a
+        // job-handle guard silently swallowed the timer chain's next shot
+        // exactly there (iOS gates on isStillCapturing the same way).
+        if (_isCapturing.value) {
             if (openShutter.get()) {
                 // Second press ends the open exposure (iOS captureStill).
                 scope.launch { runCatching { session.terminateStillCapture() } }
@@ -60,7 +64,7 @@ internal class StillCaptureController(
         }
         held.set(true)
         latchedContinuous.set(continuousDrive)
-        runJob = scope.launch { runRelease(continuousDrive) }
+        runJob = scope.launch { runRelease(continuousDrive, scope) }
     }
 
     /**
@@ -75,7 +79,7 @@ internal class StillCaptureController(
         }
     }
 
-    private suspend fun runRelease(continuous: Boolean) {
+    private suspend fun runRelease(continuous: Boolean, scope: CoroutineScope) {
         _isCapturing.value = true
         openShutter.set(false)
         var chained = 0
@@ -127,9 +131,13 @@ internal class StillCaptureController(
             openShutter.set(false)
             held.set(false)
             _isCapturing.value = false
-            // The SHOTS pill re-reads through the regular refresh.
-            runCatching { session.refreshProperties() }
-            runCatching { onRunCompleted?.invoke() }
+            // Detached: the SHOTS refresh and the review kickoff can take
+            // seconds and must never keep the run "active" — the timer chain's
+            // next shot fires the moment capturing clears.
+            scope.launch {
+                runCatching { session.refreshProperties() }
+                runCatching { onRunCompleted?.invoke() }
+            }
         }
     }
 }
