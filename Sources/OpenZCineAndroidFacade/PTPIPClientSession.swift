@@ -265,6 +265,10 @@ private struct AndroidRawControlCatalog: Sendable {
     var vibrationReduction: [AndroidRawControlMode<UInt8>] = []
     var electronicVR: [AndroidRawControlMode<UInt8>] = []
     var allowsApertureFallback = false
+    // Photo-mode descriptor domains (iOS `cameraControlOptions` stills equivalents).
+    var stillShutterSpeeds: [AndroidRawControlMode<UInt32>] = []
+    var stillWhiteBalanceModes: [AndroidRawControlMode<UInt16>] = []
+    var imageSizes: [String] = []
 
     func capabilities(
         properties: PTPCameraPropertySnapshot,
@@ -322,12 +326,21 @@ private struct AndroidRawControlCatalog: Sendable {
                     fallback: ""
                 ).nilIfEmpty
         }
-        let activeShutterValues: [String] =
+        let photography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: properties.captureSelector)
+        let activeShutterValues: [String]
+        if photography {
+            // Photo: the body enumerates the stills speeds valid for the active
+            // program/flash state (iOS `optionProperty` for `.stillShutter`);
+            // the shell keeps its ladder fallback when empty.
+            activeShutterValues = stillShutterSpeeds.map(\.label)
+        } else {
             switch properties.shutterMode {
-            case .angle: shutterAngles.map(\.label)
-            case .speed: shutterSpeeds.map(\.label)
-            case nil: []
+            case .angle: activeShutterValues = shutterAngles.map(\.label)
+            case .speed: activeShutterValues = shutterSpeeds.map(\.label)
+            case nil: activeShutterValues = []
             }
+        }
         let irisValues: [String]
         if !apertures.isEmpty {
             irisValues = apertures.map(\.label)
@@ -359,10 +372,21 @@ private struct AndroidRawControlCatalog: Sendable {
         } else {
             isoValues = []
         }
-        let whiteBalanceValues =
-            (whiteBalanceModes.contains { $0.label == "Color temp" }
-                ? whiteBalanceKelvin.map(\.label) : [])
-            + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+        let whiteBalanceValues: [String]
+        if photography {
+            // Photo WB: the stills preset enum, with the shared Kelvin dial
+            // ladder while the body offers colour-temperature mode (iOS photo
+            // WB reuses the movie popup over the stills property).
+            whiteBalanceValues =
+                (stillWhiteBalanceModes.contains { $0.label == "Color temp" }
+                    ? WhiteBalanceKelvinPolicy.kelvinOptions : [])
+                + stillWhiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+        } else {
+            whiteBalanceValues =
+                (whiteBalanceModes.contains { $0.label == "Color temp" }
+                    ? whiteBalanceKelvin.map(\.label) : [])
+                + whiteBalanceModes.filter { $0.label != "Color temp" }.map(\.label)
+        }
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: resolutionFrameRate,
             codec: properties.fileType.map(MonitorTextFormat.codecShortLabel),
@@ -394,7 +418,8 @@ private struct AndroidRawControlCatalog: Sendable {
             // Unknown/raw codecs fail closed: only a recognized non-raw codec unlocks e-VR.
             electronicVR:
                 recognizedCodec.map(MonitorTextFormat.isRawCodec) == false
-                ? electronicVR.map(\.label) : []
+                ? electronicVR.map(\.label) : [],
+            imageSizes: imageSizes
         )
     }
 
@@ -1400,6 +1425,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
             refreshAndroidWhiteBalanceTintDescriptor,
             refreshAndroidVibrationReductionDescriptor,
             refreshAndroidElectronicVRDescriptor,
+            // Photo-mode enums (stills shutter / photo WB presets / image sizes).
+            // Bodies reject them in movie mode; the walk continues past that.
+            refreshAndroidStillShutterDescriptor,
+            refreshAndroidStillWhiteBalanceDescriptor,
+            refreshAndroidImageSizeDescriptor,
         ]
         var result: AndroidCameraPropertyRefreshResult = .accepted
         for refresh in refreshers {
@@ -1696,12 +1726,52 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
+    private func refreshAndroidStillShutterDescriptor() throws {
+        // The body enumerates stills speeds valid for the active program/flash
+        // state (fraction-packed `ShutterSpeed` plus the Bulb/Time sentinels).
+        // Sentinels a picker cannot re-encode are dropped like iOS. [verify-on-HW]
+        androidControlCatalog.stillShutterSpeeds = []
+        let raw = try descriptorEnumValues(.stillShutterSpeed, valueByteCount: 4)
+        androidControlCatalog.stillShutterSpeeds = uniqueUInt32Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.stillShutterLabel(value)
+            guard PTPCameraPropertyDecoders.stillShutterRaw(for: label) != nil else {
+                return nil
+            }
+            return label
+        }
+    }
+
+    private func refreshAndroidStillWhiteBalanceDescriptor() throws {
+        // Photo WB preset enum (`WhiteBalance` 0x5005) — the photography popup's
+        // Preset drum follows it, mirroring iOS's stills WB option source.
+        androidControlCatalog.stillWhiteBalanceModes = []
+        let raw = try descriptorEnumValues(.whiteBalance, valueByteCount: 2)
+        androidControlCatalog.stillWhiteBalanceModes = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.whiteBalanceMode(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    private func refreshAndroidImageSizeDescriptor() throws {
+        // `ImageSize` is a string enumeration ("Size L" / resolution strings);
+        // the SIZE picker offers the exact strings and writes them verbatim.
+        androidControlCatalog.imageSizes = []
+        let descriptor = try readPropertyDescriptor(.imageSize)
+        androidControlCatalog.imageSizes =
+            PTPCameraPropertyDecoders.devicePropDescStringEnumValues(data: descriptor)
+    }
+
     private func refreshAndroidWhiteBalanceTintDescriptor() throws {
         androidControlCatalog.whiteBalanceTints = []
         androidWhiteBalanceTint = nil
         guard
             let mode = androidPropertySnapshot.wbMode,
-            let property = WhiteBalanceTint.tuneProperty(forWBModeLabel: mode)
+            let property = WhiteBalanceTint.tuneProperty(
+                forWBModeLabel: mode,
+                // Photo mode fine-tunes the stills pad family (iOS routes by
+                // the snapshot's selector). [verify-on-HW]
+                photography: StillCapturePolicy.prefersPhotographyChrome(
+                    selector: androidPropertySnapshot.captureSelector))
         else {
             return
         }
@@ -2156,6 +2226,9 @@ public final class PTPIPClientSession: @unchecked Sendable {
                     || androidControlCatalog.whiteBalanceModes.contains {
                         $0.label == "Color temp"
                     }
+                    || androidControlCatalog.stillWhiteBalanceModes.contains {
+                        $0.label == "Color temp"
+                    }
                 let isFineKelvin =
                     control == .whiteBalance
                     && WhiteBalanceKelvinPolicy.isKelvinLabel(label)
@@ -2205,6 +2278,22 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
             return sharedControlWrites(control, label: label)
         case .whiteBalance:
+            // Photography reuses the movie WB picker; the shared core routes the write to the
+            // stills WB property family by the snapshot's selector. Prefer the photo descriptor's
+            // exact preset raws when the body advertised them. [verify-on-HW]
+            if StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector)
+            {
+                if let raw = androidControlCatalog.stillWhiteBalanceModes.first(where: {
+                    $0.label == label
+                })?.raw {
+                    return [
+                        PTPCameraPropertyWrite(
+                            property: .whiteBalance, data: Data(ByteCoding.uint16LE(raw)))
+                    ]
+                }
+                return sharedControlWrites(control, label: label)
+            }
             let descriptorWrites = whiteBalanceDescriptorWrites(label: label)
             if !descriptorWrites.isEmpty { return descriptorWrites }
             return sharedControlWrites(control, label: label)
@@ -2320,6 +2409,46 @@ public final class PTPIPClientSession: @unchecked Sendable {
                 property: .electronicVR)
         case .exposureMode:
             return sharedControlWrites(control, label: label)
+        case .stillShutter:
+            // Prefer the exact camera-advertised raw for the label (the stills
+            // enum narrows by program/flash state); shared fraction-packing
+            // covers the ladder fallback.
+            if let raw = androidControlCatalog.stillShutterSpeeds.first(where: {
+                $0.label == label
+            })?.raw {
+                return [
+                    PTPCameraPropertyWrite(
+                        property: .stillShutterSpeed, data: Data(ByteCoding.uint32LE(raw)))
+                ]
+            }
+            return sharedControlWrites(control, label: label)
+        case .stillISOAuto:
+            // Stills Auto ISO toggle — iOS's raw one-byte property write.
+            switch label {
+            case "On", "ON":
+                return [
+                    PTPCameraPropertyWrite(property: .stillISOAutoControl, data: Data([1]))
+                ]
+            case "Off", "OFF":
+                return [
+                    PTPCameraPropertyWrite(property: .stillISOAutoControl, data: Data([0]))
+                ]
+            default:
+                return []
+            }
+        case .stillImageArea:
+            // Photo sensor crop — the raw area byte, exactly like iOS's
+            // `setStillImageArea` safe-point write.
+            guard let area = StillImageArea.area(forLabel: label) else { return [] }
+            return [
+                PTPCameraPropertyWrite(property: .captureAreaCrop, data: Data([area.rawValue]))
+            ]
+        case .stillISO, .stillIris, .stillDrive, .stillFocusMode, .stillFocusArea,
+            .stillFocusSubject, .stillMeter, .stillImageSize, .stillQuality,
+            .stillRawCompression, .stillUserModeProgram, .stillPictureControl:
+            // Stills writes ride the shared-core label encoders (the same
+            // byte policy iOS queues); the body stays the final authority.
+            return sharedControlWrites(control, label: label)
         }
     }
 
@@ -2390,6 +2519,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
         case .vibrationReduction: capabilities.vibrationReduction
         case .electronicVR: capabilities.electronicVR
         case .exposureMode: []
+        case .stillISO, .stillISOAuto, .stillShutter, .stillIris, .stillDrive,
+            .stillFocusMode, .stillFocusArea, .stillFocusSubject, .stillMeter,
+            .stillImageArea, .stillImageSize, .stillQuality, .stillRawCompression,
+            .stillUserModeProgram, .stillPictureControl:
+            // Stills controls skip capability validation (`isStillControl`).
+            []
         }
     }
 
@@ -2460,7 +2595,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         return WhiteBalanceTint.write(
             wbModeLabel: mode,
             amberBlueCell: tint.amberBlue,
-            greenMagentaCell: tint.greenMagenta)
+            greenMagentaCell: tint.greenMagenta,
+            // Photo mode writes the stills tune property for the active WB mode.
+            photography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: androidPropertySnapshot.captureSelector))
     }
 
     private func confirmAndroidControlWrites(
@@ -2522,10 +2660,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
             return PTPCameraPropertyDecoders.movieFocusMode(written)
                 == PTPCameraPropertyDecoders.movieFocusMode(live)
         }
-        // Effective / dual-base / exposure-index ISO — compare the UINT32, not raw length.
+        // Effective / dual-base / exposure-index / stills ISO — compare the UINT32, not raw length.
         if write.property == .movieExposureIndex
             || write.property == .movieISOSensitivity
-            || write.property == .isoControlSensitivity,
+            || write.property == .isoControlSensitivity
+            || write.property == .exposureIndexEx,
             write.data.count >= 4,
             readback.count >= 4
         {

@@ -246,6 +246,21 @@ private val CameraControl.nativeSelector: Int
             CameraControl.VIBRATION_REDUCTION -> 19
             CameraControl.ELECTRONIC_VR -> 20
             CameraControl.ISO_AUTO -> 21
+            CameraControl.STILL_ISO -> 22
+            CameraControl.STILL_ISO_AUTO -> 23
+            CameraControl.STILL_SHUTTER -> 24
+            CameraControl.STILL_IRIS -> 25
+            CameraControl.STILL_DRIVE -> 26
+            CameraControl.STILL_FOCUS_MODE -> 27
+            CameraControl.STILL_FOCUS_AREA -> 28
+            CameraControl.STILL_FOCUS_SUBJECT -> 29
+            CameraControl.STILL_METER -> 30
+            CameraControl.STILL_IMAGE_AREA -> 31
+            CameraControl.STILL_IMAGE_SIZE -> 32
+            CameraControl.STILL_QUALITY -> 33
+            CameraControl.STILL_RAW_COMPRESSION -> 34
+            CameraControl.STILL_USER_MODE_PROGRAM -> 35
+            CameraControl.STILL_PICTURE_CONTROL -> 36
         }
 
 /**

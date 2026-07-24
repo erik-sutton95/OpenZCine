@@ -27,7 +27,44 @@ struct AndroidCameraControlWireTests {
         #expect(AndroidCameraControlWire.control(selector: 19) == .vibrationReduction)
         #expect(AndroidCameraControlWire.control(selector: 20) == .electronicVR)
         #expect(AndroidCameraControlWire.control(selector: 21) == .isoAuto)
+        #expect(AndroidCameraControlWire.control(selector: 22) == .stillISO)
+        #expect(AndroidCameraControlWire.control(selector: 23) == .stillISOAuto)
+        #expect(AndroidCameraControlWire.control(selector: 24) == .stillShutter)
+        #expect(AndroidCameraControlWire.control(selector: 25) == .stillIris)
+        #expect(AndroidCameraControlWire.control(selector: 26) == .stillDrive)
+        #expect(AndroidCameraControlWire.control(selector: 27) == .stillFocusMode)
+        #expect(AndroidCameraControlWire.control(selector: 28) == .stillFocusArea)
+        #expect(AndroidCameraControlWire.control(selector: 29) == .stillFocusSubject)
+        #expect(AndroidCameraControlWire.control(selector: 30) == .stillMeter)
+        #expect(AndroidCameraControlWire.control(selector: 31) == .stillImageArea)
+        #expect(AndroidCameraControlWire.control(selector: 32) == .stillImageSize)
+        #expect(AndroidCameraControlWire.control(selector: 33) == .stillQuality)
+        #expect(AndroidCameraControlWire.control(selector: 34) == .stillRawCompression)
+        #expect(AndroidCameraControlWire.control(selector: 35) == .stillUserModeProgram)
+        #expect(AndroidCameraControlWire.control(selector: 36) == .stillPictureControl)
         #expect(AndroidCameraControlWire.control(selector: -1) == nil)
-        #expect(AndroidCameraControlWire.control(selector: 22) == nil)
+        #expect(AndroidCameraControlWire.control(selector: 37) == nil)
+    }
+
+    @Test func stillControlsSkipCapabilityValidationAndMapSharedEncoders() {
+        for control in [
+            AndroidCameraControl.stillISO, .stillISOAuto, .stillShutter, .stillIris,
+            .stillDrive, .stillFocusMode, .stillFocusArea, .stillFocusSubject, .stillMeter,
+            .stillImageArea, .stillImageSize, .stillQuality, .stillRawCompression,
+            .stillUserModeProgram, .stillPictureControl,
+        ] {
+            #expect(control.isStillControl)
+            #expect(!control.requiresCapabilityValidation)
+        }
+        #expect(AndroidCameraControl.stillISO.sharedControl == .stillISO)
+        #expect(AndroidCameraControl.stillFocusMode.sharedControl == .stillFocus)
+        #expect(AndroidCameraControl.stillQuality.sharedControl == .stillQuality)
+        // Session-local byte writes carry no shared label encoder.
+        #expect(AndroidCameraControl.stillISOAuto.sharedControl == nil)
+        #expect(AndroidCameraControl.stillImageArea.sharedControl == nil)
+        // The shared-core stills model round-trips into the Android superset.
+        #expect(AndroidCameraControl(PTPCameraControl.stillFocus) == .stillFocusMode)
+        #expect(AndroidCameraControl(PTPCameraControl.stillPictureControl) == .stillPictureControl)
+        #expect(AndroidCameraControl(PTPCameraControl.stillFlash) == nil)
     }
 }

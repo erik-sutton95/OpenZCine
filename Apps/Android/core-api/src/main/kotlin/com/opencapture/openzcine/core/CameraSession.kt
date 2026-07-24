@@ -188,6 +188,54 @@ public enum class CameraControl {
 
     /** Camera-advertised electronic vibration-reduction state. */
     ELECTRONIC_VR,
+
+    // Stills / photo-mode controls (photography pickers; the movie controls
+    // above stay untouched in photo mode).
+
+    /** Stills ISO sensitivity, such as `"800"`. */
+    STILL_ISO,
+
+    /** Stills Auto-ISO toggle, `"On"` or `"Off"`. */
+    STILL_ISO_AUTO,
+
+    /** Stills shutter speed, such as `"1/250"`, `"30s"`, or `"Bulb"`. */
+    STILL_SHUTTER,
+
+    /** Stills lens aperture, such as `"f/2.8"`. */
+    STILL_IRIS,
+
+    /** Still release/drive mode, such as `"Single"` or `"Continuous H"`. */
+    STILL_DRIVE,
+
+    /** Stills autofocus mode, such as `"AF-S"`. */
+    STILL_FOCUS_MODE,
+
+    /** Stills autofocus area, such as `"Wide-L"`. */
+    STILL_FOCUS_AREA,
+
+    /** Stills subject-detection mode, such as `"People"`. */
+    STILL_FOCUS_SUBJECT,
+
+    /** Exposure metering pattern, such as `"Matrix"`. */
+    STILL_METER,
+
+    /** Photo sensor crop, such as `"FX"` or `"16:9"`. */
+    STILL_IMAGE_AREA,
+
+    /** Camera-enumerated still image-size string, sent back verbatim. */
+    STILL_IMAGE_SIZE,
+
+    /** Still image quality, such as `"RAW+JPEG Fine"`. */
+    STILL_QUALITY,
+
+    /** NEF (RAW) recording compression, such as `"High efficiency★"`. */
+    STILL_RAW_COMPRESSION,
+
+    /** The shooting program a U bank runs as (`"P"`/`"S"`/`"A"`/`"M"`). */
+    STILL_USER_MODE_PROGRAM,
+
+    /** Active picture control (profile), such as `"Standard"` or `"Cloud 3"`. */
+    STILL_PICTURE_CONTROL,
 }
 
 /** The camera's active movie-shutter display convention. */
@@ -280,6 +328,8 @@ public data class CameraControlCapabilities(
     val vibrationReduction: List<String> = emptyList(),
     /** Electronic-VR states advertised by the camera. */
     val electronicVr: List<String> = emptyList(),
+    /** Photo image-size strings enumerated by the camera, verbatim. */
+    val imageSizes: List<String> = emptyList(),
 ) {
     /** Returns the advertised labels for one descriptor-dependent control. */
     public fun options(control: CameraControl): List<String> =
@@ -289,6 +339,11 @@ public data class CameraControlCapabilities(
             CameraControl.SHUTTER -> shutterValues
             CameraControl.IRIS -> irisValues
             CameraControl.WHITE_BALANCE -> whiteBalanceValues
+            // Photo mode: the facade swaps shutter/WB/iris domains to the
+            // stills enums, so the still controls read the same lists.
+            CameraControl.STILL_SHUTTER -> shutterValues
+            CameraControl.STILL_IRIS -> irisValues
+            CameraControl.STILL_IMAGE_SIZE -> imageSizes
             CameraControl.FOCUS_MODE -> focusModes
             CameraControl.FOCUS_AREA -> focusAreas
             CameraControl.FOCUS_SUBJECT -> focusSubjects
@@ -419,6 +474,12 @@ public data class CameraPropertySnapshot(
     val exposureBias: String? = null,
     /** Frames remaining on the active card in photo mode. */
     val shotsRemaining: Int? = null,
+    /** Photo sensor-crop (image area) label, such as `FX` or `16:9`. */
+    val imageArea: String? = null,
+    /** NEF (RAW) recording compression label. */
+    val rawCompression: String? = null,
+    /** The shooting program the active U bank runs as (`P`/`S`/`A`/`M`). */
+    val userModeProgram: String? = null,
     /** Active picture-control (profile) label, such as `Standard`. */
     val pictureControl: String? = null,
     /** The body's exposure-indicator needle in 1/6 EV steps (±60 == ±10 EV). */
