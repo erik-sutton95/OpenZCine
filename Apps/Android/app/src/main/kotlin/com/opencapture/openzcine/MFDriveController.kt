@@ -84,6 +84,16 @@ internal class MFDriveController(
     fun drive(scope: CoroutineScope, pulses: Int) {
         if (pulses == 0) return
         pendingPulses += pulses
+        // Advance the dial position on the DRAG, not the ack — the drum tracks the finger
+        // smoothly instead of stepping at the command round-trip rate. Clamp to pinned ends.
+        _netPulses.value =
+            (_netPulses.value + pulses).let { advanced ->
+                var v = advanced
+                nearPulses?.let { v = maxOf(v, it) }
+                infinityPulses?.let { v = minOf(v, it) }
+                v
+            }
+        recalculateFraction()
         _atEnd.value = null
         if (driveJob?.isActive == true) return
         driveJob = scope.launch { drain() }
@@ -102,16 +112,14 @@ internal class MFDriveController(
                 }.getOrElse { MFDriveOutcome.Refused(DEVICE_BUSY_RESPONSE) }
             when (outcome) {
                 MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> {
+                    // Position already advanced optimistically on the drag (in drive()).
                     retries = 0
-                    _netPulses.value += pending
-                    recalculateFraction()
                     continue
                 }
                 MFDriveOutcome.EndOfTravel -> {
-                    // The reached limit lights its side and pins that end so the relative
-                    // position can calibrate; queued pulses toward it are moot.
+                    // Pin this end at the current (optimistic) position so the relative position
+                    // calibrates and the dial clamps here on further drives toward it.
                     retries = 0
-                    _netPulses.value += pending
                     if (pending < 0) {
                         nearPulses = _netPulses.value
                         _atEnd.value = -1

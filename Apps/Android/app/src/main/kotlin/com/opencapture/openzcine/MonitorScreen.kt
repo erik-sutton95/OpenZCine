@@ -2417,6 +2417,8 @@ internal fun MonitorScreen(
                     // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`) —
                     // off hides the strip even in an AF focus mode.
                     operatorSettings.mfDriveScrubEnabled.value &&
+                    // Photography only (iOS `showsMFDriveScrub … && isPhotographyMode`).
+                    isPhotographyMode &&
                     !isClean && !locked &&
                     sessionState is CameraSessionState.Connected &&
                     !isDemoSession &&
