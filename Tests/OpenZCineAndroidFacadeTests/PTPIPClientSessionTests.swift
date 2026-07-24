@@ -501,8 +501,7 @@ struct PTPIPClientSessionTests {
 
         let screenSizeDescriptorReadsBeforeCodecChange =
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropDescEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isDescriptorRead($0, of: .movieRecordScreenSize)
             }.count
         server.setCameraMovieFileType(r3dNE)
 
@@ -516,8 +515,7 @@ struct PTPIPClientSessionTests {
                 == ["[FX] 6K · 25p", "[FX] 4K · 50p", "[DX] 4K · 100p"])
         #expect(
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropDescEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isDescriptorRead($0, of: .movieRecordScreenSize)
             }.count == screenSizeDescriptorReadsBeforeCodecChange + 1)
 
         let writeBaseline = server.receivedPropertyWrites().count
@@ -535,24 +533,20 @@ struct PTPIPClientSessionTests {
 
         let screenSizeDescriptorReadsBeforeNRAWWrite =
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropDescEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isDescriptorRead($0, of: .movieRecordScreenSize)
             }.count
         let screenSizeValueReadsBeforeNRAWWrite =
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropValueEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isValueRead($0, of: .movieRecordScreenSize)
             }.count
         try session.applyAndroidControl(.codec, label: "N-RAW")
         #expect(
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropDescEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isDescriptorRead($0, of: .movieRecordScreenSize)
             }.count == screenSizeDescriptorReadsBeforeNRAWWrite + 1)
         #expect(
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropValueEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isValueRead($0, of: .movieRecordScreenSize)
             }.count == screenSizeValueReadsBeforeNRAWWrite + 1)
         let nRAWReadback = session.refreshAndroidPropertySnapshot(
             .propertyChanged(PTPPropertyCode.batteryLevel.rawValue))
@@ -624,8 +618,7 @@ struct PTPIPClientSessionTests {
         #expect(bootstrap.controls.resolutionFrameRates == ["4K · 60p"])
         let screenSizeDescriptorReadsBeforeCodecChange =
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropDescEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isDescriptorRead($0, of: .movieRecordScreenSize)
             }.count
 
         // The event may be delayed, dropped, or reordered. The regular monitor poll must still
@@ -662,32 +655,23 @@ struct PTPIPClientSessionTests {
                 == ["[FX] 6K · 25p", "[DX] 4K · 100p"])
         #expect(
             server.receivedRequests().filter {
-                $0.operation == .getDevicePropDescEx
-                    && $0.parameters.first == PTPPropertyCode.movieRecordScreenSize.rawValue
+                isDescriptorRead($0, of: .movieRecordScreenSize)
             }.count == screenSizeDescriptorReadsBeforeCodecChange + 1)
         // Codec change must re-read MovFileType then rebuild MovScreenSize. Extra follow-on
-        // screen-size samples (poll-index cadence) may trail the triple; match the sequence, not
-        // a hard-coded "last N" that breaks when the live poll order gains properties.
+        // screen-size samples (poll-index cadence) may trail the triple; match the sequence
+        // by meaning (property + read kind, either code width), not a hard-coded request
+        // list that breaks when the live poll order gains properties.
         let afterBaseline = Array(server.receivedRequests().dropFirst(requestBaseline))
-        let expectedCodecThenScreenRebuild = [
-            FakeZRRequest(
-                operation: .getDevicePropValueEx,
-                parameters: [PTPPropertyCode.movieFileType.rawValue],
-                dataPhase: .dataIn),
-            FakeZRRequest(
-                operation: .getDevicePropDescEx,
-                parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
-                dataPhase: .dataIn),
-            FakeZRRequest(
-                operation: .getDevicePropValueEx,
-                parameters: [PTPPropertyCode.movieRecordScreenSize.rawValue],
-                dataPhase: .dataIn),
+        let expectedCodecThenScreenRebuild: [(FakeZRRequest) -> Bool] = [
+            { isValueRead($0, of: .movieFileType) },
+            { isDescriptorRead($0, of: .movieRecordScreenSize) },
+            { isValueRead($0, of: .movieRecordScreenSize) },
         ]
         let hasCodecThenScreenRebuild: Bool = {
-            guard afterBaseline.count >= expectedCodecThenScreenRebuild.count else { return false }
             let needle = expectedCodecThenScreenRebuild
+            guard afterBaseline.count >= needle.count else { return false }
             for start in 0...(afterBaseline.count - needle.count) {
-                if Array(afterBaseline[start..<(start + needle.count)]) == needle {
+                if zip(needle, afterBaseline[start...]).allSatisfy({ $0($1) }) {
                     return true
                 }
             }
@@ -1824,4 +1808,16 @@ private final class FocusResetCompletion: @unchecked Sendable {
         while result == nil, condition.wait(until: deadline) {}
         return result
     }
+}
+
+/// Width-agnostic request matchers: value/descriptor reads of a property, whichever op the
+/// code width routed them through.
+private func isValueRead(_ request: FakeZRRequest, of property: PTPPropertyCode) -> Bool {
+    (request.operation == .getDevicePropValueEx || request.operation == .getDevicePropValue)
+        && request.parameters.first == property.rawValue
+}
+
+private func isDescriptorRead(_ request: FakeZRRequest, of property: PTPPropertyCode) -> Bool {
+    (request.operation == .getDevicePropDescEx || request.operation == .getDevicePropDesc)
+        && request.parameters.first == property.rawValue
 }
