@@ -505,6 +505,20 @@ final class NativeCameraSession: @unchecked Sendable {
         try await transport.nextEvent()
     }
 
+    /// Polls the camera's Nikon event queue (`GetEventEx` 0x941C) and returns the events it held.
+    /// Nikon bodies deliver capture events (ObjectAdded, CaptureComplete) through THIS poll, not
+    /// the PTP-IP event socket — so a shutter fired ON THE BODY only surfaces here. Parameter1 = 0
+    /// clears the queue after the read so the same events aren't processed twice. Empty on any
+    /// non-OK answer (the op is capability-checked by the caller). [verify-on-HW]
+    func pollDeviceEvents() async -> [PTPEvent] {
+        guard
+            let result = try? await transact(
+                operationCode: .getEventEx, parameters: [0], dataPhase: .dataIn),
+            result.operationResponse.responseCode == .ok
+        else { return [] }
+        return PTPNikonEventList.parse(Array(result.data))
+    }
+
     func startLiveView() async throws {
         let start = try await transact(operationCode: .startLiveView)
         guard start.operationResponse.responseCode == .ok else {

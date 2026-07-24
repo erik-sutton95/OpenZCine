@@ -2306,6 +2306,12 @@ final class NativeAppModel {
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
+    /// Single-flight poll of the camera's Nikon event queue (`GetEventEx`) — the channel a
+    /// body-fired capture surfaces on.
+    @ObservationIgnored private var deviceEventPollTask: Task<Void, Never>?
+    /// Debounces the body-fired capture sync so a burst's many ObjectAdded events trigger one
+    /// instant playback, not one per frame.
+    @ObservationIgnored private var lastBodyCaptureSyncAt: Date?
     /// Single-flight drain of queued property writes while live view is down.
     @ObservationIgnored private var pendingWriteDrainTask: Task<Void, Never>?
     @ObservationIgnored private var measuredLiveViewFPS: Double = 0
@@ -3333,6 +3339,8 @@ final class NativeAppModel {
         linkHealthUpdateTask = nil
         propertyPollTask?.cancel()
         propertyPollTask = nil
+        deviceEventPollTask?.cancel()
+        deviceEventPollTask = nil
         pendingWriteDrainTask?.cancel()
         pendingWriteDrainTask = nil
         // Media traffic must not outlive the session: an in-flight clip stream or thumbnail sweep
@@ -3649,25 +3657,10 @@ final class NativeAppModel {
                 guard let self, self.cameraSession === session else { return }
                 do {
                     let event = try await session.nextEvent()
-                    if event.eventCode == .captureComplete {
-                        // A body-fired release finished writing (the app path schedules its
-                        // own review on completion, so only react when no app release is in
-                        // flight): sync the app — instant playback of the new shot and a
-                        // fresh shots-remaining readout. [verify-on-HW]
-                        if !self.isStillCapturing, !self.pendingStillCapture,
-                            StillCapturePolicy.prefersPhotographyChrome(
-                                selector: self.cameraPropertySnapshot.captureSelector)
-                        {
-                            // Pulse the app's shutter button so a shutter fired ON THE BODY
-                            // visibly registers in the app, then run instant playback.
-                            self.bodyShutterPulse &+= 1
-                            self.scheduleInstantReview(session: session)
-                            await self.readAndApplyCameraProperty(
-                                session: session, property: .exposureRemaining)
-                        }
-                        // The card object set changed (backup mode adds a second-card copy
-                        // that fires no event of its own) — the next media pass must re-list.
-                        self.mediaFetchCompletedTab = nil
+                    if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
+                        // Some bodies push these on the socket; the ZR delivers them via the
+                        // GetEventEx poll instead. Both route through the same debounced sync.
+                        self.handleBodyFiredCapture(session: session)
                     } else if event.eventCode == .movieRecordInterrupted {
                         // An interruption is authoritative even while an optimistic app record
                         // command is in its brief readback-suppression window.
@@ -3703,6 +3696,45 @@ final class NativeAppModel {
                     return
                 }
             }
+        }
+    }
+
+    /// Routes a device event from either channel (the GetEventEx poll or the PTP-IP socket).
+    /// Capture events sync the app to a body-fired shutter; record-lifecycle events update the
+    /// record state.
+    private func handlePolledDeviceEvent(_ event: PTPEvent, session: NativeCameraSession) {
+        switch event.eventCode {
+        case .objectAdded, .captureComplete:
+            handleBodyFiredCapture(session: session)
+        case .movieRecordStarted, .movieRecordComplete, .movieRecordInterrupted:
+            if let state = event.inferredRecordState {
+                applyCameraRecordState(isRecording: state == .recording)
+            }
+        case .unknown:
+            break
+        }
+    }
+
+    /// Syncs the app to a capture fired ON THE CAMERA BODY: pulses the shutter button, runs
+    /// instant playback, and refreshes shots-remaining. Debounced so a body burst (many
+    /// ObjectAdded events) triggers ONE review, not one per frame. A no-op while an app-initiated
+    /// release is in flight (that path runs its own review) or outside photography chrome.
+    private func handleBodyFiredCapture(session: NativeCameraSession) {
+        // The card object set changed — the next media pass must re-list (a backup twin fires
+        // no event of its own).
+        mediaFetchCompletedTab = nil
+        guard !isStillCapturing, !pendingStillCapture,
+            StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector)
+        else { return }
+        let now = Date()
+        if let last = lastBodyCaptureSyncAt, now.timeIntervalSince(last) < 0.8 { return }
+        lastBodyCaptureSyncAt = now
+        // Pulse the app's shutter button so a body-fired shutter visibly registers, then review.
+        bodyShutterPulse &+= 1
+        scheduleInstantReview(session: session)
+        Task { [weak self] in
+            await self?.readAndApplyCameraProperty(session: session, property: .exposureRemaining)
         }
     }
 
@@ -4109,6 +4141,24 @@ final class NativeAppModel {
         }
         if await performNextPendingCameraWrite(session: session) {
             return
+        }
+        // Nikon delivers capture events (a shutter fired ON THE BODY → ObjectAdded /
+        // CaptureComplete) through the GetEventEx poll, NOT the PTP-IP event socket the drain
+        // loop reads — so poll it on a brisk cadence in photography chrome and sync the app
+        // (instant playback + shutter-button pulse). Single-flight so it can't stack behind the
+        // transaction gate and jitter the feed.
+        if StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector),
+            frameCounter.isMultiple(of: 4), deviceEventPollTask == nil
+        {
+            deviceEventPollTask = Task { [weak self] in
+                defer { self?.deviceEventPollTask = nil }
+                guard let self, self.cameraSession === session else { return }
+                let events = await session.pollDeviceEvents()
+                for event in events {
+                    self.handlePolledDeviceEvent(event, session: session)
+                }
+            }
         }
         guard pollEveryCall || frameCounter.isMultiple(of: 8) else { return }
         if isRecording {

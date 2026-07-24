@@ -59,4 +59,45 @@ struct PTPEventTests {
         let event = try PTPEvent(from: packet)
         #expect(event.inferredRecordState == .recording)
     }
+
+    @Test func getEventExListParsesMultipleElements() {
+        // NumberOfElements=2; el1 = ObjectAdded(0x4002) with 1 param (a handle);
+        // el2 = CaptureComplete(0x400D) with 0 params.
+        var bytes: [UInt8] = []
+        func u16(_ v: UInt16) {
+            bytes.append(UInt8(v & 0xFF))
+            bytes.append(UInt8((v >> 8) & 0xFF))
+        }
+        func u32(_ v: UInt32) {
+            u16(UInt16(v & 0xFFFF))
+            u16(UInt16((v >> 16) & 0xFFFF))
+        }
+        u32(2)
+        u16(0x4002)
+        u16(1)
+        u32(0x0001_0042)
+        u16(0x400D)
+        u16(0)
+        let events = PTPNikonEventList.parse(bytes)
+        #expect(events.count == 2)
+        #expect(events[0].eventCode == .objectAdded)
+        #expect(events[0].parameters == [0x0001_0042])
+        #expect(events[1].eventCode == .captureComplete)
+        #expect(events[1].parameters.isEmpty)
+    }
+
+    @Test func getEventExEmptyListIsNoEvents() {
+        #expect(PTPNikonEventList.parse([0, 0, 0, 0]).isEmpty)
+        #expect(PTPNikonEventList.parse([]).isEmpty)
+    }
+
+    @Test func getEventExStopsAtTruncatedPayload() {
+        // Declares 3 elements but only one complete element of bytes follows.
+        var bytes: [UInt8] = [3, 0, 0, 0]
+        bytes += [0x02, 0x40, 0x00, 0x00]  // ObjectAdded, 0 params
+        let events = PTPNikonEventList.parse(bytes)
+        #expect(events.count == 1)
+        #expect(events[0].eventCode == .objectAdded)
+    }
+
 }
