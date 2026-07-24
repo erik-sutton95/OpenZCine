@@ -558,6 +558,9 @@ internal fun MediaBrowseScreen(
     // Deletion progress (completed, total) while a batch delete runs — drives the progress bar
     // and keeps the grid steady until the run finishes (the listing restarts once, at the end).
     var deletionProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // Shots the operator selected (smaller than the file total when RAW+JPEG pairs / masters /
+    // backups ride along) — kept so the progress bar can explain the inflated file count.
+    var deletionSelectedCount by remember { mutableStateOf(0) }
     var deleteConfirmTargets by remember { mutableStateOf<List<MediaClipRecord>?>(null) }
     var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
     var viewingPhoto by remember { mutableStateOf<MediaClipRecord?>(null) }
@@ -771,6 +774,7 @@ internal fun MediaBrowseScreen(
         val catalog = (state as? BrowseState.Loaded)?.clips.orEmpty()
         deleteConfirmTargets = null
         viewingPhoto = null
+        deletionSelectedCount = selection.size
         pendingDeletion = cameraDeletionTargets(catalog, selection, ::ownerCameraID)
     }
 
@@ -1737,16 +1741,25 @@ internal fun MediaBrowseScreen(
                         .glass(RoundedCornerShape(16.dp))
                         .padding(horizontal = 24.dp, vertical = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    val picks = deletionSelectedCount.coerceAtLeast(1)
                     Text(
-                        "Deleting $done of $total…",
+                        "Deleting $picks ${if (picks == 1) "item" else "items"}…",
                         style = chromeStyle(14f, FontWeight.SemiBold),
                         color = LiveDesign.text,
                     )
+                    // Explain the inflated file count: 8 picks can be 16 files once each
+                    // RAW+JPEG pair (and any backup copies) are counted.
+                    Text(
+                        if (total > picks) "$done of $total files · incl. RAW + copies"
+                        else "$done of $total",
+                        style = chromeStyle(11f, FontWeight.Normal),
+                        color = LiveDesign.muted,
+                    )
                     LinearProgressIndicator(
                         progress = { if (total > 0) done.toFloat() / total else 0f },
-                        modifier = Modifier.width(220.dp),
+                        modifier = Modifier.width(220.dp).padding(top = 6.dp),
                     )
                 }
             }

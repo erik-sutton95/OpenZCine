@@ -1749,14 +1749,28 @@ private struct MediaDeletionProgressOverlay: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.35).ignoresSafeArea()
-            VStack(spacing: 12) {
-                Text("Deleting \(progress.completed) of \(progress.total)…")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(LiveDesign.text)
+            VStack(spacing: 6) {
+                Text(
+                    "Deleting \(progress.selectedCount) \(progress.selectedCount == 1 ? "item" : "items")…"
+                )
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(LiveDesign.text)
+                if progress.hasCompanionFiles {
+                    // Make the inflated file count legible: 8 picks can be 16 files once each
+                    // RAW+JPEG pair (and any backup copies) are counted.
+                    Text("\(progress.completed) of \(progress.total) files · incl. RAW + copies")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(LiveDesign.muted)
+                } else {
+                    Text("\(progress.completed) of \(progress.total)")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(LiveDesign.muted)
+                }
                 ProgressView(value: progress.fraction)
                     .progressViewStyle(.linear)
                     .tint(LiveDesign.accent)
                     .frame(width: 220)
+                    .padding(.top, 6)
                     .animation(.easeInOut(duration: 0.2), value: progress.fraction)
             }
             .padding(.horizontal, 24)

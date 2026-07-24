@@ -6473,7 +6473,8 @@ final class NativeAppModel {
         // list per item made the grid jump/reflow on every delete. The store is purged as we go
         // (so a mid-run failure still frees the card), but the visible `mediaClips` list is left
         // untouched until the single `refreshMediaClips()` below rebuilds it from the store.
-        mediaDeletionProgress = MediaDeletionProgress(completed: 0, total: targets.count)
+        mediaDeletionProgress = MediaDeletionProgress(
+            completed: 0, total: targets.count, selectedCount: clips.count)
         defer { mediaDeletionProgress = nil }
         var deleted = 0
         for clip in targets {

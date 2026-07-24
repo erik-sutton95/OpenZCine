@@ -90,8 +90,13 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
 /// refresh until it finishes.
 struct MediaDeletionProgress: Equatable, Sendable {
     var completed: Int
+    /// Total files removed (a RAW+JPEG pair or a proxy+master counts as 2+).
     var total: Int
+    /// Shots the operator selected — smaller than `total` when pairs/masters/backups ride along.
+    var selectedCount: Int
     var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
+    /// True when companions (RAW, master, backup copies) inflate the file count above the picks.
+    var hasCompanionFiles: Bool { total > selectedCount }
 }
 
 /// Clips shown from the connected camera bucket vs the on-device `local` bucket.
