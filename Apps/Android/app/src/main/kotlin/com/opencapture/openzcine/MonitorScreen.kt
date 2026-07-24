@@ -2519,9 +2519,12 @@ internal fun MonitorScreen(
         if (focusResetVisible) {
             val bottomChromeInset =
                 with(density) { levelGaugeBottomChromeInset.toDp().value }
+            // Photography's letterboxed feed frame (not the zone map's full-bleed rect):
+            // its leading edge clears the vertical assist rail's lane by construction, so
+            // the affordance seats beside the rail like iOS instead of under it.
             val baseFrame =
                 focusResetButtonBaseFrame(
-                    feed = zones.feed,
+                    feed = effectiveFeed,
                     isPortrait = isPortrait,
                     bottomChromeInset = bottomChromeInset,
                 )
@@ -2529,7 +2532,7 @@ internal fun MonitorScreen(
                 focusResetButtonClearFrame(
                     base = baseFrame,
                     panelFrames = analysisPanelFrames.values,
-                    bounds = zones.feed,
+                    bounds = effectiveFeed,
                 )
             val resetDescription =
                 stringResource(
