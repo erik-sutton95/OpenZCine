@@ -68,6 +68,7 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.glass
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -109,6 +110,8 @@ internal fun MediaStillViewer(
     onDelete: () -> Unit = {},
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
     onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
+    /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
+    onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ) {
@@ -350,12 +353,13 @@ internal fun MediaStillViewer(
                 StarRatingRow(stars = stars) { target ->
                     val previous = ratingStars
                     ratingStars = target
+                    onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_ATTEMPTED)
                     viewerScope.launch {
-                        val confirmed =
+                        val written =
                             withContext(Dispatchers.IO) {
-                                val written =
+                                val result =
                                     SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
-                                if (written >= 0 && rawSibling != null) {
+                                if (result >= 0 && rawSibling != null) {
                                     // iOS parity: a pair writes both sides, tolerating
                                     // the RAW side's refusal; the JPEG handle stays the
                                     // confirming identity. [verify-on-HW]
@@ -364,11 +368,28 @@ internal fun MediaStillViewer(
                                         target,
                                     )
                                 }
-                                written
+                                result
                             }
-                        ratingStars = if (confirmed >= 0) confirmed else previous
-                        // Mirror the confirmed star onto the JPEG-identity row the grid renders.
-                        if (confirmed >= 0) onRatingMirrored(clip, confirmed)
+                        when (val outcome = ratingWriteResult(written)) {
+                            is RatingWriteResult.Confirmed -> {
+                                ratingStars = outcome.stars
+                                shareMessage = null
+                                // Mirror ONLY a confirmed write onto the JPEG-identity row.
+                                onRatingMirrored(clip, outcome.stars)
+                                onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_CONFIRMED)
+                            }
+                            is RatingWriteResult.Refused -> {
+                                // Never a silent rollback — say why, with the body's response code.
+                                ratingStars = previous
+                                shareMessage = ratingRefusalMessage(outcome.code)
+                                onRatingDiagnostic(
+                                    if (outcome.code == 0x2013) {
+                                        AndroidDiagnosticEvent.RATING_WRITE_REFUSED_ACCESS_DENIED
+                                    } else {
+                                        AndroidDiagnosticEvent.RATING_WRITE_REFUSED
+                                    })
+                            }
+                        }
                     }
                 }
             }

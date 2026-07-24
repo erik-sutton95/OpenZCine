@@ -10,6 +10,26 @@ import kotlin.test.assertTrue
 /** JVM coverage for the camera-card deletion policy and its local purge. */
 class MediaDeletionTest {
     @Test
+    fun `rating write result decodes confirmed stars, coded refusals, and no-code failures`() {
+        assertEquals(RatingWriteResult.Confirmed(3), ratingWriteResult(3))
+        assertEquals(RatingWriteResult.Confirmed(0), ratingWriteResult(0))
+        // -1 is a failure with no reported code; a smaller negative is a negated wire code.
+        assertEquals(RatingWriteResult.Refused(0), ratingWriteResult(-1))
+        assertEquals(RatingWriteResult.Refused(0x2013), ratingWriteResult(-0x2013))
+        assertEquals(RatingWriteResult.Refused(0x2005), ratingWriteResult(-0x2005))
+    }
+
+    @Test
+    fun `rating refusal message carries the response code so the report self-diagnoses`() {
+        val accessDenied = ratingRefusalMessage(0x2013)
+        assertTrue(accessDenied.contains("Access Denied"))
+        assertTrue(accessDenied.contains("0x2013"))
+        assertTrue(ratingRefusalMessage(0x2005).contains("0x2005"))
+        // No code reported → a distinct, code-free line (not a bogus 0x0000).
+        assertTrue(ratingRefusalMessage(0).contains("didn't respond"))
+    }
+
+    @Test
     fun `raw sibling pairs the same stem on the same card only`() {
         val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
         val raw = still(handle = 2, filename = "DSC_0001.NEF")

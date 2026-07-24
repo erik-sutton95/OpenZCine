@@ -113,6 +113,7 @@ import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
@@ -466,6 +467,8 @@ internal fun MediaBrowseScreen(
     selectedLut: FeedLutSelection,
     autoPlayFirstProxy: Boolean = false,
     galleryFailureInjection: MediaGalleryFailureInjection = MediaGalleryFailureInjection.NONE,
+    /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
+    onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1565,6 +1568,7 @@ internal fun MediaBrowseScreen(
                 mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                 onToggleFavorite = ::toggleFavorite,
                 onRatingMirrored = ::mirrorRating,
+                onRatingDiagnostic = onRatingDiagnostic,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
                         ownerCameraID(resolvedClip),
@@ -1589,6 +1593,7 @@ internal fun MediaBrowseScreen(
                     librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
                 onDelete = { requestDeletion(listOf(clip)) },
                 onRatingMirrored = ::mirrorRating,
+                onRatingDiagnostic = onRatingDiagnostic,
                 onResolvedObjectSize = { resolvedClip, resolvedSize ->
                     libraryIndex.rememberResolvedObjectSize(
                         ownerCameraID(resolvedClip),

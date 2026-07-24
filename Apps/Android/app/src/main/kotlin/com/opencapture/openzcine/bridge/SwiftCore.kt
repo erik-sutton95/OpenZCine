@@ -924,7 +924,10 @@ object SwiftCore {
 
     /**
      * Writes a 0–5 star rating and returns the camera-confirmed star count
-     * after readback, or -1 on failure. Blocking — call from IO.
+     * after readback (`>= 0`); `-1` when the write can't be attempted or fails
+     * without a response; or the NEGATED raw PTP response code (e.g. `-0x2013`
+     * for a state-based Access Denied) when the body refuses, so the caller can
+     * name the refusal. See `ratingWriteResult`. Blocking — call from IO.
      */
     external fun sessionSetObjectRating(handle: Int, stars: Int): Int
 

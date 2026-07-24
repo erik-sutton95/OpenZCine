@@ -128,6 +128,7 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.bridge.ZoneFrame
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
@@ -211,6 +212,8 @@ internal fun MediaPlaybackScreen(
     onToggleFavorite: (MediaClipRecord) -> Unit,
     /** Mirrors a camera star (seed-read or write) into the local favorite index. */
     onRatingMirrored: (MediaClipRecord, Int) -> Unit = { _, _ -> },
+    /** Records a closed rating-write breadcrumb (attempted / confirmed / refused). */
+    onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit = { _, _ -> },
     onClose: () -> Unit,
 ): Unit {
@@ -241,6 +244,7 @@ internal fun MediaPlaybackScreen(
             mediaDeliveryCoordinator = mediaDeliveryCoordinator,
             onToggleFavorite = { onToggleFavorite(activeClip) },
             onRatingMirrored = onRatingMirrored,
+            onRatingDiagnostic = onRatingDiagnostic,
             onResolvedObjectSize = onResolvedObjectSize,
             onNavigate = { target -> activeClip = target },
             onClose = onClose,
@@ -267,6 +271,7 @@ private fun PlaybackClipSession(
     mediaDeliveryCoordinator: MediaDeliveryCoordinator? = null,
     onToggleFavorite: () -> Unit,
     onRatingMirrored: (MediaClipRecord, Int) -> Unit,
+    onRatingDiagnostic: (AndroidDiagnosticEvent) -> Unit,
     onResolvedObjectSize: (MediaClipRecord, Long) -> Unit,
     onNavigate: (MediaClipRecord) -> Unit,
     onClose: () -> Unit,
@@ -325,6 +330,9 @@ private fun PlaybackClipSession(
     // Seeded by read, confirmed by the entry point's built-in readback: the
     // camera stays source of truth for every write.
     var ratingStars by remember(clip.handle) { mutableStateOf<Int?>(null) }
+    // Set when the body refuses a rating write — surfaced with its response code above the star
+    // row, never a silent rollback; auto-cleared so it doesn't linger over playback.
+    var ratingMessage by remember(clip.handle) { mutableStateOf<String?>(null) }
     val ratingScope = rememberCoroutineScope()
     LaunchedEffect(clip.handle, cameraTransferAvailable) {
         if (!cameraTransferAvailable || !SwiftCore.isAvailable) return@LaunchedEffect
@@ -336,16 +344,39 @@ private fun PlaybackClipSession(
             onRatingMirrored(clip, read)
         }
     }
+    LaunchedEffect(ratingMessage) {
+        if (ratingMessage != null) {
+            delay(4000)
+            ratingMessage = null
+        }
+    }
     fun selectRating(target: Int) {
         val previous = ratingStars
         ratingStars = target
+        onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_ATTEMPTED)
         ratingScope.launch {
-            val confirmed =
+            val written =
                 withContext(Dispatchers.IO) {
                     SwiftCore.sessionSetObjectRating(clip.handle.toInt(), target)
                 }
-            ratingStars = if (confirmed >= 0) confirmed else previous
-            if (confirmed >= 0) onRatingMirrored(clip, confirmed)
+            when (val outcome = ratingWriteResult(written)) {
+                is RatingWriteResult.Confirmed -> {
+                    ratingStars = outcome.stars
+                    ratingMessage = null
+                    onRatingMirrored(clip, outcome.stars)  // mirror only a confirmed write
+                    onRatingDiagnostic(AndroidDiagnosticEvent.RATING_WRITE_CONFIRMED)
+                }
+                is RatingWriteResult.Refused -> {
+                    ratingStars = previous
+                    ratingMessage = ratingRefusalMessage(outcome.code)
+                    onRatingDiagnostic(
+                        if (outcome.code == 0x2013) {
+                            AndroidDiagnosticEvent.RATING_WRITE_REFUSED_ACCESS_DENIED
+                        } else {
+                            AndroidDiagnosticEvent.RATING_WRITE_REFUSED
+                        })
+                }
+            }
         }
     }
     val deliveryLut = sharedAssistState.selectedLut
@@ -549,6 +580,7 @@ private fun PlaybackClipSession(
                     deliveryInProgress = deliveryInProgress,
                     onShare = { deliveryChooserPresented = true },
                     ratingStars = ratingStars,
+                    ratingMessage = ratingMessage,
                     onSelectRating = ::selectRating,
                 )
             MediaTransferPreparation.Cancelled -> PlaybackLoading("Closing camera media…")
@@ -699,6 +731,8 @@ private fun ProgressivePlayer(
     onShare: () -> Unit = {},
     /** Camera-read clip star rating; null hides the row (offline/unreadable). */
     ratingStars: Int? = null,
+    /** Transient rating-write refusal line (with the body's response code); null hides it. */
+    ratingMessage: String? = null,
     onSelectRating: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -1344,6 +1378,17 @@ private fun ProgressivePlayer(
             ) {
                 // Clip star rating on its own capsule above the transport (iOS
                 // player row) — written to the card, camera source of truth.
+                if (ratingMessage != null) {
+                    Text(
+                        ratingMessage,
+                        style = chromeStyle(12f, FontWeight.Medium),
+                        color = LiveDesign.text,
+                        modifier =
+                            Modifier.padding(bottom = 6.dp, start = 16.dp, end = 16.dp)
+                                .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
                 if (ratingStars != null) {
                     StarRatingRow(
                         stars = ratingStars,

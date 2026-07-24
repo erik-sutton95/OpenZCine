@@ -411,6 +411,7 @@ class MainActivity : ComponentActivity() {
                         frameioController = frameioController,
                         mediaDeliveryCoordinator = mediaDeliveryCoordinator,
                         selectedLut = offlineAssist.selectedLut,
+                        onRatingDiagnostic = diagnostics::record,
                         onClose = { offlineMediaBuckets = null },
                     )
                 } else if (active == null) {
@@ -756,6 +757,7 @@ class MainActivity : ComponentActivity() {
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         galleryFailureInjection =
                                             DemoHarness.galleryFailureInjection(intent),
+                                        onRatingDiagnostic = diagnostics::record,
                                         onClose = { overlay = MonitorOverlay.NONE },
                                     )
                             }

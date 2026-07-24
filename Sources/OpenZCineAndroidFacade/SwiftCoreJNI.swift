@@ -2046,7 +2046,11 @@
 
     /// `SwiftCore.sessionSetObjectRating(handle, stars): Int` — writes a 0–5
     /// star rating and confirms with a readback (the body rounds off-step
-    /// values down); returns the confirmed star count or -1 on failure.
+    /// values down). Returns the confirmed star count (0–5); `-1` when the
+    /// write can't be attempted (no session / bad input) or a non-response
+    /// failure; or the NEGATED raw PTP response code (e.g. `-0x2013` for a
+    /// state-based Access Denied) when the body refuses the write, so the
+    /// caller can name the refusal instead of rolling back silently.
     /// Blocking; Kotlin calls it from `Dispatchers.IO`. [verify-on-HW]
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionSetObjectRating")
     public func swiftCoreSessionSetObjectRating(
@@ -2056,12 +2060,19 @@
             let session = ActiveSessionSlot.shared.current()
         else { return -1 }
         let objectHandle = UInt32(bitPattern: handle)
-        guard
-            (try? session.setObjectRating(
+        do {
+            try session.setObjectRating(
                 handle: objectHandle,
-                value: StillCapturePolicy.ratingValue(forStars: Int(stars)))) != nil,
-            let confirmed = try? session.objectRating(handle: objectHandle)
-        else { return -1 }
+                value: StillCapturePolicy.ratingValue(forStars: Int(stars)))
+        } catch PTPIPClientSessionError.operationRejected(_, let response) {
+            // A refusal carries the wire code — negate it so the sign distinguishes it from a
+            // confirmed 0–5 star count. The bridge already maps every negative to `null`.
+            return -jint(response.rawValue)
+        } catch {
+            return -1
+        }
+        // Write accepted — confirm by readback, falling back to the requested count.
+        guard let confirmed = try? session.objectRating(handle: objectHandle) else { return stars }
         return jint(StillCapturePolicy.stars(fromRatingValue: confirmed))
     }
 

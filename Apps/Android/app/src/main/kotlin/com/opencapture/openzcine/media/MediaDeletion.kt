@@ -152,6 +152,39 @@ internal fun StarRatingRow(
 }
 
 /**
+ * The outcome of `SwiftCore.sessionSetObjectRating`, whose packed `Int` return encodes three
+ * cases: a confirmed 0–5 star count, a state-based refusal carrying the body's wire code, or a
+ * generic failure with no code. The camera stays source of truth — a refusal is surfaced with
+ * its code, never a silent rollback, and never mirrored into the local favorite index.
+ */
+internal sealed interface RatingWriteResult {
+    data class Confirmed(val stars: Int) : RatingWriteResult
+
+    /** [code] is the raw PTP response (e.g. 0x2013 Access Denied); 0 when none was reported. */
+    data class Refused(val code: Int) : RatingWriteResult
+}
+
+/** Decodes the packed return: `>= 0` confirmed stars; `< -1` a negated wire code; `-1` no code. */
+internal fun ratingWriteResult(returnValue: Int): RatingWriteResult =
+    if (returnValue >= 0) {
+        RatingWriteResult.Confirmed(returnValue)
+    } else {
+        RatingWriteResult.Refused(if (returnValue < -1) -returnValue else 0)
+    }
+
+/** Operator-facing refusal line carrying the body's response code (the diagnostic discriminator). */
+internal fun ratingRefusalMessage(code: Int): String =
+    when {
+        code == 0 -> "Rating not saved — the camera didn't respond."
+        code == 0x2013 ->
+            "Rating not saved — camera refused (Access Denied ${ratingCodeHex(code)}). " +
+                "It may not accept ratings in this mode."
+        else -> "Rating not saved — camera refused (${ratingCodeHex(code)})."
+    }
+
+private fun ratingCodeHex(code: Int): String = "0x%04X".format(code)
+
+/**
  * Destructive camera-card deletion confirmation on the media glass style —
  * matching iOS's confirmation dialog rather than a Material alert.
  */
