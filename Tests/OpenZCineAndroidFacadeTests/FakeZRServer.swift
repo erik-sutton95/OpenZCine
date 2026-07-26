@@ -177,6 +177,14 @@ final class FakeZRServer: @unchecked Sendable {
         /// Optional codec-specific `MovScreenSize` descriptor domains. When configured, a codec
         /// write switches the current screen size to the first value in that codec's domain.
         var screenSizeModesByFileType: [UInt32: [UInt64]] = [:]
+        /// The `MovFileType` enum this body advertises. Overridable so a test can stand up a body
+        /// that offers BOTH H.265 bit depths, the Z6III case behind #276.
+        var movieFileTypeEnum: [UInt32] = [0x0031_0A03, 0x0001_0A01]
+        /// The `StillCaptureMode` enum this body advertises, in the body's own release-mode order.
+        var stillCaptureModeEnum: [UInt16] = [0x0001, 0x8010, 0x0002, 0x8019]
+        /// The `ExposureProgramMode` enum this body advertises. The default has NO user banks —
+        /// a Zf. A body with banks lists them here.
+        var exposureProgramEnum: [UInt16] = [0x8010, 0x0002, 0x0004, 0x0003, 0x0001]
     }
 
     let port: UInt16
@@ -1131,10 +1139,17 @@ final class FakeZRServer: @unchecked Sendable {
             return enumDescriptor(
                 property: property,
                 valueByteCount: 4,
-                values: [
-                    ByteCoding.uint32LE(0x0031_0A03),
-                    ByteCoding.uint32LE(0x0001_0A01),
-                ])
+                values: options.movieFileTypeEnum.map(ByteCoding.uint32LE))
+        case .stillCaptureMode:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: options.stillCaptureModeEnum.map(ByteCoding.uint16LE))
+        case .exposureProgramMode:
+            return enumDescriptor(
+                property: property,
+                valueByteCount: 2,
+                values: options.exposureProgramEnum.map(ByteCoding.uint16LE))
         case .movieFNumber:
             return enumDescriptor(
                 property: property,

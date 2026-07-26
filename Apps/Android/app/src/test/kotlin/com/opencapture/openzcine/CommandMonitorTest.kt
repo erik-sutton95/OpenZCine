@@ -151,7 +151,10 @@ class CommandMonitorTest {
 
         val mode = assertNotNull(presentation.tiles.first { it.kind == CommandTileKind.MODE }.request)
         assertEquals(CameraControl.EXPOSURE_MODE, mode.control)
-        assertContains(mode.options, "U3")
+        // This snapshot advertises no `ExposureProgramMode` enum, so the drum gets the
+        // conservative ladder — and a body that never said it has user banks is never offered
+        // them (#274; the reported Zf).
+        assertEquals(listOf("Auto", "P", "A", "S", "M"), mode.options)
 
         val codec = presentation.tiles.first { it.kind == CommandTileKind.CODEC }
         assertEquals("R3D NE", codec.value)

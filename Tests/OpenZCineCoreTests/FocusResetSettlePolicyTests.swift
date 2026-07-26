@@ -97,7 +97,7 @@ import Testing
         FocusResetReleasePolicy.shouldDemoteSubjectArea(
             focusArea: "Single", liveViewFocus: tracking))
     #expect(
-        FocusResetReleasePolicy.shouldDemoteSubjectArea(focusArea: "Subject", liveViewFocus: nil))
+        FocusResetReleasePolicy.shouldDemoteSubjectArea(focusArea: "Subject tracking", liveViewFocus: nil))
     #expect(
         !FocusResetReleasePolicy.shouldDemoteSubjectArea(
             focusArea: "Single", liveViewFocus: idle))
@@ -144,7 +144,7 @@ import Testing
         FocusResetRestorePolicy.shouldRestoreFocusArea(
             demoted: true,
             currentFocusArea: "Single",
-            savedFocusArea: "Subject",
+            savedFocusArea: "Subject tracking",
             focusMode: "AF-C"
         ))
     #expect(
@@ -161,7 +161,7 @@ import Testing
         !FocusResetRestorePolicy.shouldRestoreFocusArea(
             demoted: true,
             currentFocusArea: "Wide-S",
-            savedFocusArea: "Subject",
+            savedFocusArea: "Subject tracking",
             focusMode: "AF-C"
         ))
     #expect(
@@ -178,7 +178,7 @@ import Testing
         !FocusResetRestorePolicy.shouldRestoreFocusArea(
             demoted: true,
             currentFocusArea: "Single",
-            savedFocusArea: "Subject",
+            savedFocusArea: "Subject tracking",
             focusMode: "MF"
         ))
     #expect(
@@ -194,8 +194,8 @@ import Testing
     #expect(
         !FocusResetRestorePolicy.shouldRestoreFocusArea(
             demoted: false,
-            currentFocusArea: "Subject",
-            savedFocusArea: "Subject",
+            currentFocusArea: "Subject tracking",
+            savedFocusArea: "Subject tracking",
             focusMode: "AF-C"
         ))
     #expect(
