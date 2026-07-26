@@ -28,6 +28,7 @@
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
 		331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */; };
 		7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */; };
+		7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */; };
 		354E32F45664AA90999EF23C /* MonitorLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E943CC20E05A8C345F7D2A9 /* MonitorLUT.swift */; };
 		3B2081943B1D2A36C4DA228C /* ScopeSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A11 /* ScopeSampler.swift */; };
 		3B2081943B1D2A36C4DA228D /* AudioLevelMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D329D509E000B93B59AE9A12 /* AudioLevelMeter.swift */; };
@@ -198,6 +199,7 @@
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTimecodeTests.swift; sourceTree = "<group>"; };
+		7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPopupPlacementTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		381B085F758DD57850E6CFAE /* FrameioModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModels.swift; path = ../Sources/OpenZCineCore/Frameio/FrameioModels.swift; sourceTree = SOURCE_ROOT; };
 		3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPopup.swift; sourceTree = "<group>"; };
@@ -344,6 +346,7 @@
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
 				331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */,
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
+				7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */,
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
 				TEST00000000000000000003 /* NativeCameraEstablishRetryTests.swift */,
 			);
@@ -663,6 +666,7 @@
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
 				331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */,
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,
+				7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */,
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
 				TEST00000000000000000004 /* NativeCameraEstablishRetryTests.swift in Sources */,
 			);
