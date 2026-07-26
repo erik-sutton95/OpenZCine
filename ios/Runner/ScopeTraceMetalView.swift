@@ -154,6 +154,12 @@ struct ScopeTraceMetalView: UIViewRepresentable {
 /// The overlay can therefore be one bundle behind for a few milliseconds. At the ~10 Hz the scopes
 /// publish, against a feed that now runs at 60, that is not observable — and the alternative was a
 /// feed that ran at 5.
+/// `@MainActor` because `MTKViewDelegate`'s methods are `NS_SWIFT_UI_ACTOR` and every stored
+/// property here is touched only from them or from `updateUIView`. It is also what makes the class
+/// `Sendable`, so the build hop below may capture `self` at all — without it, Swift 6 rejects the
+/// capture as sending a non-`Sendable` value across a concurrency boundary. The work that must NOT
+/// be main-actor bound is marked `nonisolated`.
+@MainActor
 final class ScopeTraceRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice?
     private let queue: MTLCommandQueue?
@@ -213,9 +219,13 @@ final class ScopeTraceRenderer: NSObject, MTKViewDelegate {
         buildQueue.async { [weak self, weak view] in
             let built = Self.build(inputs)
             DispatchQueue.main.async {
-                guard let self, self.buildGeneration == generation else { return }
-                self.vertices = built
-                view?.setNeedsDisplay()
+                // `DispatchQueue.main` IS the main actor; `assumeIsolated` states that rather than
+                // paying for a `Task` hop, which would also lose the serial queue's ordering.
+                MainActor.assumeIsolated {
+                    guard let self, self.buildGeneration == generation else { return }
+                    self.vertices = built
+                    view?.setNeedsDisplay()
+                }
             }
         }
     }
@@ -223,7 +233,7 @@ final class ScopeTraceRenderer: NSObject, MTKViewDelegate {
     /// Pure: inputs in, dot list out. Returns a fresh array rather than filling one in place —
     /// appending into a stored property through `inout` is a read-modify-write on a multi-megabyte
     /// buffer, which can copy the whole thing on every call.
-    private static func build(_ inputs: BuildInputs) -> [ScopeTraceMetal.Vertex] {
+    nonisolated private static func build(_ inputs: BuildInputs) -> [ScopeTraceMetal.Vertex] {
         let bounds = inputs.bounds
         guard bounds.width > 1, bounds.height > 1 else { return [] }
         var out: [ScopeTraceMetal.Vertex] = []
@@ -286,7 +296,7 @@ final class ScopeTraceRenderer: NSObject, MTKViewDelegate {
 
     /// One pipeline for every panel — compiled once from source (no `.metal` file to register).
     /// Additive one/one blending reproduces `.plusLighter` over the transparent layer.
-    static let sharedPipeline: MTLRenderPipelineState? = {
+    nonisolated static let sharedPipeline: MTLRenderPipelineState? = {
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
         let source = """
             #include <metal_stdlib>
@@ -371,6 +381,8 @@ struct VectorscopeMetalView: UIViewRepresentable {
 }
 
 /// MTKView delegate for the vectorscope: composites prebuilt density textures on the GPU.
+/// Same isolation as `ScopeTraceRenderer`, and for the same reasons.
+@MainActor
 final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice?
     private let queue: MTLCommandQueue?
@@ -393,7 +405,7 @@ final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
     private var blurredMain: MTLTexture?
     private var blurredTrail: MTLTexture?
 
-    private static let binCount = 128
+    nonisolated private static let binCount = 128
 
     override init() {
         device = MTLCreateSystemDefaultDevice()
@@ -430,14 +442,17 @@ final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
                 device: device, points: next.trailPoints, zoom: next.zoom,
                 brightness: next.brightness)
             DispatchQueue.main.async {
-                guard let self, self.buildGeneration == generation else { return }
-                self.mainTexture = main
-                self.trailTexture = trail
-                // The blurs are GPU passes encoded per draw; drop them so they re-encode against
-                // the new densities.
-                self.blurredMain = nil
-                self.blurredTrail = nil
-                view?.setNeedsDisplay()
+                // See `ScopeTraceRenderer.scheduleBuild` for why `assumeIsolated` and not a `Task`.
+                MainActor.assumeIsolated {
+                    guard let self, self.buildGeneration == generation else { return }
+                    self.mainTexture = main
+                    self.trailTexture = trail
+                    // The blurs are GPU passes encoded per draw; drop them so they re-encode
+                    // against the new densities.
+                    self.blurredMain = nil
+                    self.blurredTrail = nil
+                    view?.setNeedsDisplay()
+                }
             }
         }
     }
@@ -494,7 +509,7 @@ final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
 
     /// CPU bins + the tested density rasterizer → a premultiplied RGBA texture. Returns nil for an
     /// empty trace, matching the Canvas plot drawing nothing.
-    private static func densityTexture(
+    nonisolated private static func densityTexture(
         device: MTLDevice, points: [ScopePoint],
         zoom: AssistConfiguration.Scopes.VectorscopeZoom, brightness: Int
     ) -> MTLTexture? {
@@ -519,7 +534,7 @@ final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
         return texture
     }
 
-    private static func blurred(
+    nonisolated private static func blurred(
         _ texture: MTLTexture, device: MTLDevice, command: MTLCommandBuffer
     ) -> MTLTexture? {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -536,7 +551,7 @@ final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
     }
 
     /// Textured-quad pipeline with the same additive one/one blend as the trace rasterizer.
-    static let quadPipeline: MTLRenderPipelineState? = {
+    nonisolated static let quadPipeline: MTLRenderPipelineState? = {
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
         let source = """
             #include <metal_stdlib>

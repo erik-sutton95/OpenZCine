@@ -1921,7 +1921,9 @@ struct WaveformScopePlot: View, Equatable {
     var mapping = ExposureSignalMapping(curve: .redLog3G10)
 
     /// Opacity multiplier for the trail pass — low enough to read as decay, high enough to bridge.
-    static let trailDecay = 0.35
+    /// `nonisolated` because `ScopeTraceRenderer` reads it while building geometry off the main
+    /// thread; a `View`'s statics are main-actor by default, and this is a plain constant.
+    nonisolated static let trailDecay = 0.35
 
     nonisolated static func == (lhs: WaveformScopePlot, rhs: WaveformScopePlot) -> Bool {
         lhs.samples == rhs.samples && lhs.trail == rhs.trail && lhs.mode == rhs.mode
