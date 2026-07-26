@@ -785,6 +785,8 @@ internal fun QualityPickerPanelBody(
     nefCompression: String?,
     onSelect: (CommandControlRequest, String) -> Unit,
     onDismiss: () -> Unit,
+    /** The body's advertised NEF compressions; the ladder is only a fallback (#274). */
+    nefOptions: List<String> = StillPickerPolicy.NEF_OPTIONS,
 ) {
     val qualityRequest = picker.modes.first().request
     // Seed once from the camera (never re-read per frame — the wheels would
@@ -881,7 +883,7 @@ internal fun QualityPickerPanelBody(
                         .alpha(if (config.rawEnabled) 1f else 0.35f),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    StillPickerPolicy.NEF_OPTIONS.forEach { option ->
+                    nefOptions.forEach { option ->
                         QualityOptionChip(
                             label = option,
                             active = nefCompression == option,
@@ -892,7 +894,7 @@ internal fun QualityPickerPanelBody(
                                     title = "NEF",
                                     control = CameraControl.STILL_RAW_COMPRESSION,
                                     currentValue = nefCompression ?: option,
-                                    options = StillPickerPolicy.NEF_OPTIONS,
+                                    options = nefOptions,
                                 ),
                                 option,
                             )

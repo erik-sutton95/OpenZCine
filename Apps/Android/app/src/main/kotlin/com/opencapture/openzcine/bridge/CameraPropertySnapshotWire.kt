@@ -152,6 +152,7 @@ internal object CameraPropertySnapshotWire {
                     driveModes = value.options("options.drive"),
                     meteringModes = value.options("options.metering"),
                     pictureControls = value.options("options.pictureControl"),
+                    rawCompressions = value.options("options.rawCompression"),
                 ),
         )
     }

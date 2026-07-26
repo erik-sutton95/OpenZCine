@@ -1583,6 +1583,9 @@ struct QualityPickerPanel: View {
 
     private static let rawOptions = ["On", "Off"]
     private static let tierOptions = StillQualityConfiguration.Tier.allCases.map(\.rawValue)
+    /// Conservative fallback only — the body's own `RawCompressionType` enum wins below.
+    /// First-generation Z bodies use the Compressed/Uncompressed pair and reject this trio, so
+    /// offering it unconditionally is the same "options the body does not have" defect (#274).
     private static let nefOptions = [
         "High efficiency", "High efficiency★", "Lossless compression",
     ]
@@ -1658,8 +1661,9 @@ struct QualityPickerPanel: View {
     private var nefRows: some View {
         let enabled = config.rawEnabled
         let current = model.cameraPropertySnapshot.rawCompression
+        let options = model.cameraControlOptions[.rawCompressionType] ?? Self.nefOptions
         return VStack(spacing: 6) {
-            ForEach(Self.nefOptions, id: \.self) { option in
+            ForEach(options, id: \.self) { option in
                 optionChip(option, active: current == option, enabled: enabled) {
                     model.applyStillRawCompression(option)
                 }

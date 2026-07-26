@@ -276,6 +276,7 @@ private struct AndroidRawControlCatalog: Sendable {
     var driveModes: [AndroidRawControlMode<UInt16>] = []
     var meteringModes: [AndroidRawControlMode<UInt16>] = []
     var pictureControls: [AndroidRawControlMode<UInt16>] = []
+    var rawCompressions: [AndroidRawControlMode<UInt8>] = []
 
     func capabilities(
         properties: PTPCameraPropertySnapshot,
@@ -432,7 +433,8 @@ private struct AndroidRawControlCatalog: Sendable {
             userModePrograms: userModePrograms.map(\.label),
             driveModes: driveModes.map(\.label),
             meteringModes: meteringModes.map(\.label),
-            pictureControls: pictureControls.map(\.label)
+            pictureControls: pictureControls.map(\.label),
+            rawCompressions: rawCompressions.map(\.label)
         )
     }
 
@@ -1573,6 +1575,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             refreshAndroidDriveDescriptor,
             refreshAndroidMeteringDescriptor,
             refreshAndroidPictureControlDescriptor,
+            refreshAndroidRawCompressionDescriptor,
         ]
         var result: AndroidCameraPropertyRefreshResult = .accepted
         for refresh in refreshers {
@@ -1854,6 +1857,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
         let raw = try descriptorEnumValues(.activePicCtrlItem, valueByteCount: 2)
         androidControlCatalog.pictureControls = uniqueUInt16Modes(raw) { value in
             let label = PTPCameraPropertyDecoders.pictureControl(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    /// The NEF (RAW) recording menu. First-generation Z bodies use the Compressed/Uncompressed
+    /// pair and reject the modern trio, so the chips must come from the body, not a union.
+    private func refreshAndroidRawCompressionDescriptor() throws {
+        androidControlCatalog.rawCompressions = []
+        let raw = try descriptorEnumValues(.rawCompressionType, valueByteCount: 1)
+        androidControlCatalog.rawCompressions = uniqueUInt8Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.rawCompression(value)
             return label.hasPrefix("0x") ? nil : label
         }
     }

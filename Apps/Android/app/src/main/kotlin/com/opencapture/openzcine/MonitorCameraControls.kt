@@ -1370,6 +1370,8 @@ internal fun MonitorControlPickerPanel(
     onAdjustTimerShots: ((Int) -> Unit)? = null,
     /** Live NEF (RAW) compression readout for the QUALITY dual-drum panel. */
     nefCompression: String? = null,
+    /** The body's advertised NEF compressions; empty keeps the conservative ladder (#274). */
+    nefOptions: List<String> = emptyList(),
     /** Current persisted focus-scrub preference, shown as a toggle row in the FOCUS popup. */
     mfScrubEnabled: Boolean = true,
     /** Flips the focus-scrub preference; null omits the FOCUS popup's toggle row. */
@@ -1433,6 +1435,8 @@ internal fun MonitorControlPickerPanel(
                         nefCompression = nefCompression,
                         onSelect = onSelect,
                         onDismiss = onDismiss,
+                        nefOptions =
+                            nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
                     )
                 } else {
                     PickerPanelBody(

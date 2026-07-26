@@ -2791,6 +2791,9 @@ internal fun MonitorScreen(
                                     null
                                 },
                             nefCompression = cameraProperties.rawCompression,
+                            nefOptions =
+                                cameraProperties.controlCapabilities.options(
+                                    CameraControl.STILL_RAW_COMPRESSION),
                             mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
                             onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
                         )

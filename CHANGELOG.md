@@ -55,6 +55,18 @@ All notable changes to this project are documented here. The format is based on
   reconnect runs, then gets **Retry connection** / **Operator menu**. The retry rule lives in the
   shared core, so both shells retry, back off, and give up identically. Both platforms.
 
+- **The H.265 picker no longer collapses 8-bit and 10-bit.** A body advertising both wore one
+  "H.265" row backed by whichever value came first, so leaving H.265 and returning to it silently
+  landed on 8-bit. Each advertised variant is now its own row, labelled with its bit depth, and the
+  exact value the operator picked is what gets written and read back.
+- **Pickers mirror the connected body instead of a fixed list of Nikon Z values.** Exposure mode,
+  drive, focus mode/area/subject, metering, flash, image quality, NEF compression and picture
+  control now come from the camera's own descriptors — its values, in its order. A body without
+  user modes is no longer offered U1/U2/U3, drive reads in the body's release order (Single, CL,
+  CH, CH+), and reconnecting or swapping cameras rebuilds every list from the new body.
+- **Focus-area and subject-detection names match the camera's.** 3D tracking and subject tracking
+  are AF-area modes and are now named as such, so neither reads as the separate subject-detection
+  control beside it.
 - **Focus peaking now tracks the focus plane.** It measured edge contrast, which scales with how
   bright an edge is as much as with how sharp it is — so a defocused specular highlight outranked
   genuinely sharp low-contrast detail, painting background bokeh while skipping the subject. It

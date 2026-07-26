@@ -70,7 +70,8 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         userModePrograms: [String] = [],
         driveModes: [String] = [],
         meteringModes: [String] = [],
-        pictureControls: [String] = []
+        pictureControls: [String] = [],
+        rawCompressions: [String] = []
     ) {
         self.resolutionFrameRate = resolutionFrameRate
         self.codec = codec
@@ -101,6 +102,7 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         self.driveModes = driveModes
         self.meteringModes = meteringModes
         self.pictureControls = pictureControls
+        self.rawCompressions = rawCompressions
     }
 
     /// Current shared-core resolution/frame-rate label matching descriptor options.
@@ -162,6 +164,9 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
     public let meteringModes: [String]
     /// Picture controls the body advertises, including only the custom/cloud slots it has.
     public let pictureControls: [String]
+    /// NEF (RAW) recording compressions the body advertises — the modern trio on current bodies,
+    /// the Compressed/Uncompressed pair on first-generation ones.
+    public let rawCompressions: [String]
 
     /// Empty capabilities before a successful descriptor refresh.
     public static let empty = AndroidCameraControlCapabilities()
@@ -332,6 +337,7 @@ public enum AndroidCameraPropertyReadbackWire {
         appendOptions("options.drive", values: controls.driveModes, to: &fields)
         appendOptions("options.metering", values: controls.meteringModes, to: &fields)
         appendOptions("options.pictureControl", values: controls.pictureControls, to: &fields)
+        appendOptions("options.rawCompression", values: controls.rawCompressions, to: &fields)
         return fields.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n")
     }
 

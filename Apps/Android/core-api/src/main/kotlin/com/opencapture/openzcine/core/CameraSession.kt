@@ -380,6 +380,11 @@ public data class CameraControlCapabilities(
     val meteringModes: List<String> = emptyList(),
     /** Picture controls the body advertises, including only the slots it actually has. */
     val pictureControls: List<String> = emptyList(),
+    /**
+     * NEF (RAW) recording compressions the body advertises. First-generation Z bodies use the
+     * Compressed/Uncompressed pair and reject the modern trio, so this must come from the body.
+     */
+    val rawCompressions: List<String> = emptyList(),
 ) {
     /** Returns the advertised labels for one descriptor-dependent control. */
     public fun options(control: CameraControl): List<String> =
@@ -408,6 +413,7 @@ public data class CameraControlCapabilities(
             CameraControl.STILL_DRIVE -> driveModes
             CameraControl.STILL_METER -> meteringModes
             CameraControl.STILL_PICTURE_CONTROL -> pictureControls
+            CameraControl.STILL_RAW_COMPRESSION -> rawCompressions
             CameraControl.AUDIO_SENSITIVITY -> audioSensitivities
             CameraControl.AUDIO_INPUT -> audioInputs
             CameraControl.WIND_FILTER -> windFilters
