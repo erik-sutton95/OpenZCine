@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -350,28 +352,34 @@ internal fun CameraWifiScannerOverlay(
                 verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp),
             ) {
                 val manual = scannerState as? CameraWifiScannerState.ManualEntry
-                Text(
-                    text =
-                        stringResource(
-                            if (manual != null) R.string.wifi_scanner_manual_title
-                            else R.string.wifi_scanner_title,
-                        ),
-                    color = PopupColors.title,
-                    fontSize = 20.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    text =
-                        stringResource(
-                            if (manual != null) R.string.wifi_scanner_manual_intro
-                            else R.string.wifi_scanner_intro,
-                        ),
-                    color = PopupColors.detail,
-                    fontSize = 15.sp,
-                    lineHeight = 20.sp,
-                    textAlign = TextAlign.Center,
-                )
+                // A keyboard takes over half of the ~400dp landscape canvas. The
+                // header is read once, so drop it while typing rather than make
+                // the operator scroll blind between the fields and Use details.
+                val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+                if (!keyboardOpen) {
+                    Text(
+                        text =
+                            stringResource(
+                                if (manual != null) R.string.wifi_scanner_manual_title
+                                else R.string.wifi_scanner_title,
+                            ),
+                        color = PopupColors.title,
+                        fontSize = 20.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        text =
+                            stringResource(
+                                if (manual != null) R.string.wifi_scanner_manual_intro
+                                else R.string.wifi_scanner_intro,
+                            ),
+                        color = PopupColors.detail,
+                        fontSize = 15.sp,
+                        lineHeight = 20.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                }
 
                 fun useManualEntry(canReturnToScan: Boolean) {
                     controller.close()
