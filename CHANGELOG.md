@@ -80,6 +80,14 @@ All notable changes to this project are documented here. The format is based on
   ending the session. The camera-event reader could re-arm a transfer the system still owned; it now
   hands each one back before starting the next, and an unrecoverable event channel closes the USB
   session cleanly.
+- **The focus dial no longer stalls or blocks tap-to-focus.** A refused focus drive retried by
+  count, and each attempt could spend seconds polling the camera for readiness — so one drag could
+  own the single camera command channel long enough that the body answered every AF-area change
+  "busy", leaving both the dial and tap-to-focus dead until a shutter release. Refusals are now
+  budgeted by wall clock, a tap or recenter pre-empts an in-flight drive, and an AF-area change
+  retries a busy body instead of dropping the tap. Both platforms.
+- Starting tap-to-focus no longer hitches the live view: the AF-confirmation poll ran inside the
+  frame loop and stalled it for about half a second.
 
 - Media: backup (two-card) shots appear under both slots and delete every copy; context-aware
   delete copy and companion handling (RAW+JPEG pairs; a video plus its R3D/NEV master); EXIF
@@ -88,6 +96,9 @@ All notable changes to this project are documented here. The format is based on
   the AF point moves while the preview loads.
 
 ### Changed
+
+- The **Focus dial** is available in video mode as well as photo mode, and is now **off by default**
+  on a new install. An operator who already switched it on (or off) keeps that choice.
 
 - Google Play **internal** uploads automate like TestFlight: merge Android-relevant paths to `main`
   builds and uploads phone + Wear AABs when `PLAY_UPLOAD_ENABLED=true` (see
