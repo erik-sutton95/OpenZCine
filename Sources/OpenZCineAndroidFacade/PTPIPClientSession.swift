@@ -1376,8 +1376,12 @@ public final class PTPIPClientSession: @unchecked Sendable {
             }
             return androidPropertyReadback(result: result)
         case .propertyChanged(let rawCode):
+            // Gate on the movie ∪ photo monitor union, not the movie order alone: photo chrome
+            // watches `fNumber` / `stillShutterSpeed` / `imageSize`, none of which appear in
+            // `liveMonitorPollOrder`, so the old gate silently dropped every photo-mode
+            // camera-side change and left the readouts to the ~20 s round-robin.
             guard let property = PTPPropertyCode(rawValue: rawCode),
-                PTPPropertyCode.liveMonitorPollOrder.contains(property)
+                PTPPropertyCode.isMonitoredChange(property)
             else {
                 // The event stream preserves unknown properties for callers,
                 // but a raw event alone is not evidence that this readback

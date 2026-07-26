@@ -2232,6 +2232,9 @@ private fun applyKelvinFineStep(
     onSelect(request, next)
 }
 
+/** Centred-row sentinel for a drum whose lazy list has not been measured yet. */
+private const val NOT_LAID_OUT = -1
+
 /**
  * iOS `AccentDrumWheel`: a snapping vertical drum — the centred row renders
  * large in accent between two hairlines, neighbours dim above/below behind a
@@ -2271,7 +2274,12 @@ internal fun AccentDrumWheel(
             val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
             layout.visibleItemsInfo
                 .minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) }
-                ?.index ?: 0
+                // NOT_LAID_OUT, never row 0. LaunchedEffect runs in the ANIMATION callback,
+                // before the measure pass, so on the very first composition `visibleItemsInfo`
+                // is still empty. Reporting row 0 there made the settle collector below fire
+                // `onSettle(options[0])` the instant a picker opened — a camera write of a
+                // placeholder the operator never chose (issue #257).
+                ?.index ?: NOT_LAID_OUT
         }
     }
     // Centre on [selection] only when it is not already the settled row and the
@@ -2283,7 +2291,8 @@ internal fun AccentDrumWheel(
         if (centeredIndex == index) return@LaunchedEffect
         listState.scrollToItem(index)
     }
-    // Apply the row the wheel settles on (iOS applies on drum settle).
+    // Apply the row the wheel settles on (iOS applies on drum settle). `getOrNull(NOT_LAID_OUT)`
+    // is null, so the pre-layout emission is skipped instead of writing row 0 to the camera.
     LaunchedEffect(listState, options) {
         androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress to centeredIndex }
             .collect { (scrolling, index) ->

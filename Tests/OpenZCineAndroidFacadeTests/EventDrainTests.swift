@@ -26,8 +26,8 @@ struct EventDrainTests {
             onEnded: collector.markEnded)
         #expect(server.waitForEventChannel())
 
-        // DevicePropChanged has established PTP framing but no property value
-        // in the event itself. Its raw code/UINT32 data must survive intact.
+        // DevicePropChanged names the changed property in `e1` but carries no value.
+        // Its raw code/UINT32 data must survive intact.
         #expect(
             server.sendEvent(
                 rawEventCode: 0x4006,
@@ -43,7 +43,8 @@ struct EventDrainTests {
         let events = collector.snapshot()
         let property = try #require(events.first)
         #expect(property.rawEventCode == 0x4006)
-        #expect(property.eventCode == .unknown)
+        #expect(property.eventCode == .devicePropChanged)
+        #expect(property.changedPropertyCode == .movieRecProhibitionCondition)
         #expect(property.transactionID == 7)
         #expect(property.parameters == [0xD0A4, UInt32.max])
         #expect(events.contains { $0.inferredRecordState == .recording })

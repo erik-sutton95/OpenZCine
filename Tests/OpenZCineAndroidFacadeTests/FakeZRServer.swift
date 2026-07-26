@@ -167,6 +167,9 @@ final class FakeZRServer: @unchecked Sendable {
         var focusModeRaw: UInt8 = 1  // AF-C
         var focusAreaRaw: UInt16 = 0x8033  // Subject
         var focusSubjectRaw: UInt8 = 2  // People
+        /// The body's `MovieShutterMode` readback (1 = speed, 2 = angle). Lets a test stand up two
+        /// differently-configured bodies — a Z5II on shutter speed and a Z6III on shutter angle.
+        var movieShutterModeRaw: UInt8 = 2  // angle
         /// Current packed movie-screen-size value returned by property readback.
         var movieRecordScreenSizeRaw: UInt64 = 0x1770_0D08_0019_0000
         /// Current packed movie-file-type value returned by property readback.
@@ -990,7 +993,7 @@ final class FakeZRServer: @unchecked Sendable {
         case .exposureIndicateLightup:
             return Data([0])  // 0 = indicator lit
         case .movieShutterMode:
-            return Data([2])  // angle
+            return Data([options.movieShutterModeRaw])
         case .movieTVLockSetting:
             return Data([0])
         case .movieShutterAngle:
