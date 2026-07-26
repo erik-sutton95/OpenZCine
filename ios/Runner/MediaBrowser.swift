@@ -1095,8 +1095,10 @@ private struct MediaFilterPopup: View {
     let onClose: () -> Void
 
     /// Two chips where they fit, one where they do not. `.adaptive` is SwiftUI's own column
-    /// collapse, so the narrow case needs no width plumbed into the popup.
-    private let filterChipColumns = [GridItem(.adaptive(minimum: 120), spacing: 5)]
+    /// collapse, so the narrow case needs no width plumbed into the popup. 150 is chosen to stay
+    /// two-up at the full 400pt panel (120 gave three) and to drop to one column only below a
+    /// ~350pt viewport, where two chips no longer hold a usable width.
+    private let filterChipColumns = [GridItem(.adaptive(minimum: 150), spacing: 5)]
 
     var body: some View {
         GlassPanel(
