@@ -177,8 +177,11 @@ internal class MFDriveController(
                         refusalRunStartedAt = it
                     }
                     if (elapsedMillis() - startedAt < REFUSAL_RETRY_BUDGET_MILLIS) {
-                        pendingPulses += pending
+                        // Back off FIRST, requeue after: a cancel during the backoff throws out
+                        // of delay(), so a superseded run can never leave its pulses behind for
+                        // the drive that replaces it.
                         delay(retryDelayMillis)
+                        pendingPulses += pending
                         continue
                     }
                     // Give the command channel back: the next gesture retries from a clean slate,

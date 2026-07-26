@@ -6678,9 +6678,12 @@ final class NativeAppModel {
                     if MFDriveChannelBudget.shouldRetryRefusal(
                         elapsedSeconds: Date().timeIntervalSince(startedAt))
                     {
-                        self.mfDrivePendingPulses += pending
+                        // Back off FIRST, requeue after: a tap that cancels during the backoff
+                        // must not leave this run's pulses behind for the drive that replaces it.
                         try? await Task.sleep(
                             for: .seconds(MFDriveChannelBudget.refusalRetryIntervalSeconds))
+                        guard !Task.isCancelled, self.mfDriveRunID == runID else { continue }
+                        self.mfDrivePendingPulses += pending
                         continue
                     }
                     // Give the channel back: the next gesture retries from a clean slate, and a
