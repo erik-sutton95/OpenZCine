@@ -1378,7 +1378,9 @@ internal fun MonitorScreen(
         val sideRailsVisible = operatorSettings.sideRailsVisible.value
         val visibleAssistTools = operatorSettings.visibleAssistToolbarTools
         val openAssistOptions: (AssistTool, Rect) -> Unit = { tool, anchor ->
-            if (!locked) {
+            // Clean view defers transient pop-ups (#256) — the toolbar that opens them is hidden
+            // there anyway, so this only catches a stray remote/hardware route.
+            if (!locked && monitorAllowsPopups(effectiveDisplayMode)) {
                 activeMonitorPickerKind = null
                 activeCommandControl = null
                 commandControlFeedback = null
