@@ -69,6 +69,10 @@ object DemoHarness {
     @Suppress("UNUSED_PARAMETER")
     fun glassTierOverride(intent: Intent): String? = null
 
+    /** Always null: release builds cannot stage a dropped-session affordance. */
+    @Suppress("UNUSED_PARAMETER")
+    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? = null
+
     /** Release builds never provide a debug image-assist override. */
     @Suppress("UNUSED_PARAMETER")
     fun assistEffects(intent: Intent): FeedEffects? = null

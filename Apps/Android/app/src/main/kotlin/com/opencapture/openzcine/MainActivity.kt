@@ -700,6 +700,7 @@ class MainActivity : ComponentActivity() {
                                     mediaRemoteShutter.disarm()
                                     disconnectToSavedCameraHome(false)
                                 },
+                                recoveryStateOverride = DemoHarness.sessionRecoveryOverride(intent),
                                 onDriveDiagnostic = diagnostics::record,
                             )
                             when (overlay) {

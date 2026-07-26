@@ -137,6 +137,21 @@ object DemoHarness {
      */
     fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
 
+    /**
+     * Stages the dropped-session recovery affordance over the held frame
+     * (`--es zc.demo.sessionLost retrying|lost`), mirroring iOS
+     * `ZC_DEMO_SESSION_LOST`. Paints the state only; no retry loop runs.
+     */
+    const val EXTRA_SESSION_LOST = "zc.demo.sessionLost"
+
+    /** Debug-only recovery state for screenshot verification, or null. */
+    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? =
+        when (intent.getStringExtra(EXTRA_SESSION_LOST)) {
+            null -> null
+            "retrying" -> MonitorRecoveryState.Retrying(attempt = 2, maxAttempts = 8)
+            else -> MonitorRecoveryState.WaitingForOperator(attemptsMade = 8)
+        }
+
     /** String intent extra selecting scopes: `wave,parade,histo,vector,lights`. */
     const val EXTRA_SCOPES = "zc.scopes"
 

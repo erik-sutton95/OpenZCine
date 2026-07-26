@@ -44,6 +44,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A dropped camera no longer needs an app restart, and a stalled first connect no longer needs
+  a cancel.** A failed connection attempt now disposes exactly as thoroughly as tapping Cancel —
+  the single-flight latch is released with the attempt it belonged to, so an immediate retry is
+  never silently swallowed while an abandoned attempt unwinds. Every machine-driven connection
+  phase has a truthful bounded timeout (phases that wait on a person stay unbounded), and the
+  failed connection card gained **Try again**. When an established session drops — USB cable
+  knocked loose, camera powered off and on, wedged command channel — the operator now stays in
+  live view on the last frame (clearly marked as held, not live) while a bounded, cancellable
+  reconnect runs, then gets **Retry connection** / **Operator menu**. The retry rule lives in the
+  shared core, so both shells retry, back off, and give up identically. Both platforms.
+
 - **Focus peaking now tracks the focus plane.** It measured edge contrast, which scales with how
   bright an edge is as much as with how sharp it is — so a defocused specular highlight outranked
   genuinely sharp low-contrast detail, painting background bokeh while skipping the subject. It

@@ -320,6 +320,8 @@ internal fun MonitorScreen(
     onOpenMedia: () -> Unit = {},
     /** Leaves the held frame for the saved-camera home after a session drop. */
     onBackToOperatorMenu: () -> Unit = {},
+    /** Debug-only staged recovery state for screenshot verification (`DemoHarness`). */
+    recoveryStateOverride: MonitorRecoveryState? = null,
     /** Closed diagnostics breadcrumbs for the MF drive failure surfaces. */
     onDriveDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
 ) {
@@ -2829,8 +2831,8 @@ internal fun MonitorScreen(
 
         // Dropped-session recovery over the held frame (iOS `MonitorRecoveryOverlay`).
         MonitorRecoveryOverlay(
-            state = sessionRecoveryState,
-            cameraName = lastConnectedCameraName,
+            state = recoveryStateOverride ?: sessionRecoveryState,
+            cameraName = recoveryStateOverride?.let { "Nikon ZR" } ?: lastConnectedCameraName,
             onRetry = { sessionRecoveryRetryTicket += 1 },
             onBackToOperatorMenu = onBackToOperatorMenu,
         )

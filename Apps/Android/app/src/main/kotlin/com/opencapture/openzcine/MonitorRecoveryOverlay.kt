@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -130,10 +131,14 @@ internal fun MonitorRecoveryOverlay(
                 )
                 RecoveryAction(
                     label = stringResource(R.string.recovery_operator_menu),
-                    container = LiveDesign.glassBright,
+                    container = LiveDesign.glassOpaque,
                     content = LiveDesign.text,
                     onClick = onBackToOperatorMenu,
-                    modifier = Modifier.weight(1f),
+                    // A translucent secondary pill washes out over a bright held frame; the
+                    // hairline keeps its edge readable against any feed content.
+                    modifier =
+                        Modifier.weight(1f)
+                            .border(1.dp, LiveDesign.hairlineStrong, CircleShape),
                 )
             }
         }
