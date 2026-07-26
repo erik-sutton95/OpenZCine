@@ -1761,8 +1761,9 @@ final class NativeAppModel {
 
         // Single-flight: a PTP-IP camera accepts one command channel per initiator, and overlapping
         // Init attempts (re-taps, an auto-reconnect racing a manual one) can wedge the camera's PTP
-        // state machine — coalesce extra triggers instead of stacking attempts. The flag clears in
-        // the establishment task's defer, so a failed attempt still frees the next retry.
+        // state machine — coalesce extra triggers instead of stacking attempts. The latch is
+        // released by whichever comes first: this attempt finishing, or a teardown replacing it
+        // (`clearCameraSessionState`), so a failed or cancelled attempt never blocks the retry.
         guard !isEstablishingConnection else { return }
         // An auto-reconnect behind a preserved monitor keeps the operator on the frozen frame with
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
