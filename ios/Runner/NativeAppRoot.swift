@@ -2266,6 +2266,22 @@ final class NativeAppModel {
             liveFPS = SessionRecoveryCopy.heldFrameBadge
             sessionRecovery = state
         }
+
+        /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
+        /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
+        /// reconnect never replays stale camera-setting writes. Keeps the real members private.
+        var debugIsEstablishingConnection: Bool { isEstablishingConnection }
+        var debugHasCameraSession: Bool { cameraSession != nil }
+        var debugConnectionGeneration: Int { connectionGeneration }
+        var debugHasSessionRecoveryTask: Bool { sessionRecoveryTask != nil }
+        var debugPendingCameraWriteCount: Int { pendingCameraWrites.count }
+        func debugEnqueueCameraWrite(_ property: PTPPropertyCode) {
+            enqueueCameraWrite(
+                PendingCameraWrite(
+                    picker: .iso,
+                    value: "debug",
+                    write: PTPCameraPropertyWrite(property: property, data: Data([1]))))
+        }
     #endif
 
     // Demo-session entry points (screenshot/marketing harness — see DemoHarness.swift). Debug-only:
