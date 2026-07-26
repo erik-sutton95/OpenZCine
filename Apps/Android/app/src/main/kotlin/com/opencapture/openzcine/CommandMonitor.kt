@@ -541,7 +541,10 @@ internal fun commandDashboardPresentation(
                     strings.resolve(R.string.command_title_mode),
                     snapshot.exposureMode,
                     CameraControl.EXPOSURE_MODE,
-                    EXPOSURE_MODE_OPTIONS,
+                    // The body's own program enum, in its order; the ladder below is only a
+                    // fallback and deliberately holds no U banks (#274).
+                    capabilities.options(CameraControl.EXPOSURE_MODE)
+                        .ifEmpty { EXPOSURE_MODE_OPTIONS },
                 ),
             CommandTileKind.ISO to
                 run {
@@ -1104,7 +1107,12 @@ internal fun CameraPropertySnapshot.withOptimisticControlValue(
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
 private const val COLOR_TEMPERATURE_MODE = "Color temp"
 
-private val EXPOSURE_MODE_OPTIONS = listOf("Auto", "P", "A", "S", "M", "U1", "U2", "U3")
+/**
+ * Conservative MODE fallback for a body that has not advertised its
+ * `ExposureProgramMode` enum. No U banks — a body that has them says so, and
+ * inferring them offered a Zf three user modes it does not have (#274).
+ */
+private val EXPOSURE_MODE_OPTIONS = listOf("Auto", "P", "A", "S", "M")
 
 /**
  * iOS `CameraPicker.options` fallbacks for the resolution/codec drums when the

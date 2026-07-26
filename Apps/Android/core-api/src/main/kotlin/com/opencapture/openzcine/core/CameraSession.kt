@@ -366,6 +366,20 @@ public data class CameraControlCapabilities(
     val electronicVr: List<String> = emptyList(),
     /** Photo image-size strings enumerated by the camera, verbatim. */
     val imageSizes: List<String> = emptyList(),
+    /**
+     * Exposure programs the body advertises, in the body's order. Empty means the body did not
+     * enumerate them; the shell then keeps a conservative ladder and never synthesises the U
+     * banks a body may not have.
+     */
+    val exposureModes: List<String> = emptyList(),
+    /** Inner programs a U bank can run as, when the body advertises the property. */
+    val userModePrograms: List<String> = emptyList(),
+    /** Release/drive modes the body advertises, in its own release-mode order. */
+    val driveModes: List<String> = emptyList(),
+    /** Metering patterns the body advertises. */
+    val meteringModes: List<String> = emptyList(),
+    /** Picture controls the body advertises, including only the slots it actually has. */
+    val pictureControls: List<String> = emptyList(),
 ) {
     /** Returns the advertised labels for one descriptor-dependent control. */
     public fun options(control: CameraControl): List<String> =
@@ -383,6 +397,17 @@ public data class CameraControlCapabilities(
             CameraControl.FOCUS_MODE -> focusModes
             CameraControl.FOCUS_AREA -> focusAreas
             CameraControl.FOCUS_SUBJECT -> focusSubjects
+            // Photo mode: the facade describes the STILLS focus properties into the same three
+            // lists, so the stills tabs read them like the movie ones do.
+            CameraControl.STILL_FOCUS_MODE -> focusModes
+            CameraControl.STILL_FOCUS_AREA -> focusAreas
+            CameraControl.STILL_FOCUS_SUBJECT -> focusSubjects
+            // The body's own function-picker domains (#274).
+            CameraControl.EXPOSURE_MODE -> exposureModes
+            CameraControl.STILL_USER_MODE_PROGRAM -> userModePrograms
+            CameraControl.STILL_DRIVE -> driveModes
+            CameraControl.STILL_METER -> meteringModes
+            CameraControl.STILL_PICTURE_CONTROL -> pictureControls
             CameraControl.AUDIO_SENSITIVITY -> audioSensitivities
             CameraControl.AUDIO_INPUT -> audioInputs
             CameraControl.WIND_FILTER -> windFilters

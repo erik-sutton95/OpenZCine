@@ -147,6 +147,11 @@ internal object CameraPropertySnapshotWire {
                     vibrationReduction = value.options("options.vibrationReduction"),
                     electronicVr = value.options("options.electronicVr"),
                     imageSizes = value.options("options.imageSize"),
+                    exposureModes = value.options("options.exposureMode"),
+                    userModePrograms = value.options("options.userModeProgram"),
+                    driveModes = value.options("options.drive"),
+                    meteringModes = value.options("options.metering"),
+                    pictureControls = value.options("options.pictureControl"),
                 ),
         )
     }

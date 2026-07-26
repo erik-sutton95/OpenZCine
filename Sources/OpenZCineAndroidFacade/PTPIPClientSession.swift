@@ -197,7 +197,7 @@ private enum AndroidNikonZRControlFallback {
         AndroidRawControlMode(label: "Wide-S", raw: 0x8018),
         AndroidRawControlMode(label: "Wide-L", raw: 0x8019),
         AndroidRawControlMode(label: "Auto", raw: 0x8011),
-        AndroidRawControlMode(label: "Subject", raw: 0x8033),
+        AndroidRawControlMode(label: "Subject tracking", raw: 0x8033),
     ]
     static let focusSubjects: [AndroidRawControlMode<UInt8>] = [
         AndroidRawControlMode(label: "Auto", raw: 1),
@@ -269,6 +269,13 @@ private struct AndroidRawControlCatalog: Sendable {
     var stillShutterSpeeds: [AndroidRawControlMode<UInt32>] = []
     var stillWhiteBalanceModes: [AndroidRawControlMode<UInt16>] = []
     var imageSizes: [String] = []
+    // Photo-mode FUNCTION picker domains. Empty until the body advertises them; the shells then
+    // keep a conservative fallback rather than an invented union of the whole Z lineup (#274).
+    var exposureModes: [AndroidRawControlMode<UInt16>] = []
+    var userModePrograms: [AndroidRawControlMode<UInt8>] = []
+    var driveModes: [AndroidRawControlMode<UInt16>] = []
+    var meteringModes: [AndroidRawControlMode<UInt16>] = []
+    var pictureControls: [AndroidRawControlMode<UInt16>] = []
 
     func capabilities(
         properties: PTPCameraPropertySnapshot,
@@ -389,7 +396,8 @@ private struct AndroidRawControlCatalog: Sendable {
         }
         return AndroidCameraControlCapabilities(
             resolutionFrameRate: resolutionFrameRate,
-            codec: properties.fileType.map(MonitorTextFormat.codecShortLabel),
+            codec: currentCodecOptionLabel(properties.fileType)
+                ?? properties.fileType.map(MonitorTextFormat.codecShortLabel),
             whiteBalanceTint: whiteBalanceTint,
             isoValues: isoValues,
             shutterValues: activeShutterValues,
@@ -419,14 +427,31 @@ private struct AndroidRawControlCatalog: Sendable {
             electronicVR:
                 recognizedCodec.map(MonitorTextFormat.isRawCodec) == false
                 ? electronicVR.map(\.label) : [],
-            imageSizes: imageSizes
+            imageSizes: imageSizes,
+            exposureModes: exposureModes.map(\.label),
+            userModePrograms: userModePrograms.map(\.label),
+            driveModes: driveModes.map(\.label),
+            meteringModes: meteringModes.map(\.label),
+            pictureControls: pictureControls.map(\.label)
         )
     }
 
+    /// The body's current codec, resolved against the advertised catalog by its exact raw value
+    /// and reported as the FAMILY short label ("H.265") — crop presentation and e-VR gating are
+    /// family decisions. Matching on the raw matters because a picker label now carries the bit
+    /// depth whenever a body advertises more than one variant of a family (#276).
     private func recognizedCurrentCodec(_ codec: String?) -> String? {
-        guard let codec else { return nil }
-        let label = MonitorTextFormat.codecShortLabel(codec)
-        return fileTypes.contains(where: { $0.label == label }) ? label : nil
+        guard
+            let mode = PTPCameraPropertyDecoders.fileTypeMode(forFileType: codec, in: fileTypes)
+        else { return nil }
+        return MonitorTextFormat.codecShortLabel(PTPCameraPropertyDecoders.fileType(mode.raw))
+    }
+
+    /// The advertised codec ROW the body is currently on — the picker's selected option, carrying
+    /// the bit depth when the body offers several variants. Nil until the descriptor and readback
+    /// agree, so the drum never claims a selection the catalog cannot write back.
+    private func currentCodecOptionLabel(_ codec: String?) -> String? {
+        PTPCameraPropertyDecoders.fileTypeMode(forFileType: codec, in: fileTypes)?.label
     }
 
     /// Resolves a picker label to a camera-advertised mode — same matching as iOS
@@ -1539,6 +1564,15 @@ public final class PTPIPClientSession: @unchecked Sendable {
             refreshAndroidStillShutterDescriptor,
             refreshAndroidStillWhiteBalanceDescriptor,
             refreshAndroidImageSizeDescriptor,
+            // The photo-mode function pickers (#274). Optional for the same reason as the three
+            // above: a body in movie mode rejects them, which is a mode-dependent omission, not a
+            // capability gap. `ExposureProgramMode` sits here too — several bodies expose it as a
+            // dial-only readout and reject the describe, and that must not downgrade the refresh.
+            refreshAndroidExposureModeDescriptor,
+            refreshAndroidUserModeDescriptor,
+            refreshAndroidDriveDescriptor,
+            refreshAndroidMeteringDescriptor,
+            refreshAndroidPictureControlDescriptor,
         ]
         var result: AndroidCameraPropertyRefreshResult = .accepted
         for refresh in refreshers {
@@ -1706,31 +1740,51 @@ public final class PTPIPClientSession: @unchecked Sendable {
         }
     }
 
+    /// Whether the body is in photo chrome, so the focus family describes the STILLS properties
+    /// (AF-A, the dynamic areas, 3D tracking) rather than the movie ones.
+    private var androidPrefersPhotographyChrome: Bool {
+        StillCapturePolicy.prefersPhotographyChrome(
+            selector: androidPropertySnapshot.captureSelector)
+    }
+
     private func refreshAndroidFocusModeDescriptor() throws {
         androidControlCatalog.focusModes = []
+        let photography = androidPrefersPhotographyChrome
         let advertised = try descriptorModesWithZRFallback(
             fallback: AndroidNikonZRControlFallback.focusModes
         ) {
-            let raw = try descriptorEnumValues(.movieFocusMode, valueByteCount: 1)
+            let raw = try descriptorEnumValues(
+                photography ? .stillFocusMode : .movieFocusMode, valueByteCount: 1)
             return uniqueUInt8Modes(raw) { value in
-                let label = PTPCameraPropertyDecoders.movieFocusMode(value)
+                let label =
+                    photography
+                    ? PTPCameraPropertyDecoders.stillFocusModeD061(value)
+                    : PTPCameraPropertyDecoders.movieFocusMode(value)
                 return label.hasPrefix("0x") ? nil : label
             }
         }
+        // The ZR's movie AF ladder stays selectable after a lens-ring override narrows the
+        // descriptor to MF-only; the stills space has its own values and takes the body verbatim.
         androidControlCatalog.focusModes =
-            usesNikonZRFallbacks
+            usesNikonZRFallbacks && !photography
             ? mergedModes(AndroidNikonZRControlFallback.focusModes, advertised)
             : advertised
     }
 
     private func refreshAndroidFocusAreaDescriptor() throws {
         androidControlCatalog.focusAreas = []
+        let photography = androidPrefersPhotographyChrome
         androidControlCatalog.focusAreas = try descriptorModesWithZRFallback(
             fallback: AndroidNikonZRControlFallback.focusAreas
         ) {
-            let raw = try descriptorEnumValues(.movieFocusMeteringMode, valueByteCount: 2)
+            let raw = try descriptorEnumValues(
+                photography ? .stillFocusMeteringMode : .movieFocusMeteringMode,
+                valueByteCount: 2)
             return uniqueUInt16Modes(raw) { value in
-                let label = PTPCameraPropertyDecoders.movieFocusArea(value)
+                let label =
+                    photography
+                    ? PTPCameraPropertyDecoders.stillFocusArea(value)
+                    : PTPCameraPropertyDecoders.movieFocusArea(value)
                 return label.hasPrefix("0x") ? nil : label
             }
         }
@@ -1738,14 +1792,69 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     private func refreshAndroidFocusSubjectDescriptor() throws {
         androidControlCatalog.focusSubjects = []
+        let photography = androidPrefersPhotographyChrome
         androidControlCatalog.focusSubjects = try descriptorModesWithZRFallback(
             fallback: AndroidNikonZRControlFallback.focusSubjects
         ) {
-            let raw = try descriptorEnumValues(.movieAFSubjectDetection, valueByteCount: 1)
+            let raw = try descriptorEnumValues(
+                photography ? .afSubjectDetection : .movieAFSubjectDetection, valueByteCount: 1)
             return uniqueUInt8Modes(raw) { value in
                 let label = PTPCameraPropertyDecoders.movieAFSubject(value)
                 return label.hasPrefix("0x") ? nil : label
             }
+        }
+    }
+
+    /// The photo-mode function-picker domains: exposure program, the U bank's inner program,
+    /// release/drive mode, metering pattern and picture control.
+    ///
+    /// Every one of these used to be a fixed list in each shell. They are read verbatim — the
+    /// body's values in the body's order — with NO fallback merge, because the whole point of
+    /// #274 is that a union invents options the connected body does not have (a Zf offered
+    /// U1/U2/U3) and an app-chosen order contradicts the body's (Z6III drive: Single, CL, CH,
+    /// CH+). An unread domain stays empty and the shells keep a conservative fallback.
+    private func refreshAndroidExposureModeDescriptor() throws {
+        androidControlCatalog.exposureModes = []
+        let raw = try descriptorEnumValues(.exposureProgramMode, valueByteCount: 2)
+        androidControlCatalog.exposureModes = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.exposureProgramShort(value)
+            // Only positions the MODE drum can write back.
+            return PTPCameraPropertyDecoders.exposureProgramCode(for: label) == nil ? nil : label
+        }
+    }
+
+    private func refreshAndroidUserModeDescriptor() throws {
+        androidControlCatalog.userModePrograms = []
+        let raw = try descriptorEnumValues(.userMode, valueByteCount: 1)
+        androidControlCatalog.userModePrograms = uniqueUInt8Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.userModeProgram(value)
+            return PTPCameraPropertyDecoders.userModeProgramCode(for: label) == nil ? nil : label
+        }
+    }
+
+    private func refreshAndroidDriveDescriptor() throws {
+        androidControlCatalog.driveModes = []
+        let raw = try descriptorEnumValues(.stillCaptureMode, valueByteCount: 2)
+        androidControlCatalog.driveModes = uniqueUInt16Modes(raw) { value in
+            StillDriveMode.decode(raw: value)?.label
+        }
+    }
+
+    private func refreshAndroidMeteringDescriptor() throws {
+        androidControlCatalog.meteringModes = []
+        let raw = try descriptorEnumValues(.exposureMeteringMode, valueByteCount: 2)
+        androidControlCatalog.meteringModes = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.exposureMetering(value)
+            return label.hasPrefix("0x") ? nil : label
+        }
+    }
+
+    private func refreshAndroidPictureControlDescriptor() throws {
+        androidControlCatalog.pictureControls = []
+        let raw = try descriptorEnumValues(.activePicCtrlItem, valueByteCount: 2)
+        androidControlCatalog.pictureControls = uniqueUInt16Modes(raw) { value in
+            let label = PTPCameraPropertyDecoders.pictureControl(value)
+            return label.hasPrefix("0x") ? nil : label
         }
     }
 

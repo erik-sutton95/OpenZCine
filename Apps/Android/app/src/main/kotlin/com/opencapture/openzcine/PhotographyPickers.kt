@@ -63,13 +63,16 @@ internal object StillPickerPolicy {
         )
 
     /**
-     * iOS `CameraPicker.stillDrive.options`: the drive label union minus the
-     * dial-only Quick position and the on-body Self-timer (the Built-in Timer
-     * tab owns that engage/restore).
+     * Conservative fallback for the release-mode drum when the body has not
+     * advertised its `StillCaptureMode` enum. In the body's own release-mode
+     * order — Single, CL, CH, CH+, then the high-speed positions — not the
+     * app's old Single/CH/CL/CH+ (#274). Minus the dial-only Quick position and
+     * the on-body Self-timer (the Built-in Timer tab owns that engage/restore).
+     * A connected body's advertised order always wins over this.
      */
     val DRIVE_OPTIONS: List<String> =
         listOf(
-            "Single", "Continuous H", "Continuous L", "Continuous H+",
+            "Single", "Continuous L", "Continuous H", "Continuous H+",
             "C15", "C30", "C60", "C120",
         )
 
@@ -86,15 +89,28 @@ internal object StillPickerPolicy {
 
     /** iOS `CameraPicker.stillFocus.modes` ladders. */
     val FOCUS_MODE_OPTIONS: List<String> = listOf("AF-S", "AF-C", "AF-A", "MF")
+
+    /**
+     * AF-**area** modes. `3D tracking` and `Subject tracking` are spelled the way
+     * the body spells them so neither reads as the adjacent subject-*detection*
+     * tab — the two are separate Nikon settings (#274).
+     */
     val FOCUS_AREA_OPTIONS: List<String> =
-        listOf("Pin", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L", "3D", "Auto")
+        listOf(
+            "Pinpoint", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L",
+            "3D tracking", "Auto",
+        )
     val FOCUS_SUBJECT_OPTIONS: List<String> =
         listOf("Off", "Auto", "People", "Animal", "Vehicle", "Bird", "Airplane")
 
-    /** iOS `CameraPicker.stillMode.options` + the U banks' inner program. */
-    val MODE_OPTIONS: List<String> = listOf("Auto", "P", "S", "A", "M", "U1", "U2", "U3")
+    /**
+     * Conservative MODE fallback. No user banks: a body with U1/U2/U3 advertises
+     * them in its `ExposureProgramMode` enum, and inferring them from generic
+     * photo capability offered a Zf three modes it does not have (#274).
+     */
+    val MODE_OPTIONS: List<String> = listOf("Auto", "P", "S", "A", "M")
     val USER_MODE_OPTIONS: List<String> = listOf("P", "S", "A", "M")
-    private val USER_BANKS = setOf("U1", "U2", "U3")
+    private val USER_BANKS = setOf("U1", "U2", "U3", "U4")
 
     /** iOS `CameraPicker.stillMeter.options`. */
     val METER_OPTIONS: List<String> = listOf("Matrix", "Center", "Spot", "Highlight")
@@ -132,7 +148,7 @@ internal object StillPickerPolicy {
      * offers itself in P/S/A/M and the user banks.
      */
     fun allowsManualISO(exposureMode: String?): Boolean =
-        exposureMode in listOf("P", "S", "A", "M", "U1", "U2", "U3")
+        exposureMode in listOf("P", "S", "A", "M") || exposureMode in USER_BANKS
 
     /** The stills program actually driving exposure: a U bank runs as its inner program. */
     fun effectiveProgram(exposureMode: String?, userModeProgram: String?): String {
@@ -229,6 +245,14 @@ internal fun photographyCaptureSettings(
     val exposureMode = properties.exposureMode
     val userProgram = properties.userModeProgram
 
+    /**
+     * The connected body's advertised values for a control, in the body's order, falling back to
+     * the conservative ladder only while the descriptor has not landed. The whole of #274 is that
+     * these lists must come from the body, not from a union of the Z lineup.
+     */
+    fun advertised(control: CameraControl, fallback: List<String>): List<String> =
+        properties.controlCapabilities.options(control).ifEmpty { fallback }
+
     fun flat(
         kind: MonitorPickerKind,
         title: String,
@@ -261,6 +285,10 @@ internal fun photographyCaptureSettings(
     }
 
     // MODE — the main program drum plus the U banks' inner program (iOS stillMode).
+    val modeOptions =
+        advertised(CameraControl.EXPOSURE_MODE, StillPickerPolicy.MODE_OPTIONS)
+    val userModeOptions =
+        advertised(CameraControl.STILL_USER_MODE_PROGRAM, StillPickerPolicy.USER_MODE_OPTIONS)
     val modePicker =
         MonitorPickerPresentation(
             kind = MonitorPickerKind.MODE,
@@ -275,9 +303,8 @@ internal fun photographyCaptureSettings(
                                 title = "MODE",
                                 control = CameraControl.EXPOSURE_MODE,
                                 currentValue =
-                                    exposureMode?.takeIf { it in StillPickerPolicy.MODE_OPTIONS }
-                                        ?: "P",
-                                options = StillPickerPolicy.MODE_OPTIONS,
+                                    exposureMode?.takeIf { it in modeOptions } ?: "P",
+                                options = modeOptions,
                             ),
                         applyValueOnActivate = false,
                     ),
@@ -288,10 +315,11 @@ internal fun photographyCaptureSettings(
                                 title = "MODE",
                                 control = CameraControl.STILL_USER_MODE_PROGRAM,
                                 currentValue = userProgram ?: "P",
-                                options = StillPickerPolicy.USER_MODE_OPTIONS,
+                                options = userModeOptions,
                             ),
                         applyValueOnActivate = false,
-                        // A bank's inner program is settable only while that bank is active.
+                        // A bank's inner program is settable only while that bank is active —
+                        // and only on a body that has banks at all.
                         disabled = !StillPickerPolicy.allowsUserModeProgram(exposureMode),
                     ),
                 ),
@@ -385,6 +413,12 @@ internal fun photographyCaptureSettings(
 
     // DRIVE — release mode plus the two mutually-exclusive timers (iOS stillDrive).
     val builtInTimerOn = properties.stillCaptureMode == StillPickerPolicy.SELF_TIMER_LABEL
+    // The body's own release-mode order (Z6III: Single, CL, CH, CH+, …), minus the two positions
+    // the app owns: Quick is dial-only and Self-timer belongs to the Built-in Timer tab.
+    val driveOptions =
+        advertised(CameraControl.STILL_DRIVE, StillPickerPolicy.DRIVE_OPTIONS)
+            .filterNot { it == StillPickerPolicy.SELF_TIMER_LABEL || it == "Quick" }
+            .ifEmpty { StillPickerPolicy.DRIVE_OPTIONS }
     val drivePicker =
         MonitorPickerPresentation(
             kind = MonitorPickerKind.DRIVE,
@@ -399,10 +433,9 @@ internal fun photographyCaptureSettings(
                                 title = "DRIVE",
                                 control = CameraControl.STILL_DRIVE,
                                 currentValue =
-                                    properties.stillCaptureMode
-                                        ?.takeIf { it in StillPickerPolicy.DRIVE_OPTIONS }
-                                        ?: "Single",
-                                options = StillPickerPolicy.DRIVE_OPTIONS,
+                                    properties.stillCaptureMode?.takeIf { it in driveOptions }
+                                        ?: driveOptions.first(),
+                                options = driveOptions,
                             ),
                         applyValueOnActivate = false,
                         // An engaged body timer owns the release mode.
@@ -439,7 +472,15 @@ internal fun photographyCaptureSettings(
                 ),
         )
 
-    // FOCUS — Mode | Area | Subject, three independent stills settings.
+    // FOCUS — Mode | Area | Subject, three independent stills settings. In photo mode the facade
+    // describes the STILLS focus properties into these lists, so Area carries the body's
+    // dynamic-area and 3D-tracking positions rather than the movie set.
+    val focusModeOptions =
+        advertised(CameraControl.STILL_FOCUS_MODE, StillPickerPolicy.FOCUS_MODE_OPTIONS)
+    val focusAreaOptions =
+        advertised(CameraControl.STILL_FOCUS_AREA, StillPickerPolicy.FOCUS_AREA_OPTIONS)
+    val focusSubjectOptions =
+        advertised(CameraControl.STILL_FOCUS_SUBJECT, StillPickerPolicy.FOCUS_SUBJECT_OPTIONS)
     val focusPicker =
         MonitorPickerPresentation(
             kind = MonitorPickerKind.FOCUS,
@@ -454,10 +495,9 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_MODE,
                                 currentValue =
-                                    properties.focusMode
-                                        ?.takeIf { it in StillPickerPolicy.FOCUS_MODE_OPTIONS }
-                                        ?: "AF-S",
-                                options = StillPickerPolicy.FOCUS_MODE_OPTIONS,
+                                    properties.focusMode?.takeIf { it in focusModeOptions }
+                                        ?: focusModeOptions.first(),
+                                options = focusModeOptions,
                             ),
                         applyValueOnActivate = false,
                     ),
@@ -468,10 +508,9 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_AREA,
                                 currentValue =
-                                    properties.focusArea
-                                        ?.takeIf { it in StillPickerPolicy.FOCUS_AREA_OPTIONS }
-                                        ?: "Single",
-                                options = StillPickerPolicy.FOCUS_AREA_OPTIONS,
+                                    properties.focusArea?.takeIf { it in focusAreaOptions }
+                                        ?: focusAreaOptions.first(),
+                                options = focusAreaOptions,
                             ),
                         applyValueOnActivate = false,
                     ),
@@ -482,12 +521,9 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_SUBJECT,
                                 currentValue =
-                                    properties.focusSubject
-                                        ?.takeIf {
-                                            it in StillPickerPolicy.FOCUS_SUBJECT_OPTIONS
-                                        }
-                                        ?: "Auto",
-                                options = StillPickerPolicy.FOCUS_SUBJECT_OPTIONS,
+                                    properties.focusSubject?.takeIf { it in focusSubjectOptions }
+                                        ?: focusSubjectOptions.first(),
+                                options = focusSubjectOptions,
                             ),
                         applyValueOnActivate = false,
                     ),
@@ -500,7 +536,7 @@ internal fun photographyCaptureSettings(
             title = "METER",
             subtitle = "Metering pattern",
             control = CameraControl.STILL_METER,
-            options = StillPickerPolicy.METER_OPTIONS,
+            options = advertised(CameraControl.STILL_METER, StillPickerPolicy.METER_OPTIONS),
             current = properties.meteringMode,
         )
 
@@ -510,7 +546,9 @@ internal fun photographyCaptureSettings(
             title = "PROFILE",
             subtitle = "Picture control",
             control = CameraControl.STILL_PICTURE_CONTROL,
-            options = StillPickerPolicy.PICTURE_OPTIONS,
+            options =
+                advertised(
+                    CameraControl.STILL_PICTURE_CONTROL, StillPickerPolicy.PICTURE_OPTIONS),
             current = properties.pictureControl,
         )
 

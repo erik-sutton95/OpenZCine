@@ -65,7 +65,12 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         codecs: [String] = [],
         vibrationReduction: [String] = [],
         electronicVR: [String] = [],
-        imageSizes: [String] = []
+        imageSizes: [String] = [],
+        exposureModes: [String] = [],
+        userModePrograms: [String] = [],
+        driveModes: [String] = [],
+        meteringModes: [String] = [],
+        pictureControls: [String] = []
     ) {
         self.resolutionFrameRate = resolutionFrameRate
         self.codec = codec
@@ -91,6 +96,11 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         self.vibrationReduction = vibrationReduction
         self.electronicVR = electronicVR
         self.imageSizes = imageSizes
+        self.exposureModes = exposureModes
+        self.userModePrograms = userModePrograms
+        self.driveModes = driveModes
+        self.meteringModes = meteringModes
+        self.pictureControls = pictureControls
     }
 
     /// Current shared-core resolution/frame-rate label matching descriptor options.
@@ -141,6 +151,17 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
     public let electronicVR: [String]
     /// Photo image sizes from the camera's string enumeration, verbatim.
     public let imageSizes: [String]
+    /// Exposure programs the body advertises, in its order. Empty means the body did not
+    /// enumerate them — never a reason to synthesise P/A/S/M + U banks (#274).
+    public let exposureModes: [String]
+    /// Inner programs a U bank can run as, when the body advertises the property at all.
+    public let userModePrograms: [String]
+    /// Release/drive modes the body advertises, in the body's own release-mode order.
+    public let driveModes: [String]
+    /// Metering patterns the body advertises.
+    public let meteringModes: [String]
+    /// Picture controls the body advertises, including only the custom/cloud slots it has.
+    public let pictureControls: [String]
 
     /// Empty capabilities before a successful descriptor refresh.
     public static let empty = AndroidCameraControlCapabilities()
@@ -305,6 +326,12 @@ public enum AndroidCameraPropertyReadbackWire {
             "options.vibrationReduction", values: controls.vibrationReduction, to: &fields)
         appendOptions("options.electronicVr", values: controls.electronicVR, to: &fields)
         appendOptions("options.imageSize", values: controls.imageSizes, to: &fields)
+        appendOptions("options.exposureMode", values: controls.exposureModes, to: &fields)
+        appendOptions(
+            "options.userModeProgram", values: controls.userModePrograms, to: &fields)
+        appendOptions("options.drive", values: controls.driveModes, to: &fields)
+        appendOptions("options.metering", values: controls.meteringModes, to: &fields)
+        appendOptions("options.pictureControl", values: controls.pictureControls, to: &fields)
         return fields.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n")
     }
 
