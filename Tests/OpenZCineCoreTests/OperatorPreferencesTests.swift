@@ -23,6 +23,14 @@ import Testing
     #expect(OperatorPreferences.defaults.keepScreenAwake)
 }
 
+@Test func operatorPreferencesDefaultToQualityStreamAtTheSizeBias() {
+    // A new install asks the body for its largest preview stream. The bias stays on the
+    // middle grade, which the operator-facing Size/Quality control reads as "Size".
+    #expect(OperatorPreferences.defaults.streamPreset == .quality)
+    #expect(OperatorPreferences.defaults.qualityBias == .balanced)
+    #expect(OperatorPreferences.defaults.qualityBias != .detail)
+}
+
 @Test func operatorPreferencesDefaultToWireframeMonitorBehavior() {
     let preferences = OperatorPreferences.defaults
 

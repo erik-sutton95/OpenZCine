@@ -1367,13 +1367,14 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     /** Reads only a real integer, treating wrong-typed preference corruption as an absent value. */
     private fun storedInt(key: String): Int? = preferences.all[key] as? Int
 
+    /** Defaults mirror `OperatorPreferences.defaults` in the shared core — keep them in step. */
     private fun loadStreamPreset(): LiveViewStreamPreset =
         LiveViewStreamPreset.fromStoredName(preferences.getString(STREAM_PRESET_KEY, null))
-            ?: LiveViewStreamPreset.FAST
+            ?: LiveViewStreamPreset.QUALITY
 
     private fun loadQualityBias(): LiveViewQualityBias =
         LiveViewQualityBias.fromStoredName(preferences.getString(QUALITY_BIAS_KEY, null))
-            ?: LiveViewQualityBias.LATENCY
+            ?: LiveViewQualityBias.BALANCED
 
     private fun loadPortraitFeedAspect(): PortraitFeedAspect =
         PortraitFeedAspect.fromStoredName(

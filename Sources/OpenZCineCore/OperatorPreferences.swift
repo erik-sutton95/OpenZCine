@@ -414,9 +414,10 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         keepScreenAwake: true,
         // The smallest preset is ~320x240 — too little real detail for the focus and exposure
         // assists to read, and most of what a detector finds there is compression structure
-        // rather than the lens. Default to the middle of the range instead; the operator can
-        // still drop to Fast for latency.
-        streamPreset: .balanced,
+        // rather than the lens. Default to the largest stream the body will send; the operator
+        // can still drop to Balanced or Fast for latency. Quality bias stays at the body-default
+        // middle ground, which the Size/Quality control reads as "Size".
+        streamPreset: .quality,
         qualityBias: .balanced
     )
 
