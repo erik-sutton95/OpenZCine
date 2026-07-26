@@ -79,7 +79,6 @@ internal data class LocalFramingRenderPlan(
 internal fun localFramingRenderPlan(
     feed: FramingAssistRect,
     configuration: LocalFramingAssistConfiguration,
-    cleanMode: Boolean,
 ): LocalFramingRenderPlan {
     val presentationRect =
         localDesqueezePresentationRect(
@@ -101,17 +100,17 @@ internal fun localFramingRenderPlan(
         } else {
             emptyList()
         }
-    val drawsGrid = !cleanMode && configuration.drawsGrid
+    val drawsGrid = configuration.drawsGrid
+    // DISP-mode policy is NOT applied here: the caller passes a configuration already filtered by
+    // `renderedFramingAssists`, so clean view draws exactly the tools the operator pinned (#256).
     return LocalFramingRenderPlan(
         presentationRect = presentationRect,
         guideFrames = guideFrames,
         drawsInverseGuideMask = configuration.guideMaskEnabled && guideFrames.isNotEmpty(),
-        // Match iOS clean output: retain delivery framing and de-squeeze, but
-        // hide the busier compositional grid and crosshair.
         drawsRuleOfThirds = drawsGrid && configuration.ruleOfThirdsEnabled,
         drawsPhiGrid = drawsGrid && configuration.phiGridEnabled,
         drawsDiagonalGrid = drawsGrid && configuration.diagonalGridEnabled,
-        drawsCenterCrosshair = !cleanMode && configuration.centerCrosshairEnabled,
+        drawsCenterCrosshair = configuration.centerCrosshairEnabled,
     )
 }
 
@@ -120,12 +119,10 @@ internal fun localFramingRenderPlan(
     width: Float,
     height: Float,
     configuration: LocalFramingAssistConfiguration,
-    cleanMode: Boolean,
 ): LocalFramingRenderPlan =
     localFramingRenderPlan(
         feed = FramingAssistRect(0f, 0f, width.coerceAtLeast(0f), height.coerceAtLeast(0f)),
         configuration = configuration,
-        cleanMode = cleanMode,
     )
 
 /**
@@ -203,7 +200,6 @@ internal fun centeredGuideRect(
 @Composable
 internal fun LocalFramingAssistOverlay(
     configuration: LocalFramingAssistConfiguration,
-    cleanMode: Boolean,
     presentationState: LiveFeedPresentationState? = null,
     feedRect: FramingAssistRect? = null,
     aspectFill: Boolean = false,
@@ -237,7 +233,6 @@ internal fun LocalFramingAssistOverlay(
         val plan =
             remember(
                 configuration,
-                cleanMode,
                 feedRect,
                 aspectFill,
                 presentationState,
@@ -264,7 +259,6 @@ internal fun LocalFramingAssistOverlay(
                     localFramingRenderPlan(
                         feed = it,
                         configuration = configuration,
-                        cleanMode = cleanMode,
                     )
                 }
             }

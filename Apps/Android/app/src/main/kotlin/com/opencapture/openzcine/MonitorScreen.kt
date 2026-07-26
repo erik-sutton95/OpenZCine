@@ -1367,6 +1367,11 @@ internal fun MonitorScreen(
         val isPortraitFill =
             isPortrait && !isCommand && !isPhotographyMode && portraitAspect.fillsViewport
 
+        // One authoritative mode filter, mirroring core `MonitorChromePolicy`: clean (DISP 2) is a
+        // bare image unless the operator pinned a tool to it, and it strips the deck/rails/bands
+        // as well (#256).
+        val cleanViewPins = operatorSettings.cleanViewPinnedTools
+        val showsChrome = monitorShowsChrome(effectiveDisplayMode)
         val statusBarVisible = operatorSettings.statusBarVisible.value
         val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
         val cameraValuesVisible = operatorSettings.cameraValuesVisible.value
@@ -1483,6 +1488,11 @@ internal fun MonitorScreen(
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
         val localFraming = operatorSettings.localFramingAssistConfiguration
+        // What the feed overlays actually draw: the operator's framing config with the tools this
+        // DISP mode suppresses switched off. The stored config is untouched, so leaving clean
+        // restores the previous set exactly.
+        val renderedFraming =
+            renderedFramingAssists(localFraming, effectiveDisplayMode, cleanViewPins)
         // While the EV meter tool is on, the session interleaves fast needle
         // reads between regular property polls (dropped again on dispose so a
         // dismissed monitor can't keep the extra camera traffic alive).
@@ -1629,8 +1639,14 @@ internal fun MonitorScreen(
         }
         // Constant camera-header TC sync — every live-view frame updates the
         // hero readout (standby and rolling). No free-run or lag probing.
-        LaunchedEffect(monitorFrameSource, timecodeRetention) {
-            val source = monitorFrameSource ?: return@LaunchedEffect
+        //
+        // Deliberately NOT `monitorFrameSource`: that goes null in Command, which dropped the last
+        // subscriber, ended live view, and froze the dashboard's hero clock at the last pre-Command
+        // frame (#271). Timecode only exists in the live-view frame header, so this collector holds
+        // the stream open in every DISP mode while decode/scopes/audio still stand down.
+        val timecodeFrameSource = monitorTimecodeFrameSource(activeFrameSource)
+        LaunchedEffect(timecodeFrameSource, timecodeRetention) {
+            val source = timecodeFrameSource ?: return@LaunchedEffect
             source.frames
                 .conflate()
                 .collect { frame ->
@@ -1657,10 +1673,16 @@ internal fun MonitorScreen(
             remember(monitorFrameSource) { LiveFeedEffectsPresentationState() }
         var feedPointerSize by remember(monitorFrameSource) { mutableStateOf(IntSize.Zero) }
         val audioMetersEnabled = assist.audioMetersEnabled
+        // Mode-filtered render inputs (#256): the operator's stored on/off state is untouched, so
+        // leaving clean restores everything exactly.
+        val renderedEffects = renderedFeedEffects(assist.effects, effectiveDisplayMode, cleanViewPins)
+        val renderedAudioMeters =
+            audioMetersEnabled &&
+                assistToolRendersInMode(AssistTool.AUDIO, effectiveDisplayMode, cleanViewPins)
         var liveAudioLevels by
             remember(monitorFrameSource) { mutableStateOf<LiveAudioMeterLevels?>(null) }
-        LaunchedEffect(monitorFrameSource, audioMetersEnabled) {
-            if (!audioMetersEnabled || monitorFrameSource == null) {
+        LaunchedEffect(monitorFrameSource, renderedAudioMeters) {
+            if (!renderedAudioMeters || monitorFrameSource == null) {
                 liveAudioLevels = null
                 return@LaunchedEffect
             }
@@ -1672,11 +1694,17 @@ internal fun MonitorScreen(
         }
         val railPlan =
             landscapeSideRailPlan(
-                sideRailsVisible = sideRailsVisible,
+                sideRailsVisible = sideRailsVisible && showsChrome,
                 recording = recording,
                 recordCommandPending = recordCommandPending,
                 recordConfirmationPending = pendingRecordTarget != null,
-            )
+            ).let { plan ->
+                // Clean view (DISP 2) strips the rails as non-critical chrome (#256), and the
+                // Settings recovery affordance is chrome too — the operator chose a bare image and
+                // swipes up on the feed to come back. The rolling-take stop control is the one
+                // documented exception the plan already models, so it stays.
+                if (showsChrome) plan else plan.copy(settingsRecoveryVisible = false)
+            }
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
         // Photography's landscape feed: the still image-area's shape centred in
         // the clear box between the chrome lanes — the rail and capture band
@@ -2032,7 +2060,7 @@ internal fun MonitorScreen(
                             }
                         },
                         presentationState = liveFeedPresentation,
-                        effects = assist.effects,
+                        effects = renderedEffects,
                         configuration = operatorSettings.feedEffectsConfiguration,
                         cameraInput = exposureAssistCameraInput,
                         lutLibrary = lutLibrary,
@@ -2057,14 +2085,13 @@ internal fun MonitorScreen(
                     MonitorFeedCameraStatus(status = cameraFeedStatus)
                 }
                 LocalFramingAssistOverlay(
-                    configuration = localFraming,
-                    cleanMode = isClean,
+                    configuration = renderedFraming,
                     presentationState = liveFeedPresentation,
                     aspectFill = isPortraitFill,
                 )
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,
-                    configuration = localFraming,
+                    configuration = renderedFraming,
                     cleanMode = isClean,
                     isPortrait = isPortrait,
                     aspectFill = isPortraitFill,
@@ -2077,7 +2104,7 @@ internal fun MonitorScreen(
                 )
                 LiveFeedColorModeNotice(
                     colorMode = liveFeedPresentation.colorMode,
-                    effectsActive = !assist.effects.isIdentity,
+                    effectsActive = !renderedEffects.isIdentity,
                     modifier =
                         Modifier.align(Alignment.TopCenter)
                             .padding(top = liveFeedColorNoticeTopInset.dp),
@@ -2090,6 +2117,7 @@ internal fun MonitorScreen(
                     zones = zones,
                     viewportHeight = viewportHeight,
                     isCommand = isCommand,
+                    showsChrome = showsChrome,
                     isFill = isPortraitFill,
                     locked = locked,
                     recording = recording,
@@ -2207,7 +2235,7 @@ internal fun MonitorScreen(
                     // lane (see monitorLeadingInsetDp) starts the feed right of
                     // the lock, so the band always clears it — same as iPhone
                     // geometry.
-                    if (operatorSettings.statusBarVisible.value) {
+                    if (operatorSettings.statusBarVisible.value && showsChrome) {
                         // Photography centres the deck pill group over the
                         // centred FEED, not the band (iOS centres the deck
                         // over the feed) — a band slice symmetric about the
@@ -2608,9 +2636,10 @@ internal fun MonitorScreen(
         // One monitor-owned sampler serves every toolbar-selected scope.
         // Landscape and portrait fill float every selection; portrait fit
         // mounts only its recency-selected ≤2 stack in the shared zone.
-        if (!isCommand && assist.selectedScopes.isNotEmpty() && monitorFrameSource != null) {
+        val renderedScopeSet = renderedScopes(assist.selectedScopes, effectiveDisplayMode, cleanViewPins)
+        if (renderedScopeSet.isNotEmpty() && monitorFrameSource != null) {
             ScopePanels(
-                selectedScopes = assist.selectedScopes,
+                selectedScopes = renderedScopeSet,
                 portraitScopes = portraitScopes,
                 crushClipCompensationRaw = operatorSettings.scopeCrushClipCompensation.wireValue,
                 histogramTrafficLightsEnabled = operatorSettings.histogramTrafficLightsEnabled.value,
@@ -2636,7 +2665,7 @@ internal fun MonitorScreen(
                 onPanelFrameChanged = onAnalysisPanelFrameChanged,
             )
         }
-        if (!isCommand && (!isPortrait || isPortraitFill) && audioMetersEnabled) {
+        if (!isCommand && (!isPortrait || isPortraitFill) && renderedAudioMeters) {
             val audioBounds = if (isPortraitFill) zones.feed else physicalViewport
             AudioMetersOverlay(
                 levels = liveAudioLevels,
@@ -2647,7 +2676,7 @@ internal fun MonitorScreen(
         }
         // Match iOS z-order: the false-colour key is mounted after floating
         // scopes and audio so nothing can obscure or intercept its drag target.
-        if (!isCommand && (!isPortrait || isPortraitFill)) {
+        if (!isCommand && (!isPortrait || isPortraitFill) && renderedEffects.falseColor != null) {
             val falseColorBounds = if (isPortraitFill) zones.feed else physicalViewport
             CompositionLocalProvider(LocalMonitorGlass provides glass) {
                 FalseColorReferenceOverlay(
@@ -3162,6 +3191,8 @@ private fun PortraitChrome(
     zones: MonitorZones,
     viewportHeight: Float,
     isCommand: Boolean,
+    /** Whether non-critical chrome mounts; clean view (DISP 2) strips it all (#256). */
+    showsChrome: Boolean,
     isFill: Boolean,
     locked: Boolean,
     recording: Boolean,
@@ -3207,10 +3238,10 @@ private fun PortraitChrome(
     LaunchedEffect(isFill, isCommand) {
         if (!isFill || isCommand) railExpanded = false
     }
-    // iOS mounts the portrait info bar unconditionally — it shows in live,
-    // clean, AND command portrait, independent of the status-bar toggle
-    // (which governs only the landscape pill).
-    run {
+    // The portrait info bar shows in live and command, independent of the
+    // status-bar toggle (which governs only the landscape pill). Clean strips
+    // it with the rest of the non-critical chrome (#256).
+    if (showsChrome) {
         PortraitInfoBar(
             timecodeRetention = timecodeRetention,
             sessionState = sessionState,
@@ -3225,7 +3256,7 @@ private fun PortraitChrome(
     // feed's top-trailing corner, under the top bar. iOS always mounts it in
     // non-command portrait (dimmed while locked) and always offers both menu
     // rows; showPicker itself no-ops while locked.
-    if (!isCommand) {
+    if (!isCommand && showsChrome) {
         var recOptionsExpanded by remember { mutableStateOf(false) }
         val recOptionsFrame =
             ZoneFrame(
@@ -3388,66 +3419,74 @@ private fun PortraitChrome(
         )
     }
 
-    // Opaque band behind the system controls through the physical bottom
-    // edge, so the record button never floats on bare black (iOS R4).
-    Box(
-        Modifier.zone(
-            ZoneFrame(
-                zones.systemCluster.x,
-                zones.systemCluster.y,
-                zones.systemCluster.width,
-                maxOf(0f, viewportHeight - zones.systemCluster.y),
-            ),
-        ).background(LiveDesign.glass),
-    )
-
     // Bottom system band: equal gaps around natural control sizes (iOS
     // `PortraitSystemBar` uses equal spacers, not equal columns).
-    Row(
-        Modifier.zone(zones.systemCluster),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Spacer(Modifier.weight(1f))
-        LockButton(locked, Modifier.size(40.dp), onClick = onLock)
-        Spacer(Modifier.weight(1f))
-        DispButton(
-            activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
-            modeCount = enabledDisplayModeOrder.size,
-            isLiveActive = displayMode == MonitorDisplayMode.LIVE,
-            modifier = Modifier.size(width = 74.dp, height = 44.dp),
-            onClick = onDisp,
+    // Clean view (DISP 2) strips it as non-critical chrome, except while a take is rolling: the
+    // way to STOP one is never removed (#256). A feed swipe-up returns to DISP 1.
+    val systemBandRecordOnly = !showsChrome && recording
+    if (showsChrome || systemBandRecordOnly) {
+        // Opaque band behind the system controls through the physical bottom
+        // edge, so the record button never floats on bare black (iOS R4).
+        Box(
+            Modifier.zone(
+                ZoneFrame(
+                    zones.systemCluster.x,
+                    zones.systemCluster.y,
+                    zones.systemCluster.width,
+                    maxOf(0f, viewportHeight - zones.systemCluster.y),
+                ),
+            ).background(LiveDesign.glass),
         )
-        Spacer(Modifier.weight(1f))
-        if (isPhotography) {
-            PhotographyShutterButton(
-                isCapturing = stillCapturing,
-                modifier = Modifier.size(83.dp),
-                timerRemaining = photoTimerRemaining,
-                bodyShutterPulse = bodyShutterPulse,
-                onPressed = onShutterPressed,
-                onReleased = onShutterReleased,
-            )
-        } else {
-            RecordButton(
-                recording = recording,
-                modifier = Modifier.size(83.dp),
-                enabled = recordEnabled,
-                onClick = onRecord,
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
+        Row(
+            Modifier.zone(zones.systemCluster),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.weight(1f))
+            if (!systemBandRecordOnly) {
+                LockButton(locked, Modifier.size(40.dp), onClick = onLock)
+                Spacer(Modifier.weight(1f))
+                DispButton(
+                    activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
+                    modeCount = enabledDisplayModeOrder.size,
+                    isLiveActive = displayMode == MonitorDisplayMode.LIVE,
+                    modifier = Modifier.size(width = 74.dp, height = 44.dp),
+                    onClick = onDisp,
+                )
+                Spacer(Modifier.weight(1f))
+            }
             if (isPhotography) {
-                PhotoGlyph(tint, glyphModifier)
+                PhotographyShutterButton(
+                    isCapturing = stillCapturing,
+                    modifier = Modifier.size(83.dp),
+                    timerRemaining = photoTimerRemaining,
+                    bodyShutterPulse = bodyShutterPulse,
+                    onPressed = onShutterPressed,
+                    onReleased = onShutterReleased,
+                )
             } else {
-                MediaStackGlyph(tint, glyphModifier)
+                RecordButton(
+                    recording = recording,
+                    modifier = Modifier.size(83.dp),
+                    enabled = recordEnabled,
+                    onClick = onRecord,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            if (!systemBandRecordOnly) {
+                AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
+                    if (isPhotography) {
+                        PhotoGlyph(tint, glyphModifier)
+                    } else {
+                        MediaStackGlyph(tint, glyphModifier)
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->
+                    GearGlyph(tint, glyphModifier)
+                }
+                Spacer(Modifier.weight(1f))
             }
         }
-        Spacer(Modifier.weight(1f))
-        AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->
-            GearGlyph(tint, glyphModifier)
-        }
-        Spacer(Modifier.weight(1f))
     }
 }
 

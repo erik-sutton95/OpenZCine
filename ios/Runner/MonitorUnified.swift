@@ -780,6 +780,9 @@ struct MonitorSystemCluster: View {
     /// Absolute (landscape) or column-relative (portrait) frames for the five controls.
     var slots: MonitorSystemSlotFrames
     var axis: MonitorZoneStyle
+    /// Renders the record control alone. Clean view (DISP 2) strips the rail as non-critical
+    /// chrome but never the way to STOP a rolling take (#256).
+    var recordOnly: Bool = false
     /// Press tracking for the photo shutter. `@GestureState` (not `@State`): the system can
     /// swallow a finger-up (gesture-gate timeouts), and gesture state resets even then — a
     /// stranded latch once chained an endless burst.
@@ -801,16 +804,20 @@ struct MonitorSystemCluster: View {
     // MARK: - .axisVertical (former `LockButtonModule` + `RightRailControlsModule`)
 
     @ViewBuilder private var landscapeBody: some View {
-        lockButton
-            .monitorModuleFrame(slots.lock)
-        settingsButton
-            .monitorModuleFrame(slots.settings)
-        mediaButton
-            .monitorModuleFrame(slots.media)
+        if !recordOnly {
+            lockButton
+                .monitorModuleFrame(slots.lock)
+            settingsButton
+                .monitorModuleFrame(slots.settings)
+            mediaButton
+                .monitorModuleFrame(slots.media)
+        }
         recordButton
             .monitorModuleFrame(slots.record)
-        displayButton
-            .monitorModuleFrame(slots.disp)
+        if !recordOnly {
+            displayButton
+                .monitorModuleFrame(slots.disp)
+        }
     }
 
     private var lockButton: some View {
@@ -927,19 +934,23 @@ struct MonitorSystemCluster: View {
         // column left DISP nearly touching record while far from lock.
         HStack(spacing: 0) {
             Spacer(minLength: 14)
-            lockButton
-            Spacer(minLength: 14)
-            PortraitDisplayButton()
-                .accessibilityLabel("Change display mode")
-                .accessibilityIdentifier("monitor.system.display")
-                .liveViewGuideAnchor(.display)
-            Spacer(minLength: 14)
+            if !recordOnly {
+                lockButton
+                Spacer(minLength: 14)
+                PortraitDisplayButton()
+                    .accessibilityLabel("Change display mode")
+                    .accessibilityIdentifier("monitor.system.display")
+                    .liveViewGuideAnchor(.display)
+                Spacer(minLength: 14)
+            }
             recordButton
             Spacer(minLength: 14)
-            mediaButton
-            Spacer(minLength: 14)
-            settingsButton
-            Spacer(minLength: 14)
+            if !recordOnly {
+                mediaButton
+                Spacer(minLength: 14)
+                settingsButton
+                Spacer(minLength: 14)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1219,10 +1230,13 @@ struct MonitorShell: View {
 
                 // Side rails (batteries + system cluster) render on top of live and command.
                 // Clean strips them with the rest of the non-critical chrome (#256) — a swipe up
-                // on the feed is the way back to DISP 1 from there.
-                if chrome.sideRailsVisible, MonitorChromePolicy.showsChrome(in: model.displayMode) {
+                // on the feed is the way back to DISP 1 from there. The one exception is a rolling
+                // take: clean must never remove the way to stop one, so the record control alone
+                // stays up (documented critical exception, see `MonitorChromePolicy`).
+                let recordOnlyRail = !showsChrome && model.isRecordingOrPending
+                if chrome.sideRailsVisible, showsChrome || recordOnlyRail {
                     canvasLayer {
-                        if let battery = map.batteryCluster {
+                        if showsChrome, let battery = map.batteryCluster {
                             if battery.style == .batteryInline {
                                 // Width-constrained (iPad): inline row beside the lock button.
                                 // The frame is a nominal band; content hugs its leading edge.
@@ -1242,8 +1256,11 @@ struct MonitorShell: View {
                                 .monitorModuleFrame(battery.frame)
                             }
                         }
-                        MonitorSystemCluster(slots: map.systemSlots, axis: .axisVertical)
-                            .environment(model)
+                        MonitorSystemCluster(
+                            slots: map.systemSlots, axis: .axisVertical,
+                            recordOnly: recordOnlyRail
+                        )
+                        .environment(model)
                     }
                 }
             }
@@ -1752,8 +1769,10 @@ struct MonitorShell: View {
             // is top-anchored at physical 0 (no safe-area centering — the offset children carry
             // physical coordinates), so this reaches the true bottom edge.
             // Bottom system band — hidden in clean along with the rest of the chrome (#256); a
-            // swipe up on the feed is the way back to DISP 1.
-            if showsChrome {
+            // swipe up on the feed is the way back to DISP 1. A rolling take keeps the record
+            // control alone (see the landscape branch).
+            let recordOnlyBand = !showsChrome && model.isRecordingOrPending
+            if showsChrome || recordOnlyBand {
                 Rectangle()
                     .fill(LiveDesign.glass)
                     .frame(
@@ -1763,13 +1782,15 @@ struct MonitorShell: View {
                     .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
                     .allowsHitTesting(false)
 
-                MonitorSystemCluster(slots: map.systemSlots, axis: .axisHorizontal)
-                    .environment(model)
-                    .frame(
-                        width: map.systemCluster.frame.width,
-                        height: map.systemCluster.frame.height
-                    )
-                    .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
+                MonitorSystemCluster(
+                    slots: map.systemSlots, axis: .axisHorizontal, recordOnly: recordOnlyBand
+                )
+                .environment(model)
+                .frame(
+                    width: map.systemCluster.frame.width,
+                    height: map.systemCluster.frame.height
+                )
+                .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
             }
 
             // Pickers / assist popups (portrait-anchored host).

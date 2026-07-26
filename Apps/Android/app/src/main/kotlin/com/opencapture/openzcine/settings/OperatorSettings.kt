@@ -936,6 +936,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     private val assistToolbarOrderState = mutableStateOf(loadAssistToolbarOrder())
     private val visibleAssistToolsState = mutableStateOf(loadVisibleAssistTools())
+    private val cleanViewPinnedToolsState = mutableStateOf(loadCleanViewPinnedTools())
 
     /** Current persisted order for the Android-supported assist toolbar tools. */
     public val assistToolbarOrder: List<AssistTool>
@@ -977,6 +978,27 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .apply()
     }
 
+    /**
+     * View-assist tools the operator pinned to survive clean view (DISP 2).
+     * Empty by default — clean is a bare image out of the box (#256).
+     */
+    public val cleanViewPinnedTools: Set<AssistTool>
+        get() = cleanViewPinnedToolsState.value
+
+    /** Whether [tool] keeps rendering in clean view (DISP 2). */
+    public fun isPinnedToCleanView(tool: AssistTool): Boolean =
+        tool in cleanViewPinnedToolsState.value
+
+    /** Toggles whether [tool] keeps rendering in clean view (DISP 2). */
+    public fun toggleCleanViewPin(tool: AssistTool) {
+        val next = cleanViewPinnedToolsState.value.toMutableSet()
+        if (!next.add(tool)) next.remove(tool)
+        cleanViewPinnedToolsState.value = next
+        preferences.edit()
+            .putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, next.mapTo(linkedSetOf()) { it.name })
+            .apply()
+    }
+
     /** Moves [tool] directly to [targetIndex] and persists the normalized order. */
     public fun moveAssistToolbarTool(tool: AssistTool, targetIndex: Int) {
         val current = assistToolbarOrderState.value
@@ -998,9 +1020,11 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         val defaultOrder = AssistTool.entries.toList()
         assistToolbarOrderState.value = defaultOrder
         visibleAssistToolsState.value = defaultOrder.toSet()
+        cleanViewPinnedToolsState.value = emptySet()
         preferences.edit()
             .putString(ASSIST_TOOLBAR_ORDER_KEY, defaultOrder.joinToString(separator = ",") { it.name })
             .putStringSet(VISIBLE_ASSIST_TOOLS_KEY, defaultOrder.mapTo(linkedSetOf()) { it.name })
+            .putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, linkedSetOf())
             .putBoolean(TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(AUDIO_METERS_VISIBILITY_MIGRATED_KEY, true)
             .putBoolean(FRAMING_TOOLS_VISIBILITY_MIGRATED_KEY, true)
@@ -1146,6 +1170,17 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         }
         return migrated
     }
+
+    /**
+     * Clean-view pins default to empty and stay empty for every existing
+     * install: an absent key means the operator never pinned anything, which is
+     * exactly the documented default (clean is bare), so no migration is needed.
+     */
+    private fun loadCleanViewPinnedTools(): Set<AssistTool> =
+        preferences.getStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, emptySet())
+            ?.mapNotNull(AssistTool::fromStoredName)
+            ?.toSet()
+            .orEmpty()
 
     private fun legacyGuideWasVisible(): Boolean = legacyGuideRatio() != null
 
@@ -1392,6 +1427,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val ENABLED_DISPLAY_MODES_KEY = "display.disp.enabled.v1"
         const val ASSIST_TOOLBAR_ORDER_KEY = "display.assistToolbar.order.v1"
         const val VISIBLE_ASSIST_TOOLS_KEY = "display.assistToolbar.visible.v1"
+        const val CLEAN_VIEW_PINNED_TOOLS_KEY = "display.assistToolbar.cleanViewPinned.v1"
         const val TRAFFIC_LIGHTS_VISIBILITY_MIGRATED_KEY =
             "display.assistToolbar.trafficLights.visibility.migrated.v1"
         const val AUDIO_METERS_VISIBILITY_MIGRATED_KEY =

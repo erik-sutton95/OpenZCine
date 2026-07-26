@@ -7362,6 +7362,13 @@ final class NativeAppModel {
         if let message { connectionMessage = message }
     }
 
+    /// A take is rolling, or a record command is waiting on the operator's confirmation. Clean
+    /// view keeps the record control alone on screen while this is true — it strips every other
+    /// rail, but never the way to STOP a take (#256).
+    var isRecordingOrPending: Bool {
+        isRecording || pendingRecordConfirmation != nil
+    }
+
     /// True while the body reports photo mode — the strips and pickers then resolve the stills
     /// set (`CameraPicker.forValueLabel(_:photography:)`) instead of the movie one.
     var isPhotographyMode: Bool {

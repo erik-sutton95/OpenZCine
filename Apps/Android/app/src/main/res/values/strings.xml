@@ -825,6 +825,10 @@
     <string name="settings_position_number">%1$d</string>
     <string name="settings_pinned">PINNED</string>
     <string name="settings_toolbar_visibility">Show %1$s in monitor toolbar</string>
+    <string name="settings_clean_view_tag">CLEAN</string>
+    <string name="settings_clean_view_pin">Keep %1$s visible in clean view</string>
+    <string name="status_pinned_to_clean">Kept in clean view</string>
+    <string name="status_hidden_in_clean">Hidden in clean view</string>
     <string name="status_visible">Visible</string>
     <string name="status_hidden">Hidden</string>
     <string name="settings_reorder_position">Reorder %1$s, position %2$d</string>
@@ -838,7 +842,7 @@
     <string name="settings_toggle_assists">ASSISTS</string>
     <string name="settings_toggle_values">VALUES</string>
     <string name="settings_assist_toolbar">View Assist toolbar</string>
-    <string name="settings_assist_toolbar_caption">Drag to reorder; tap the eye to show or hide each tool on the monitor bar.</string>
+    <string name="settings_assist_toolbar_caption">Drag to reorder; tap the switch to show or hide each tool on the monitor bar, and CLEAN to keep it visible in clean view (DISP 2).</string>
     <string name="settings_reset_toolbar">Reset toolbar</string>
     <string name="settings_live_readouts">Live Status Readouts</string>
     <string name="settings_live_readouts_caption">Hide readouts you do not ride during a take.</string>

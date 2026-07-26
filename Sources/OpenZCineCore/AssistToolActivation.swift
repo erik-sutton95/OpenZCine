@@ -16,8 +16,13 @@ import Foundation
 /// **Documented critical exceptions.** These are deliberately *not* routed through this policy and
 /// stay visible in clean view, because suppressing them risks a ruined or lost take:
 /// camera fault and thermal/card warnings (`CameraWarningStatus`), the recording tally, connection
-/// loss / reconnect notices, and modal alerts that require an immediate answer (record
-/// confirmation). Analysis chrome — scopes, traffic lights, histograms, meters — is never critical.
+/// loss / reconnect notices, modal alerts that require an immediate answer (record confirmation),
+/// and — while a take is rolling or a record command is awaiting confirmation — the record control
+/// itself, which both shells keep on screen alone after stripping the rest of the rail. Clean view
+/// must never remove the way to STOP a take. Analysis chrome — scopes, traffic lights, histograms,
+/// meters — is never critical.
+///
+/// The way *out* of clean view is the existing feed swipe-up gesture, which both shells keep live.
 public enum MonitorChromePolicy {
     /// Whether `tool` renders right now: switched on for `context`, and permitted by `mode`.
     public static func isToolVisible(

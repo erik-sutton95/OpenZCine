@@ -2196,6 +2196,14 @@ internal fun AssistToolbarOrderList(
                         if (settings.isAssistToolbarToolVisible(tool)) R.string.status_visible
                         else R.string.status_hidden,
                     )
+                val cleanPinned = settings.isPinnedToCleanView(tool)
+                val cleanPinDescription =
+                    stringResource(R.string.settings_clean_view_pin, toolTitle)
+                val cleanPinState =
+                    stringResource(
+                        if (cleanPinned) R.string.status_pinned_to_clean
+                        else R.string.status_hidden_in_clean,
+                    )
                 val reorderDescription =
                     stringResource(R.string.settings_reorder_position, toolTitle, index + 1)
                 val dragging = tool == draggingTool
@@ -2273,6 +2281,29 @@ internal fun AssistToolbarOrderList(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
+                        // Keep-in-clean-view pin: clean (DISP 2) hides every tool unless pinned
+                        // (#256). Offered for every tool, LUT included.
+                        Box(
+                            Modifier.settingsClickable(role = Role.Switch) {
+                                settings.toggleCleanViewPin(tool)
+                                onInteraction()
+                            }.semantics {
+                                contentDescription = cleanPinDescription
+                                stateDescription = cleanPinState
+                            },
+                        ) {
+                            Text(
+                                stringResource(R.string.settings_clean_view_tag),
+                                style = chromeStyle(9.5f, FontWeight.Bold, mono = true),
+                                color = if (cleanPinned) LiveDesign.accent else LiveDesign.faint,
+                                maxLines = 1,
+                                modifier =
+                                    Modifier.background(
+                                        if (cleanPinned) LiveDesign.accentDim else LiveDesign.surface,
+                                        CircleShape,
+                                    ).padding(horizontal = 7.dp, vertical = 4.dp),
+                            )
+                        }
                         if (tool == AssistTool.LUT) {
                             SettingsValueText(stringResource(R.string.settings_pinned))
                         } else {

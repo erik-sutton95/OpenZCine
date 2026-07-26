@@ -376,7 +376,10 @@ internal fun LiveFrameMetadataOverlay(
     modifier: Modifier = Modifier,
 ) {
     val cameraLevel = presentationState.level
-    val levelEnabled = configuration.levelEnabled && !cleanMode
+    // Tool visibility comes from [configuration], already filtered for the DISP mode by
+    // `renderedFramingAssists` (#256). `cleanMode` is now only a LAYOUT input: clean leaves the
+    // feed's bottom edge free, so the EV needle drops to it instead of clearing a capture bar.
+    val levelEnabled = configuration.levelEnabled
     val cameraLevelAvailable = cameraLevel?.let(::cameraLevelIsValid) == true
     val deviceGravity =
         rememberDeviceGravityLevel(
@@ -435,8 +438,6 @@ internal fun LiveFrameMetadataOverlay(
                     debugFixtureShown = debugFixtureShown,
                 )
             }
-            // The EV meter SURVIVES clean mode (iOS DISP 2 rule): exposure
-            // truth is exactly what a stripped-down operator view still needs.
             // Photography-only — the render guards the mode as well as the
             // toolset, since a persisted visibility set from an older build may
             // still carry the tool. Hidden while the body reports its indicator
