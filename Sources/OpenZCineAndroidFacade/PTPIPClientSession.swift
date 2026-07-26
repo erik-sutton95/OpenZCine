@@ -2202,17 +2202,20 @@ public final class PTPIPClientSession: @unchecked Sendable {
 
     // MARK: - Still capture (photography mode)
 
-    /// Fires a still release with the media-destination capture op (AF-then-release to
-    /// the card). Activation-style: the OK response confirms the release started; poll
+    /// Fires a still release with the media-destination capture op, to the card.
+    /// Activation-style: the OK response confirms the release started; poll
     /// ``pollStillReleaseReadiness()`` between frames for completion.
-    public func initiateStillCapture() throws {
+    /// `preserveFocus` releases without the AF-driving step so a focus set with the dial
+    /// survives the shutter (see ``StillCapturePolicy/captureSortParameter(preserveFocus:)``).
+    public func initiateStillCapture(preserveFocus: Bool = false) throws {
         commandLifecycleLock.lock()
         defer { commandLifecycleLock.unlock() }
         guard !isMediaModeActive else {
             throw PTPIPClientSessionError.mediaModeActive
         }
+        let captureSort = StillCapturePolicy.captureSortParameter(preserveFocus: preserveFocus)
         try transactExpectingOK(
-            .initiateCaptureRecInMedia, parameters: [0xFFFF_FFFE, 0x0000])
+            .initiateCaptureRecInMedia, parameters: [captureSort, 0x0000])
     }
 
     /// One `DeviceReady` poll after a still release.
@@ -2270,7 +2273,11 @@ public final class PTPIPClientSession: @unchecked Sendable {
     ) -> Bool {
         guard
             (1...3).contains(imageSize),
-            (1...3).contains(compression),
+            // Compression is a 6-value enum (Basic/Normal/Fine x size/quality priority). The old
+            // 1...3 guard silently rejected the Fine grade, so the best live-view quality the body
+            // offers could never be requested — and the top operator setting only ever reached
+            // Normal.
+            (0...5).contains(compression),
             // Match recording-rate cadences (e.g. 25p → 40 ms, 50p → 20 ms) while
             // still rejecting pathological intervals outside the supported envelope.
             frameIntervalNanoseconds >= Self.minimumLiveViewFrameIntervalNanoseconds,

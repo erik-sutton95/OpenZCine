@@ -63,13 +63,9 @@ public enum AndroidLiveViewPolicyWire {
             let thermalTier = ThermalTier(rawValue: thermalTierRaw)
         else { return nil }
 
-        let imageSize = LiveViewLoadPolicy.effectiveImageSize(
-            requested: imageSize(for: streamPreset),
-            isRecording: isRecording,
-            thermalTier: thermalTier,
-            cameraOverheating: cameraOverheating)
+        // The operator's preset is honoured unconditionally — no thermal or recording step-down.
         return AndroidLiveViewRequest(
-            imageSize: imageSize,
+            imageSize: imageSize(for: streamPreset),
             compression: compression(for: qualityBias),
             frameIntervalNanoseconds: frameIntervalNanoseconds())
     }
@@ -91,19 +87,11 @@ public enum AndroidLiveViewPolicyWire {
     }
 
     private static func imageSize(for preset: OperatorPreferences.StreamPreset) -> UInt8 {
-        switch preset {
-        case .fast: 1
-        case .balanced: 2
-        case .quality: 3
-        }
+        preset.liveViewImageSize
     }
 
     private static func compression(for bias: OperatorPreferences.QualityBias) -> UInt8 {
-        switch bias {
-        case .latency: 1
-        case .balanced: 2
-        case .detail: 3
-        }
+        bias.liveViewImageCompression
     }
 }
 
