@@ -375,6 +375,16 @@ enum DemoHarness {
                             in: CGRect(x: 0, y: 0, width: 1, height: 1))
                     }
                 }
+                if let raw = env["ZC_DEMO_CLEAN_PIN"] {
+                    // Demo/screenshot affordance: pin assist tools to clean view (comma-separated
+                    // raw values, e.g. "WAVE,GUIDES") so DISP 2 can be captured both bare and
+                    // with exactly one tool kept.
+                    for value in raw.split(separator: ",") {
+                        if let tool = MonitorAssistTool(rawValue: String(value)) {
+                            model.preferences.cleanViewPinnedTools.insert(tool)
+                        }
+                    }
+                }
                 if let raw = env["ZC_DEMO_ASSIST_ON"] {
                     // Demo/screenshot affordance: switch one or more assist tools on (comma-separated
                     // raw values, e.g. "FALSE,PEAK,WAVE") so the live monitor tools can be captured.
@@ -393,7 +403,12 @@ enum DemoHarness {
                         model.demoSeedAudioMonitor()
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
-                    if model.scopesActive,
+                    // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
+                    // view capture with a pinned scope still gets samples.
+                    let scopesOn = MonitorAssistTool.scopeTools.contains {
+                        model.preferences.visibleAssistTools(for: .liveView).contains($0)
+                    }
+                    if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
                     {
                         Task { await model.refreshScopes(from: mock) }

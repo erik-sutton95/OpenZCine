@@ -4000,7 +4000,8 @@ struct OperatorSettingsPanel: View {
     @ViewBuilder private var displayRows: some View {
         SettingsGroupCard(
             title: "View Assist toolbar",
-            caption: "Drag to reorder; tap the eye to show or hide each tool on the monitor bar.",
+            caption:
+                "Drag to reorder; tap the eye to show or hide each tool on the monitor bar, and the pin to keep it visible in clean view (DISP 2).",
             onReset: { model.resetAssistToolbarPreferences() },
             content: {
                 AssistToolbarOrderStrip()
