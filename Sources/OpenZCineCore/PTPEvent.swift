@@ -10,6 +10,10 @@ public enum PTPEventCode: UInt16, Sendable {
     case objectAdded = 0x4002
     /// Standard PIMA 15740 event: the capture run finished writing (one per destination).
     case captureComplete = 0x400D
+    /// Standard PIMA 15740 event: a device property changed ON THE CAMERA. Parameter `e1` carries
+    /// the property code. This is how a body-side dial, ring, or menu edit reaches the app promptly
+    /// — the round-robin poll visits any one property only every ~20 s.
+    case devicePropChanged = 0x4006
     case movieRecordInterrupted = 0xC105
     case movieRecordComplete = 0xC108
     case movieRecordStarted = 0xC10A
@@ -72,6 +76,16 @@ public struct PTPEvent: Equatable, Sendable {
         return parameters.first
     }
 
+    /// The device property a `DevicePropChanged` (`0x4006`) event names, when the shared core
+    /// decodes that property. Nikon puts the property code in the first event parameter.
+    ///
+    /// Nil for any other event, for a malformed event with no parameters, and for a property code
+    /// this build does not model — an announcement alone is not evidence the app can decode it.
+    public var changedPropertyCode: PTPPropertyCode? {
+        guard eventCode == .devicePropChanged, let raw = parameters.first else { return nil }
+        return PTPPropertyCode(rawValue: raw)
+    }
+
     /// Infers movie record state from Nikon record lifecycle events (`0xC10A` started,
     /// `0xC108` complete, `0xC105` interrupted). Returns nil for unrelated events.
     public var inferredRecordState: RecordState? {
@@ -80,7 +94,7 @@ public struct PTPEvent: Equatable, Sendable {
             return .recording
         case .movieRecordComplete, .movieRecordInterrupted:
             return .standby
-        case .objectAdded, .captureComplete, .unknown:
+        case .objectAdded, .captureComplete, .devicePropChanged, .unknown:
             return nil
         }
     }

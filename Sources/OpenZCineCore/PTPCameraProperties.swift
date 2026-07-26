@@ -109,6 +109,24 @@ extension PTPPropertyCode {
         return liveMonitorPollOrder
     }
 
+    /// Whether a camera-announced property change (`DevicePropChanged` `0x4006`) names a property
+    /// the monitor decodes, so the shells can turn the announcement straight into one authoritative
+    /// read instead of waiting out the round-robin.
+    ///
+    /// The gate is the UNION of the movie and photo monitor sets, deliberately: movie and photo
+    /// chrome watch different exposure properties (`movieFNumber` vs `fNumber`,
+    /// `movieShutterSpeed` vs `stillShutterSpeed`, …), and the app's cached capture selector can
+    /// lag the body's lever by a poll or two. Gating on only the currently-believed chrome drops
+    /// exactly the changes made across a mode switch. Recording is not considered either — the
+    /// narrow recording poll set exists to spare the camera radio, and a body-announced change is
+    /// a single read the operator explicitly caused.
+    public static func isMonitoredChange(_ property: PTPPropertyCode) -> Bool {
+        monitoredChangeProperties.contains(property)
+    }
+
+    private static let monitoredChangeProperties: Set<PTPPropertyCode> =
+        Set(liveMonitorPollOrder).union(StillCapturePolicy.photoMonitorPollOrder)
+
     /// Next property for one steady-state poll tick, with high-priority mode-selector interleave.
     ///
     /// Round-robin alone puts `LiveViewSelector` once per full cycle (~30 properties ≈ 5–10 s at
@@ -400,7 +418,33 @@ public struct PTPCameraPropertyWrite: Equatable, Sendable {
                 codec: snapshot.fileType ?? "")
             return isoWrite(label: label, dualBase: dualBase)
         }
+        if control == .shutter, let mode = snapshot.shutterMode,
+            let write = request(control: control, label: label),
+            write.property != shutterValueProperty(for: mode)
+        {
+            // The body's shutter circuit and its value are ONE camera-supported state. The
+            // label-shape encoder picks the property from the text alone ("180°" → angle,
+            // "1/50" → speed), and a Nikon body silently SWITCHES its shutter mode when it
+            // accepts the other circuit's property — a body set to shutter angle comes back on
+            // shutter speed without anyone asking for it. Refuse: changing the mode is
+            // `shutterMode(_:)`'s job, on an explicit operator action.
+            //
+            // Only refused when the mode is KNOWN. A nil mode means the body has not reported
+            // `MovieShutterMode` (or has not been read yet); the label shape is then the only
+            // information available, and refusing would break shutter control on bodies that do
+            // not advertise the property at all.
+            return nil
+        }
         return request(control: control, label: label)
+    }
+
+    /// The value property that belongs to a shutter display mode. Writing the OTHER one flips the
+    /// body's mode as a side effect, so every shutter value write must agree with this.
+    public static func shutterValueProperty(for mode: ShutterDisplayMode) -> PTPPropertyCode {
+        switch mode {
+        case .angle: .movieShutterAngle
+        case .speed: .movieShutterSpeed
+        }
     }
 
     /// All property writes a picker selection should send — usually one, but a **Kelvin** white
