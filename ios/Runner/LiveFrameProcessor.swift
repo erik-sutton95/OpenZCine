@@ -109,26 +109,16 @@ struct FalseColorSettings: Equatable, Sendable {
 
 struct PeakingSettings: Equatable, Sendable {
     var color: Peaking.Color = .red  // reads clearly over almost any scene
-    /// Sharpness threshold on the de-logged peaking mask — lower flags finer (noisier) edges.
-    /// 0.035 is the stored default (Sensitivity = Med); the renderer rescales it onto the
-    /// gradient-edge response.
-    var threshold: Double = 0.035
-    /// The feed's transfer curve, so the de-log linearises with the SAME anchor as false colour
-    /// and zebra. Photography's display-referred sRGB/HLG feed was previously de-logged as
-    /// Log3G10 (video's curve), so peaking looked different between the two modes.
-    var curve: ExposureToneCurve = .redLog3G10
-}
-
-extension Peaking.Sensitivity {
-    /// The operator-facing level mapped to the renderer's band-response threshold. Med keeps the
-    /// prior hardcoded 0.035; Low raises it (stricter, fewer edges), High lowers it (finer, noisier).
-    var peakingThreshold: Double {
-        switch self {
-        case .low: 0.05
-        case .medium: 0.035
-        case .high: 0.022
-        }
-    }
+    /// The operator-facing step. The detector constants behind it live in shared core
+    /// (`Peaking.Sensitivity`), which is also what the Android shells resolve.
+    var sensitivity: Peaking.Sensitivity = .medium
+    /// Multiplies the sensitivity's noise gate, in the gate's own (squared) domain.
+    ///
+    /// The RATIO the detector thresholds is near-invariant to the camera's encoding, but the gate is
+    /// an absolute magnitude, so it is not — see `Peaking.displayReferredGradientScale`. This is how
+    /// a step keeps meaning the same thing on the photography feed, which is display-referred, as it
+    /// does on the log video feed the gates were calibrated against.
+    var gateScale: Double = 1
 }
 
 struct ZebraSettings: Equatable, Sendable {
@@ -258,8 +248,13 @@ extension NativeAppModel {
             peaking: visible.contains(.peaking)
                 ? PeakingSettings(
                     color: assistConfiguration.peakingColor,
-                    threshold: assistConfiguration.peakingSensitivity.peakingThreshold,
-                    curve: exposureSignalMapping.curve) : nil,
+                    sensitivity: assistConfiguration.peakingSensitivity,
+                    // The photography feed is a display-referred preview, so its gradients run
+                    // larger than the log video feed the gates were calibrated on. Squared because
+                    // the Core Image detector's gate lives in `CIEdges`' squared domain.
+                    gateScale: isPhotographyMode
+                        ? Peaking.displayReferredGradientScale
+                            * Peaking.displayReferredGradientScale : 1) : nil,
             zebra: visible.contains(.zebra)
                 ? ZebraSettings(
                     unit: assistConfiguration.zebra.unit,
@@ -377,7 +372,13 @@ final class LiveFrameProcessor {
     private static let displaySpace =
         CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
     private let context = CIContext(options: [
-        .workingFormat: CIFormat.RGBAh,
+        // 8-bit, not half-float. The half-float working space was chosen to stop LUT
+        // banding when the frame was read back and handed to a UIImageView; presenting
+        // straight to an 8-bit panel removes that reason and halves the bandwidth of every
+        // Core Image intermediate — which is the dominant per-frame cost. `MediaLUTExport`
+        // deliberately stays at RGBAh: it writes files, where banding matters and a
+        // millisecond does not.
+        .workingFormat: CIFormat.BGRA8,
         .workingColorSpace: displaySpace,
         .cacheIntermediates: false,
     ])
@@ -415,7 +416,7 @@ final class LiveFrameProcessor {
         defer { LiveViewSignposts.endCreateCGImageReadback() }
         guard
             let cgImage = context.createCGImage(
-                output, from: output.extent, format: .RGBAh, colorSpace: outputColorSpace)
+                output, from: output.extent, format: .BGRA8, colorSpace: outputColorSpace)
         else { return image }
         let rendered = UIImage(
             cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)

@@ -810,7 +810,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertTrue(box.set(effects: effects))
         XCTAssertFalse(box.set(effects: effects))
 
-        effects.peaking?.threshold += 0.01
+        effects.peaking?.sensitivity = .high
         XCTAssertTrue(box.set(effects: effects))
 
         XCTAssertTrue(box.set(effects: ImageEffectsCompositor.ResolvedEffects()))
@@ -1101,5 +1101,165 @@ extension RunnerTests {
         XCTAssertEqual(sorted.first, "B.JPG")
         XCTAssertEqual(sorted[1], "C.JPG")
         XCTAssertEqual(Set(sorted.suffix(2)), ["A.JPG", "D.JPG"])
+    }
+
+    // MARK: - Fused peaking kernel vs the reference filter chain
+
+    /// The single-pass CIKL detector must reproduce the filter chain exactly — every constant in
+    /// `Peaking` was calibrated against the chain, so any divergence here is the kernel being
+    /// WRONG, not different. The frame mixes the four cases that matter: hard sharp edges, fine
+    /// texture, a defocused (pre-blurred) region, and per-pixel noise dense enough to exercise the
+    /// gate's partial band. Checked at every sensitivity because the gains and biases change with
+    /// it.
+    func testFusedPeakingMatchesFilterChainPixelForPixel() throws {
+        try XCTSkipIf(
+            !ImageEffectsCompositor.fusedPeakingAvailable,
+            "fused peaking disabled on this OS (kernel missing or the runtime self-check found it "
+                + "does not reproduce the chain) — chain fallback is in force, nothing to compare")
+        let w = 320
+        let h = 180
+        // Scale pinned to 1 — the renderer defaults to the screen scale, which would silently make
+        // the frame 3x the stated size and the readback below a partial crop of it.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let frame = UIGraphicsImageRenderer(size: CGSize(width: w, height: h), format: format)
+            .image { ctx in
+                let cg = ctx.cgContext
+                cg.setFillColor(UIColor(white: 0.3, alpha: 1).cgColor)
+                cg.fill(CGRect(x: 0, y: 0, width: w, height: h))
+                var seed: UInt64 = 0x5_DEEC_E66D
+                func rand() -> Double {
+                    seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                    return Double(seed >> 33) / Double(UInt64(1) << 31)
+                }
+                // Sharp strokes and fine texture on the left half.
+                for i in 0..<24 {
+                    cg.setFillColor(UIColor(white: i % 2 == 0 ? 0.85 : 0.12, alpha: 1).cgColor)
+                    cg.fill(CGRect(x: 8 + i * 5, y: 10, width: 2, height: 70))
+                    cg.fill(CGRect(x: 8, y: 90 + i * 3, width: 130, height: 1))
+                }
+                // Noise everywhere, including over the edges.
+                for _ in 0..<4_000 {
+                    cg.setFillColor(UIColor(white: rand(), alpha: 1).cgColor)
+                    cg.fill(
+                        CGRect(
+                            x: Int(rand() * Double(w - 1)), y: Int(rand() * Double(h - 1)),
+                            width: 1, height: 1))
+                }
+            }
+        let source = try XCTUnwrap(CIImage(image: frame, options: [.colorSpace: NSNull()]))
+        // Defocus the right half by pre-blurring — the ratio must read it as out of focus in both
+        // implementations identically.
+        let blurredHalf =
+            source
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3.0])
+            .cropped(to: CGRect(x: w / 2, y: 0, width: w / 2, height: h))
+        let mixed = blurredHalf.composited(over: source).cropped(to: source.extent)
+
+        // Float working space, deliberately NOT the shipping BGRA8: this test compares the MATH.
+        // Under BGRA8 the chain quantises every intermediate to 1/255 across its ~25 passes — the
+        // detector's own gates sit below one code value there, which is exactly the precision loss
+        // the 8-bit switch was measured to cost — while the fused kernel holds float through its
+        // single pass. Their shipping outputs therefore differ legitimately (the kernel is the
+        // more faithful one); equality of the formulas is only decidable where both see exact
+        // intermediates.
+        let context = CIContext(options: [
+            .workingFormat: CIFormat.RGBAf,
+            .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+            .cacheIntermediates: false,
+        ])
+        func rendered(_ image: CIImage) -> [UInt8] {
+            var out = [UInt8](repeating: 0, count: w * h * 4)
+            context.render(
+                image, toBitmap: &out, rowBytes: w * 4,
+                bounds: CGRect(x: 0, y: 0, width: w, height: h), format: .BGRA8,
+                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+            return out
+        }
+
+        for sensitivity in Peaking.Sensitivity.allCases {
+            let settings = PeakingSettings(color: .red, sensitivity: sensitivity)
+            let fused = rendered(
+                ImageEffectsCompositor.applyPeaking(
+                    over: mixed, source: mixed, settings: settings, extent: source.extent))
+            let chain = rendered(
+                ImageEffectsCompositor.applyPeakingFilterChain(
+                    over: mixed, source: mixed, settings: settings, extent: source.extent))
+            var worst = 0
+            var differing = 0
+            var inRing = 0
+            var worstAt = (0, 0)
+            let inset = Int(Peaking.edgeInset)
+            for i in 0..<fused.count {
+                let d = abs(Int(fused[i]) - Int(chain[i]))
+                if d > worst {
+                    worst = d
+                    worstAt = ((i / 4) % w, (i / 4) / w)
+                }
+                if d > 1 {
+                    differing += 1
+                    let px = (i / 4) % w
+                    let py = (i / 4) / w
+                    if px < inset || py < inset || px >= w - inset || py >= h - inset {
+                        inRing += 1
+                    }
+                }
+            }
+            // ±1/255 allows float-order-of-operations rounding; anything past that on more than a
+            // stray pixel means a real formula divergence.
+            XCTAssertLessThanOrEqual(
+                differing, 8,
+                "\(sensitivity): \(differing) channels differ by >1/255 (\(inRing) of them in the "
+                    + "\(inset)px inset ring), worst \(worst) at \(worstAt)")
+        }
+    }
+
+    // MARK: - Live-feed bake resolution
+
+    /// A 16:9 feed on a 2.17:1 panel keeps every source column and crops rows — at SOURCE
+    /// resolution, which is the whole point: the drawable-sized bake it replaced evaluated the
+    /// Core Image graph over 6× as many pixels.
+    func testFeedBakeKeepsSourceResolutionAndCropsToDrawableAspect() {
+        let size = MetalFeedFrameBaker.bakeSize(
+            source: CGSize(width: 1_024, height: 576),
+            drawable: CGSize(width: 2_868, height: 1_320))
+
+        XCTAssertEqual(size.width, 1_024, accuracy: 0.5)
+        XCTAssertEqual(size.height, 1_024 / (2_868.0 / 1_320.0), accuracy: 0.5)
+        // Aspect must match the drawable exactly, or the uniform scale on present stretches.
+        XCTAssertEqual(size.width / size.height, 2_868.0 / 1_320.0, accuracy: 0.001)
+    }
+
+    /// A taller-than-panel source crops columns instead, and still matches the drawable's aspect.
+    func testFeedBakeCropsColumnsWhenSourceIsWiderThanTheDrawable() {
+        let size = MetalFeedFrameBaker.bakeSize(
+            source: CGSize(width: 1_024, height: 256),
+            drawable: CGSize(width: 800, height: 600))
+
+        XCTAssertEqual(size.height, 256, accuracy: 0.5)
+        XCTAssertEqual(size.width / size.height, 800.0 / 600.0, accuracy: 0.001)
+        XCTAssertLessThan(size.width, 1_024)
+    }
+
+    /// Demo stills out-resolve the panel. Baking at their size would render pixels that can never
+    /// be shown — slower than the drawable-sized path this replaced — so it clamps.
+    func testFeedBakeClampsToDrawableWhenSourceOutResolvesThePanel() {
+        let drawable = CGSize(width: 1_024, height: 768)
+
+        XCTAssertEqual(
+            MetalFeedFrameBaker.bakeSize(
+                source: CGSize(width: 4_032, height: 3_024), drawable: drawable),
+            drawable)
+    }
+
+    /// An empty or infinite source extent (a CI generator with no bounds) falls back to the drawable.
+    func testFeedBakeFallsBackToDrawableForADegenerateSource() {
+        let drawable = CGSize(width: 1_024, height: 768)
+
+        XCTAssertEqual(
+            MetalFeedFrameBaker.bakeSize(source: .zero, drawable: drawable), drawable)
+        XCTAssertEqual(
+            MetalFeedFrameBaker.bakeSize(source: CGRect.infinite.size, drawable: drawable), drawable
+        )
     }
 }
