@@ -5296,7 +5296,29 @@ final class NativeAppModel {
         (.movieFocusMode, 1),
         (.movieFocusMeteringMode, 2),
         (.movieAFSubjectDetection, 1),
+        // Shared across both chromes — the MODE drum reads the same 0x500E property in movie and
+        // photo mode, so it is described on every cadence rather than only in photography.
+        (.exposureProgramMode, 2),
     ]
+
+    /// Photo-mode function pickers whose option lists the body enumerates. Read only while the
+    /// photography chrome is up: describing the stills AF / drive / quality space in movie mode
+    /// costs camera round trips for drums nobody can open, and several of these properties report
+    /// a placeholder domain outside their own chrome. Each body advertises its own values in its
+    /// own order — that is the whole point of #274, so nothing here has a "union" fallback.
+    private static let photographyEnumeratedControls:
+        [(property: PTPPropertyCode, valueByteCount: Int)] = [
+            (.stillCaptureMode, 2),
+            (.userMode, 1),
+            (.exposureMeteringMode, 2),
+            (.flashMode, 2),
+            (.compressionSetting, 1),
+            (.rawCompressionType, 1),
+            (.activePicCtrlItem, 2),
+            (.stillFocusMode, 1),
+            (.stillFocusMeteringMode, 2),
+            (.afSubjectDetection, 1),
+        ]
 
     /// Reads the camera's advertised option lists for the moded AF / shutter / WB-preset settings
     /// so each picker offers exactly what the body supports. Re-read on the slow descriptor
@@ -5304,9 +5326,21 @@ final class NativeAppModel {
     /// kept. The WB enum's colour-temperature mode belongs to the Kelvin tab, so it's filtered out.
     private func refreshControlOptions(session: NativeCameraSession) async {
         let shutterMode = effectiveShutterMode()
-        for (property, valueByteCount) in Self.enumeratedControls {
+        let photography = StillCapturePolicy.prefersPhotographyChrome(
+            selector: cameraPropertySnapshot.captureSelector)
+        let controls =
+            Self.enumeratedControls
+            + (photography ? Self.photographyEnumeratedControls : [])
+        for (property, valueByteCount) in controls {
             if property == .movieShutterSpeed, shutterMode != .speed { continue }
             if property == .movieShutterAngle, shutterMode != .angle { continue }
+            // A body that never lists the property spends nothing on a describe that will fail;
+            // its picker keeps the conservative fallback.
+            if Self.photographyEnumeratedControls.contains(where: { $0.property == property }),
+                !session.supportsProperty(property)
+            {
+                continue
+            }
             await refreshControlOption(
                 session: session, property: property, valueByteCount: valueByteCount)
         }
@@ -5913,7 +5947,7 @@ final class NativeAppModel {
     private var shouldCancelSubjectTrackingOnFocusReset: Bool {
         guard !isDemoSession else { return false }
         if let focus = liveViewFocus, focus.isSubjectTrackingLatched { return true }
-        if focusArea == "Subject" { return true }
+        if PTPCameraPropertyDecoders.isSubjectTrackingArea(focusArea) { return true }
         if let focus = liveViewFocus {
             if focus.subjectDetectionActive { return true }
             if focus.selectedBoxIndex != nil { return true }
@@ -7529,7 +7563,14 @@ final class NativeAppModel {
     func cameraValue(for picker: CameraPicker) -> String {
         switch picker {
         case .resolution: cameraState.resolutionFrameRate
-        case .codec: cameraState.codec
+        case .codec:
+            // Match the body's exact `MovFileType` readback onto the advertised row so the drum
+            // centres on the right H.265 bit depth. The bar's short label ("H.265") is ambiguous
+            // whenever the body offers both depths (#276) — falling back to it only while the
+            // descriptor has not landed.
+            PTPCameraPropertyDecoders.fileTypeMode(
+                forFileType: cameraPropertySnapshot.fileType, in: cameraFileTypeModes
+            )?.label ?? cameraState.codec
         case .mode, .stillMode: commandExposureMode
         case .stillISO: cameraPropertySnapshot.iso.map(String.init) ?? ""
         case .stillShutter: cameraPropertySnapshot.shutterSpeed ?? ""
@@ -8813,11 +8854,13 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .codec: ["R3D NE", "N-RAW", "ProRes RAW HQ", "ProRes 422 HQ", "H.265 10-bit"]
         // Stabilization renders its own `StabilizationPickerPanel`, never the flat drum.
         case .stabilization: []
-        case .mode: ["Auto", "P", "A", "S", "M", "U1", "U2", "U3"]
+        // Conservative fallback only — the drum prefers the body's own `ExposureProgramMode`
+        // enum (see `optionProperty(forMode:)`). No U banks here: a body that has them
+        // advertises them, and inferring them from generic photo capability offered a Zf
+        // three user modes it does not own (#274).
+        case .mode: PTPCameraPropertyDecoders.exposureProgramFallbackOptions
         case .audio: ["Auto"] + (1...20).map(String.init)
-        // Auto and the user banks round-trip through `exposureProgramCode`; scene/effects
-        // positions are dial-only and stay out of the drum.
-        case .stillMode: ["Auto", "P", "S", "A", "M", "U1", "U2", "U3"]
+        case .stillMode: PTPCameraPropertyDecoders.exposureProgramFallbackOptions
         case .stillISO:
             [
                 "100", "125", "160", "200", "250", "320", "400", "500", "640", "800", "1000",
@@ -8932,7 +8975,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(
                     title: "AF Mode", options: ["MF", "AF-S", "AF-C", "AF-F"], base: "AF-F"),
                 PickerMode(
-                    title: "Area", options: ["Single", "Wide-S", "Wide-L", "Auto", "Subject"],
+                    title: "Area",
+                    options: ["Single", "Wide-S", "Wide-L", "Auto", "Subject tracking"],
                     base: "Single"),
                 PickerMode(
                     title: "Subject",
@@ -8991,8 +9035,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
                 PickerMode(
                     title: "Area",
                     options: [
-                        "Pin", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L", "3D",
-                        "Auto",
+                        "Pinpoint", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L",
+                        "3D tracking", "Auto",
                     ],
                     base: "Single"),
                 PickerMode(
@@ -9054,10 +9098,35 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // The body enumerates the stills speeds valid for the active program/flash
             // state — the drum follows it, with the hardcoded ladder as fallback.
             return .stillShutterSpeed
-        case .iso, .iris, .resolution, .codec, .stabilization, .mode, .stillMode, .stillISO,
-            .stillIris, .stillDrive, .stillFocus, .stillFlash, .stillMeter,
-            .stillQuality, .stillPicture:
-            // The remaining stills pickers keep their fixed hardcoded ladders.
+        // Photo-mode function pickers. Each body advertises its own value set and its own order
+        // for these; sourcing them from a fixed union is what offered a Zf the U banks it does
+        // not have and ordered the Z6III's drive wheel CH before CL (#274).
+        case .mode:
+            return .exposureProgramMode
+        case .stillMode:
+            // Mode tab = the program enum; U Mode tab = the bank's inner program.
+            return mode == 0 ? .exposureProgramMode : .userMode
+        case .stillDrive:
+            // Only the Drive tab is a camera enum — the two Timer tabs are app state.
+            return mode == 0 ? .stillCaptureMode : nil
+        case .stillFocus:
+            switch mode {
+            case 0: return .stillFocusMode
+            case 1: return .stillFocusMeteringMode
+            case 2: return .afSubjectDetection
+            default: return nil
+            }
+        case .stillFlash:
+            return .flashMode
+        case .stillMeter:
+            return .exposureMeteringMode
+        case .stillQuality:
+            return .compressionSetting
+        case .stillPicture:
+            return .activePicCtrlItem
+        case .iso, .iris, .resolution, .codec, .stabilization, .stillISO, .stillIris:
+            // ISO circuits switch via `movieBaseISO`; IRIS, resolution and codec have their own
+            // dedicated descriptor paths; stabilization renders its own panel.
             return nil
         }
     }

@@ -1024,6 +1024,14 @@ public enum PTPCameraPropertyDecoders {
         }
     }
 
+    /// Whether a decoded AF-**area** label is the subject-tracking position (`0x8033`), which a
+    /// focus reset has to release before it can move the point. Compared here rather than against
+    /// a literal at each call site so renaming the label can never silently disarm the release.
+    public static func isSubjectTrackingArea(_ label: String?) -> Bool {
+        guard let label else { return false }
+        return movieFocusAreaCode(for: label) == 0x8033
+    }
+
     /// Inverse of `stillFocusArea` — the stills-specific dynamic/3D/pinpoint codes first,
     /// shared positions via the movie map.
     public static func stillFocusAreaCode(for label: String) -> UInt16? {

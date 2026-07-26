@@ -1458,7 +1458,10 @@ struct PickerPanel: View {
             if property == .movieWhiteBalance, model.isPhotographyMode {
                 property = .whiteBalance
             }
-            if let cameraMode = model.cameraControlOptions[property], cameraMode.count > 1 {
+            // A body advertising exactly one value means exactly one value is selectable — show
+            // that, not the app's union. (The shutter circuits' single-value PLACEHOLDER enum is
+            // filtered upstream in `refreshControlOption`, so it never reaches this cache.)
+            if let cameraMode = model.cameraControlOptions[property], !cameraMode.isEmpty {
                 return cameraMode
             }
         }

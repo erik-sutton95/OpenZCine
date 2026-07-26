@@ -3010,7 +3010,7 @@ public final class PTPIPClientSession: @unchecked Sendable {
             || initialFocus.subjectDetectionActive
             || initialFocus.selectedBoxIndex != nil
             || initialFocus.boxes.count > 1
-            || savedFocusArea == "Subject"
+            || PTPCameraPropertyDecoders.isSubjectTrackingArea(savedFocusArea)
             || savedFocusSubject != "Off"
             || savedFocusMode == "AF-F"
 
