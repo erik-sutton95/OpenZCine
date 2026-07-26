@@ -12,8 +12,8 @@ layout(set = 0, binding = 2) uniform Params {
     vec4 peakingColor;
     vec4 zebraHighlightColor;
     vec4 zebraMidtoneColor;
-    float peakingThreshold;
-    float peakingRamp;
+    float peakingRatioThreshold;
+    float peakingNoiseGate;
     float zebraHighlight;
     float zebraMidtone;
     float aspectFill;
@@ -42,48 +42,22 @@ vec3 grade(vec3 c) {
     return mix(texture(uLut, lo).rgb, texture(uLut, hi).rgb, b - s0);
 }
 
-float monotoneTone(float y0, float y1, float y2, float y3, float t) {
-    float m1 = 0.5 * (y2 - y0);
-    float m2 = 0.5 * (y3 - y1);
-    float t2 = t * t;
-    float t3 = t2 * t;
-    float value =
-        (2.0 * t3 - 3.0 * t2 + 1.0) * y1
-        + (t3 - 2.0 * t2 + t) * m1
-        + (-2.0 * t3 + 3.0 * t2) * y2
-        + (t3 - t2) * m2;
-    return clamp(value, min(y1, y2), max(y1, y2));
-}
-
-float deLogGrey(vec2 uv) {
+// Focus peaking measures BLUR RADIUS, not edge contrast: the gradient at two
+// spacings, divided, cancels edge amplitude and leaves only how defocused the edge
+// is (2.0 sharp -> 1.0 fully blurred). Measured on the RAW source. See `Peaking` in
+// shared core. The de-log members of the uniform block are no longer read here; they
+// are kept so the std140 layout matches GpuParams unchanged.
+float sourceGrey(vec2 uv) {
     vec3 c = texture(uFeed, uv).rgb;
-    float position = clamp((c.r + c.g + c.b) / 3.0, 0.0, 1.0) * 4.0;
-    float segment = min(floor(position), 3.0);
-    float fraction = position - segment;
-    if (segment < 0.5) {
-        return monotoneTone(
-            u.deLogCurve0to3.x, u.deLogCurve0to3.x, u.deLogCurve0to3.y, u.deLogCurve0to3.z, fraction);
-    }
-    if (segment < 1.5) {
-        return monotoneTone(
-            u.deLogCurve0to3.x, u.deLogCurve0to3.y, u.deLogCurve0to3.z, u.deLogCurve0to3.w, fraction);
-    }
-    if (segment < 2.5) {
-        return monotoneTone(
-            u.deLogCurve0to3.y, u.deLogCurve0to3.z, u.deLogCurve0to3.w, u.deLogCurve4, fraction);
-    }
-    return monotoneTone(
-        u.deLogCurve0to3.z, u.deLogCurve0to3.w, u.deLogCurve4, u.deLogCurve4, fraction);
+    return (c.r + c.g + c.b) / 3.0;
 }
 
-// 1 px central differences — no Sobel / pre-blur fattening.
-float edgeMagnitude(vec2 uv) {
-    vec2 px = 1.0 / max(u.sourceSize, vec2(1.0));
-    float left = deLogGrey(uv - vec2(px.x, 0.0));
-    float right = deLogGrey(uv + vec2(px.x, 0.0));
-    float up = deLogGrey(uv - vec2(0.0, px.y));
-    float down = deLogGrey(uv + vec2(0.0, px.y));
-    return length(vec2(right - left, down - up)) * 0.5;
+float gradientAt(vec2 uv, vec2 spacing, float taps) {
+    float left = sourceGrey(uv - vec2(spacing.x, 0.0));
+    float right = sourceGrey(uv + vec2(spacing.x, 0.0));
+    float up = sourceGrey(uv - vec2(0.0, spacing.y));
+    float down = sourceGrey(uv + vec2(0.0, spacing.y));
+    return length(vec2(right - left, down - up)) * 0.5 / taps;
 }
 
 void main() {
@@ -96,11 +70,19 @@ void main() {
         if (srcPx.x >= PEAKING_EDGE_INSET && srcPx.y >= PEAKING_EDGE_INSET
             && srcPx.x < u.sourceSize.x - PEAKING_EDGE_INSET
             && srcPx.y < u.sourceSize.y - PEAKING_EDGE_INSET) {
-            float g = edgeMagnitude(uv);
-            float threshold = clamp(u.peakingThreshold * 30.0, 0.045, 0.14);
-            float aa = threshold * (0.06 + 0.04 * clamp(160.0 / max(u.peakingRamp, 1.0), 0.5, 1.5));
-            float core = smoothstep(threshold, threshold + aa, g);
-            float under = smoothstep(threshold - aa * 0.35, threshold, g) * (1.0 - core);
+            float scale = max(1.0, max(u.sourceSize.x, u.sourceSize.y) / 1000.0);
+            vec2 fineStep = scale / max(u.sourceSize, vec2(1.0));
+            float fine = gradientAt(uv, fineStep, 1.0);
+            float coarse = gradientAt(uv, fineStep * 2.0, 2.0);
+            float ratio = fine / max(coarse, 1e-4);
+            // Noise is not lens-blurred, so it always reads as sharp; the gate rejects it.
+            float gate = smoothstep(u.peakingNoiseGate * 0.7, u.peakingNoiseGate, coarse);
+            float aa = 0.06;
+            float core =
+                smoothstep(u.peakingRatioThreshold, u.peakingRatioThreshold + aa, ratio) * gate;
+            float under = smoothstep(
+                u.peakingRatioThreshold - aa * 0.35, u.peakingRatioThreshold, ratio
+            ) * gate * (1.0 - core);
             color = mix(color, vec3(0.04, 0.04, 0.05), under * 0.28);
             color = mix(color, u.peakingColor.rgb, core);
         }

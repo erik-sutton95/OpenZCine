@@ -83,7 +83,7 @@ class ExposureAssistWireTest {
         val record =
             FeedEffectsRenderConfiguration.parse(
                 floatArrayOf(
-                    1f, 200f, 0f, 0.2f, 0.5f, 0.8f, 1f, 0.00132f, 160f,
+                    1f, 200f, 0f, 0.2f, 0.5f, 0.8f, 1f, 1.35f, 0.008f,
                     0.2f, 0.4f, 0.8f,
                     1f, 0.78f, 1f, 1f, 1f,
                     0f, 0.41f, 1f, 0.72f, 0.2f,

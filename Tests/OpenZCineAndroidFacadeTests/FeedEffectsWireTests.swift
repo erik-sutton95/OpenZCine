@@ -110,7 +110,9 @@ struct FeedEffectsWireTests {
         #expect(render.count == FeedEffectsWire.renderConfigurationFieldCount)
         #expect(render[0] == 1)
         #expect(render[1] == 200)
-        #expect(render[7] == Float(0.022 * 0.06))
+        // Ordinal 2 = High: the shared-core detector constants, uploaded verbatim.
+        #expect(render[7] == Float(Peaking.Sensitivity.high.wideTapRatioThreshold))
+        #expect(render[8] == Float(Peaking.Sensitivity.high.noiseGate))
         #expect(render[12] == 0)
         #expect(render[17] == 1)
         #expect(render[13] == Float(mapping.signalNative(monitorPercent: 96) / 255))

@@ -30,8 +30,8 @@ struct GpuParams {
     float peakingColor[4];
     float zebraHighlightColor[4];
     float zebraMidtoneColor[4];
-    float peakingThreshold;
-    float peakingRamp;
+    float peakingRatioThreshold;
+    float peakingNoiseGate;
     float zebraHighlight;
     float zebraMidtone;
     float aspectFill;
@@ -941,8 +941,8 @@ bool LiveFeedVk_SetPlan(
     bool peakingOn,
     const float* peakingColor3,
     const float* deLogCurve5,
-    float peakingThreshold,
-    float peakingRamp,
+    float peakingRatioThreshold,
+    float peakingNoiseGate,
     bool zebraHighlightOn,
     float zebraHighlight,
     const float* zebraHighlightColor3,
@@ -957,8 +957,8 @@ bool LiveFeedVk_SetPlan(
     session->params.peakingOn = peakingOn ? 1.f : 0.f;
     session->params.zebraHighlightOn = zebraHighlightOn ? 1.f : 0.f;
     session->params.zebraMidtoneOn = zebraMidtoneOn ? 1.f : 0.f;
-    session->params.peakingThreshold = peakingThreshold;
-    session->params.peakingRamp = peakingRamp;
+    session->params.peakingRatioThreshold = peakingRatioThreshold;
+    session->params.peakingNoiseGate = peakingNoiseGate;
     session->params.zebraHighlight = zebraHighlight;
     session->params.zebraMidtone = zebraMidtone;
     session->params.aspectFill = aspectFill ? 1.f : 0.f;

@@ -16,10 +16,8 @@ uniform vec2 uDisplaySize;
 
 uniform float uPeakingOn;
 uniform vec3 uPeakingColor;
-uniform vec4 uDeLogCurve0To3;
-uniform float uDeLogCurve4;
-uniform float uPeakingThreshold;
-uniform float uPeakingRamp;
+uniform float uPeakingRatioThreshold;
+uniform float uPeakingNoiseGate;
 
 uniform float uZebraHighlightOn;
 uniform float uZebraHighlight;
@@ -113,71 +111,33 @@ float limitsWeight(vec3 color) {
     return clamp(mix(lower, upper, blue - lowerSlice), 0.0, 1.0);
 }
 
-float monotoneTone(float y0, float y1, float y2, float y3, float fraction) {
-    float m1 = 0.5 * (y2 - y0);
-    float m2 = 0.5 * (y3 - y1);
-    float t2 = fraction * fraction;
-    float t3 = t2 * fraction;
-    float value =
-        (2.0 * t3 - 3.0 * t2 + 1.0) * y1
-        + (t3 - 2.0 * t2 + fraction) * m1
-        + (-2.0 * t3 + 3.0 * t2) * y2
-        + (t3 - t2) * m2;
-    return clamp(value, min(y1, y2), max(y1, y2));
-}
-
-float deLogGrey(vec2 coordinate) {
+// Focus peaking measures BLUR RADIUS, not edge contrast.
+//
+// A gradient magnitude scales with amplitude as much as with focus, so a bright
+// defocused highlight rim outranks genuinely sharp low-contrast detail — the
+// overlay then paints background bokeh and skips the subject. Taking the gradient
+// at two spacings and dividing cancels amplitude exactly, leaving a number that
+// depends only on how blurred the edge is: 2.0 when perfectly sharp, falling to
+// 1.0 when fully defocused. See `Peaking` in shared core for the derivation and
+// the thresholds.
+//
+// Measured on the RAW source: the ratio is near-invariant to the camera's
+// transfer curve, and the contrast stretch that used to run here clamped
+// everything above ~75% code value flat, making in-focus highlight detail
+// undetectable however sharp it was.
+float sourceGrey(vec2 coordinate) {
     vec3 color = sampleSource(coordinate);
-    float position = clamp((color.r + color.g + color.b) / 3.0, 0.0, 1.0) * 4.0;
-    float segment = min(floor(position), 3.0);
-    float fraction = position - segment;
-    if (segment < 0.5) {
-        return monotoneTone(
-            uDeLogCurve0To3.x,
-            uDeLogCurve0To3.x,
-            uDeLogCurve0To3.y,
-            uDeLogCurve0To3.z,
-            fraction
-        );
-    }
-    if (segment < 1.5) {
-        return monotoneTone(
-            uDeLogCurve0To3.x,
-            uDeLogCurve0To3.y,
-            uDeLogCurve0To3.z,
-            uDeLogCurve0To3.w,
-            fraction
-        );
-    }
-    if (segment < 2.5) {
-        return monotoneTone(
-            uDeLogCurve0To3.y,
-            uDeLogCurve0To3.z,
-            uDeLogCurve0To3.w,
-            uDeLogCurve4,
-            fraction
-        );
-    }
-    return monotoneTone(
-        uDeLogCurve0To3.z,
-        uDeLogCurve0To3.w,
-        uDeLogCurve4,
-        uDeLogCurve4,
-        fraction
-    );
+    return (color.r + color.g + color.b) / 3.0;
 }
 
-// Thin peaking: pure 1 px central differences (no 3×3 Sobel / pre-blur —
-// those fatten the ridge). Strict threshold + minimal AA.
-// Wire: uPeakingThreshold = sensitivity×0.06; uPeakingRamp must stay *used*
-// or ES2 strips it and Media3 NPE fail-closes the whole assist path.
-float edgeMagnitude(vec2 coordinate) {
-    vec2 px = 1.0 / max(uSourceSize, vec2(1.0));
-    float l = deLogGrey(coordinate - vec2(px.x, 0.0));
-    float r = deLogGrey(coordinate + vec2(px.x, 0.0));
-    float u = deLogGrey(coordinate - vec2(0.0, px.y));
-    float d = deLogGrey(coordinate + vec2(0.0, px.y));
-    return length(vec2(r - l, d - u)) * 0.5;
+// Central-difference magnitude over a horizontal and a vertical pair, normalised
+// to a per-pixel slope so the two scales are directly comparable.
+float gradientAt(vec2 coordinate, vec2 spacing, float taps) {
+    float l = sourceGrey(coordinate - vec2(spacing.x, 0.0));
+    float r = sourceGrey(coordinate + vec2(spacing.x, 0.0));
+    float u = sourceGrey(coordinate - vec2(0.0, spacing.y));
+    float d = sourceGrey(coordinate + vec2(0.0, spacing.y));
+    return length(vec2(r - l, d - u)) * 0.5 / taps;
 }
 
 void main() {
@@ -196,12 +156,23 @@ void main() {
             && vTexSamplingCoord.x < 1.0 - inset.x
             && vTexSamplingCoord.y < 1.0 - inset.y
         ) {
-            float g = edgeMagnitude(vTexSamplingCoord);
-            float threshold = clamp(uPeakingThreshold * 30.0, 0.045, 0.14);
-            // Very narrow AA — almost a hard edge (ramp kept live for the linker).
-            float aa = threshold * (0.06 + 0.04 * clamp(160.0 / max(uPeakingRamp, 1.0), 0.5, 1.5));
-            float core = smoothstep(threshold, threshold + aa, g);
-            float under = smoothstep(threshold - aa * 0.35, threshold, g) * (1.0 - core);
+            // Tap spacing tracks resolution so the same optical blur reads the same on a
+            // downscaled live feed and on a 4K clip.
+            float scale = max(1.0, max(uSourceSize.x, uSourceSize.y) / 1000.0);
+            vec2 fineStep = scale / max(uSourceSize, vec2(1.0));
+            float fine = gradientAt(vTexSamplingCoord, fineStep, 1.0);
+            float coarse = gradientAt(vTexSamplingCoord, fineStep * 2.0, 2.0);
+            float ratio = fine / max(coarse, 1e-4);
+            // Noise is not lens-blurred, so it always reads as perfectly sharp; the ratio
+            // cannot reject it and this gate is what keeps shadows from sparkling.
+            float gate = smoothstep(uPeakingNoiseGate * 0.7, uPeakingNoiseGate, coarse);
+            // Very narrow AA — peaking reads as a drawn line, not a glow.
+            float aa = 0.06;
+            float core = smoothstep(uPeakingRatioThreshold, uPeakingRatioThreshold + aa, ratio)
+                * gate;
+            float under = smoothstep(
+                uPeakingRatioThreshold - aa * 0.35, uPeakingRatioThreshold, ratio
+            ) * gate * (1.0 - core);
             color = mix(color, vec3(0.04, 0.04, 0.05), under * 0.28);
             color = mix(color, uPeakingColor, core);
         }
