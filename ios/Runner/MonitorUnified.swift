@@ -1121,7 +1121,13 @@ struct MonitorShell: View {
     /// Count of scopes the portrait-fit stacked zone displays — the recency-selected ≤2 (R8);
     /// sizes the portrait scopes zone. Fit-only: fill floats all active scopes independently.
     private var scopeCount: Int {
-        model.preferences.displayedFitScopes.count
+        model.renderedFitScopes.count
+    }
+
+    /// Whether the non-critical monitor chrome (decks, rails, system band, quick buttons) mounts.
+    /// One read of the core rule so no surface can drift out of clean view (#256).
+    private var showsChrome: Bool {
+        MonitorChromePolicy.showsChrome(in: model.displayMode)
     }
 
     var body: some View {
@@ -1211,8 +1217,10 @@ struct MonitorShell: View {
                     }
                 }
 
-                // Persistent side rails (batteries + system cluster) render on top of every mode.
-                if chrome.sideRailsVisible {
+                // Side rails (batteries + system cluster) render on top of live and command.
+                // Clean strips them with the rest of the non-critical chrome (#256) — a swipe up
+                // on the feed is the way back to DISP 1 from there.
+                if chrome.sideRailsVisible, MonitorChromePolicy.showsChrome(in: model.displayMode) {
                     canvasLayer {
                         if let battery = map.batteryCluster {
                             if battery.style == .batteryInline {
@@ -1262,10 +1270,11 @@ struct MonitorShell: View {
         let isClean = model.displayMode == .clean
         let deck = map.infoBar.frame
 
-        // Status deck — compact in clean, full in live. The zone map centers it over the
-        // native 16:9 feed; photography recenters it on the rail-anchored photo frame so
-        // the pill tracks the visible image, not the old frame's footprint.
-        if chrome.statusBarVisible {
+        // Status deck — live only; clean hides it with the rest of the non-critical chrome
+        // (#256). The zone map centers it over the native 16:9 feed; photography recenters it
+        // on the rail-anchored photo frame so the pill tracks the visible image, not the old
+        // frame's footprint.
+        if chrome.statusBarVisible, !isClean {
             let isPhotographyDeck = StillCapturePolicy.prefersPhotographyChrome(
                 selector: model.cameraPropertySnapshot.captureSelector)
             let photoFeed = isPhotographyDeck ? photographyFeedFrame() : nil
@@ -1489,13 +1498,10 @@ struct MonitorShell: View {
         let isPhotography = model.isPhotographyMode
         let zoneAspect: PortraitFeedAspect =
             model.displayMode == .command || isPhotography ? .fit16x9 : persistedAspect
-        // The stacked-scopes zone must bill only what photography will actually render —
-        // `PortraitScopesStack` drops cinema-only scopes, and a zone sized to the unfiltered
-        // count leaves a dead band between the feed and the toolbar.
-        let zoneScopeCount =
-            isPhotography
-            ? model.preferences.displayedFitScopes.filter(\.appliesToPhotography).count
-            : scopeCount
+        // The stacked-scopes zone must bill only what `PortraitScopesStack` will actually render
+        // (photography drops cinema-only scopes; clean drops everything unpinned) — a zone sized
+        // to the unfiltered count leaves a dead band between the feed and the toolbar.
+        let zoneScopeCount = scopeCount
         let map = MonitorZoneLayout.map(
             viewportWidth: context.viewportWidth,
             viewportHeight: context.viewportHeight,
@@ -1599,16 +1605,18 @@ struct MonitorShell: View {
                 .offset(x: feed.x, y: feed.y)
             }
 
-            // Overlaid top bar.
-            MonitorInfoBar(style: .infoBar)
-                .environment(model)
-                .liveViewGuideAnchor(.infoBar)
-                .frame(width: map.infoBar.frame.width, height: map.infoBar.frame.height)
-                .offset(x: map.infoBar.frame.x, y: map.infoBar.frame.y)
+            // Overlaid top bar — clean strips it with the rest of the non-critical chrome (#256).
+            if showsChrome {
+                MonitorInfoBar(style: .infoBar)
+                    .environment(model)
+                    .liveViewGuideAnchor(.infoBar)
+                    .frame(width: map.infoBar.frame.width, height: map.infoBar.frame.height)
+                    .offset(x: map.infoBar.frame.x, y: map.infoBar.frame.y)
+            }
 
             // REC options quick access: the zone map returns nil recOptions in both orientations,
             // so the shell places the button itself — top-right over the feed, below the top bar.
-            if model.displayMode != .command {
+            if model.displayMode != .command, showsChrome {
                 PortraitRecOptionsButton()
                     .environment(model)
                     .opacity(model.interfaceLocked ? 0.4 : 1)
@@ -1715,7 +1723,9 @@ struct MonitorShell: View {
             // the landscape `focusResetButton`. In fill the capture strip overlays the feed
             // bottom, so lift it clear (same clearance as the assist rail); in fit the feed
             // bottom is free.
-            if model.displayMode != .command, model.isFocusResetAvailable, !model.interfaceLocked {
+            if model.displayMode != .command, showsChrome, model.isFocusResetAvailable,
+                !model.interfaceLocked
+            {
                 let size: CGFloat = 40
                 let controlsHeight = map.captureStrip?.frame.height ?? 0
                 let bottomClearance = isFill ? controlsHeight + 10 : 10
@@ -1741,20 +1751,26 @@ struct MonitorShell: View {
             // black (R4). `context.viewportHeight` is the restored full physical height; the ZStack
             // is top-anchored at physical 0 (no safe-area centering — the offset children carry
             // physical coordinates), so this reaches the true bottom edge.
-            Rectangle()
-                .fill(LiveDesign.glass)
-                .frame(
-                    width: map.systemCluster.frame.width,
-                    height: CGFloat(context.viewportHeight) - map.systemCluster.frame.y
-                )
-                .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
-                .allowsHitTesting(false)
+            // Bottom system band — hidden in clean along with the rest of the chrome (#256); a
+            // swipe up on the feed is the way back to DISP 1.
+            if showsChrome {
+                Rectangle()
+                    .fill(LiveDesign.glass)
+                    .frame(
+                        width: map.systemCluster.frame.width,
+                        height: CGFloat(context.viewportHeight) - map.systemCluster.frame.y
+                    )
+                    .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
+                    .allowsHitTesting(false)
 
-            // Persistent bottom system band.
-            MonitorSystemCluster(slots: map.systemSlots, axis: .axisHorizontal)
-                .environment(model)
-                .frame(width: map.systemCluster.frame.width, height: map.systemCluster.frame.height)
-                .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
+                MonitorSystemCluster(slots: map.systemSlots, axis: .axisHorizontal)
+                    .environment(model)
+                    .frame(
+                        width: map.systemCluster.frame.width,
+                        height: map.systemCluster.frame.height
+                    )
+                    .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
+            }
 
             // Pickers / assist popups (portrait-anchored host).
             if let panel = model.activePanel, !panel.coversFullScreen {

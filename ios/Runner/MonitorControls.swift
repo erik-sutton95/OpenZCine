@@ -585,7 +585,9 @@ where Item.ID == String {
     }
 }
 
-/// Assist-toolbar order and per-button visibility for Display settings.
+/// Assist-toolbar order, per-button visibility, and the per-tool clean-view pin for Display
+/// settings. The pin (#256) is offered for every tool, LUT included — clean view is bare unless
+/// the operator explicitly keeps a tool on it.
 struct AssistToolbarOrderStrip: View {
     @Environment(NativeAppModel.self) private var model
 
@@ -596,6 +598,7 @@ struct AssistToolbarOrderStrip: View {
         ) { tool, index in
             let visible = model.preferences.isAssistToolbarButtonVisible(tool)
             let canToggleVisibility = tool != .lut
+            let pinnedToClean = model.preferences.cleanViewPinnedTools.contains(tool)
             HStack(spacing: 10) {
                 Text("\(index + 1)")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -613,6 +616,19 @@ struct AssistToolbarOrderStrip: View {
                 Text(tool.rawValue)
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(LiveDesign.faint)
+                // Keep-in-clean-view pin: clean (DISP 2) hides every tool unless it is pinned.
+                Button {
+                    model.toggleCleanViewPin(tool)
+                } label: {
+                    Image(systemName: pinnedToClean ? "pin.fill" : "pin.slash")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(pinnedToClean ? LiveDesign.accent : LiveDesign.faint)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.zcTapTarget)
+                .accessibilityLabel("Keep \(tool.displaySettingsTitle) in clean view")
+                .accessibilityValue(pinnedToClean ? "Pinned" : "Hidden in clean view")
                 if canToggleVisibility {
                     Button {
                         model.toggleAssistToolbarVisibility(tool)
@@ -624,13 +640,16 @@ struct AssistToolbarOrderStrip: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.zcTapTarget)
+                    .accessibilityLabel("Show \(tool.displaySettingsTitle) on the monitor bar")
+                    .accessibilityValue(visible ? "Shown" : "Hidden")
                 }
             }
+            .accessibilityElement(children: .contain)
             .accessibilityLabel("\(tool.displaySettingsTitle), position \(index + 1)")
             .accessibilityHint(
                 canToggleVisibility
-                    ? "Tap the eye to show or hide on the monitor bar. Drag to reorder."
-                    : "Drag to reorder."
+                    ? "Tap the eye to show or hide on the monitor bar, the pin to keep it in clean view. Drag to reorder."
+                    : "Tap the pin to keep it in clean view. Drag to reorder."
             )
         }
     }

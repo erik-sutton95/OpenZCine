@@ -670,7 +670,19 @@ final class NativeAppModel {
     var pendingHopShareResumeClips: [MediaClip]?
     /// Where to return after the hop: the camera's host + AP SSID captured before leaving.
     @ObservationIgnored private var internetHopReturn: (host: String, ssid: String)?
-    var displayMode: DispMode = .live
+    var displayMode: DispMode = .live {
+        didSet {
+            guard displayMode != oldValue else { return }
+            // Clean view defers transient pop-ups (#256): a picker or assist drawer opened in
+            // DISP 1 must not ride into the bare image. Full-screen destinations the operator
+            // navigated to deliberately (Settings, Media) are not pop-ups and stay put.
+            if !MonitorChromePolicy.allowsPopups(in: displayMode),
+                activePanel?.coversFullScreen == false
+            {
+                dismissActivePanel()
+            }
+        }
+    }
     /// Operator interface lock (the top-left lock button). When on, the monitor's controls — pickers,
     /// assist tools, DISP, tap-to-focus — are inert so nothing changes by accident on set. Record and
     /// the lock itself stay live. Session-only; never persisted, so a relaunch is always unlocked.
@@ -3834,20 +3846,41 @@ final class NativeAppModel {
         activePanel?.coversFullScreen ?? false
     }
 
-    /// Whether the live feed is currently not being shown to anyone — Command mode (DISP 3) or a
-    /// full-screen panel cover. While true the streaming loop stops pulling frames AND tells the
-    /// camera to `EndLiveView`, so the sensor stops encoding for a feed nobody sees (the biggest
-    /// avoidable camera-heat source). It resumes on return.
+    /// Whether the live feed is currently not being shown to anyone — a full-screen panel cover.
+    /// While true the streaming loop stops pulling frames AND tells the camera to `EndLiveView`,
+    /// so the sensor stops encoding for a feed nobody sees (the biggest avoidable camera-heat
+    /// source). It resumes on return.
+    ///
+    /// Command mode (DISP 3) is deliberately **not** here: its hero readout is the timecode, and
+    /// timecode rides the live-view frame header only — there is no PTP timecode property — so
+    /// ending live view froze it (#271). Command uses `streamsHeaderOnly` instead.
     private var shouldPauseLiveFeed: Bool {
-        displayMode == .command || activePanelHidesLiveFeed
+        activePanelHidesLiveFeed
     }
+
+    /// Command mode (DISP 3): the dashboard hides the image but shows live timecode and record
+    /// state, both of which only exist in the live-view frame header. The stream therefore stays
+    /// up at the *smallest* frame the body will send and is pulled on a slow cadence, with decode,
+    /// display, the watch relay and scope sampling all skipped.
+    private var streamsHeaderOnly: Bool {
+        displayMode == .command && !activePanelHidesLiveFeed
+    }
+
+    /// How long the loop waits between header-only pulls in Command mode — the same cadence the
+    /// mode's property polling already ran at, so the dashboard's transaction load is unchanged
+    /// apart from one small image fetch per tick. The camera keeps encoding at its own rate either
+    /// way: our pull rate does not change camera heat, the frame *size* does.
+    private static let commandHeaderPullInterval: Duration = .milliseconds(250)
 
     /// The `LiveViewImageSize` byte to request right now: the operator's preset, capped smaller when
     /// the phone is thermally stressed, the camera reports an overheat warning, or a take is in
     /// progress. A smaller preview is less sensor-readout/encode work for the body to do while
     /// things are hot. Never enlarges beyond the operator's chosen preset.
     private var effectiveStreamImageSize: UInt8 {
-        preferences.streamPreset.liveViewImageSize
+        // Command shows no image at all — ask for the smallest frame the body offers, purely as a
+        // carrier for the header's timecode and record state.
+        if streamsHeaderOnly { return OperatorPreferences.StreamPreset.fast.liveViewImageSize }
+        return preferences.streamPreset.liveViewImageSize
     }
 
     /// Restarts live view when `effectiveStreamImageSize` has moved since the last configure — e.g.
@@ -4196,13 +4229,16 @@ final class NativeAppModel {
             connection = .connected
             var pausedForCommand = false
             var liveViewSuspended = false
+            // Whether the stream is currently configured for Command's header-only pulls, so the
+            // size change is applied exactly once per DISP transition instead of every frame.
+            var headerOnly = false
             nextFrameTask = liveFrameTask(session)
             while !Task.isCancelled {
                 if shouldPauseLiveFeed {
-                    // Feed hidden (Command mode / DISP 3, or a full-screen cover): stop pulling
-                    // frames AND end live view on the camera — sensor readout + JPEG encode is the
-                    // dominant camera-heat source. Property polls and queued writes keep running
-                    // on this idle cadence (cheap, separate transactions).
+                    // Feed hidden behind a full-screen cover: stop pulling frames AND end live
+                    // view on the camera — sensor readout + JPEG encode is the dominant
+                    // camera-heat source. Property polls and queued writes keep running on this
+                    // idle cadence (cheap, separate transactions).
                     pausedForCommand = true
                     nextFrameTask.cancel()
                     if !liveViewSuspended {
@@ -4231,6 +4267,7 @@ final class NativeAppModel {
                         lastAppliedStreamImageSize = requestedSize
                         try await session.startLiveView()
                     }
+                    headerOnly = streamsHeaderOnly
                     watchdog.recordGoodFrame(at: Date())
                     lastGoodFrameAt = Date()
                     consecutiveBadLiveFrames = 0
@@ -4239,8 +4276,48 @@ final class NativeAppModel {
                     lastScopeSampleTime = 0
                     nextFrameTask = liveFrameTask(session)
                 }
+                // Entering or leaving Command: restart the stream at the size that mode wants.
+                // One stop/start per DISP transition — the same count the old pause/resume paid.
+                if streamsHeaderOnly != headerOnly {
+                    headerOnly = streamsHeaderOnly
+                    nextFrameTask.cancel()
+                    await session.stopLiveView()
+                    let requestedSize = effectiveStreamImageSize
+                    await session.configureLiveView(
+                        size: requestedSize,
+                        compression: preferences.qualityBias.liveViewImageCompression)
+                    lastAppliedStreamImageSize = requestedSize
+                    try await session.startLiveView()
+                    frameRate = FrameRateSampler()
+                    watchdog.recordGoodFrame(at: Date())
+                    lastGoodFrameAt = Date()
+                    consecutiveBadLiveFrames = 0
+                    lastLevelUpdateTime = 0
+                    lastScopeSampleTime = 0
+                    nextFrameTask = liveFrameTask(
+                        session, deadline: Self.firstLiveViewFrameDeadline)
+                }
                 let frame = try await nextFrameTask.value
                 guard !Task.isCancelled, cameraSession === session else { return .taskCancelled }
+                if headerOnly {
+                    // Command mode: the header is the whole point. Publish the authoritative
+                    // timecode and record state, skip the JPEG entirely, and pace the next pull.
+                    //
+                    // `frameRate` / `measuredLiveViewFPS` deliberately do NOT sample here: this
+                    // cadence is our own throttle, not the link's capability, and feeding it to
+                    // the link-health scorer would drop the signal bars to a false alarm. The FPS
+                    // chip holds its last live-feed reading until the feed comes back.
+                    watchdog.recordGoodFrame(at: Date())
+                    lastGoodFrameAt = Date()
+                    consecutiveBadLiveFrames = 0
+                    applyLiveViewHeaderState(frame)
+                    applyLiveViewHeaderTimecode(frame.timecode)
+                    publishWatchState()
+                    nextFrameTask = liveFrameTask(session)
+                    await runCommandModeSafePoint(session: session)
+                    try? await Task.sleep(for: Self.commandHeaderPullInterval)
+                    continue
+                }
                 // Bound in-flight frames to one JPEG + one decoded bitmap: finish decode and
                 // display before pulling the next camera frame; scope sampling overlaps the next
                 // fetch. Scopes must meter the clean frame, never the assist-composited bake
@@ -4271,7 +4348,8 @@ final class NativeAppModel {
                     // One shared scope sample per throttle tick feeds histogram, waveform, parade,
                     // and traffic lights (see `ScopeAssistSampling`); the portrait scopes stack
                     // renders exactly these tools, so this set already covers it.
-                    let visibleScopes = preferences.visibleAssistTools(for: .liveView)
+                    // Mode-filtered: clean view with nothing pinned samples no scopes at all.
+                    let visibleScopes = renderedLiveAssistTools
                     let shouldSampleScopes = ScopeAssistSampling.shouldSample(
                         visible: visibleScopes)
                     if shouldSampleScopes {
@@ -4823,7 +4901,7 @@ final class NativeAppModel {
         }
         // Sound indicator (bytes 824–827) → the audio-levels panel. The camera applies its own
         // meter ballistics and peak hold, so segments feed the panel directly.
-        if preferences.visibleAssistTools(for: .liveView).contains(.audioMeters),
+        if renderedLiveAssistTools.contains(.audioMeters),
             let sound = frame.sound
         {
             let levels = AudioMeterLevels(cameraIndicator: sound)
@@ -5702,6 +5780,12 @@ final class NativeAppModel {
         } else if MonitorAssistTool.framingBarTools.contains(tool) {
             toggleFramingBarVisibility(tool)
         }
+    }
+
+    /// Toggles whether a tool keeps rendering in clean view (DISP 2) — off for all 17 by default
+    /// so clean is a bare image out of the box (#256).
+    func toggleCleanViewPin(_ tool: MonitorAssistTool) {
+        preferences.toggleCleanViewPin(tool)
     }
 
     func resetExposureBarVisibility() {
@@ -7285,13 +7369,23 @@ final class NativeAppModel {
             selector: cameraPropertySnapshot.captureSelector)
     }
 
-    /// The live assist tools that actually render right now — photography filters the
-    /// cinema-only overlays (video scopes, audio meters, …) while the persisted set stays
-    /// untouched for the flip back to video.
+    /// The live assist tools that actually render right now. The single funnel every live overlay,
+    /// scope, image effect and sampler reads — asking `MonitorChromePolicy` here (rather than at
+    /// each render site) is what makes clean view genuinely clean (#256). Photography then filters
+    /// the cinema-only overlays (video scopes, audio meters, …); the persisted set stays untouched
+    /// for the flip back to video, and for the return to DISP 1.
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
-        let tools = preferences.liveViewVisibleAssistTools
+        let tools = MonitorChromePolicy.visibleTools(
+            mode: displayMode, preferences: preferences)
         guard isPhotographyMode else { return tools }
         return tools.filter(\.appliesToPhotography)
+    }
+
+    /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
+    /// photography toolset — the recency selection itself stays in the core preferences.
+    var renderedFitScopes: [MonitorAssistTool] {
+        let rendered = renderedLiveAssistTools
+        return preferences.displayedFitScopes.filter { rendered.contains($0) }
     }
 
     func confirmRecordToggle() {
@@ -8067,6 +8161,9 @@ final class NativeAppModel {
 
     func showPicker(_ picker: CameraPicker, mode: Int = 0) {
         guard !interfaceLocked else { return }
+        // Clean view stays bare — the controls that open pickers are hidden there anyway, so this
+        // only catches a stray hardware/remote route (#256).
+        guard MonitorChromePolicy.allowsPopups(in: displayMode) else { return }
         // Open only from a clean slate; tapping a setting while a picker is already up blends
         // instead (see CaptureSettingButton / handleBackdropTap).
         guard activePanel == nil else { return }
@@ -8297,6 +8394,7 @@ final class NativeAppModel {
 
     func showAssist(_ tool: MonitorAssistTool) {
         guard !interfaceLocked else { return }
+        guard MonitorChromePolicy.allowsPopups(in: displayMode) else { return }
         if isScopeCapBlocked(tool) {
             scopeCapNotice += 1
             return

@@ -738,8 +738,9 @@ func desqueezedRect(_ full: CGRect, _ desqueeze: AssistConfiguration.Desqueeze) 
 /// same way the index.html prototype does.
 struct FeedAlignedAssists: View {
     @Environment(NativeAppModel.self) private var model
-    /// Clean output mode (DISP 2) keeps the framing guides — which bound the de-squeeze — but drops
-    /// the busier grid, crosshair and level.
+    /// Clean output mode (DISP 2). Which tools survive it is decided by `MonitorChromePolicy` via
+    /// `renderedLiveAssistTools` — nothing unless the operator pinned it. This flag only carries
+    /// the layout consequence (no bottom bars, so the EV needle drops to the feed edge).
     var clean: Bool = false
     /// When set (e.g. letterboxed media playback), framing overlays align to this rect instead of
     /// the full geometry.
@@ -755,7 +756,7 @@ struct FeedAlignedAssists: View {
             let visible =
                 (usePlaybackContext
                 ? model.preferences.playbackVisibleAssistTools
-                : model.preferences.liveViewVisibleAssistTools).subtracting(excludeTools)
+                : model.renderedLiveAssistTools).subtracting(excludeTools)
             let overlayDesqueeze: AssistConfiguration.Desqueeze = {
                 var config = model.assistConfiguration.desqueeze
                 config.enabled = visible.contains(.desqueeze)
@@ -767,8 +768,6 @@ struct FeedAlignedAssists: View {
                     AspectGuideFrameView(
                         configuration: model.assistConfiguration.guides, feed: feed)
                 }
-                // The EV meter survives clean mode (DISP 2): exposure truth is exactly what
-                // a stripped-down operator view still needs, like the framing guides.
                 if visible.contains(.evMeter),
                     // Photography-only: a persisted visibility set from an older build may
                     // still carry the tool, so the render guards the mode as well.
@@ -790,20 +789,18 @@ struct FeedAlignedAssists: View {
                         )
                         .allowsHitTesting(false)
                 }
-                if !clean {
-                    if visible.contains(.grid) {
-                        FeedGridView(grid: model.assistConfiguration.grid, feed: feed)
-                    }
-                    if visible.contains(.crosshair) {
-                        FeedCrosshairView(feed: feed)
-                    }
-                    if visible.contains(.level) && model.assistConfiguration.level.enabled {
-                        FeedLevelView(
-                            style: model.assistConfiguration.level.style, feed: feed,
-                            visibleBounds: Self.visibleBounds(
-                                contentGlobal: proxy.frame(in: .global), size: proxy.size,
-                                screen: screenBounds))
-                    }
+                if visible.contains(.grid) {
+                    FeedGridView(grid: model.assistConfiguration.grid, feed: feed)
+                }
+                if visible.contains(.crosshair) {
+                    FeedCrosshairView(feed: feed)
+                }
+                if visible.contains(.level) && model.assistConfiguration.level.enabled {
+                    FeedLevelView(
+                        style: model.assistConfiguration.level.style, feed: feed,
+                        visibleBounds: Self.visibleBounds(
+                            contentGlobal: proxy.frame(in: .global), size: proxy.size,
+                            screen: screenBounds))
                 }
             }
         }
