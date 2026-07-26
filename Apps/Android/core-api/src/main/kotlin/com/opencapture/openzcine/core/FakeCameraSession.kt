@@ -216,8 +216,11 @@ public class FakeCameraSession(
                             ),
                         // iOS CameraPicker.focus.modes ladders (independent tabs).
                         focusModes = listOf("MF", "AF-S", "AF-C", "AF-F"),
+                        // "Subject tracking" is the AF-AREA mode (0x8033), named as the body
+                        // names it so it stays distinct from the subject-DETECTION list below
+                        // and round-trips through the shared-core encoder (#274).
                         focusAreas =
-                            listOf("Single", "Wide-S", "Wide-L", "Auto", "Subject"),
+                            listOf("Single", "Wide-S", "Wide-L", "Auto", "Subject tracking"),
                         focusSubjects =
                             listOf("Auto", "People", "Animal", "Bird", "Vehicle", "Airplane"),
                         resolutionFrameRates =
