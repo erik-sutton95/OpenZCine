@@ -64,7 +64,7 @@ flowchart TD
 - **Detail:** Configures image size/compression from operator prefs, sends PTP `StartLiveView`,
   polls `DeviceReady` (≤40 × 50 ms), then pulls JPEG frames one at a time. Decode and assist
   baking run off the main actor; display publishes `liveFrameImage` ~24–30 Hz. Default feed path
-  is `LiveFrameView` (`UIImageView`); opt-in `ZC_METAL_FEED=1` uses `MetalLiveView` +
+  is `MetalLiveView` (GPU-native, no readback); `ZC_DEMO_CPU_FEED=1` forces `LiveFrameView` (`UIImageView`) +
   `MetalFeedFrameBaker`. Scope sampling meters the **clean** decoded frame (never the
   assist-composited display).
 - 📝 Notes:

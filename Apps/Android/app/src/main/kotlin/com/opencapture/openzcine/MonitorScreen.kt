@@ -929,7 +929,11 @@ internal fun MonitorScreen(
                     }
                     if (stillCapture.isCapturing.value) return@launch
                 }
-                stillCapture.pressed(recordScope, continuousDrive = false)
+                stillCapture.pressed(
+                    recordScope,
+                    continuousDrive = false,
+                    preserveFocus = mfDrive.focusManuallyDialed,
+                )
                 delay(150)
             }
         }
@@ -988,6 +992,9 @@ internal fun MonitorScreen(
             recordScope,
             continuousDrive =
                 cameraProperties.stillCaptureMode in StillPickerPolicy.CONTINUOUS_DRIVES,
+            // A dialled focus must survive the shutter — an AF release would re-focus at the
+            // box and undo the pull (iOS `focusManuallyDialed`).
+            preserveFocus = mfDrive.focusManuallyDialed,
         )
     }
     val photoShutterReleased: () -> Unit = { stillCapture.released(recordScope) }
@@ -1794,6 +1801,9 @@ internal fun MonitorScreen(
                     if (!focusGestureContext.canSetFocusPoint) {
                         return@handleFocusFeedAction
                     }
+                    // The operator chose to AF at a point — subsequent releases resume normal
+                    // AF focus (iOS clears the same flag before changeAfArea).
+                    mfDrive.clearManualFocus()
                     focusMoveRequestsInFlight += 1
                     recordScope.launch {
                         try {

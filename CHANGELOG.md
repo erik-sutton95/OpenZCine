@@ -42,6 +42,21 @@ All notable changes to this project are documented here. The format is based on
 - Repository foundation: governance docs, tooling (`just`, meta-checks), native CI, and agent
   configuration.
 
+### Fixed
+
+- **Focus peaking now tracks the focus plane.** It measured edge contrast, which scales with how
+  bright an edge is as much as with how sharp it is — so a defocused specular highlight outranked
+  genuinely sharp low-contrast detail, painting background bokeh while skipping the subject. It
+  now measures blur radius (a two-scale gradient ratio), which is independent of contrast.
+  Separately, peaking ran on a stretch that flattened the top of the range, so in-focus highlight
+  detail could never register at all. Both platforms; the sensitivity steps behave the same.
+- Android: the media page no longer crawls after the first long-press — selecting one item used to
+  make every later tap re-hash the whole library, and stale hit-test rectangles could send a tap to
+  an off-screen item.
+- Android: the shutter no longer re-focuses when focus was set with the focus dial, matching iOS.
+- Android: star ratings write to the card as they always did — the star's tap target was far
+  smaller than the minimum and gave no press feedback, so taps missed silently.
+
 ### Changed
 
 - Google Play **internal** uploads automate like TestFlight: merge Android-relevant paths to `main`
