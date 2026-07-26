@@ -18,11 +18,14 @@ import Foundation
 /// camera fault and thermal/card warnings (`CameraWarningStatus`), the recording tally, connection
 /// loss / reconnect notices, modal alerts that require an immediate answer (record confirmation),
 /// and — while a take is rolling or a record command is awaiting confirmation — the record control
-/// itself, which both shells keep on screen alone after stripping the rest of the rail. Clean view
-/// must never remove the way to STOP a take. Analysis chrome — scopes, traffic lights, histograms,
-/// meters — is never critical.
+/// itself. Clean view must never remove the way to STOP a take. Analysis chrome — scopes, traffic
+/// lights, histograms, meters — is never critical.
 ///
-/// The way *out* of clean view is the existing feed swipe-up gesture, which both shells keep live.
+/// Clean also keeps the **DISP key** itself: it is the control for this feature, and the rest of
+/// the cycle is only reachable through it, so hiding it would strand the operator in clean. Both
+/// shells therefore render exactly two rail controls in clean — DISP always, record while rolling
+/// — and strip the batteries, lock, Settings, Media, status deck and every bar. The feed swipe
+/// (down → clean, up → live) remains a second way out.
 public enum MonitorChromePolicy {
     /// Whether `tool` renders right now: switched on for `context`, and permitted by `mode`.
     public static func isToolVisible(

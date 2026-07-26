@@ -780,9 +780,13 @@ struct MonitorSystemCluster: View {
     /// Absolute (landscape) or column-relative (portrait) frames for the five controls.
     var slots: MonitorSystemSlotFrames
     var axis: MonitorZoneStyle
-    /// Renders the record control alone. Clean view (DISP 2) strips the rail as non-critical
-    /// chrome but never the way to STOP a rolling take (#256).
-    var recordOnly: Bool = false
+    /// Renders only what clean view (DISP 2) keeps: the DISP key — the way back OUT of clean,
+    /// without which the rest of the cycle is unreachable — and, when `showsRecordControl` is
+    /// still true, the record control. The rest of the rail is non-critical chrome (#256).
+    var cleanEssentials: Bool = false
+    /// Whether the record control mounts at all. Clean standby drops it; a rolling take never
+    /// does — clean must never remove the way to STOP a take.
+    var showsRecordControl: Bool = true
     /// Press tracking for the photo shutter. `@GestureState` (not `@State`): the system can
     /// swallow a finger-up (gesture-gate timeouts), and gesture state resets even then — a
     /// stranded latch once chained an endless burst.
@@ -804,7 +808,7 @@ struct MonitorSystemCluster: View {
     // MARK: - .axisVertical (former `LockButtonModule` + `RightRailControlsModule`)
 
     @ViewBuilder private var landscapeBody: some View {
-        if !recordOnly {
+        if !cleanEssentials {
             lockButton
                 .monitorModuleFrame(slots.lock)
             settingsButton
@@ -812,12 +816,12 @@ struct MonitorSystemCluster: View {
             mediaButton
                 .monitorModuleFrame(slots.media)
         }
-        recordButton
-            .monitorModuleFrame(slots.record)
-        if !recordOnly {
-            displayButton
-                .monitorModuleFrame(slots.disp)
+        if showsRecordControl {
+            recordButton
+                .monitorModuleFrame(slots.record)
         }
+        displayButton
+            .monitorModuleFrame(slots.disp)
     }
 
     private var lockButton: some View {
@@ -934,18 +938,20 @@ struct MonitorSystemCluster: View {
         // column left DISP nearly touching record while far from lock.
         HStack(spacing: 0) {
             Spacer(minLength: 14)
-            if !recordOnly {
+            if !cleanEssentials {
                 lockButton
                 Spacer(minLength: 14)
-                PortraitDisplayButton()
-                    .accessibilityLabel("Change display mode")
-                    .accessibilityIdentifier("monitor.system.display")
-                    .liveViewGuideAnchor(.display)
+            }
+            PortraitDisplayButton()
+                .accessibilityLabel("Change display mode")
+                .accessibilityIdentifier("monitor.system.display")
+                .liveViewGuideAnchor(.display)
+            Spacer(minLength: 14)
+            if showsRecordControl {
+                recordButton
                 Spacer(minLength: 14)
             }
-            recordButton
-            Spacer(minLength: 14)
-            if !recordOnly {
+            if !cleanEssentials {
                 mediaButton
                 Spacer(minLength: 14)
                 settingsButton
@@ -1228,13 +1234,12 @@ struct MonitorShell: View {
                     }
                 }
 
-                // Side rails (batteries + system cluster) render on top of live and command.
-                // Clean strips them with the rest of the non-critical chrome (#256) — a swipe up
-                // on the feed is the way back to DISP 1 from there. The one exception is a rolling
-                // take: clean must never remove the way to stop one, so the record control alone
-                // stays up (documented critical exception, see `MonitorChromePolicy`).
-                let recordOnlyRail = !showsChrome && model.isRecordingOrPending
-                if chrome.sideRailsVisible, showsChrome || recordOnlyRail {
+                // Side rails (batteries + system cluster). Clean strips the batteries, lock,
+                // Settings and Media as non-critical chrome (#256) and keeps exactly two
+                // controls: the DISP key — hiding it would strand the operator, since the rest
+                // of the cycle is only reachable through it — and, while a take is rolling, the
+                // record control. Both are documented exceptions on `MonitorChromePolicy`.
+                if chrome.sideRailsVisible {
                     canvasLayer {
                         if showsChrome, let battery = map.batteryCluster {
                             if battery.style == .batteryInline {
@@ -1258,7 +1263,8 @@ struct MonitorShell: View {
                         }
                         MonitorSystemCluster(
                             slots: map.systemSlots, axis: .axisVertical,
-                            recordOnly: recordOnlyRail
+                            cleanEssentials: !showsChrome,
+                            showsRecordControl: showsChrome || model.isRecordingOrPending
                         )
                         .environment(model)
                     }
@@ -1763,16 +1769,15 @@ struct MonitorShell: View {
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
 
-            // Opaque band behind the system controls, from the cluster's top through the physical
-            // bottom edge (home-indicator area) so the record button no longer floats on bare
-            // black (R4). `context.viewportHeight` is the restored full physical height; the ZStack
+            // Bottom system band. Clean keeps only the DISP key (the way out of clean) and, while
+            // a take is rolling, the record control — the opaque glass band behind them goes with
+            // the rest of the chrome (#256), leaving the controls floating on the portrait
+            // letterbox. `context.viewportHeight` is the restored full physical height; the ZStack
             // is top-anchored at physical 0 (no safe-area centering — the offset children carry
-            // physical coordinates), so this reaches the true bottom edge.
-            // Bottom system band — hidden in clean along with the rest of the chrome (#256); a
-            // swipe up on the feed is the way back to DISP 1. A rolling take keeps the record
-            // control alone (see the landscape branch).
-            let recordOnlyBand = !showsChrome && model.isRecordingOrPending
-            if showsChrome || recordOnlyBand {
+            // physical coordinates), so the band reaches the true bottom edge.
+            let cleanBand = !showsChrome
+            let bandShowsRecord = showsChrome || model.isRecordingOrPending
+            if showsChrome {
                 Rectangle()
                     .fill(LiveDesign.glass)
                     .frame(
@@ -1781,17 +1786,17 @@ struct MonitorShell: View {
                     )
                     .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
                     .allowsHitTesting(false)
-
-                MonitorSystemCluster(
-                    slots: map.systemSlots, axis: .axisHorizontal, recordOnly: recordOnlyBand
-                )
-                .environment(model)
-                .frame(
-                    width: map.systemCluster.frame.width,
-                    height: map.systemCluster.frame.height
-                )
-                .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
             }
+            MonitorSystemCluster(
+                slots: map.systemSlots, axis: .axisHorizontal,
+                cleanEssentials: cleanBand, showsRecordControl: bandShowsRecord
+            )
+            .environment(model)
+            .frame(
+                width: map.systemCluster.frame.width,
+                height: map.systemCluster.frame.height
+            )
+            .offset(x: map.systemCluster.frame.x, y: map.systemCluster.frame.y)
 
             // Pickers / assist popups (portrait-anchored host).
             if let panel = model.activePanel, !panel.coversFullScreen {

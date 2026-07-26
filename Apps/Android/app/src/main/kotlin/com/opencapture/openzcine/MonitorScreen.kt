@@ -2606,6 +2606,21 @@ internal fun MonitorScreen(
                         displayMode = nextDisplayModeInOrder(displayModeOrder, effectiveDisplayMode)
                     }
                 } else {
+                    // Clean view keeps the DISP key: it is the control for this feature and the
+                    // rest of the cycle is only reachable through it, so hiding it would strand
+                    // the operator in a bare image (#256).
+                    if (!showsChrome) {
+                        DispButton(
+                            activeIndex = displayModeOrder.indexOf(effectiveDisplayMode),
+                            modeCount = displayModeOrder.size,
+                            isLiveActive = effectiveDisplayMode == MonitorDisplayMode.LIVE,
+                            modifier = Modifier.zone(zones.disp),
+                        ) {
+                            activeAssistOptions = null
+                            displayMode =
+                                nextDisplayModeInOrder(displayModeOrder, effectiveDisplayMode)
+                        }
+                    }
                     if (railPlan.recordingSafetyVisible) {
                         if (prefersPhotographyChrome(cameraProperties)) {
                             PhotographyShutterButton(
@@ -2624,14 +2639,16 @@ internal fun MonitorScreen(
                             )
                         }
                     }
-                    LandscapeSettingsRecoveryButton(
-                        modifier = Modifier.zone(zones.settings),
-                        onOpenSettings = {
-                            activeAssistOptions = null
-                            if (pendingCommandControl == null) activeMonitorPickerKind = null
-                            onOpenSettings()
-                        },
-                    )
+                    if (railPlan.settingsRecoveryVisible) {
+                        LandscapeSettingsRecoveryButton(
+                            modifier = Modifier.zone(zones.settings),
+                            onOpenSettings = {
+                                activeAssistOptions = null
+                                if (pendingCommandControl == null) activeMonitorPickerKind = null
+                                onOpenSettings()
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -3423,39 +3440,41 @@ private fun PortraitChrome(
 
     // Bottom system band: equal gaps around natural control sizes (iOS
     // `PortraitSystemBar` uses equal spacers, not equal columns).
-    // Clean view (DISP 2) strips it as non-critical chrome, except while a take is rolling: the
-    // way to STOP one is never removed (#256). A feed swipe-up returns to DISP 1.
-    val systemBandRecordOnly = !showsChrome && recording
-    if (showsChrome || systemBandRecordOnly) {
-        // Opaque band behind the system controls through the physical bottom
-        // edge, so the record button never floats on bare black (iOS R4).
-        Box(
-            Modifier.zone(
-                ZoneFrame(
-                    zones.systemCluster.x,
-                    zones.systemCluster.y,
-                    zones.systemCluster.width,
-                    maxOf(0f, viewportHeight - zones.systemCluster.y),
-                ),
-            ).background(LiveDesign.glass),
-        )
-        Row(
-            Modifier.zone(zones.systemCluster),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    // Clean view (DISP 2) strips the band to the essentials (#256): the DISP key — the way out,
+    // without which the rest of the cycle is unreachable — and, while a take is rolling, the
+    // record control. Everything else in the band is non-critical chrome.
+    val cleanBand = !showsChrome
+    val bandShowsRecord = showsChrome || recording
+    // Opaque band behind the system controls through the physical bottom
+    // edge, so the record button never floats on bare black (iOS R4).
+    Box(
+        Modifier.zone(
+            ZoneFrame(
+                zones.systemCluster.x,
+                zones.systemCluster.y,
+                zones.systemCluster.width,
+                maxOf(0f, viewportHeight - zones.systemCluster.y),
+            ),
+        ).background(LiveDesign.glass),
+    )
+    Row(
+        Modifier.zone(zones.systemCluster),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.weight(1f))
+        if (!cleanBand) {
+            LockButton(locked, Modifier.size(40.dp), onClick = onLock)
             Spacer(Modifier.weight(1f))
-            if (!systemBandRecordOnly) {
-                LockButton(locked, Modifier.size(40.dp), onClick = onLock)
-                Spacer(Modifier.weight(1f))
-                DispButton(
-                    activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
-                    modeCount = enabledDisplayModeOrder.size,
-                    isLiveActive = displayMode == MonitorDisplayMode.LIVE,
-                    modifier = Modifier.size(width = 74.dp, height = 44.dp),
-                    onClick = onDisp,
-                )
-                Spacer(Modifier.weight(1f))
-            }
+        }
+        DispButton(
+            activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
+            modeCount = enabledDisplayModeOrder.size,
+            isLiveActive = displayMode == MonitorDisplayMode.LIVE,
+            modifier = Modifier.size(width = 74.dp, height = 44.dp),
+            onClick = onDisp,
+        )
+        Spacer(Modifier.weight(1f))
+        if (bandShowsRecord) {
             if (isPhotography) {
                 PhotographyShutterButton(
                     isCapturing = stillCapturing,
@@ -3474,20 +3493,20 @@ private fun PortraitChrome(
                 )
             }
             Spacer(Modifier.weight(1f))
-            if (!systemBandRecordOnly) {
-                AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
-                    if (isPhotography) {
-                        PhotoGlyph(tint, glyphModifier)
-                    } else {
-                        MediaStackGlyph(tint, glyphModifier)
-                    }
+        }
+        if (!cleanBand) {
+            AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
+                if (isPhotography) {
+                    PhotoGlyph(tint, glyphModifier)
+                } else {
+                    MediaStackGlyph(tint, glyphModifier)
                 }
-                Spacer(Modifier.weight(1f))
-                AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->
-                    GearGlyph(tint, glyphModifier)
-                }
-                Spacer(Modifier.weight(1f))
             }
+            Spacer(Modifier.weight(1f))
+            AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->
+                GearGlyph(tint, glyphModifier)
+            }
+            Spacer(Modifier.weight(1f))
         }
     }
 }
