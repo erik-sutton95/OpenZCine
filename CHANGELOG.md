@@ -66,6 +66,12 @@ All notable changes to this project are documented here. The format is based on
 - Android: star ratings write to the card as they always did — the star's tap target was far
   smaller than the minimum and gave no press feedback, so taps missed silently.
 
+- Media: backup (two-card) shots appear under both slots and delete every copy; context-aware
+  delete copy and companion handling (RAW+JPEG pairs; a video plus its R3D/NEV master); EXIF
+  auto-rotation; and a batch-delete progress bar that refreshes the grid once at the end.
+- Instant playback freezes the reviewed shot's focus box at capture time, so it no longer drifts if
+  the AF point moves while the preview loads.
+
 ### Changed
 
 - Google Play **internal** uploads automate like TestFlight: merge Android-relevant paths to `main`
@@ -75,16 +81,6 @@ All notable changes to this project are documented here. The format is based on
   successful apply (see `docs/android-control-writes.md`).
 - TestFlight notes are now reviewed, tester-written copy with concrete test steps. CI rejects stale
   notes, commit titles, and common implementation jargon before an iOS build can ship.
-
-### Fixed
-
-- Focus peaking de-logs with the active mode's tone curve, so it looks identical in photo and video
-  (was hardcoded to the movie log curve).
-- Media: backup (two-card) shots appear under both slots and delete every copy; context-aware
-  delete copy and companion handling (RAW+JPEG pairs; a video plus its R3D/NEV master); EXIF
-  auto-rotation; and a batch-delete progress bar that refreshes the grid once at the end.
-- Instant playback freezes the reviewed shot's focus box at capture time, so it no longer drifts if
-  the AF point moves while the preview loads.
 
 ### Security
 
