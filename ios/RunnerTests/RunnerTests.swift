@@ -1111,15 +1111,12 @@ extension RunnerTests {
     /// texture, a defocused (pre-blurred) region, and per-pixel noise dense enough to exercise the
     /// gate's partial band. Checked at every sensitivity because the gains and biases change with
     /// it.
-    func testFusedPeakingMatchesFilterChainPixelForPixel() throws {
-        try XCTSkipIf(
-            !ImageEffectsCompositor.fusedPeakingAvailable,
-            "fused peaking disabled on this OS (kernel missing or the runtime self-check found it "
-                + "does not reproduce the chain) — chain fallback is in force, nothing to compare")
-        let w = 320
-        let h = 180
+    /// The frame the peaking equivalence tests measure on: sharp strokes and fine texture on the
+    /// left half, the same content defocused on the right, and sensor-like noise over all of it —
+    /// so a detector that confuses grain for detail, or blur for focus, separates here.
+    private func peakingProbeFrame(width w: Int, height h: Int) throws -> CIImage {
         // Scale pinned to 1 — the renderer defaults to the screen scale, which would silently make
-        // the frame 3x the stated size and the readback below a partial crop of it.
+        // the frame 3x the stated size and every readback a partial crop of it.
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let frame = UIGraphicsImageRenderer(size: CGSize(width: w, height: h), format: format)
@@ -1148,13 +1145,114 @@ extension RunnerTests {
                 }
             }
         let source = try XCTUnwrap(CIImage(image: frame, options: [.colorSpace: NSNull()]))
-        // Defocus the right half by pre-blurring — the ratio must read it as out of focus in both
-        // implementations identically.
+        // Defocus the right half by pre-blurring — the ratio must read it as out of focus.
         let blurredHalf =
             source
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3.0])
             .cropped(to: CGRect(x: w / 2, y: 0, width: w / 2, height: h))
-        let mixed = blurredHalf.composited(over: source).cropped(to: source.extent)
+        return blurredHalf.composited(over: source).cropped(to: source.extent)
+    }
+
+    /// `Peaking.overlay` is the transcription target for all three Android shells, so it has to be
+    /// a transcription of what iOS actually renders. This test is the only thing standing behind
+    /// that, and without it "Android matches iOS" is an intention rather than a fact.
+    ///
+    /// Checked end to end against the composited frame rather than against an intermediate mask, so
+    /// every part of the port lands here as pixels: the operator's tap quad, the measured re-blur
+    /// weights, the ratio ceiling, the ramps being LINEAR rather than the smoothstep a shader
+    /// reaches for by habit, the closing's five-point element, and the order the dark hairline and
+    /// the stroke composite in.
+    func testSharedCoreReferenceReproducesTheRenderedDetector() throws {
+        let w = 320
+        let h = 180
+        let frame = try peakingProbeFrame(width: w, height: h)
+
+        // Colour management off and float readback: this compares the MATH, so nothing may convert
+        // between the two paths. Under the shipping BGRA8 space the chain quantises every one of its
+        // ~25 intermediates to 1/255, which is below the detector's own gates.
+        let context = CIContext(options: [
+            .workingFormat: CIFormat.RGBAf,
+            .workingColorSpace: NSNull(),
+            .cacheIntermediates: false,
+        ])
+        func rendered(_ image: CIImage) -> [Float] {
+            var out = [Float](repeating: 0, count: w * h * 4)
+            context.render(
+                image, toBitmap: &out, rowBytes: w * 16,
+                bounds: CGRect(x: 0, y: 0, width: w, height: h), format: .RGBAf, colorSpace: nil)
+            return out
+        }
+
+        // `CIContext.render(toBitmap:)` writes buffer row 0 as the image's TOP row — probed, not
+        // assumed — which is the same top-down order `Peaking.overlay` reads, so the operator's
+        // `+y` tap lands on the same neighbour in both. Getting this backwards would shift the
+        // whole overlay by one row, which is exactly the sort of thing this test exists to catch.
+        let base = rendered(frame)
+        let grey = (0..<(w * h)).map { i in
+            (Double(base[i * 4]) + Double(base[i * 4 + 1]) + Double(base[i * 4 + 2])) / 3
+        }
+        let dark = Peaking.underColor
+
+        for sensitivity in Peaking.Sensitivity.allCases {
+            let settings = PeakingSettings(color: .red, sensitivity: sensitivity)
+            let actual = rendered(
+                ImageEffectsCompositor.applyPeaking(
+                    over: frame, source: frame, settings: settings, extent: frame.extent))
+            let reference = Peaking.overlay(
+                grey: grey, width: w, height: h, sensitivity: sensitivity)
+            let tint = settings.color.rgb
+
+            /// The hairline first, then the stroke over it — `composite`'s two blends.
+            func expected(_ baseValue: Float, _ darkValue: Double, _ tintValue: Double, _ i: Int)
+                -> Double
+            {
+                let under = reference.under[i]
+                let stroke = reference.stroke[i]
+                let withUnder = Double(baseValue) * (1 - under) + darkValue * under
+                return withUnder * (1 - stroke) + tintValue * stroke
+            }
+
+            var painted = 0
+            var worst = 0.0
+            var worstAt = (0, 0)
+            var beyondTolerance = 0
+            for i in 0..<(w * h) {
+                if reference.stroke[i] > 0.35 { painted += 1 }
+                let channels = [
+                    expected(base[i * 4], dark.red, tint.0, i),
+                    expected(base[i * 4 + 1], dark.green, tint.1, i),
+                    expected(base[i * 4 + 2], dark.blue, tint.2, i),
+                ]
+                for (channel, want) in channels.enumerated() {
+                    let delta = abs(Double(actual[i * 4 + channel]) - want)
+                    if delta > worst {
+                        worst = delta
+                        worstAt = (i % w, i / w)
+                    }
+                    if delta > 2.0 / 255 { beyondTolerance += 1 }
+                }
+            }
+            // The frame must actually paint, or an all-zero overlay would agree with anything.
+            XCTAssertGreaterThan(
+                painted, 200, "\(sensitivity): probe frame drew almost nothing to compare")
+            // 2/255 absorbs float ordering across the graph's passes; a formula divergence moves
+            // whole strokes, not a handful of channels on a ramp knee.
+            XCTAssertLessThan(
+                Double(beyondTolerance) / Double(w * h * 3), 0.001,
+                "\(sensitivity): \(beyondTolerance) of \(w * h * 3) channels differ by >2/255, "
+                    + "worst \(worst) at \(worstAt) (\(painted) px painted)")
+        }
+    }
+
+    func testFusedPeakingMatchesFilterChainPixelForPixel() throws {
+        try XCTSkipIf(
+            !ImageEffectsCompositor.fusedPeakingAvailable,
+            "fused peaking disabled on this OS (kernel missing or the runtime self-check found it "
+                + "does not reproduce the chain) — chain fallback is in force, nothing to compare")
+        let w = 320
+        let h = 180
+        let mixed = try peakingProbeFrame(width: w, height: h)
+        let source = mixed
 
         // Float working space, deliberately NOT the shipping BGRA8: this test compares the MATH.
         // Under BGRA8 the chain quantises every intermediate to 1/255 across its ~25 passes — the

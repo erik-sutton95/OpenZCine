@@ -49,7 +49,16 @@ All notable changes to this project are documented here. The format is based on
   genuinely sharp low-contrast detail, painting background bokeh while skipping the subject. It
   now measures blur radius (a two-scale gradient ratio), which is independent of contrast.
   Separately, peaking ran on a stretch that flattened the top of the range, so in-focus highlight
-  detail could never register at all. Both platforms; the sensitivity steps behave the same.
+  detail could never register at all. Measured against a real focus sweep from the camera, a fully
+  defocused frame now paints nothing at all.
+- **Peaking behaves the same on iPhone and on Android, and the same in photo mode as in video.**
+  The two platforms were running detectors that only resembled each other, each with its own
+  thresholds, so "Med" did not mean the same thing on a phone as on an iPhone. There is now one
+  detector definition that both render. And because the photography feed is a display-referred
+  preview rather than log, the same scene used to read as sharper in photo mode than in video —
+  a sensitivity step silently meant something stricter in one mode than the other. Both platforms
+  now correct for the feed's encoding. One difference remains: Android does not yet smooth the
+  finished overlay the way iOS does, so at the same setting it reads slightly grainier.
 - Android: the media page no longer crawls after the first long-press — selecting one item used to
   make every later tap re-hash the whole library, and stale hit-test rectangles could send a tap to
   an off-screen item.

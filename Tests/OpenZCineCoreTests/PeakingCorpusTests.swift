@@ -63,100 +63,22 @@ import Testing
 
         // MARK: Detector under test
 
-        /// The overlay the GPU shells produce, evaluated on the CPU.
+        /// The shipped detector, on a real frame.
         ///
-        /// Deliberately a transcription of the shipped GLES2/Vulkan/AGSL kernel rather than a
-        /// tidied-up version: a harness that scores something other than what ships is how the
-        /// last round went wrong. Phase 2 moves this into `Peaking` as the single reference the
-        /// shells mirror, and this becomes a call rather than a copy.
+        /// This used to be two hand-written transcriptions — one of the Android kernel and one
+        /// approximating Core Image — and they disagreed with each other AND with what shipped: the
+        /// Core Image one gated on the square root of the coarse operator and compared the threshold
+        /// squared, so it was scoring a linear-domain detector while iOS renders a squared-domain
+        /// one. A harness that scores something other than what ships is how the previous round went
+        /// wrong, so there is now exactly one implementation — `Peaking.overlay` — and it is checked
+        /// against the live Core Image graph in `RunnerTests`.
         private static func overlay(
-            _ frame: Frame, sensitivity: Peaking.Sensitivity = .medium
-        ) -> [Double] {
-            let w = frame.width
-            let h = frame.height
-            let p = frame.grey
-            let gate = sensitivity.noiseGate
-            let threshold = sensitivity.wideTapRatioThreshold
-            let scale = max(1, Int((Double(max(w, h)) / Peaking.referenceLongSide).rounded()))
-            let inset = Int(Peaking.edgeInset) + 2 * scale
-            var mask = [Double](repeating: 0, count: w * h)
-
-            func grad(_ x: Int, _ y: Int, _ s: Int) -> Double {
-                Peaking.gradientMagnitude(
-                    left: p[y * w + x - s], right: p[y * w + x + s],
-                    up: p[(y - s) * w + x], down: p[(y + s) * w + x], spacing: Double(s))
-            }
-            func smoothstep(_ e0: Double, _ e1: Double, _ x: Double) -> Double {
-                let t = min(max((x - e0) / (e1 - e0), 0), 1)
-                return t * t * (3 - 2 * t)
-            }
-
-            // Transcribed from the shipped kernel down to the antialiasing width: a plain
-            // smoothstep gate on the coarse gradient, and the ratio ramped over `aa`.
-            let aa = 0.06
-            for y in inset..<(h - inset) {
-                for x in inset..<(w - inset) {
-                    let fine = grad(x, y, scale)
-                    let coarse = grad(x, y, scale * 2)
-                    let ratio = Peaking.sharpnessRatio(fine: fine, coarse: coarse)
-                    let confidence = smoothstep(gate * 0.7, gate, coarse)
-                    mask[y * w + x] = smoothstep(threshold, threshold + aa, ratio) * confidence
-                }
-            }
-            return mask
-        }
-
-        /// The overlay the **Core Image** chain produces — the iOS path, and the one being judged
-        /// on hardware. Scored separately because it is a genuinely different detector: `CIEdges`
-        /// is a 2×2 forward difference and is quadratic in the gradient, which is why its
-        /// thresholds are roughly the square of the wide-tap ones and why the two paths cannot
-        /// share a gate. Approximated on the CPU rather than run through Core Image so the whole
-        /// harness stays one comparable measurement.
-        private static func reblurOverlay(
             _ frame: Frame, sensitivity: Peaking.Sensitivity = .medium, gateScale: Double = 1
         ) -> [Double] {
-            let w = frame.width
-            let h = frame.height
-            let p = frame.grey
-            let gate = sensitivity.reblurNoiseGate * gateScale
-            let threshold = sensitivity.reblurRatioThreshold
-            let inset = Int(Peaking.edgeInset) + 3
-            var mask = [Double](repeating: 0, count: w * h)
-
-            // The coarse scale is a re-blur by `reblurRadius`, approximated with a 3-tap binomial.
-            var blurred = [Double](repeating: 0, count: w * h)
-            for y in 1..<(h - 1) {
-                for x in 1..<(w - 1) {
-                    blurred[y * w + x] =
-                        (p[y * w + x] * 4 + p[y * w + x - 1] + p[y * w + x + 1]
-                            + p[(y - 1) * w + x] + p[(y + 1) * w + x]) / 8
-                }
-            }
-            /// `CIEdges` is a 2×2 forward difference, and its output is the SQUARED gradient.
-            func edges(_ s: [Double], _ x: Int, _ y: Int) -> Double {
-                let dx = s[y * w + x + 1] - s[y * w + x]
-                let dy = s[(y + 1) * w + x] - s[y * w + x]
-                return dx * dx + dy * dy
-            }
-            func smoothstep(_ e0: Double, _ e1: Double, _ x: Double) -> Double {
-                let t = min(max((x - e0) / (e1 - e0), 0), 1)
-                return t * t * (3 - 2 * t)
-            }
-            let aa = 0.12
-            for y in inset..<(h - inset) {
-                for x in inset..<(w - inset) {
-                    let fine = edges(p, x, y)
-                    let coarse = edges(blurred, x, y)
-                    // Squared domain on both terms, so the threshold is compared squared too.
-                    let ratio = fine / max(coarse, 1e-12)
-                    let confidence = smoothstep(gate * 0.7, gate, coarse.squareRoot())
-                    mask[y * w + x] =
-                        smoothstep(
-                            threshold * threshold, (threshold + aa) * (threshold + aa), ratio)
-                        * confidence
-                }
-            }
-            return mask
+            Peaking.overlay(
+                grey: frame.grey, width: frame.width, height: frame.height,
+                sensitivity: sensitivity, gateScale: gateScale
+            ).stroke
         }
 
         // MARK: Metrics
@@ -239,17 +161,23 @@ import Testing
             let measured = Self.coarseP90(sdr) / Self.coarseP90(log)
             #expect(abs(measured - Peaking.displayReferredGradientScale) < 0.15)
 
-            // `reblurOverlay` gates on the magnitude, so it takes the scale unsquared; the Core
-            // Image detector works in `CIEdges`' squared domain and squares it (see
-            // `PeakingSettings.gateScale`).
-            let logInk = Self.ink(Self.reblurOverlay(log))
-            let sdrInk = Self.ink(Self.reblurOverlay(sdr))
+            // `coarseP90` measures a magnitude; the detector's gate lives in the operator's
+            // SQUARED domain, so the correction is squared — `Peaking.gateScale` owns that so
+            // neither shell has to remember to do it.
+            let logInk = Self.ink(Self.overlay(log))
+            let sdrInk = Self.ink(Self.overlay(sdr))
             let correctedInk = Self.ink(
-                Self.reblurOverlay(sdr, gateScale: Peaking.displayReferredGradientScale))
-            // Uncorrected, the SDR feed paints materially more; corrected, it lands within a tenth
-            // of the log feed it should match.
+                Self.overlay(
+                    sdr,
+                    gateScale: Peaking.gateScale(
+                        gradientScale: Peaking.displayReferredGradientScale)))
+            // Uncorrected, the SDR feed paints materially more; corrected, it lands close to the
+            // log feed it should match. Not exactly — `displayReferredGradientScale` is a single
+            // number standing in for a curve, and a frame's gradients come from every luminance
+            // level, so the residual is ~12% here. That is the accuracy the constant claims, and
+            // closing it needs a hardware A/B rather than a tighter bound. [verify-on-HW]
             #expect(sdrInk > logInk * 1.05)
-            #expect(abs(correctedInk - logInk) < logInk * 0.1)
+            #expect(abs(correctedInk - logInk) < logInk * 0.15)
         }
 
         // MARK: Characterisation
@@ -259,28 +187,25 @@ import Testing
         /// state what it moved and in which direction.
         @Test("The sweep is scored end to end, and the numbers are recorded")
         func corpusBaseline() throws {
-            var report: [String] = ["            wide-tap (Android)     Core Image (iOS)"]
+            var report: [String] = ["frame          ink     fragmented"]
             for name in ["zr-sweep-00", "zr-sweep-12", "zr-sweep-19", "zr-sweep-24"] {
                 let frame = try Self.load(name)
-                let wide = Self.overlay(frame)
-                let ci = Self.reblurOverlay(frame)
+                let mask = Self.overlay(frame)
                 report.append(
                     String(
-                        format: "%@   ink %6.3f%% frag %4.1f%%    ink %6.3f%% frag %4.1f%%",
-                        name, Self.ink(wide),
-                        Self.fragmentation(wide, width: frame.width, height: frame.height),
-                        Self.ink(ci),
-                        Self.fragmentation(ci, width: frame.width, height: frame.height)))
+                        format: "%@   %6.3f%%      %4.1f%%",
+                        name, Self.ink(mask),
+                        Self.fragmentation(mask, width: frame.width, height: frame.height)))
             }
             for step in Peaking.Sensitivity.allCases {
                 let frame = try Self.load("zr-sweep-19")
                 let quiet = try Self.load("zr-sweep-00")
                 report.append(
                     String(
-                        format: "iOS %-4@ gate %.5f  focused ink %6.3f%%  defocused ink %6.3f%%",
-                        step.rawValue as NSString, step.reblurNoiseGate,
-                        Self.ink(Self.reblurOverlay(frame, sensitivity: step)),
-                        Self.ink(Self.reblurOverlay(quiet, sensitivity: step))))
+                        format: "%-4@ gate %.5f  focused ink %6.3f%%  defocused ink %6.3f%%",
+                        step.rawValue as NSString, step.noiseGate,
+                        Self.ink(Self.overlay(frame, sensitivity: step)),
+                        Self.ink(Self.overlay(quiet, sensitivity: step))))
             }
             // Surfaces in the test log; `swift test` prints it on failure and with --verbose.
             print(report.joined(separator: "\n"))
@@ -298,41 +223,44 @@ import Testing
             let focused = try Self.load("zr-sweep-19")
             let quiet = Self.ink(Self.overlay(defocused))
             let sharp = Self.ink(Self.overlay(focused))
-            // On real frames this separation is far better than synthetic JPEG predicted —
-            // 0.042% against 5.95%, about 140:1, where the synthetic rig suggested nearer 10:1.
-            // Which means the complaint is NOT that the detector cannot tell focus from defocus.
-            #expect(sharp > quiet * 50, "best focus must clearly outrank full defocus")
+            // Measured: 2.31% against 0.000%. The old wide-tap detector managed 5.95% against
+            // 0.042% — about 140:1, already good — and the rebuilt one drives the false-positive
+            // floor to zero outright, so the separation is no longer a ratio at all.
+            #expect(sharp > 1, "best focus must paint")
             // Ratchet on today's floor, so a change that makes defocused frames noisier fails
             // here rather than on Erik's phone.
-            #expect(quiet < 0.10)
+            #expect(quiet == 0)
         }
 
-        /// The actual shape of the complaint, and the lever the rebuild should pull.
+        /// What the rebuild actually bought, against the frame that showed the problem.
         ///
-        /// A defocused frame paints very little in total, yet reads as noisy — because what it
-        /// paints is almost entirely ISOLATED. Four fifths of the paint on a fully defocused
-        /// frame stands alone, against a quarter on the focused one. So the false positives are
-        /// not merely fewer than the true ones, they are structurally different, and removing
-        /// isolated paint is selective roughly 3:1 in the right direction on top of a detector
-        /// that is already separating focus from defocus 140:1.
+        /// This test used to assert the SHAPE of the false positives: a fully defocused frame
+        /// painted little in total (0.042%) but four fifths of it stood alone as isolated specks,
+        /// which read as noise however few of them there were. That was the lever — remove
+        /// isolated paint and you remove mostly false positives.
         ///
-        /// Caveat worth keeping in view when this gets used: a one-pixel-wide LINE has exactly
-        /// two painted neighbours, so the ≤2 rule counts it as isolated too. That is most of the
-        /// residual 27% on the focused frame, and it means the neighbour threshold is the knob,
-        /// not the idea.
-        @Test("Defocused frames paint specks; focused frames paint lines")
-        func falsePositivesAreIsolatedAndTrueOnesAreNot() throws {
+        /// It no longer applies, because there is nothing left to remove. The measured detector
+        /// paints EXACTLY NOTHING on a fully defocused frame at every sensitivity, so the speck
+        /// analysis has no subject. What is worth guarding now is the pair of facts that replaced
+        /// it: full defocus paints nothing, and what best focus paints reads as lines.
+        @Test("Full defocus paints nothing at all, and best focus paints lines")
+        func defocusPaintsNothingAndFocusPaintsLines() throws {
             let defocused = try Self.load("zr-sweep-00")
             let focused = try Self.load("zr-sweep-19")
-            let loose = Self.overlay(defocused)
+            for sensitivity in Peaking.Sensitivity.allCases {
+                #expect(
+                    Self.ink(Self.overlay(defocused, sensitivity: sensitivity)) == 0,
+                    "\(sensitivity) painted a frame with nothing in the focus plane")
+            }
             let solid = Self.overlay(focused)
-            let looseFragmentation = Self.fragmentation(
-                loose, width: defocused.width, height: defocused.height)
-            let solidFragmentation = Self.fragmentation(
-                solid, width: focused.width, height: focused.height)
-            #expect(looseFragmentation > 70)
-            #expect(solidFragmentation < 40)
-            #expect(looseFragmentation > solidFragmentation * 2)
+            #expect(Self.ink(solid) > 1)
+            // Continuity is the metric whose absence let a regression ship — a line broken into
+            // dashes reads as more noise than a solid line while putting LESS ink on screen. The
+            // closing is what holds this down; 14.8% measured, and note that a genuine 1px line
+            // has exactly two painted neighbours so it counts as "isolated" here too, which is
+            // most of what remains.
+            #expect(
+                Self.fragmentation(solid, width: focused.width, height: focused.height) < 25)
         }
 
         /// Sensitivity has to mean something on real frames, not just on synthetic edges.

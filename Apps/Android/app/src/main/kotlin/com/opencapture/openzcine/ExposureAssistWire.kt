@@ -76,9 +76,11 @@ data class FeedEffectsRenderConfiguration(
             ) {
                 "invalid de-log curve"
             }
-            // Ratio threshold lives strictly between "fully defocused" (1) and the
-            // wide-tap sharp limit (2); the noise gate is a code-value slope.
-            require(values[7] > 1f && values[7] < 2f && values[8] > 0f && values[8] <= 1f) {
+            // Ratio threshold lives strictly between "fully defocused" (1) and the ceiling a
+            // perfectly sharp edge saturates at (`Peaking.ratioCeiling`, 4). The noise gate is a
+            // SQUARED code-value slope — see `Peaking.Sensitivity.noiseGate` — and arrives already
+            // scaled for the feed's encoding, so the shaders hold no mode policy of their own.
+            require(values[7] > 1f && values[7] < 4f && values[8] > 0f && values[8] <= 1f) {
                 "invalid peaking controls"
             }
             requireFlag(values[12], "highlight enabled")

@@ -250,11 +250,11 @@ extension NativeAppModel {
                     color: assistConfiguration.peakingColor,
                     sensitivity: assistConfiguration.peakingSensitivity,
                     // The photography feed is a display-referred preview, so its gradients run
-                    // larger than the log video feed the gates were calibrated on. Squared because
-                    // the Core Image detector's gate lives in `CIEdges`' squared domain.
+                    // larger than the log video feed the gates were calibrated on. Shared core
+                    // owns the squaring, so both shells resolve the same number.
                     gateScale: isPhotographyMode
-                        ? Peaking.displayReferredGradientScale
-                            * Peaking.displayReferredGradientScale : 1) : nil,
+                        ? Peaking.gateScale(
+                            gradientScale: Peaking.displayReferredGradientScale) : 1) : nil,
             zebra: visible.contains(.zebra)
                 ? ZebraSettings(
                     unit: assistConfiguration.zebra.unit,

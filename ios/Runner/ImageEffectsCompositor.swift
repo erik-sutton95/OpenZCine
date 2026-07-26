@@ -357,10 +357,10 @@ enum ImageEffectsCompositor {
         kernel: CIKernel, over base: CIImage, source: CIImage, settings: PeakingSettings,
         extent: CGRect
     ) -> CIImage? {
-        let threshold = settings.sensitivity.reblurRatioThreshold
-        let gate = settings.sensitivity.reblurNoiseGate * settings.gateScale
-        let aa = 0.12
-        let ratioScale = Peaking.reblurRatioScale
+        let threshold = settings.sensitivity.ratioThreshold
+        let gate = settings.sensitivity.noiseGate * settings.gateScale
+        let aa = Peaking.antialiasWidth
+        let ratioScale = Peaking.ratioScale
         let cropped = extent.insetBy(dx: Peaking.edgeInset, dy: Peaking.edgeInset)
 
         let grey = greyscale(source).clampedToExtent()
@@ -368,7 +368,7 @@ enum ImageEffectsCompositor {
             "CIGaussianBlur", parameters: [kCIInputRadiusKey: Peaking.reblurRadius])
 
         // Same gains and biases the chain's `CIColorMatrix` + `CIColorClamp` pairs encode.
-        let gateGain = 1.0 / max(gate * 0.3, 1e-6)
+        let gateGain = 1.0 / max(gate * (1 - Peaking.gateRampFloor), 1e-6)
         let rampGain = 1.0 / max(aa * ratioScale, 1e-6)
         // Applied over a rect larger than the visible window so the kernel's arithmetic zero ring
         // (see the kernel source) is real pixels — every downstream consumer (closing, broadcast,
@@ -380,9 +380,9 @@ enum ImageEffectsCompositor {
                 roiCallback: { _, rect in rect.insetBy(dx: -2, dy: -2) },
                 arguments: [
                     grey, blurred,
-                    ratioScale, gateGain, -(gate * 0.7) * gateGain,
+                    ratioScale, gateGain, -(gate * Peaking.gateRampFloor) * gateGain,
                     rampGain, -(threshold * ratioScale) * rampGain,
-                    -((threshold - aa * 0.5) * ratioScale) * rampGain,
+                    -((threshold - aa * Peaking.underRampOffset) * ratioScale) * rampGain,
                     CIVector(x: cropped.minX, y: cropped.minY),
                     CIVector(x: cropped.maxX, y: cropped.maxY),
                 ])
@@ -453,7 +453,10 @@ enum ImageEffectsCompositor {
         over base: CIImage, coreMask: CIImage, underMask: CIImage, color: Peaking.Color,
         extent: CGRect
     ) -> CIImage {
-        let dark = CIImage(color: CIColor(red: 0.04, green: 0.04, blue: 0.05)).cropped(to: extent)
+        let under = Peaking.underColor
+        let dark = CIImage(
+            color: CIColor(red: under.red, green: under.green, blue: under.blue)
+        ).cropped(to: extent)
         let (red, green, blue) = color.rgb
         let tint = CIImage(color: CIColor(red: red, green: green, blue: blue)).cropped(to: extent)
         let withUnder =
@@ -480,10 +483,9 @@ enum ImageEffectsCompositor {
     static func applyPeakingFilterChain(
         over base: CIImage, source: CIImage, settings: PeakingSettings, extent: CGRect
     ) -> CIImage {
-        let threshold = settings.sensitivity.reblurRatioThreshold
-        let gate = settings.sensitivity.reblurNoiseGate * settings.gateScale
-        // Narrow AA — peaking reads as a drawn line, not a glow.
-        let aa = 0.12
+        let threshold = settings.sensitivity.ratioThreshold
+        let gate = settings.sensitivity.noiseGate * settings.gateScale
+        let aa = Peaking.antialiasWidth
         let edgeInset = Peaking.edgeInset
 
         let grey = greyscale(source).clampedToExtent()
@@ -516,7 +518,7 @@ enum ImageEffectsCompositor {
 
         // The divide blend saturates at 1, so shrink the numerator first and compare against a
         // correspondingly shrunk threshold; otherwise every sharp edge clamps to the same value.
-        let ratioScale = Peaking.reblurRatioScale
+        let ratioScale = Peaking.ratioScale
         let ratio =
             (CIFilter(
                 name: "CIDivideBlendMode",
@@ -528,9 +530,9 @@ enum ImageEffectsCompositor {
 
         // Noise is not lens-blurred, so it always reads as perfectly sharp. Only this gate — on
         // the coarse magnitude — keeps shadow grain from painting.
-        let gateGain = 1.0 / max(gate * 0.3, 1e-6)
+        let gateGain = 1.0 / max(gate * (1 - Peaking.gateRampFloor), 1e-6)
         let gateMask =
-            scale(coarse, by: gateGain, bias: -(gate * 0.7) * gateGain)
+            scale(coarse, by: gateGain, bias: -(gate * Peaking.gateRampFloor) * gateGain)
             .applyingFilter("CIColorClamp")
 
         /// Cropped to the analysed window, and that crop is load-bearing rather than tidy: `scale`
@@ -581,7 +583,7 @@ enum ImageEffectsCompositor {
         // nothing. Halves the added per-frame cost.
         let coreMask = smoothed(ramp(from: threshold))
         // The ramp is already grey with opaque alpha, so it needs no channel splat.
-        let underMask = ramp(from: threshold - aa * 0.5)
+        let underMask = ramp(from: threshold - aa * Peaking.underRampOffset)
 
         return composite(
             over: base, coreMask: coreMask, underMask: underMask, color: settings.color,

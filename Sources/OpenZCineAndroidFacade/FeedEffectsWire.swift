@@ -293,6 +293,9 @@ public enum FeedEffectsWire {
     /// samples of the active curve; peaking no longer consumes them (it measures a
     /// blur ratio on the raw source — see `Peaking`), and the slots are kept so the
     /// record layout and the Vulkan uniform block stay put.
+    ///
+    /// `peakingNoiseGate` arrives already scaled for the feed's own encoding, so the shaders
+    /// compare it directly and hold no mode policy of their own.
     public static func renderConfiguration(
         codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil,
         peakingSensitivityOrdinal: Int, peakingColorOrdinal: Int, highlightEnabled: Bool,
@@ -324,8 +327,16 @@ public enum FeedEffectsWire {
             Float(mapping.clipNative),
         ]
         record += deLog
-        record.append(Float(sensitivity.wideTapRatioThreshold))
-        record.append(Float(sensitivity.noiseGate))
+        // The ratio threshold is transfer-curve invariant; the noise gate is not. A display-referred
+        // stills preview hands the detector larger gradients than the log video feed the gate was
+        // calibrated on, so the gate moves with the mode — the same correction iOS applies through
+        // `PeakingSettings.gateScale`, and `stillsToneMode` is the same photography-mode
+        // discriminator `cameraMapping` above routes on.
+        let gateScale =
+            stillsToneMode == nil
+            ? 1 : Peaking.gateScale(gradientScale: Peaking.displayReferredGradientScale)
+        record.append(Float(sensitivity.ratioThreshold))
+        record.append(Float(sensitivity.noiseGate * gateScale))
         record += [Float(peak.0), Float(peak.1), Float(peak.2)]
         record.append(highlightEnabled ? 1 : 0)
         record.append(Float(highlightCode))
