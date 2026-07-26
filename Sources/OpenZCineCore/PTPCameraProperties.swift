@@ -824,19 +824,52 @@ public enum PTPCameraPropertyDecoders {
     }
 
     /// Maps the camera's advertised `MovFileType` enum values to codec modes — the exact value to
-    /// write plus a short label ("H.265") matching the bar. Deduped by label (the picker shows one
-    /// row per codec family); only values whose codec is recognised are kept.
+    /// write plus a display label — in the body's advertised order.
+    ///
+    /// Identity is the **raw value**, never the label. A body that advertises H.265 8-bit
+    /// (`0x00010800`) and H.265 10-bit (`0x00010A00`) gets two rows; collapsing them by their
+    /// shared short label ("H.265") silently pinned the picker to whichever came first, so
+    /// leaving H.265 and returning to it landed on 8-bit (#276). Labels are widened only as far
+    /// as needed to stay distinct — family, then bit depth, then container, then the raw hex —
+    /// so single-variant codecs keep their short bar label and the reverse label → raw lookup the
+    /// shells use to write stays unambiguous. Values whose codec byte we don't recognise are
+    /// dropped: we can't name them, so we must not offer to write them.
     public static func fileTypeModes(fromEnum values: [UInt32]) -> [PTPCameraFileTypeMode] {
-        var seen = Set<String>()
-        var modes: [PTPCameraFileTypeMode] = []
-        for raw in values {
-            guard codecNames[(raw >> 16) & 0xFF] != nil else { continue }
-            let label = MonitorTextFormat.codecShortLabel(fileType(raw))
-            if seen.insert(label).inserted {
-                modes.append(PTPCameraFileTypeMode(raw: raw, label: label))
-            }
+        var seenRaw = Set<UInt32>()
+        let recognised = values.filter {
+            codecNames[($0 >> 16) & 0xFF] != nil && seenRaw.insert($0).inserted
         }
-        return modes
+        // How many advertised values share each short family label decides how much of the
+        // decoded name each row has to keep.
+        var familyCounts: [String: Int] = [:]
+        for raw in recognised {
+            familyCounts[MonitorTextFormat.codecShortLabel(fileType(raw)), default: 0] += 1
+        }
+        var usedLabels = Set<String>()
+        return recognised.map { raw in
+            let full = fileType(raw)  // "H.265 10-bit MOV"
+            let family = MonitorTextFormat.codecShortLabel(full)  // "H.265"
+            var label = family
+            if (familyCounts[family] ?? 0) > 1 {
+                label = "\(family) \((raw >> 8) & 0xFF)-bit"
+                if usedLabels.contains(label) { label = full }
+                if usedLabels.contains(label) { label = "\(full) 0x\(String(raw, radix: 16))" }
+            }
+            usedLabels.insert(label)
+            return PTPCameraFileTypeMode(raw: raw, label: label)
+        }
+    }
+
+    /// The advertised codec mode matching the body's current `MovFileType` readback, matched on
+    /// the exact decoded value rather than a shortened label — so the picker centres on the row
+    /// the body is actually on, including the right H.265 bit depth. Nil until the descriptor and
+    /// the readback have both landed, or when the body reports a value it never advertised.
+    public static func fileTypeMode(
+        forFileType fileType: String?,
+        in modes: [PTPCameraFileTypeMode]
+    ) -> PTPCameraFileTypeMode? {
+        guard let fileType else { return nil }
+        return modes.first { Self.fileType($0.raw) == fileType }
     }
 
     /// Decodes white balance mode from raw value.
@@ -888,9 +921,13 @@ public enum PTPCameraPropertyDecoders {
         }
     }
 
-    /// Inverse of `exposureProgramShort` for the writable ladder (Auto/P/A/S/M/U1–U3). The scene
+    /// Inverse of `exposureProgramShort` for the writable ladder (Auto/P/A/S/M/U1–U4). The scene
     /// modes are intentionally omitted — the MODE picker only offers the P/A/S/M + auto/user set.
     /// Returns nil for a label that isn't one of those (the write is then a no-op).
+    ///
+    /// A `U` bank appearing here does NOT mean the drum offers it: the option list comes from the
+    /// body's `ExposureProgramMode` descriptor enum, and a body without user banks never
+    /// advertises one. This map only says "if the body offers it, here is how to write it".
     public static func exposureProgramCode(for label: String) -> UInt16? {
         switch label {
         case "M": 0x0001
@@ -901,6 +938,7 @@ public enum PTPCameraPropertyDecoders {
         case "U1": 0x8050
         case "U2": 0x8051
         case "U3": 0x8052
+        case "U4": 0x8053
         default: nil
         }
     }
@@ -968,6 +1006,11 @@ public enum PTPCameraPropertyDecoders {
     }
 
     /// `MovieFocusMeteringMode` (0xD1F8, UINT16, the AF-area mode) raw → label.
+    ///
+    /// `0x8033` is Nikon's **subject-tracking AF area**, a different setting from
+    /// subject *detection* (`MovieAFSubjectDetection`: People / Animal / Vehicle …). The bare
+    /// "Subject" this used to read made the two look like the same control in adjacent picker
+    /// tabs (#274); the label now names the AF-area mode the body names.
     public static func movieFocusArea(_ raw: UInt16) -> String {
         switch raw {
         case 0x8010: "Single"
@@ -976,7 +1019,7 @@ public enum PTPCameraPropertyDecoders {
         case 0x8019: "Wide-L"
         case 0x801E: "Wide-C1"
         case 0x801F: "Wide-C2"
-        case 0x8033: "Subject"
+        case 0x8033: "Subject tracking"
         default: hex(UInt32(raw))
         }
     }
@@ -986,10 +1029,10 @@ public enum PTPCameraPropertyDecoders {
     public static func stillFocusAreaCode(for label: String) -> UInt16? {
         switch label {
         case "Dyn-S": 0x0002
-        case "3D": 0x8012
+        case "3D tracking": 0x8012
         case "Dyn-M": 0x8013
         case "Dyn-L": 0x8014
-        case "Pin": 0x8017
+        case "Pinpoint": 0x8017
         default: movieFocusAreaCode(for: label)
         }
     }
@@ -1003,7 +1046,7 @@ public enum PTPCameraPropertyDecoders {
         case "Wide-L": 0x8019
         case "Wide-C1": 0x801E
         case "Wide-C2": 0x801F
-        case "Subject": 0x8033
+        case "Subject tracking": 0x8033
         default: nil
         }
     }
@@ -1257,14 +1300,16 @@ public enum PTPCameraPropertyDecoders {
     }
 
     /// `StillFocusMeteringMode` (0xD05D, UINT16) — the stills AF-area mode. Extends the shared
-    /// movie area table with the stills-only dynamic/tracking areas. [VERIFY-ON-HW]
+    /// movie area table with the stills-only dynamic/tracking areas. `0x8012` is Nikon's
+    /// **3D-tracking** AF-area mode, spelled out rather than the app's old bare "3D" so the
+    /// operator reads the body's own term (#274). [VERIFY-ON-HW]
     public static func stillFocusArea(_ raw: UInt16) -> String {
         switch raw {
         case 0x0002: "Dyn-S"
-        case 0x8012: "3D"
+        case 0x8012: "3D tracking"
         case 0x8013: "Dyn-M"
         case 0x8014: "Dyn-L"
-        case 0x8017: "Pin"
+        case 0x8017: "Pinpoint"
         default: movieFocusArea(raw)
         }
     }
@@ -1527,6 +1572,39 @@ extension PTPCameraPropertyDecoders {
                 label = movieAFSubject(UInt8(truncatingIfNeeded: raw))
             case .movieVibrationReduction:
                 label = movieVibrationReduction(UInt8(truncatingIfNeeded: raw))
+            // Photo-mode function pickers. Each decodes through the same table its readout uses,
+            // so the body's own order and value set drive the drum instead of an app-invented
+            // union — the Zf never gets offered a U bank it doesn't have, and the Z6III's drive
+            // wheel reads Single · CL · CH · CH+ because that is the order the body advertises.
+            case .stillCaptureMode:
+                guard let mode = StillDriveMode.decode(raw: UInt16(truncatingIfNeeded: raw))
+                else { return nil }
+                label = mode.label
+            case .exposureProgramMode:
+                label = exposureProgramShort(UInt16(truncatingIfNeeded: raw))
+                // Only positions the MODE drum can actually write back.
+                guard exposureProgramCode(for: label) != nil else { return nil }
+            case .userMode:
+                label = userModeProgram(UInt8(truncatingIfNeeded: raw))
+                guard userModeProgramCode(for: label) != nil else { return nil }
+            case .exposureMeteringMode:
+                label = exposureMetering(UInt16(truncatingIfNeeded: raw))
+            case .flashMode:
+                label = flashMode(UInt16(truncatingIfNeeded: raw))
+            case .compressionSetting:
+                label = compressionSetting(UInt8(truncatingIfNeeded: raw))
+            case .rawCompressionType:
+                label = rawCompression(UInt8(truncatingIfNeeded: raw))
+            case .activePicCtrlItem:
+                label = pictureControl(UInt16(truncatingIfNeeded: raw))
+            case .stillFocusMode:
+                label = stillFocusModeD061(UInt8(truncatingIfNeeded: raw))
+            case .stillFocusMeteringMode:
+                label = stillFocusArea(UInt16(truncatingIfNeeded: raw))
+            case .afSubjectDetection:
+                label = movieAFSubject(UInt8(truncatingIfNeeded: raw))
+            case .whiteBalance:
+                label = whiteBalanceMode(UInt16(truncatingIfNeeded: raw))
             default:
                 return nil
             }
@@ -1534,6 +1612,13 @@ extension PTPCameraPropertyDecoders {
             return seen.insert(label).inserted ? label : nil
         }
     }
+
+    /// Conservative MODE-drum ladder for a body that does not enumerate `ExposureProgramMode`.
+    ///
+    /// The user banks are deliberately absent: a Zf has no U1/U2/U3 and offering them from a
+    /// generic "this is a photo body" inference is exactly the #274 report. A bank only ever
+    /// reaches the drum by being advertised in the body's own descriptor enum.
+    public static let exposureProgramFallbackOptions: [String] = ["Auto", "P", "S", "A", "M"]
 
     private static let codecNames: [UInt32: String] = [
         0x00: "H.264",
