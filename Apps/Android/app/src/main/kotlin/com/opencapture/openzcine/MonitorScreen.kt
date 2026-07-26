@@ -1827,6 +1827,10 @@ internal fun MonitorScreen(
                     // The operator chose to AF at a point — subsequent releases resume normal
                     // AF focus (iOS clears the same flag before changeAfArea).
                     mfDrive.clearManualFocus()
+                    // …and the tap wins the command channel: drop any retrying focus drive so
+                    // changeAfArea isn't stuck behind it on cameraCommandMutex (iOS
+                    // `applyFocusPoint` → `cancelManualFocusDrive`).
+                    mfDrive.cancel()
                     focusMoveRequestsInFlight += 1
                     recordScope.launch {
                         try {
@@ -1878,6 +1882,8 @@ internal fun MonitorScreen(
         val requestFocusReset: () -> Unit = resetFocusPoint@{
             if (focusCommandPending) return@resetFocusPoint
             focusResetPending = true
+            // The recenter sequence owns the command channel next, not a retrying focus drive.
+            mfDrive.cancel()
             recordScope.launch {
                 try {
                     session.resetFocusPoint()
@@ -2448,10 +2454,9 @@ internal fun MonitorScreen(
                 // strip never hides on a refusal; it retries.
                 if (
                     // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`) —
-                    // off hides the strip even in an AF focus mode.
+                    // default OFF, and off hides the strip even in an AF focus mode. Video and
+                    // photo alike: a focus pull is a video move too (iOS `showsMFDriveScrub`).
                     operatorSettings.mfDriveScrubEnabled.value &&
-                    // Photography only (iOS `showsMFDriveScrub … && isPhotographyMode`).
-                    isPhotographyMode &&
                     !isClean && !locked &&
                     sessionState is CameraSessionState.Connected &&
                     !isDemoSession &&

@@ -30,6 +30,8 @@ class OperatorSettingsTest {
         assertTrue(settings.mediaRemoteShutterEnabled.value)
         assertTrue(settings.hapticsEnabled.value)
         assertTrue(settings.keepScreenAwake.value)
+        // The focus dial is opt-in on a fresh install, in video and photo mode alike.
+        assertFalse(settings.mfDriveScrubEnabled.value)
         assertFalse(settings.guidesVisible.value)
         assertFalse(settings.localGridVisible.value)
         assertFalse(settings.ruleOfThirdsEnabled.value)

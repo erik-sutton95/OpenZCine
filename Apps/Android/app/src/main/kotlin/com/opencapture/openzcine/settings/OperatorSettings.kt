@@ -517,11 +517,16 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
     /**
-     * Enables the live-view focus-by-wire scrub strip (default on). Surfaced as a row inside the
-     * FOCUS popup rather than Operator Setup, mirroring the iOS shell; off hides the strip even in
-     * an AF focus mode.
+     * Enables the live-view focus-by-wire scrub strip in video and photo mode (**default off**).
+     * Surfaced as a row inside the FOCUS popup rather than Operator Setup, mirroring the iOS
+     * shell; off hides the strip even in an AF focus mode.
+     *
+     * The stored-key fallback IS the migration: [Toggle] only writes the key when the operator
+     * flips it, so an operator who deliberately turned the dial on keeps `true`, one who turned it
+     * off keeps `false`, and one who never touched it lands on the new default. Same rule as iOS
+     * `PreferencesStore.loadMFScrubEnabled`.
      */
-    public val mfDriveScrubEnabled: Toggle = Toggle("controls.mfDriveScrub", default = true)
+    public val mfDriveScrubEnabled: Toggle = Toggle("controls.mfDriveScrub", default = false)
 
     // View Assist — local composited framing aids. These values deliberately
     // stay separate from the camera-owned GridDisplay property so a monitor

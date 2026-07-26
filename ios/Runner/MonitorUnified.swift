@@ -1435,8 +1435,9 @@ struct MonitorShell: View {
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
 
-            // MF focus-by-wire scrub: beside the right system rail while MF is active on a
-            // lens not yet proven undrivable (the first real drive is the verdict).
+            // MF focus-by-wire scrub: beside the right system rail whenever the operator has
+            // switched the Focus dial on (default off) and the body is in an AF focus mode —
+            // video and photo alike. Refusals are transient, so the strip never hides on one.
             if model.showsMFDriveScrub {
                 MFDriveVerticalScrub()
                     .environment(model)

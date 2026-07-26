@@ -2909,13 +2909,17 @@ public final class PTPIPClientSession: @unchecked Sendable {
         guard start.operationResponse.responseCode == .ok else {
             return .refused(start.operationResponse.responseCode)
         }
-        for _ in 0..<25 {
+        // Bounded by `MFDriveChannelBudget`: this whole loop runs under `commandLifecycleLock`,
+        // which `changeAfArea` also needs — waiting out a long pull here is what left tap-to-focus
+        // blocked. Past the ceiling the lens keeps moving on the body; the app just stops watching.
+        for _ in 0..<MFDriveChannelBudget.readinessPollLimit {
             guard let ready = try? executeTransaction(.deviceReady) else {
                 return .refused(.deviceBusy)
             }
             switch ready.operationResponse.responseCode {
             case .ok: return .complete
-            case .deviceBusy: Thread.sleep(forTimeInterval: 0.12)
+            case .deviceBusy:
+                Thread.sleep(forTimeInterval: MFDriveChannelBudget.readinessPollIntervalSeconds)
             case .mfDriveStepEnd: return .endOfTravel
             case .mfDriveStepInsufficiency: return .stepTooSmall
             case let other: return .refused(other)

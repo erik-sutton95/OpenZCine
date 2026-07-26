@@ -669,17 +669,26 @@ final class NativeCameraSession: @unchecked Sendable {
 
     /// Moves the live-view AF area to `(x, y)` in the camera's live-view coordinate space
     /// (`ChangeAfArea`, 2 params, no data phase). Unverified against hardware.
+    ///
+    /// A body mid-AF, mid-release, or still settling a focus-by-wire drive answers busy for a
+    /// beat. A single `Device_Busy` used to drop the tap silently — which is how a focus-dial
+    /// drag left tap-to-focus looking dead until a shutter release. Bounded retries, matching the
+    /// Android facade's `changeAfArea`.
     func changeAfArea(x: UInt32, y: UInt32) async throws {
-        let result = try await transact(
-            operationCode: .changeAfArea,
-            parameters: [x, y],
-            dataPhase: .noDataOrDataIn
-        )
-        guard result.operationResponse.responseCode == .ok else {
-            throw NativeCameraSessionError.operationRejected(
-                .changeAfArea,
-                result.operationResponse.responseCode
+        for attempt in 0..<4 {
+            let result = try await transact(
+                operationCode: .changeAfArea,
+                parameters: [x, y],
+                dataPhase: .noDataOrDataIn
             )
+            if result.operationResponse.responseCode == .ok { return }
+            guard attempt < 3, result.operationResponse.responseCode == .deviceBusy else {
+                throw NativeCameraSessionError.operationRejected(
+                    .changeAfArea,
+                    result.operationResponse.responseCode
+                )
+            }
+            try await Task.sleep(for: .milliseconds(120))
         }
     }
 
@@ -743,13 +752,18 @@ final class NativeCameraSession: @unchecked Sendable {
         guard start.operationResponse.responseCode == .ok else {
             return .refused(start.operationResponse.responseCode)
         }
-        for _ in 0..<25 {
+        // Bounded by `MFDriveChannelBudget`: past the ceiling the lens keeps moving on the body
+        // and the app stops owning the transaction gate to watch it — holding it longer is what
+        // starved `ChangeAfArea` and made tap-to-focus look dead.
+        for _ in 0..<MFDriveChannelBudget.readinessPollLimit {
             guard let ready = try? await transact(operationCode: .deviceReady) else {
                 return .refused(.deviceBusy)
             }
             switch ready.operationResponse.responseCode {
             case .ok: return .complete
-            case .deviceBusy: try? await Task.sleep(for: .milliseconds(120))
+            case .deviceBusy:
+                try? await Task.sleep(
+                    for: .seconds(MFDriveChannelBudget.readinessPollIntervalSeconds))
             case .mfDriveStepEnd: return .endOfTravel
             case .mfDriveStepInsufficiency: return .stepTooSmall
             case let other: return .refused(other)

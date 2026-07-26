@@ -1360,4 +1360,74 @@ extension RunnerTests {
             MetalFeedFrameBaker.bakeSize(source: CGRect.infinite.size, drawable: drawable), drawable
         )
     }
+
+    /// The Focus dial is opt-in, and switching the default off must not overrule an operator who
+    /// already made the choice — in either direction. The stored key IS the migration: it only
+    /// exists once the FOCUS-popup toggle wrote it.
+    @MainActor
+    func testFocusDialDefaultsOffAndPreservesAnExplicitOperatorChoice() {
+        let key = "mfDriveScrubEnabled"
+        let original = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let original {
+                UserDefaults.standard.set(original, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+
+        // Fresh install / settings reset: nothing stored, so the dial is off — and a new model
+        // (the relaunch case) reads the same answer.
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertFalse(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertFalse(NativeAppModel().mfDriveScrubEnabled)
+
+        // An operator who deliberately switched the dial ON keeps it across the default change.
+        PreferencesStore.saveMFScrubEnabled(true)
+        XCTAssertTrue(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertTrue(NativeAppModel().mfDriveScrubEnabled)
+
+        // …and one who deliberately switched it OFF is never migrated back on.
+        PreferencesStore.saveMFScrubEnabled(false)
+        XCTAssertFalse(PreferencesStore.loadMFScrubEnabled())
+        XCTAssertFalse(NativeAppModel().mfDriveScrubEnabled)
+    }
+
+    /// Preference off hides the dial whatever else is true — mode included, since the chrome no
+    /// longer gates it. (Visible-when-on needs a live focus mode from a camera; that is the
+    /// simulator/hardware check.)
+    @MainActor
+    func testFocusDialStaysHiddenWhileThePreferenceIsOff() {
+        let key = "mfDriveScrubEnabled"
+        let original = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let original {
+                UserDefaults.standard.set(original, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        let model = NativeAppModel()
+        model.mfDriveScrubEnabled = false
+        model.connection = .connected
+        model.activePanel = nil
+
+        XCTAssertFalse(model.showsMFDriveScrub)
+    }
+
+    /// #272: no focus-drive exit path may leave focus commands owned. Cancelling with nothing in
+    /// flight, twice, and with no session must all be no-ops that leave the dial usable.
+    @MainActor
+    func testCancellingAFocusDriveIsAlwaysSafeAndNeverLatches() {
+        let model = NativeAppModel()
+
+        model.driveManualFocus(pulses: 400)
+        model.cancelManualFocusDrive()
+        model.cancelManualFocusDrive()
+
+        // Nothing latched: the dial still reports a usable, re-armable position.
+        model.resetMFDriveDial()
+        XCTAssertEqual(model.mfDriveNetPulses, 0)
+        XCTAssertNil(model.mfDriveAtEnd)
+    }
 }

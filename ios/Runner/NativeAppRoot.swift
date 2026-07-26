@@ -110,10 +110,15 @@ enum PreferencesStore {
 
     private static let mfScrubEnabledKey = "mfDriveScrubEnabled"
 
-    /// Whether the live-view focus scrub strip is enabled (default on) — operator toggle in the
-    /// FOCUS popup.
+    /// Whether the live-view focus scrub strip is enabled — operator toggle in the FOCUS popup,
+    /// available in video and photo mode, **default off**.
+    ///
+    /// The absent-key fallback IS the migration: the key is only ever written by the toggle's
+    /// `didSet`, so "no key" means the operator never chose, and they land on the new default.
+    /// An operator who deliberately switched the dial on has `true` stored and keeps it; one who
+    /// switched it off has `false` stored and keeps that. No migration record needed.
     static func loadMFScrubEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: mfScrubEnabledKey) as? Bool ?? true
+        UserDefaults.standard.object(forKey: mfScrubEnabledKey) as? Bool ?? false
     }
 
     static func saveMFScrubEnabled(_ enabled: Bool) {
@@ -2536,6 +2541,9 @@ final class NativeAppModel {
     private var pendingFocusPoint: (x: UInt32, y: UInt32)?
     /// Multi-step focus reset when subject tracking must be released before recentring.
     private var focusResetStep: FocusResetStep?
+    /// Readiness polls still owed after a tap's `AfDrive`, spent one per safe point so the drain
+    /// never blocks the live-view frame loop it runs inside.
+    private var focusAFSettlePolls = 0
     /// A record start/stop requested by the record button, serviced at the next live-view safe
     /// point (so the StartMovieRecInCard / EndMovieRec op doesn't race the live-view loop's reads).
     private var pendingRecordToggle = false
@@ -2619,6 +2627,9 @@ final class NativeAppModel {
         pendingISOAuto = nil
         pendingFocusPoint = nil
         focusResetStep = nil
+        focusAFSettlePolls = 0
+        // No exit path may leave a focus drive owning the command channel of a dead session.
+        cancelManualFocusDrive()
         cameraApertures = []
         // Still-capture state must never survive a stream (re)start — a stale chained
         // release re-firing after a reconnect loops the whole connection.
@@ -4391,17 +4402,23 @@ final class NativeAppModel {
                     selector: cameraPropertySnapshot.captureSelector)
                 {
                     try await session.afDrive()
-                    for _ in 0..<4 {
-                        if case .inProgress = try await session.pollStillReleaseReadiness() {
-                            try await Task.sleep(nanoseconds: 120_000_000)
-                        } else {
-                            break
-                        }
-                    }
+                    // Drain readiness one poll per safe point instead of sleeping ~0.5 s inline:
+                    // this runs INSIDE the live-view frame loop, so blocking here is a visible
+                    // feed hitch every time tap-to-focus starts.
+                    focusAFSettlePolls = 4
                 }
             } catch {
                 connectionMessage =
                     "Camera rejected the focus point: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            }
+            return
+        }
+        if focusAFSettlePolls > 0 {
+            focusAFSettlePolls -= 1
+            if case .inProgress = (try? await session.pollStillReleaseReadiness()) {
+                // Still driving — keep the remaining budget and check again next frame.
+            } else {
+                focusAFSettlePolls = 0
             }
             return
         }
@@ -5922,6 +5939,9 @@ final class NativeAppModel {
         let recenterX = UInt32(max(0, coordinateWidth / 2))
         let recenterY = UInt32(max(0, coordinateHeight / 2))
         if shouldCancelSubjectTrackingOnFocusReset {
+            // Same rule as a tap: the recenter sequence owns the channel next, not a retrying
+            // focus drive. (The plain-recenter path below gets this via `applyFocusPoint`.)
+            cancelManualFocusDrive()
             let context = FocusResetContext(
                 recenterX: recenterX,
                 recenterY: recenterY,
@@ -5998,6 +6018,9 @@ final class NativeAppModel {
     private func applyFocusPoint(
         cameraX: Int, cameraY: Int, coordinateWidth: Int, coordinateHeight: Int
     ) {
+        // The tap wins over the dial: drop any in-flight/queued focus drive so `ChangeAfArea`
+        // gets the command channel now instead of behind a retrying drive.
+        cancelManualFocusDrive()
         guard !isDemoSession else {
             let boxWidth = max(40, coordinateWidth / 7)
             let boxHeight = max(40, coordinateHeight / 7)
@@ -6512,8 +6535,8 @@ final class NativeAppModel {
 
     // MARK: - Manual focus drive (focus-by-wire scrub)
 
-    /// Operator toggle for the live-view focus scrub strip (persisted, default on) — flipped from
-    /// the FOCUS popup.
+    /// Operator toggle for the live-view focus scrub strip (persisted, default off) — flipped from
+    /// the FOCUS popup, in video and photo mode alike.
     var mfDriveScrubEnabled: Bool = PreferencesStore.loadMFScrubEnabled() {
         didSet { PreferencesStore.saveMFScrubEnabled(mfDriveScrubEnabled) }
     }
@@ -6524,15 +6547,19 @@ final class NativeAppModel {
     /// strip shows in AF modes (AF-S / AF-C / AF-F / AF-A), NOT MF — the app scrub acts as a
     /// manual-focus override, the way the lens ring overrides during AF. Hidden while a panel is
     /// up so picking a mode in the FOCUS popup can't mount an overlay under the operator's finger.
+    /// Both chromes: a focus pull is a video move as much as a stills one, so the only gate is the
+    /// operator's own toggle (default off) plus the focus mode.
     /// [verify-on-HW: whether continuous AF fights the drive in AF-C vs AF-S]
     var showsMFDriveScrub: Bool {
-        guard mfDriveScrubEnabled, isPhotographyMode,
-            let mode = cameraPropertySnapshot.focusMode
+        guard mfDriveScrubEnabled, let mode = cameraPropertySnapshot.focusMode
         else { return false }
         return mode != "MF" && isConnected && !isDemoSession && activePanel == nil
     }
 
     @ObservationIgnored private var mfDriveTask: Task<Void, Never>?
+    /// Bumped by `cancelManualFocusDrive()` so a superseded drive can neither keep running nor
+    /// clear the task slot its replacement now owns.
+    @ObservationIgnored private var mfDriveRunID = 0
     /// Signed pulses awaiting dispatch (+ toward infinity, − toward near). Scrub gestures
     /// accumulate here; a single in-flight drive drains it so gesture speed never floods
     /// the command channel.
@@ -6571,6 +6598,19 @@ final class NativeAppModel {
         mfDriveAtEnd = nil
     }
 
+    /// Drops an in-flight focus drive and everything queued behind it, freeing the camera command
+    /// channel immediately. An AF-point tap is interactive and must win: queueing it behind a
+    /// retrying drive is what made tap-to-focus look dead until a shutter release. Also runs on
+    /// teardown so no exit path leaves focus commands owned by a dead session.
+    func cancelManualFocusDrive() {
+        mfDrivePendingPulses = 0
+        mfDriveTask?.cancel()
+        mfDriveTask = nil
+        // A cancelled drive can still be parked in a non-cancellable transaction; its `defer` must
+        // not clear a task that a later drag has since installed.
+        mfDriveRunID &+= 1
+    }
+
     /// Queues a relative manual-focus drive (signed pulses, + toward infinity). Coalesces
     /// while a drive is in flight. A refused drive is treated as transient — the stepping-motor
     /// lens initializing after a mode change and momentary autofocus activity both refuse for a
@@ -6590,11 +6630,19 @@ final class NativeAppModel {
         if let far = mfDriveInfinityPulses { mfDriveNetPulses = min(mfDriveNetPulses, far) }
         mfDriveAtEnd = nil
         guard mfDriveTask == nil else { return }
+        let runID = mfDriveRunID
         mfDriveTask = Task { [weak self] in
-            defer { self?.mfDriveTask = nil }
-            var retries = 0
+            defer {
+                // Only clear the slot if a `cancelManualFocusDrive()` hasn't already handed it to
+                // a newer drive — otherwise two drives end up sharing the command channel.
+                if let self, self.mfDriveRunID == runID { self.mfDriveTask = nil }
+            }
+            // Wall clock, not an iteration count: one drive already costs an activation plus a
+            // bounded readiness poll, so a count-based budget silently owns the command channel
+            // for tens of seconds — and while it does, the body answers `ChangeAfArea` busy too.
+            var refusalRunStartedAt: Date?
             while let self, let session = self.cameraSession,
-                self.mfDrivePendingPulses != 0, !Task.isCancelled
+                self.mfDrivePendingPulses != 0, !Task.isCancelled, self.mfDriveRunID == runID
             {
                 let pending = self.mfDrivePendingPulses
                 self.mfDrivePendingPulses = 0
@@ -6605,7 +6653,7 @@ final class NativeAppModel {
                 switch outcome {
                 case .complete, .stepTooSmall:
                     // Position already advanced optimistically on the drag (above).
-                    retries = 0
+                    refusalRunStartedAt = nil
                 case .endOfTravel:
                     // Pin this end at the current (optimistic) position so the relative position
                     // calibrates and the dial clamps here on further drives toward it.
@@ -6617,7 +6665,7 @@ final class NativeAppModel {
                         self.mfDriveAtEnd = 1
                     }
                     self.mfDrivePendingPulses = 0
-                    retries = 0
+                    refusalRunStartedAt = nil
                 case .refused(let code):
                     // A refusal is transient while AF is momentarily driving (access-denied) or
                     // the lens is still initialising (busy): requeue and retry. A sustained
@@ -6625,14 +6673,20 @@ final class NativeAppModel {
                     // lens or that the focus mode slipped back to MF (the body refuses a remote
                     // drive in MF). Surface one message and leave the strip up to retry.
                     self.mfDriveLastCode = code.rawValue
-                    retries += 1
-                    if retries <= 16 {
+                    let startedAt = refusalRunStartedAt ?? Date()
+                    refusalRunStartedAt = startedAt
+                    if MFDriveChannelBudget.shouldRetryRefusal(
+                        elapsedSeconds: Date().timeIntervalSince(startedAt))
+                    {
                         self.mfDrivePendingPulses += pending
-                        try? await Task.sleep(for: .milliseconds(80))
+                        try? await Task.sleep(
+                            for: .seconds(MFDriveChannelBudget.refusalRetryIntervalSeconds))
                         continue
                     }
+                    // Give the channel back: the next gesture retries from a clean slate, and a
+                    // tap-to-focus queued behind this run goes through immediately.
                     self.mfDrivePendingPulses = 0
-                    retries = 0
+                    refusalRunStartedAt = nil
                     AppDiagnostics.shared.record(.mfDriveRefused)
                     self.connectionMessage =
                         code.rawValue == PTPResponseCode.invalidStatus.rawValue
