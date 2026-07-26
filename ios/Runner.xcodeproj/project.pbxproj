@@ -79,6 +79,7 @@
 		C0DE00000000000000000028 /* MonitorExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000029 /* MonitorExperience.swift */; };
 		C0DE0000000000000000002A /* MonitorPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002B /* MonitorPanels.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
+		C0DE000000000000000000F7 /* MonitorRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* MonitorRecovery.swift */; };
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
 		C0DE00000000000000000030 /* DesignShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000031 /* DesignShared.swift */; };
 		C0DE00000000000000000032 /* MonitorTextFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000033 /* MonitorTextFormat.swift */; };
@@ -86,6 +87,7 @@
 		C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003D /* LiveViewWatchdog.swift */; };
 		C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000003F /* RecordDurationEstimator.swift */; };
 		C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000041 /* CameraLinkHealth.swift */; };
+		C0DE000000000000000000F9 /* SessionRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000FA /* SessionRecovery.swift */; };
 		C0DE00000000000000000042 /* PTPEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000043 /* PTPEvent.swift */; };
 		C0DE00000000000000000044 /* CameraWarningStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000045 /* CameraWarningStatus.swift */; };
 		C0DE00000000000000000050 /* ConnectionProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000051 /* ConnectionProgressSheet.swift */; };
@@ -260,6 +262,7 @@
 		C0DE00000000000000000029 /* MonitorExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorExperience.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002B /* MonitorPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPanels.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
+		C0DE000000000000000000F8 /* MonitorRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRecovery.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000031 /* DesignShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignShared.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000033 /* MonitorTextFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorTextFormat.swift; path = ../Sources/OpenZCineCore/MonitorTextFormat.swift; sourceTree = SOURCE_ROOT; };
@@ -267,6 +270,7 @@
 		C0DE0000000000000000003D /* LiveViewWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveViewWatchdog.swift; path = ../Sources/OpenZCineCore/LiveViewWatchdog.swift; sourceTree = SOURCE_ROOT; };
 		C0DE0000000000000000003F /* RecordDurationEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecordDurationEstimator.swift; path = ../Sources/OpenZCineCore/RecordDurationEstimator.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000041 /* CameraLinkHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraLinkHealth.swift; path = ../Sources/OpenZCineCore/CameraLinkHealth.swift; sourceTree = SOURCE_ROOT; };
+		C0DE000000000000000000FA /* SessionRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SessionRecovery.swift; path = ../Sources/OpenZCineCore/SessionRecovery.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000043 /* PTPEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PTPEvent.swift; path = ../Sources/OpenZCineCore/PTPEvent.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000045 /* CameraWarningStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraWarningStatus.swift; path = ../Sources/OpenZCineCore/CameraWarningStatus.swift; sourceTree = SOURCE_ROOT; };
 		C0DE00000000000000000051 /* ConnectionProgressSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProgressSheet.swift; sourceTree = "<group>"; };
@@ -404,6 +408,7 @@
 				C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */,
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
+				C0DE000000000000000000F8 /* MonitorRecovery.swift */,
 				C0DE000000000000000000B1 /* MonitorPortrait.swift */,
 				C0DE000000000000000000B3 /* MonitorPortraitModules.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
@@ -483,6 +488,7 @@
 				C0DE0000000000000000003B /* FrameRateSampler.swift */,
 				C0DE0000000000000000003D /* LiveViewWatchdog.swift */,
 				C0DE00000000000000000041 /* CameraLinkHealth.swift */,
+				C0DE000000000000000000FA /* SessionRecovery.swift */,
 				C0DE000000000000000000CB /* LinkSignalBars.swift */,
 				C0DE0000000000000000003F /* RecordDurationEstimator.swift */,
 				4A371B3334DBAAA71593727B /* AssistToolActivation.swift */,
@@ -696,6 +702,7 @@
 				C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */,
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
+				C0DE000000000000000000F7 /* MonitorRecovery.swift in Sources */,
 				C0DE000000000000000000B0 /* MonitorPortrait.swift in Sources */,
 				C0DE000000000000000000B2 /* MonitorPortraitModules.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
@@ -739,6 +746,7 @@
 				C0DE0000000000000000003A /* FrameRateSampler.swift in Sources */,
 				C0DE0000000000000000003C /* LiveViewWatchdog.swift in Sources */,
 				C0DE00000000000000000040 /* CameraLinkHealth.swift in Sources */,
+				C0DE000000000000000000F9 /* SessionRecovery.swift in Sources */,
 				C0DE000000000000000000CA /* LinkSignalBars.swift in Sources */,
 				C0DE0000000000000000003E /* RecordDurationEstimator.swift in Sources */,
 				C0DE00000000000000000014 /* PTPDeviceInfo.swift in Sources */,

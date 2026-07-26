@@ -38,6 +38,12 @@ struct MonitorExperience: View {
             .overlay {
                 TimerTallyBorderOverlay()
             }
+            // A dropped session keeps the operator here on the held frame, with Retry / Operator
+            // menu, instead of collapsing the monitor back to the connect screen.
+            .overlay {
+                MonitorRecoveryOverlay()
+                    .animation(.easeOut(duration: 0.2), value: model.sessionRecovery)
+            }
             // Instant playback covers the whole monitor — a focused look at the captured
             // frame, above every piece of chrome.
             .overlay {

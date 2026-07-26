@@ -578,6 +578,9 @@ final class NativeAppModel {
     /// overwrites — so the progress sheet can show real progress instead of a frozen "Connecting".
     var connectionStageDetail = ""
     @ObservationIgnored private var connectionProgressShowsFailure = false
+    /// Whether an established session dropped and is being recovered behind a preserved monitor.
+    /// Drives the recovery affordance over the held frame (`MonitorRecoveryOverlay`).
+    private(set) var sessionRecovery: SessionRecoveryState = .idle
     var cameraHost = "192.168.1.1"
     var connectionMessage = "Join your camera's Wi‑Fi network, then come back here to connect."
     var connectedIdentity: NativeCameraIdentity?
@@ -1761,7 +1764,6 @@ final class NativeAppModel {
         // state machine — coalesce extra triggers instead of stacking attempts. The flag clears in
         // the establishment task's defer, so a failed attempt still frees the next retry.
         guard !isEstablishingConnection else { return }
-        isEstablishingConnection = true
         // An auto-reconnect behind a preserved monitor keeps the operator on the frozen frame with
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
         if !preservingMonitorSurface {
@@ -1783,9 +1785,29 @@ final class NativeAppModel {
         // this attempt is in flight, the attempt must not publish its session — otherwise a slow
         // handshake completing after "Disconnect" silently resurrects the connection.
         let generation = connectionGeneration
+        // Claimed AFTER the clear (which releases it) and scoped to this generation: a teardown
+        // frees the latch immediately, so the operator's next tap is never swallowed while an
+        // abandoned attempt is still unwinding a blocking socket read.
+        isEstablishingConnection = true
+        // Bounded phase timeouts belong to operator-initiated connects: a recovery attempt behind a
+        // preserved monitor is already bounded by its own loop, and failing it here could overlap a
+        // second Init with a socket read the first attempt is still blocked in.
+        if !preservingMonitorSurface {
+            startConnectionTimeoutWatchdog(
+                generation: generation,
+                isUSB: host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix))
+        }
         let hadPriorSession = previousSession != nil || sessionTeardownTask != nil
         establishmentTask = Task {
-            defer { isEstablishingConnection = false }
+            // Only this generation's owner may release the latch — a stale attempt finishing late
+            // must not unlatch the attempt that replaced it.
+            defer {
+                if connectionGeneration == generation {
+                    isEstablishingConnection = false
+                    connectionTimeoutTask?.cancel()
+                    connectionTimeoutTask = nil
+                }
+            }
             if let previousSession {
                 await previousSession.stopLiveView()
                 // Graceful CloseSession before dropping sockets — a bare close leaves the ZR
@@ -1832,6 +1854,9 @@ final class NativeAppModel {
                 AppDiagnostics.shared.record(
                     transportKind == .usb
                         ? .connectionUsbFailed : .connectionWifiJoinFailed)
+                // Behind a preserved monitor the recovery loop owns the outcome — see the
+                // establishment catch below.
+                if preservingMonitorSurface, isMonitorPresented { return }
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
@@ -1967,6 +1992,16 @@ final class NativeAppModel {
                     savePendingPairingCamera()
                 }
                 pendingPairingSaveCandidate = nil
+                // A recovery attempt behind a preserved monitor keeps the held frame and the
+                // recovery affordance. Tearing the surface down and falling back to discovery is
+                // exactly what dumped the operator out of live view on a cable knock (#254); the
+                // recovery loop owns the retry cadence and the give-up point from here.
+                if preservingMonitorSurface, isMonitorPresented {
+                    clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
+                    logConnection(
+                        "recovery attempt failed host=\(host) \(error.localizedDescription)")
+                    return
+                }
                 disconnectCameraSession(resetConnection: false)
                 if acceptedPairing {
                     pendingPairedReconnectHost = host
@@ -2023,6 +2058,74 @@ final class NativeAppModel {
                 startDiscoveryLoop(resetResults: false)
             }
         }
+    }
+
+    /// Fails an attempt whose current phase stopped making progress, so a first connection either
+    /// completes or ends with a truthful error and a Retry — never an open-ended spinner (#264).
+    ///
+    /// Phases that wait on a person (the iOS join prompt, "Confirm on camera") are deliberately
+    /// unbounded; see `CameraConnectionTimeout`. The deadline is absolute rather than a rate
+    /// divider, so the 0.5s tick lands the breach within half a second and cannot alias the budget.
+    private func startConnectionTimeoutWatchdog(generation: Int, isUSB: Bool) {
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = Task { [weak self] in
+            var watchedPhase = self?.connectionPhase ?? .idle
+            var phaseStartedAt = ContinuousClock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, let self, self.connectionGeneration == generation else {
+                    return
+                }
+                let phase = self.connectionPhase
+                if phase != watchedPhase {
+                    watchedPhase = phase
+                    phaseStartedAt = .now
+                    continue
+                }
+                guard
+                    let budget = CameraConnectionTimeout.budgetSeconds(for: phase, isUSB: isUSB),
+                    ContinuousClock.now - phaseStartedAt >= .seconds(budget)
+                else { continue }
+                self.failConnectionAttempt(
+                    message: CameraConnectionTimeout.timeoutMessage(
+                        phase: phase, deviceName: self.connectionProgressDeviceName),
+                    diagnostic: isUSB ? .connectionUsbFailed : .connectionPtpFailed,
+                    logReason: "timed out in \(phase) after \(Int(budget))s"
+                )
+                return
+            }
+        }
+    }
+
+    /// Ends the in-flight attempt with exactly the disposal an explicit cancel performs — stale
+    /// transport, PTP session, sockets, tasks, queued writes and camera identity released, and the
+    /// single-flight latch freed — then surfaces a retryable failure.
+    ///
+    /// This is the equivalence #264 turns on: a failed first attempt must leave the app in the same
+    /// clean state as tapping Cancel, so the identical retry works without one.
+    private func failConnectionAttempt(
+        message: String,
+        diagnostic: AppDiagnosticEvent,
+        logReason: String
+    ) {
+        guard isEstablishingConnection else { return }
+        logConnection("attempt failed host=\(cameraHost) — \(logReason)")
+        AppDiagnostics.shared.record(diagnostic)
+        disconnectCameraSession(resetConnection: false)
+        connection = .disconnected
+        connectionPhase = .failed
+        connectionProgressShowsFailure = true
+        connectionMessage = message
+        connectionFailureDetail = message
+        startDiscoveryLoop(resetResults: false)
+    }
+
+    /// Retries from the failed connection card in place. The failed attempt already disposed
+    /// everything an explicit cancel would, so this is the same connect the operator would get by
+    /// backing out and tapping the camera again — without making them do it.
+    func retryConnectionAttempt() {
+        guard connectionProgressShowsFailure, !isEstablishingConnection else { return }
+        connectToCamera()
     }
 
     private func startupConnectionMessage(
@@ -2154,6 +2257,14 @@ final class NativeAppModel {
         func forceLiveViewGuide(_ step: LiveViewGuideStep) {
             activePanel = nil
             liveViewGuideStep = step
+        }
+
+        /// Stages the dropped-session recovery affordance for simulator screenshot verification.
+        /// No retry loop is started — this only paints the state the loop would publish.
+        func forceSessionRecoveryState(_ state: SessionRecoveryState) {
+            activePanel = nil
+            liveFPS = SessionRecoveryCopy.heldFrameBadge
+            sessionRecovery = state
         }
     #endif
 
@@ -2318,6 +2429,13 @@ final class NativeAppModel {
     /// a PTP-IP camera accepts one command channel per initiator, and overlapping the old
     /// half-closed channel with a new Init can wedge the camera's PTP state machine.
     @ObservationIgnored private var sessionTeardownTask: Task<Void, Never>?
+    /// Bounded-timeout watchdog for the in-flight attempt: fails a phase that stops making
+    /// progress instead of letting the operator stare at a spinner (see `CameraConnectionTimeout`).
+    @ObservationIgnored private var connectionTimeoutTask: Task<Void, Never>?
+    /// The bounded auto-reconnect loop that runs behind a preserved monitor after an established
+    /// session drops (cable knocked loose, camera power-cycled). Cancelled by any operator-driven
+    /// teardown so a manual disconnect can never race a retry back into a live session.
+    @ObservationIgnored private var sessionRecoveryTask: Task<Void, Never>?
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
@@ -3327,6 +3445,93 @@ final class NativeAppModel {
         }
     }
 
+    // MARK: - Session recovery
+
+    /// Monotonic epoch for the recovery loop, so a cancelled run can't clear the handle of the run
+    /// that replaced it.
+    @ObservationIgnored private var sessionRecoveryGeneration = 0
+
+    /// Recovers an ESTABLISHED session that dropped underneath the operator — a knocked USB cable,
+    /// a camera power cycle, a wedged command channel — without leaving live view.
+    ///
+    /// The monitor stays up on the last decoded frame (badged as held, not live) while a bounded,
+    /// cancellable retry loop rebuilds the session through the normal `connectToCamera` path: the
+    /// stale transport, PTP session, sockets, tasks, queued property writes and camera identity are
+    /// all disposed (with a graceful `CloseSession`) before the replacement is built. When the
+    /// shared budget is spent the operator chooses — retry, or back to the operator menu.
+    ///
+    /// Only ever runs against a host this app was already connected to, so a retry can never
+    /// blind-probe a camera sitting on its pairing wizard (probing knocks the body out of pairing).
+    private func beginSessionRecovery(host: String, reason: String) {
+        guard !isDemoSession, isMonitorPresented, sessionRecoveryTask == nil else { return }
+        let target = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { return }
+        logConnection("session lost host=\(target) (\(reason)) → bounded recovery")
+        connection = .reconnecting
+        liveFPS = SessionRecoveryCopy.heldFrameBadge
+        isStreamRecovering = true
+        sessionRecoveryGeneration += 1
+        let generation = sessionRecoveryGeneration
+        sessionRecoveryTask = Task { [weak self] in
+            await self?.runSessionRecovery(host: target)
+            guard let self, self.sessionRecoveryGeneration == generation else { return }
+            self.sessionRecoveryTask = nil
+        }
+    }
+
+    /// The bounded loop itself. Every pass delegates teardown-then-rebuild to `connectToCamera`, so
+    /// nothing here reimplements disposal; this only owns *when* to try and when to stop.
+    private func runSessionRecovery(host: String) async {
+        let policy = SessionRecoveryPolicy.monitor
+        var failures = 0
+        while !Task.isCancelled {
+            let state = policy.state(afterFailedAttempts: failures)
+            sessionRecovery = state
+            guard case .retrying = state else { return }
+            cameraHost = host
+            connectToCamera(preservingMonitorSurface: true)
+            await establishmentTask?.value
+            if Task.isCancelled { return }
+            if cameraSession != nil {
+                sessionRecovery = .idle
+                logConnection("recovered host=\(host) after \(failures) failed attempt(s)")
+                return
+            }
+            failures += 1
+            guard
+                case .retry(let wait) = policy.decision(
+                    afterFailedAttempts: failures, jitter: .random(in: 0...1))
+            else {
+                sessionRecovery = policy.state(afterFailedAttempts: failures)
+                logConnection("recovery exhausted host=\(host) after \(failures) attempts")
+                return
+            }
+            try? await Task.sleep(for: .seconds(wait))
+        }
+    }
+
+    /// Operator action from the recovery affordance: start a fresh bounded recovery run.
+    func retrySessionRecovery() {
+        let host = cameraHost
+        cancelSessionRecovery()
+        beginSessionRecovery(host: host, reason: "operator retry")
+    }
+
+    /// Operator action from the recovery affordance: leave the held frame for the operator menu.
+    /// An explicit exit must never be undone by a late reconnect, so this stops retrying first.
+    func exitMonitorToOperatorMenu() {
+        cancelSessionRecovery()
+        disconnect()
+    }
+
+    /// Stops any in-flight recovery loop and clears the affordance.
+    private func cancelSessionRecovery() {
+        sessionRecoveryGeneration += 1
+        sessionRecoveryTask?.cancel()
+        sessionRecoveryTask = nil
+        sessionRecovery = .idle
+    }
+
     /// Clears all in-memory session and live-view state. Performs no network I/O, so callers that
     /// are about to open a new session can clear synchronously and then await the previous
     /// session's socket teardown separately (preventing overlapping PTP-IP command channels).
@@ -3338,6 +3543,14 @@ final class NativeAppModel {
         connectionGeneration += 1
         establishmentTask?.cancel()
         establishmentTask = nil
+        // Release the single-flight latch with the attempt it belonged to. Cancelling a Task does
+        // NOT interrupt a socket read blocked in a non-cancellable syscall, so the abandoned
+        // attempt's `defer` can be up to a full socket timeout away — and until it ran, every
+        // retry was silently swallowed by the guard in `connectToCamera`. That is the hidden state
+        // behind "cancel, then try again, and it connects instantly" (#264).
+        isEstablishingConnection = false
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = nil
         pairingContinuation?.resume(returning: false)
         pairingContinuation = nil
         pendingPairingChallenge = nil
@@ -3376,6 +3589,10 @@ final class NativeAppModel {
         // as stall recovery) instead of dismissing and re-presenting the whole surface — on a
         // flapping link that teardown/rebuild churn reads as app-wide lag and instability.
         if !preserveMonitorSurface {
+            // Dropping the monitor is always an operator-driven exit (disconnect, cancel, pair a
+            // new camera, internet hop). Retries must die with it — a late reconnect resurrecting
+            // a session the operator just left is the duplicate-session bug in #253.
+            cancelSessionRecovery()
             liveFrameImage = nil
             isMonitorPresented = false
             activePanel = nil
@@ -3454,7 +3671,11 @@ final class NativeAppModel {
                         )
                         consecutiveStartFailures = 0
                         await session.stopLiveView()
-                        isMonitorPresented = false
+                        // Used to drop the monitor here with nothing driving a retry — the "needs
+                        // an app restart" dead end in #254/#253. Hand over to bounded recovery: the
+                        // held frame stays up and the operator gets Retry / Back.
+                        beginSessionRecovery(
+                            host: session.identity.host, reason: "live view never started")
                         return
                     }
                     let wait = backoff.delaySeconds(
@@ -3478,15 +3699,15 @@ final class NativeAppModel {
                     if stallAttempt >= maxStallRestarts {
                         // The stream keeps dying right after each restart — escalate to a full
                         // reconnect off the saved profile rather than hammering a wedged session.
-                        // connectToCamera tears this session down (cancelling this task); if the
-                        // camera is truly gone it falls through to discovery on its own.
+                        // Bounded recovery owns it: the operator keeps the held frame instead of
+                        // being thrown back to the full-screen connect sheet mid-shoot.
                         logConnection(
                             "stall-escalate host=\(session.identity.host) consecutive=\(stallAttempt) → full reconnect"
                         )
                         connectionMessage =
                             "Live view isn't recovering — reconnecting to the camera…"
-                        cameraHost = session.identity.host
-                        connectToCamera()
+                        beginSessionRecovery(
+                            host: session.identity.host, reason: "live view stall escalation")
                         return
                     }
                     // Recover: back off, restart live view. Watchdog handles normal jitter; we
@@ -3531,6 +3752,14 @@ final class NativeAppModel {
                     logConnection(
                         "keepalive failed host=\(session.identity.host) \(error.localizedDescription)"
                     )
+                    // Three straight failures on the idle channel is the camera being gone, not
+                    // jitter — the shape of a power cycle with the feed paused (command mode,
+                    // panel open). Previously nothing watched this path at all.
+                    if self.recentKeepaliveFailures >= 3 {
+                        self.beginSessionRecovery(
+                            host: session.identity.host, reason: "keepalive failed ×3")
+                        return
+                    }
                 }
             }
         }
@@ -3698,6 +3927,7 @@ final class NativeAppModel {
                         )
                     else { return }
                     AppDiagnostics.shared.record(.connectionEventChannelEnded)
+                    self.recoverFromEndedEventChannel(session: session)
                     return
                 } catch {
                     guard
@@ -3707,10 +3937,21 @@ final class NativeAppModel {
                         )
                     else { return }
                     AppDiagnostics.shared.record(.connectionEventChannelEnded)
+                    self.recoverFromEndedEventChannel(session: session)
                     return
                 }
             }
         }
+    }
+
+    /// The event channel ending for any reason other than an idle timeout means the link is gone —
+    /// the cable was pulled, or the body powered off. Over USB this is the *only* prompt signal
+    /// (ImageCaptureCore ends the stream on `didRemove`), and until now nothing acted on it: the
+    /// monitor sat on a dead session until the operator force-quit (#254/#253). Recover if a
+    /// monitor is up; otherwise leave it to the normal connect path.
+    private func recoverFromEndedEventChannel(session: NativeCameraSession) {
+        guard cameraSession === session, isMonitorPresented else { return }
+        beginSessionRecovery(host: session.identity.host, reason: "event channel ended")
     }
 
     /// Routes a device event from either channel (the GetEventEx poll or the PTP-IP socket).
