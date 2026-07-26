@@ -65,6 +65,10 @@ All notable changes to this project are documented here. The format is based on
 - Android: the shutter no longer re-focuses when focus was set with the focus dial, matching iOS.
 - Android: star ratings write to the card as they always did — the star's tap target was far
   smaller than the minimum and gave no press feedback, so taps missed silently.
+- Android USB-C: a camera error or unplug during a tethered session could crash the app instead of
+  ending the session. The camera-event reader could re-arm a transfer the system still owned; it now
+  hands each one back before starting the next, and an unrecoverable event channel closes the USB
+  session cleanly.
 
 - Media: backup (two-card) shots appear under both slots and delete every copy; context-aware
   delete copy and companion handling (RAW+JPEG pairs; a video plus its R3D/NEV master); EXIF
