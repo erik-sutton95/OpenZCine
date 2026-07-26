@@ -853,7 +853,7 @@ public interface CameraSession {
      * operation stays behind the shared Swift boundary.
      */
     @Throws(CameraControlException::class)
-    public suspend fun initiateStillCapture() {
+    public suspend fun initiateStillCapture(preserveFocus: Boolean = false) {
         throw CameraControlException.UnsupportedSelection
     }
 
