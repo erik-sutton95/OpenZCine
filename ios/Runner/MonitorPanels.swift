@@ -1131,9 +1131,18 @@ struct PickerPanel: View {
             lastApplied = next
         }
         // Confirm-on-snap: apply each newly-centred value to the active mode's target.
-        .onChange(of: selection) { _, newValue in
+        .onChange(of: selection) { oldValue, newValue in
             guard !isDrumInteractionLocked else { return }
             guard !newValue.isEmpty, newValue != lastApplied else { return }
+            // A descriptor refresh (60 s cadence, lens swap, shutter-circuit switch) can reshape
+            // the option list while the picker is open. When the centred value leaves the list,
+            // SwiftUI re-resolves `.scrollPosition` onto a neighbouring row and writes it back
+            // through the binding — that is the LIST moving, not the operator, and pushing it to
+            // the camera would change a setting nobody touched. Re-baseline silently instead.
+            guard currentOptions.contains(oldValue) else {
+                lastApplied = newValue
+                return
+            }
             lastApplied = newValue
             model.applyPicker(picker, mode: selectedMode, value: newValue)
         }

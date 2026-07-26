@@ -2361,6 +2361,10 @@ final class NativeAppModel {
     /// button can pulse in acknowledgement (the app-fired path animates via the press gesture).
     private(set) var bodyShutterPulse = 0
     private var propertyPollIndex = 0
+    /// Properties the CAMERA announced as changed (`DevicePropChanged`) and that have not been
+    /// re-read yet. Drained ahead of the round-robin so a body-side dial/ring/menu edit lands in
+    /// one poll tick instead of a full ~20 s cycle.
+    @ObservationIgnored private var cameraAnnouncedPropertyChanges: Set<PTPPropertyCode> = []
     /// The `LiveViewImageSize` byte last written to the camera, so a thermal/warning step-down only
     /// restarts the stream when the effective size actually changes (start/stop cycling the encoder
     /// is itself a heat source — see `applyThermalStreamStepDownIfNeeded`).
@@ -2471,6 +2475,7 @@ final class NativeAppModel {
     private func resetCameraPropertyState() {
         cameraPropertySnapshot = PTPCameraPropertySnapshot()
         propertyPollIndex = 0
+        cameraAnnouncedPropertyChanges.removeAll()
         lastRecordingPropertyPollAt = nil
         pendingCameraWrites.removeAll()
         pendingShutterMode = nil
@@ -3681,6 +3686,8 @@ final class NativeAppModel {
                         await self.refreshWarningStatus(session: session)
                     } else if let recordState = event.inferredRecordState {
                         self.applyCameraRecordState(isRecording: recordState == .recording)
+                    } else {
+                        self.noteCameraAnnouncedPropertyChange(event)
                     }
                 } catch let error as NativeCameraSessionError {
                     if case .timeout = error { continue }
@@ -3717,9 +3724,28 @@ final class NativeAppModel {
             if let state = event.inferredRecordState {
                 applyCameraRecordState(isRecording: state == .recording)
             }
+        case .devicePropChanged:
+            noteCameraAnnouncedPropertyChange(event)
         case .unknown:
             break
         }
+    }
+
+    /// Queues an authoritative re-read of a property the CAMERA says changed (`DevicePropChanged`
+    /// `0x4006`, from either event channel). The body is the source of truth: a dial, lens ring, or
+    /// menu edit must reach every surface promptly, and the round-robin visits any one property
+    /// only about every 20 s.
+    ///
+    /// The event carries no value, so it can only schedule a read — never mutate the snapshot. The
+    /// set is drained one property per poll tick by ``pollNextCameraProperty(session:)``, which
+    /// keeps the announcement on the existing single-flight poll and its cadence instead of racing
+    /// the frame loop for the transaction gate. Bounded by construction: a `Set` of the property
+    /// codes the monitor decodes.
+    private func noteCameraAnnouncedPropertyChange(_ event: PTPEvent) {
+        guard let property = event.changedPropertyCode,
+            PTPPropertyCode.isMonitoredChange(property)
+        else { return }
+        cameraAnnouncedPropertyChanges.insert(property)
     }
 
     /// Syncs the app to a capture fired ON THE CAMERA BODY: pulses the shutter button, runs
@@ -4157,6 +4183,9 @@ final class NativeAppModel {
         // loop reads — so poll it on a brisk cadence in photography chrome and sync the app
         // (instant playback + shutter-button pulse). Single-flight so it can't stack behind the
         // transaction gate and jitter the feed.
+        // [verify-on-HW] `DevicePropChanged` is assumed to arrive on the event SOCKET (the drain
+        // handles it in both chromes). If a body turns out to emit it only here, this gate has to
+        // widen to movie chrome too — otherwise cinema mode loses the fast body-change path.
         if StillCapturePolicy.prefersPhotographyChrome(
             selector: cameraPropertySnapshot.captureSelector),
             frameCounter.isMultiple(of: 4), deviceEventPollTask == nil
@@ -4593,18 +4622,25 @@ final class NativeAppModel {
                         format: "slow write %@: %.1fs",
                         String(describing: pending.write.property), writeSeconds))
             }
+            // The CAMERA decides what a write landed on, so read the property back and apply that —
+            // never the requested bytes. Echoing the request lets a slow write (a body can sit on
+            // one for seconds) clobber a newer body-originated value the poll already picked up,
+            // and hides a value the body silently clamped or refused in part. Android confirms
+            // every control write by readback (`confirmAndroidControlWrites`); this is parity.
+            if let actual = try? await session.readCameraProperty(pending.write.property) {
+                cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                    property: pending.write.property, data: actual)
+            } else {
+                cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                    property: pending.write.property,
+                    data: pending.write.data
+                )
+            }
+            // A confirmed write supersedes any queued re-read of the same property.
+            cameraAnnouncedPropertyChanges.remove(pending.write.property)
             if isShutterModeWrite || isBaseISOWrite || isISOAutoWrite || isFocusModeWrite
                 || isShutterLockWrite
             {
-                if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: pending.write.property, data: actual)
-                } else {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: pending.write.property,
-                        data: pending.write.data
-                    )
-                }
                 // Clear optimistic mode only after readback confirms the requested circuit — clearing
                 // on a lagging readback lets `shutterPickerModeIndex` snap back to the old tab.
                 if isShutterModeWrite {
@@ -4626,11 +4662,6 @@ final class NativeAppModel {
                 if isShutterLockWrite {
                     pendingShutterLockState = nil
                 }
-            } else {
-                cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                    property: pending.write.property,
-                    data: pending.write.data
-                )
             }
             publishCameraDisplayState()
             syncFocusFromSnapshot()
@@ -4845,6 +4876,18 @@ final class NativeAppModel {
                 property: evFastPollTick.isMultiple(of: 8)
                     ? .exposureIndicateLightup : .exposureIndicateStatus)
             guard !Task.isCancelled, cameraSession === session else { return }
+        }
+        // A property the CAMERA announced as changed jumps the queue: it is the operator's own
+        // edit on the body, and the round-robin would otherwise take a full cycle to notice. One
+        // per tick keeps this on the existing single-flight cadence, and the round-robin index
+        // does NOT advance so no regular property is skipped.
+        if let announced = cameraAnnouncedPropertyChanges.popFirst() {
+            if session.supportsProperty(announced) {
+                await readAndApplyCameraProperty(session: session, property: announced)
+                guard !Task.isCancelled, cameraSession === session else { return }
+            }
+            await refreshCameraMaintenanceIfDue(session: session)
+            return
         }
         let property = PTPPropertyCode.nextMonitorPollProperty(
             pollIndex: propertyPollIndex,
