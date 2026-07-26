@@ -126,36 +126,55 @@ struct ScopeTraceMetalView: UIViewRepresentable {
         view.isOpaque = false
         view.backgroundColor = .clear
         view.clearColor = MTLClearColorMake(0, 0, 0, 0)
-        push(into: context.coordinator)
+        push(into: context.coordinator, view: view)
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        if push(into: context.coordinator) {
-            uiView.setNeedsDisplay()
-        }
+        push(into: context.coordinator, view: uiView)
     }
 
-    @discardableResult
-    private func push(into renderer: ScopeTraceRenderer) -> Bool {
+    /// The renderer needs the panel bounds to place points, and only the main thread may read them
+    /// off the view — so they are captured here and handed over with the data.
+    private func push(into renderer: ScopeTraceRenderer, view: MTKView) {
         renderer.update(
-            samples: samples, trail: trail, mode: mode, brightness: brightness, mapping: mapping)
+            samples: samples, trail: trail, mode: mode, brightness: brightness, mapping: mapping,
+            bounds: view.bounds.size, view: view)
     }
 }
 
-/// MTKView delegate: builds the dot list on demand and draws it in one additive pass.
+/// MTKView delegate: draws a prebuilt dot list in one additive pass.
+///
+/// The dot list is built OFF the main thread. Generating it was measured at 23% of the main thread
+/// on an iPhone 16 Pro Max — thirteen times the cost of rendering the camera feed itself, and the
+/// reason enabling a waveform took the app from 60 fps to 5. It is pure arithmetic over value
+/// types, so it has no business being there: `update` captures the inputs, a serial queue turns
+/// them into vertices, and `draw(in:)` is left with an upload and a draw call.
+///
+/// The overlay can therefore be one bundle behind for a few milliseconds. At the ~10 Hz the scopes
+/// publish, against a feed that now runs at 60, that is not observable — and the alternative was a
+/// feed that ran at 5.
 final class ScopeTraceRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice?
     private let queue: MTLCommandQueue?
     private let pipeline: MTLRenderPipelineState?
 
-    private var samples: ScopeSamples = .empty
-    private var trail: ScopeSamples = .empty
-    private var mode: ScopeTraceMetal.Mode = .waveform(.luma)
-    private var brightness: Int = AssistConfiguration.Scopes.defaultBrightness
-    private var mapping = ExposureSignalMapping(curve: .redLog3G10)
+    /// Everything one build depends on. Equatable so a rebuild is only scheduled on a real change.
+    private struct BuildInputs: Equatable {
+        var samples: ScopeSamples = .empty
+        var trail: ScopeSamples = .empty
+        var mode: ScopeTraceMetal.Mode = .waveform(.luma)
+        var brightness: Int = AssistConfiguration.Scopes.defaultBrightness
+        var mapping = ExposureSignalMapping(curve: .redLog3G10)
+        var bounds: CGSize = .zero
+    }
+
+    private var inputs = BuildInputs()
+    /// Written on the build queue's completion hop, read in `draw(in:)` — both on the main thread.
     private var vertices: [ScopeTraceMetal.Vertex] = []
-    private var verticesDirty = true
+    private var buildGeneration = 0
+    private let buildQueue = DispatchQueue(
+        label: "OpenZCine.scope-trace-vertices", qos: .userInitiated)
     /// Triple-buffered vertex storage — `setVertexBytes` caps at 4 KB, and a single buffer could
     /// still be read by the GPU while the CPU writes the next tick.
     private var vertexBuffers: [MTLBuffer?] = [nil, nil, nil]
@@ -168,27 +187,58 @@ final class ScopeTraceRenderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
-    /// Stores the latest trace inputs; returns whether anything changed (drives `setNeedsDisplay`).
+    /// Stores the latest trace inputs and schedules an off-main rebuild if anything changed.
     func update(
         samples: ScopeSamples, trail: ScopeSamples, mode: ScopeTraceMetal.Mode,
-        brightness: Int, mapping: ExposureSignalMapping
-    ) -> Bool {
-        let changed =
-            self.samples != samples || self.trail != trail || self.mode != mode
-            || self.brightness != brightness || self.mapping != mapping
-        guard changed else { return false }
-        self.samples = samples
-        self.trail = trail
-        self.mode = mode
-        self.brightness = brightness
-        self.mapping = mapping
-        verticesDirty = true
-        return true
+        brightness: Int, mapping: ExposureSignalMapping, bounds: CGSize, view: MTKView
+    ) {
+        let next = BuildInputs(
+            samples: samples, trail: trail, mode: mode, brightness: brightness, mapping: mapping,
+            bounds: bounds)
+        guard next != inputs else { return }
+        inputs = next
+        scheduleBuild(view: view)
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        verticesDirty = true
-        view.setNeedsDisplay()
+        // Positions are in panel points, so a resize invalidates the geometry even though the data
+        // is unchanged. `bounds` is not settled yet here; the follow-up `updateUIView` supplies it.
+        scheduleBuild(view: view)
+    }
+
+    private func scheduleBuild(view: MTKView) {
+        buildGeneration += 1
+        let generation = buildGeneration
+        let inputs = inputs
+        buildQueue.async { [weak self, weak view] in
+            let built = Self.build(inputs)
+            DispatchQueue.main.async {
+                guard let self, self.buildGeneration == generation else { return }
+                self.vertices = built
+                view?.setNeedsDisplay()
+            }
+        }
+    }
+
+    /// Pure: inputs in, dot list out. Returns a fresh array rather than filling one in place —
+    /// appending into a stored property through `inout` is a read-modify-write on a multi-megabyte
+    /// buffer, which can copy the whole thing on every call.
+    private static func build(_ inputs: BuildInputs) -> [ScopeTraceMetal.Vertex] {
+        let bounds = inputs.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return [] }
+        var out: [ScopeTraceMetal.Vertex] = []
+        out.reserveCapacity((inputs.samples.points.count + inputs.trail.points.count) * 3)
+        // Positions are computed in panel POINTS with the same axis math as the Canvas plots;
+        // the shader scales by the drawable's screen scale.
+        let rect = scopePlotRect(bounds, top: 26)
+        let opacity = ScopePalette.dataOpacity(brightness: inputs.brightness)
+        ScopeTraceMetal.vertices(
+            into: &out, points: inputs.trail.points, mode: inputs.mode, rect: rect,
+            mapping: inputs.mapping, opacity: opacity * WaveformScopePlot.trailDecay)
+        ScopeTraceMetal.vertices(
+            into: &out, points: inputs.samples.points, mode: inputs.mode, rect: rect,
+            mapping: inputs.mapping, opacity: opacity)
+        return out
     }
 
     func draw(in view: MTKView) {
@@ -197,23 +247,6 @@ final class ScopeTraceRenderer: NSObject, MTKViewDelegate {
             let drawable = view.currentDrawable,
             let command = queue.makeCommandBuffer()
         else { return }
-        // Positions are computed in panel POINTS with the same axis math as the Canvas plots;
-        // the shader scales by the drawable's screen scale.
-        if verticesDirty {
-            verticesDirty = false
-            vertices.removeAll(keepingCapacity: true)
-            let bounds = view.bounds.size
-            if bounds.width > 1, bounds.height > 1 {
-                let rect = scopePlotRect(bounds, top: 26)
-                let opacity = ScopePalette.dataOpacity(brightness: brightness)
-                ScopeTraceMetal.vertices(
-                    into: &vertices, points: trail.points, mode: mode, rect: rect,
-                    mapping: mapping, opacity: opacity * WaveformScopePlot.trailDecay)
-                ScopeTraceMetal.vertices(
-                    into: &vertices, points: samples.points, mode: mode, rect: rect,
-                    mapping: mapping, opacity: opacity)
-            }
-        }
         guard let encoder = command.makeRenderCommandEncoder(descriptor: descriptor) else {
             return
         }
@@ -322,33 +355,39 @@ struct VectorscopeMetalView: UIViewRepresentable {
         view.backgroundColor = .clear
         view.clearColor = MTLClearColorMake(0, 0, 0, 0)
         view.framebufferOnly = false  // MPS blur writes into an intermediate; drawable stays FBO.
-        push(into: context.coordinator)
+        push(into: context.coordinator, view: view)
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        if push(into: context.coordinator) {
-            uiView.setNeedsDisplay()
-        }
+        push(into: context.coordinator, view: uiView)
     }
 
-    @discardableResult
-    private func push(into renderer: VectorscopeMetalRenderer) -> Bool {
+    private func push(into renderer: VectorscopeMetalRenderer, view: MTKView) {
         renderer.update(
-            points: points, trailPoints: trailPoints, zoom: zoom, brightness: brightness)
+            points: points, trailPoints: trailPoints, zoom: zoom, brightness: brightness,
+            view: view)
     }
 }
 
+/// MTKView delegate for the vectorscope: composites prebuilt density textures on the GPU.
 final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice?
     private let queue: MTLCommandQueue?
     private let pipeline: MTLRenderPipelineState?
 
-    private var points: [ScopePoint] = []
-    private var trailPoints: [ScopePoint] = []
-    private var zoom: AssistConfiguration.Scopes.VectorscopeZoom = .x1
-    private var brightness: Int = AssistConfiguration.Scopes.defaultBrightness
-    private var texturesDirty = true
+    /// Everything one density build depends on. Equatable so a rebuild only happens on real change.
+    private struct BuildInputs: Equatable {
+        var points: [ScopePoint] = []
+        var trailPoints: [ScopePoint] = []
+        var zoom: AssistConfiguration.Scopes.VectorscopeZoom = .x1
+        var brightness: Int = AssistConfiguration.Scopes.defaultBrightness
+    }
+
+    private var inputs = BuildInputs()
+    private var buildGeneration = 0
+    private let buildQueue = DispatchQueue(
+        label: "OpenZCine.vectorscope-density", qos: .userInitiated)
     private var mainTexture: MTLTexture?
     private var trailTexture: MTLTexture?
     private var blurredMain: MTLTexture?
@@ -363,20 +402,44 @@ final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
+    /// Stores the latest inputs and schedules an off-main density rebuild if anything changed.
+    ///
+    /// Binning the points and rasterising the 128×128 density image is CPU work, and measured on an
+    /// iPhone 16 Pro Max it was 20% of the MAIN THREAD from inside `draw(in:)` — four times the cost
+    /// of rendering the camera feed. It depends only on value types, so it belongs on a queue; the
+    /// completion publishes the finished textures and asks for a redraw. Same treatment, and the
+    /// same reason, as `ScopeTraceRenderer`.
     func update(
         points: [ScopePoint], trailPoints: [ScopePoint],
-        zoom: AssistConfiguration.Scopes.VectorscopeZoom, brightness: Int
-    ) -> Bool {
-        let changed =
-            self.points != points || self.trailPoints != trailPoints || self.zoom != zoom
-            || self.brightness != brightness
-        guard changed else { return false }
-        self.points = points
-        self.trailPoints = trailPoints
-        self.zoom = zoom
-        self.brightness = brightness
-        texturesDirty = true
-        return true
+        zoom: AssistConfiguration.Scopes.VectorscopeZoom, brightness: Int, view: MTKView
+    ) {
+        let next = BuildInputs(
+            points: points, trailPoints: trailPoints, zoom: zoom, brightness: brightness)
+        guard next != inputs else { return }
+        inputs = next
+        buildGeneration += 1
+        let generation = buildGeneration
+        guard let device else { return }
+        buildQueue.async { [weak self, weak view] in
+            // `MTLDevice` is thread-safe for texture creation, so the upload rides along here
+            // rather than hopping back to the main thread with a pixel buffer in hand.
+            let main = Self.densityTexture(
+                device: device, points: next.points, zoom: next.zoom,
+                brightness: next.brightness)
+            let trail = Self.densityTexture(
+                device: device, points: next.trailPoints, zoom: next.zoom,
+                brightness: next.brightness)
+            DispatchQueue.main.async {
+                guard let self, self.buildGeneration == generation else { return }
+                self.mainTexture = main
+                self.trailTexture = trail
+                // The blurs are GPU passes encoded per draw; drop them so they re-encode against
+                // the new densities.
+                self.blurredMain = nil
+                self.blurredTrail = nil
+                view?.setNeedsDisplay()
+            }
+        }
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
@@ -389,16 +452,6 @@ final class VectorscopeMetalRenderer: NSObject, MTKViewDelegate {
             let drawable = view.currentDrawable,
             let command = queue.makeCommandBuffer()
         else { return }
-
-        if texturesDirty {
-            texturesDirty = false
-            mainTexture = Self.densityTexture(
-                device: device, points: points, zoom: zoom, brightness: brightness)
-            trailTexture = Self.densityTexture(
-                device: device, points: trailPoints, zoom: zoom, brightness: brightness)
-            blurredMain = nil
-            blurredTrail = nil
-        }
 
         // The blur radius tracks the plot side exactly like the Canvas filter did:
         // `side / binCount * 1.1` points, converted to pixels.
