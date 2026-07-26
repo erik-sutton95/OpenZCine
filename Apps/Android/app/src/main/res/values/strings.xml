@@ -490,6 +490,17 @@
     <string name="camera_hop_rejoined_detail">Camera Wi‑Fi rejoined — restoring live view.</string>
     <string name="camera_hop_failed_title">Couldn\'t rejoin camera</string>
     <string name="camera_hop_failed_fallback">Open the camera\'s network screen and reconnect from My cameras.</string>
+    <string name="recovery_generic_camera">The camera</string>
+    <string name="recovery_retrying_title">Reconnecting…</string>
+    <string name="recovery_retrying_detail">%1$s dropped off. Holding the last frame — attempt %2$d of %3$d.</string>
+    <string name="recovery_lost_title">Camera disconnected</string>
+    <plurals name="recovery_lost_tries">
+        <item quantity="one">%d try</item>
+        <item quantity="other">%d tries</item>
+    </plurals>
+    <string name="recovery_lost_detail">%1$s didn\'t come back after %2$s. The frame below is held, not live.</string>
+    <string name="recovery_retry">Retry connection</string>
+    <string name="recovery_operator_menu">Operator menu</string>
     <string name="control_set_success">%1$s set to %2$s.</string>
     <string name="control_change_rejected">The camera rejected the control change.</string>
     <string name="control_error">%1$s: %2$s</string>

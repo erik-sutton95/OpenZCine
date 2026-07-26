@@ -451,6 +451,18 @@ object SwiftCore {
         resetSignalBars: Boolean,
     ): String?
 
+    /**
+     * The shared monitor reconnect schedule from `SessionRecoveryPolicy`.
+     * Returns the milliseconds to wait before the next attempt after [failures]
+     * consecutive failures, or a negative value once the automatic budget is
+     * spent. [jitter] is a `0.0..1.0` sample drawn by the caller so the
+     * schedule stays pure. Kotlin owns no retry math of its own.
+     */
+    external fun sessionRetryDelayMillis(failures: Int, jitter: Double): Long
+
+    /** The shared automatic-attempt budget, for a truthful "attempt N of M". */
+    external fun sessionMaxAutomaticAttempts(): Int
+
     // ── Camera session (PTP-IP protocol/session layer in the Swift core) ──
 
     /** Receives session lifecycle callbacks pushed from Swift (non-main thread). */

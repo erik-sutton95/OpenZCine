@@ -693,6 +693,13 @@ class MainActivity : ComponentActivity() {
                                     mediaRemoteShutter.disarm()
                                     overlay = MonitorOverlay.MEDIA
                                 },
+                                // Recovery affordance's "Operator menu": the same explicit exit
+                                // Operator Settings offers, so a late reconnect can never
+                                // resurrect a session the operator just left.
+                                onBackToOperatorMenu = {
+                                    mediaRemoteShutter.disarm()
+                                    disconnectToSavedCameraHome(false)
+                                },
                                 onDriveDiagnostic = diagnostics::record,
                             )
                             when (overlay) {

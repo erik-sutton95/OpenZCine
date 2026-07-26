@@ -7,34 +7,106 @@ import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
+import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.core.CameraSession
 import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.transport.ReconnectBackoff
 import kotlin.random.Random
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 
-/** Monitor retries start at 500 ms and stay frequent enough to recover during a shoot. */
-internal fun defaultMonitorSessionRetryPolicy(): ReconnectBackoff =
-    ReconnectBackoff(baseMillis = 500L, maxMillis = 8_000L)
+/**
+ * What the operator is told while an established session is being recovered.
+ * Mirrors the shared core's `SessionRecoveryState`.
+ */
+internal sealed interface MonitorRecoveryState {
+    /** Live, or never established — nothing to show. */
+    data object Idle : MonitorRecoveryState
+
+    /** An automatic reconnect is running or waiting out its backoff. */
+    data class Retrying(val attempt: Int, val maxAttempts: Int) : MonitorRecoveryState
+
+    /** The automatic budget is spent; the operator decides what happens next. */
+    data class WaitingForOperator(val attemptsMade: Int) : MonitorRecoveryState
+}
+
+/**
+ * Injectable seam over the shared reconnect schedule, so Kotlin never owns a
+ * second copy of when to retry or when to give up. Mirrors the
+ * `LinkHealthBridge` pattern.
+ */
+internal fun interface SessionRetryScheduleBridge {
+    /**
+     * Milliseconds to wait before the next attempt after [failures]
+     * consecutive failures, or `null` once the automatic budget is spent.
+     */
+    fun retryDelayMillis(failures: Int, jitter: Double): Long?
+
+    /** The shared automatic-attempt budget, for a truthful "attempt N of M". */
+    fun maxAutomaticAttempts(): Int = DEFAULT_MAX_AUTOMATIC_ATTEMPTS
+
+    companion object {
+        /**
+         * Shown only when the core is unavailable, in which case no camera work
+         * is possible anyway and [ProductionSessionRetryScheduleBridge] stops
+         * immediately — this exists so the label never renders as "of 0".
+         */
+        const val DEFAULT_MAX_AUTOMATIC_ATTEMPTS: Int = 1
+    }
+}
+
+/**
+ * Production schedule: `SessionRecoveryPolicy.monitor` in the Swift core.
+ *
+ * Without the core there is no camera stack at all, so the honest answer is to
+ * stop rather than invent a Kotlin-side fallback schedule that could drift from
+ * the shared one.
+ */
+internal object ProductionSessionRetryScheduleBridge : SessionRetryScheduleBridge {
+    override fun retryDelayMillis(failures: Int, jitter: Double): Long? {
+        if (!SwiftCore.isAvailable) return null
+        val millis = SwiftCore.sessionRetryDelayMillis(failures, jitter)
+        return if (millis < 0) null else millis
+    }
+
+    override fun maxAutomaticAttempts(): Int =
+        if (SwiftCore.isAvailable) {
+            SwiftCore.sessionMaxAutomaticAttempts()
+        } else {
+            SessionRetryScheduleBridge.DEFAULT_MAX_AUTOMATIC_ATTEMPTS
+        }
+}
 
 /**
  * Owns reconnection only while its monitor coroutine is active.
  *
  * Every attempt calls [CameraSession.connect], so identity, property, event,
  * and recording readback all restart through the existing full session path.
+ * The retry cadence and the give-up point come from the shared core through
+ * [SessionRetryScheduleBridge]; this class only sequences them and publishes
+ * what the operator should be told.
  */
 internal class MonitorSessionRecoveryCoordinator(
     private val session: CameraSession,
-    private val retryPolicy: ReconnectBackoff = defaultMonitorSessionRetryPolicy(),
+    private val schedule: SessionRetryScheduleBridge = ProductionSessionRetryScheduleBridge,
     private val jitterSample: () -> Double = { Random.nextDouble() },
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
+    private val mutableRecoveryState =
+        MutableStateFlow<MonitorRecoveryState>(MonitorRecoveryState.Idle)
+
+    /** Drives the monitor's recovery affordance. */
+    val recoveryState: StateFlow<MonitorRecoveryState> = mutableRecoveryState.asStateFlow()
+
     /** Connects immediately, then recovers unexpected disconnections until cancelled. */
     suspend fun run(): Unit {
+        mutableRecoveryState.value = MonitorRecoveryState.Idle
         var firstConnection = true
         var consecutiveFailures = 0
         while (currentCoroutineContext().isActive) {
@@ -42,6 +114,7 @@ internal class MonitorSessionRecoveryCoordinator(
                 is CameraSessionState.Connected -> {
                     firstConnection = false
                     consecutiveFailures = 0
+                    mutableRecoveryState.value = MonitorRecoveryState.Idle
                     session.state.first { it !is CameraSessionState.Connected }
                 }
 
@@ -54,7 +127,21 @@ internal class MonitorSessionRecoveryCoordinator(
                     if (firstConnection) {
                         firstConnection = false
                     } else {
-                        sleep(retryPolicy.delayMillis(consecutiveFailures, jitterSample()))
+                        val wait = schedule.retryDelayMillis(consecutiveFailures, jitterSample())
+                        if (wait == null) {
+                            // Budget spent. Stop burning the radio on a camera that is not coming
+                            // back and hand the decision to the operator (retry, or leave the
+                            // monitor) instead of retrying forever behind a static "No camera".
+                            mutableRecoveryState.value =
+                                MonitorRecoveryState.WaitingForOperator(consecutiveFailures)
+                            return
+                        }
+                        mutableRecoveryState.value =
+                            MonitorRecoveryState.Retrying(
+                                attempt = consecutiveFailures + 1,
+                                maxAttempts = schedule.maxAutomaticAttempts(),
+                            )
+                        sleep(wait)
                         consecutiveFailures += 1
                         currentCoroutineContext().ensureActive()
                         if (session.state.value !is CameraSessionState.Disconnected) continue
@@ -66,20 +153,29 @@ internal class MonitorSessionRecoveryCoordinator(
     }
 }
 
-/** Runs monitor recovery only while the owner is started and recovery is permitted. */
+/**
+ * Runs monitor recovery only while the owner is started and recovery is permitted.
+ *
+ * [retryTicket] restarts the loop with a fresh attempt budget — bump it from the
+ * operator's "Retry connection" action. [onRecoveryState] lifts the published
+ * state so the monitor can render the affordance over the held frame.
+ */
 @Composable
 internal fun MonitorSessionRecoveryEffect(
     session: CameraSession,
     enabled: Boolean,
-    retryPolicy: ReconnectBackoff = defaultMonitorSessionRetryPolicy(),
+    schedule: SessionRetryScheduleBridge = ProductionSessionRetryScheduleBridge,
+    retryTicket: Int = 0,
+    onRecoveryState: (MonitorRecoveryState) -> Unit = {},
 ) {
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val lifecycleActive = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
     val coordinator =
-        remember(session, retryPolicy) {
-            MonitorSessionRecoveryCoordinator(session, retryPolicy)
-        }
-    LaunchedEffect(coordinator, enabled, lifecycleActive) {
+        remember(session, schedule) { MonitorSessionRecoveryCoordinator(session, schedule) }
+    LaunchedEffect(coordinator, enabled, lifecycleActive, retryTicket) {
         if (enabled && lifecycleActive) coordinator.run()
+    }
+    LaunchedEffect(coordinator, onRecoveryState) {
+        coordinator.recoveryState.collectLatest(onRecoveryState)
     }
 }

@@ -318,6 +318,8 @@ internal fun MonitorScreen(
     liveViewGuideController: LiveViewGuideController? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
+    /** Leaves the held frame for the saved-camera home after a session drop. */
+    onBackToOperatorMenu: () -> Unit = {},
     /** Closed diagnostics breadcrumbs for the MF drive failure surfaces. */
     onDriveDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
 ) {
@@ -390,7 +392,26 @@ internal fun MonitorScreen(
         remember { MutableStateFlow<SwiftLiveViewPreviewState>(SwiftLiveViewPreviewState.Idle) }
     val previewApplication by
         (swiftLiveFrameSource?.previewState ?: noPreviewApplication).collectAsState()
-    MonitorSessionRecoveryEffect(session, enabled = sessionRecoveryEnabled)
+    // Bounded recovery behind a preserved monitor: the operator keeps the held frame and gets
+    // Retry / Operator menu once the shared attempt budget is spent, instead of a static
+    // "No camera" over a loop that never stops (#253/#254).
+    var sessionRecoveryState by
+        remember(session) { mutableStateOf<MonitorRecoveryState>(MonitorRecoveryState.Idle) }
+    var sessionRecoveryRetryTicket by remember(session) { mutableIntStateOf(0) }
+    // The session is Disconnected while recovering, so the affordance needs the name from before
+    // the drop rather than the live identity.
+    var lastConnectedCameraName by remember(session) { mutableStateOf("") }
+    LaunchedEffect(sessionState) {
+        (sessionState as? CameraSessionState.Connected)?.let {
+            lastConnectedCameraName = it.identity.name
+        }
+    }
+    MonitorSessionRecoveryEffect(
+        session,
+        enabled = sessionRecoveryEnabled,
+        retryTicket = sessionRecoveryRetryTicket,
+        onRecoveryState = { sessionRecoveryState = it },
+    )
 
     // Kyant layer-backdrop glass (AndroidLiquidGlass):
     //  • feedBackdrop — live view only; bars/chips sample with Modifier.glass.
@@ -2805,6 +2826,14 @@ internal fun MonitorScreen(
                     .border(4.dp, LiveDesign.rec, RoundedCornerShape(24.dp)),
             )
         }
+
+        // Dropped-session recovery over the held frame (iOS `MonitorRecoveryOverlay`).
+        MonitorRecoveryOverlay(
+            state = sessionRecoveryState,
+            cameraName = lastConnectedCameraName,
+            onRetry = { sessionRecoveryRetryTicket += 1 },
+            onBackToOperatorMenu = onBackToOperatorMenu,
+        )
         activeAssistOptions?.let { request ->
             val recenterPanel =
                 request.tool.monitorAnalysisPanelID()?.takeIf { analysisPanelLayout != null }?.let { id ->

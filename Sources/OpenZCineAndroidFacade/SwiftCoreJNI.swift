@@ -736,6 +736,28 @@
         return javaString(env, encoded)
     }
 
+    /// `SwiftCore.sessionRetryDelayMillis(...)` — the shared monitor reconnect
+    /// schedule. Returns the wait before the next attempt, or a negative value
+    /// once the automatic budget is spent (see `AndroidSessionRecoveryWire`).
+    /// Kotlin owns no retry math of its own.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionRetryDelayMillis")
+    public func swiftCoreSessionRetryDelayMillis(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, failures: jint, jitter: jdouble
+    ) -> jlong {
+        jlong(
+            AndroidSessionRecoveryWire.retryDelayMilliseconds(
+                failures: Int(failures), jitter: Double(jitter)))
+    }
+
+    /// `SwiftCore.sessionMaxAutomaticAttempts()` — the shared attempt budget, so
+    /// the Compose recovery affordance can show a truthful "attempt N of M".
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionMaxAutomaticAttempts")
+    public func swiftCoreSessionMaxAutomaticAttempts(
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+    ) -> jint {
+        jint(AndroidSessionRecoveryWire.maximumAutomaticAttempts)
+    }
+
     // MARK: - Callback / streaming shape
 
     /// Listener state that crosses to the pushing thread.
