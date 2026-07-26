@@ -223,7 +223,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         streamPreset: StreamPreset,
         qualityBias: QualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
-        scopeActivationOrder: [MonitorAssistTool] = []
+        scopeActivationOrder: [MonitorAssistTool] = [],
+        cleanViewPinnedTools: Set<MonitorAssistTool> = []
     ) {
         self.dispOrder = dispOrder
         self.enabledDispModes = Self.normalizedEnabledDispModes(enabledDispModes)
@@ -243,6 +244,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.qualityBias = qualityBias
         self.portraitFeedAspect = portraitFeedAspect
         self.scopeActivationOrder = scopeActivationOrder
+        self.cleanViewPinnedTools = cleanViewPinnedTools
     }
 
     /// Stock defaults — forwards to ``defaults``.
@@ -275,6 +277,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
     /// newest activation. Drives the portrait-fit recency-based 2-scope display selection.
     public var scopeActivationOrder: [MonitorAssistTool]
+    /// View-assist tools the operator pinned to survive clean view (DISP 2). Empty by default —
+    /// clean is a bare image out of the box; see ``MonitorChromePolicy``.
+    public var cleanViewPinnedTools: Set<MonitorAssistTool>
 
     /// The ≤2 scope tools the portrait-fit stacked zone displays: the two most recently
     /// activated (per ``scopeActivationOrder``), shown in canonical ``MonitorAssistTool/scopeTools``
@@ -297,6 +302,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         case visibleAssistTools
         case recordConfirmationEnabled, recordHoldEnabled, bluetoothShutterEnabled, hapticsEnabled,
             keepScreenAwake, streamPreset, qualityBias, portraitFeedAspect, scopeActivationOrder
+        case cleanViewPinnedTools
     }
 
     public init(from decoder: any Decoder) throws {
@@ -365,6 +371,11 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             liveViewVisibleAssistTools = []
             playbackVisibleAssistTools = []
         }
+        // Added with the clean-view pin (#256). Absent in every older payload — decode to empty so
+        // an upgrade lands on the documented default (clean is bare) rather than resetting.
+        cleanViewPinnedTools =
+            try Self.decodeAssistToolSetIfPresent(from: container, forKey: .cleanViewPinnedTools)
+            ?? []
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -385,6 +396,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(qualityBias, forKey: .qualityBias)
         try container.encode(portraitFeedAspect, forKey: .portraitFeedAspect)
         try container.encode(scopeActivationOrder, forKey: .scopeActivationOrder)
+        try container.encode(cleanViewPinnedTools, forKey: .cleanViewPinnedTools)
     }
 
     /// Live-monitor assist visibility. Prefer ``visibleAssistTools(for:)`` when the context is known.
@@ -447,6 +459,16 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             framingBarVisibleControls.remove(tool)
         } else {
             framingBarVisibleControls.insert(tool)
+        }
+    }
+
+    /// Toggles whether `tool` stays on screen in clean view (DISP 2). Off for every tool by
+    /// default — see ``MonitorChromePolicy``.
+    public mutating func toggleCleanViewPin(_ tool: MonitorAssistTool) {
+        if cleanViewPinnedTools.contains(tool) {
+            cleanViewPinnedTools.remove(tool)
+        } else {
+            cleanViewPinnedTools.insert(tool)
         }
     }
 

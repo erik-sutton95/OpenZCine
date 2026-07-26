@@ -587,3 +587,87 @@ private func splitEraConfiguration(
     // A payload predating the key means the user never chose — the new default-on applies.
     #expect(decoded.bluetoothShutterEnabled)
 }
+
+// MARK: - Clean view (#256)
+
+@Test func cleanViewPinsDefaultOffAndToleratePayloadsPredatingThem() throws {
+    #expect(OperatorPreferences.defaults.cleanViewPinnedTools.isEmpty)
+
+    var dict = try #require(
+        try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
+    dict.removeValue(forKey: "cleanViewPinnedTools")
+    let decoded = try JSONDecoder().decode(
+        OperatorPreferences.self,
+        from: try JSONSerialization.data(withJSONObject: dict))
+    #expect(decoded.cleanViewPinnedTools.isEmpty)
+    // The rest of the blob must survive — a missing new key never resets the preferences.
+    #expect(decoded.dispOrder == OperatorPreferences.defaults.dispOrder)
+    #expect(decoded.streamPreset == OperatorPreferences.defaults.streamPreset)
+}
+
+@Test func cleanViewPinsRoundTrip() throws {
+    var prefs = OperatorPreferences.defaults
+    prefs.toggleCleanViewPin(.guides)
+    prefs.toggleCleanViewPin(.histogram)
+    prefs.toggleCleanViewPin(.histogram)  // second toggle un-pins
+    let decoded = try JSONDecoder().decode(
+        OperatorPreferences.self, from: try JSONEncoder().encode(prefs))
+    #expect(decoded.cleanViewPinnedTools == [.guides])
+}
+
+@Test func cleanViewHidesEveryUnpinnedToolByDefault() {
+    var prefs = OperatorPreferences.defaults
+    prefs.liveViewVisibleAssistTools = Set(MonitorAssistTool.allCases)
+
+    for tool in MonitorAssistTool.allCases {
+        #expect(
+            MonitorChromePolicy.isToolVisible(tool, mode: .live, preferences: prefs),
+            "\(tool) must show in live")
+        #expect(
+            !MonitorChromePolicy.isToolVisible(tool, mode: .clean, preferences: prefs),
+            "\(tool) must be hidden in clean by default")
+        #expect(
+            !MonitorChromePolicy.isToolVisible(tool, mode: .command, preferences: prefs),
+            "\(tool) must be hidden in command")
+    }
+    #expect(MonitorChromePolicy.visibleTools(mode: .clean, preferences: prefs).isEmpty)
+    #expect(MonitorChromePolicy.visibleTools(mode: .command, preferences: prefs).isEmpty)
+}
+
+@Test func cleanViewShowsExactlyThePinnedToolsAndRestoresOnLeaving() {
+    var prefs = OperatorPreferences.defaults
+    prefs.liveViewVisibleAssistTools = [.histogram, .peaking, .guides]
+    prefs.toggleCleanViewPin(.peaking)
+
+    #expect(MonitorChromePolicy.visibleTools(mode: .clean, preferences: prefs) == [.peaking])
+    // Leaving clean restores the operator's set untouched — the pin only ever filters.
+    #expect(
+        MonitorChromePolicy.visibleTools(mode: .live, preferences: prefs)
+            == [.histogram, .peaking, .guides])
+}
+
+@Test func cleanViewPinCannotResurrectASwitchedOffTool() {
+    var prefs = OperatorPreferences.defaults
+    prefs.liveViewVisibleAssistTools = []
+    prefs.toggleCleanViewPin(.waveform)
+    #expect(!MonitorChromePolicy.isToolVisible(.waveform, mode: .clean, preferences: prefs))
+}
+
+@Test func cleanViewPinsAreLiveViewOnly() {
+    var prefs = OperatorPreferences.defaults
+    prefs.playbackVisibleAssistTools = [.histogram]
+    // Playback has no DISP cycle; callers pass `.live` and see the full playback set.
+    #expect(
+        MonitorChromePolicy.isToolVisible(
+            .histogram, mode: .live, context: .playback, preferences: prefs))
+}
+
+@Test func cleanViewStripsChromeAndDefersPopups() {
+    #expect(MonitorChromePolicy.showsChrome(in: .live))
+    #expect(!MonitorChromePolicy.showsChrome(in: .clean))
+    #expect(MonitorChromePolicy.allowsPopups(in: .live))
+    #expect(!MonitorChromePolicy.allowsPopups(in: .clean))
+    // Command's dashboard tiles open the value pickers, so pop-ups stay allowed there.
+    #expect(MonitorChromePolicy.allowsPopups(in: .command))
+}

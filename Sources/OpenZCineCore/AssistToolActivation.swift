@@ -1,5 +1,63 @@
 import Foundation
 
+/// The one authoritative rule for what the monitor puts on screen in each DISP mode. Both shells
+/// ask this instead of testing `displayMode == .clean` at each render site — scattered tests are
+/// exactly how scopes, traffic lights and pop-ups survived clean view (#256).
+///
+/// - `.live` (DISP 1): everything the operator switched on.
+/// - `.clean` (DISP 2): **a bare image**. Every view-assist tool, the status deck, the side rails,
+///   the bottom strips and every non-critical pop-up are hidden. A tool comes back only when the
+///   operator pins it via ``OperatorPreferences/cleanViewPinnedTools`` — that pin is per tool and
+///   off for all 17 by default. Leaving clean restores the prior visibility exactly, because the
+///   pin is a *filter*: clean never mutates the operator's on/off set.
+/// - `.command` (DISP 3): the data dashboard owns the screen; there is no feed, so no feed overlay
+///   or scope renders regardless of pins.
+///
+/// **Documented critical exceptions.** These are deliberately *not* routed through this policy and
+/// stay visible in clean view, because suppressing them risks a ruined or lost take:
+/// camera fault and thermal/card warnings (`CameraWarningStatus`), the recording tally, connection
+/// loss / reconnect notices, and modal alerts that require an immediate answer (record
+/// confirmation). Analysis chrome — scopes, traffic lights, histograms, meters — is never critical.
+public enum MonitorChromePolicy {
+    /// Whether `tool` renders right now: switched on for `context`, and permitted by `mode`.
+    public static func isToolVisible(
+        _ tool: MonitorAssistTool,
+        mode: DispMode,
+        context: ViewAssistContext = .liveView,
+        preferences: OperatorPreferences
+    ) -> Bool {
+        guard preferences.visibleAssistTools(for: context).contains(tool) else { return false }
+        switch mode {
+        case .live: return true
+        case .clean: return preferences.cleanViewPinnedTools.contains(tool)
+        case .command: return false
+        }
+    }
+
+    /// The switched-on tools `mode` actually lets through — the set every render site should read.
+    public static func visibleTools(
+        mode: DispMode,
+        context: ViewAssistContext = .liveView,
+        preferences: OperatorPreferences
+    ) -> Set<MonitorAssistTool> {
+        let on = preferences.visibleAssistTools(for: context)
+        switch mode {
+        case .live: return on
+        case .clean: return on.intersection(preferences.cleanViewPinnedTools)
+        case .command: return []
+        }
+    }
+
+    /// Whether non-critical monitor chrome — status deck, side rails, assist/capture strips,
+    /// status readouts — renders. Clean strips all of it; command replaces it with the dashboard.
+    public static func showsChrome(in mode: DispMode) -> Bool { mode != .clean }
+
+    /// Whether a transient pop-up (camera-value picker, assist options drawer) may present.
+    /// Clean defers them — the operator asked for a bare image. Full-screen destinations the
+    /// operator navigates to deliberately (Settings, Media) are not pop-ups and are unaffected.
+    public static func allowsPopups(in mode: DispMode) -> Bool { mode != .clean }
+}
+
 /// Pure on/off semantics for the live-monitor and playback view-assist tools.
 public enum AssistToolActivation {
     public static func set(
