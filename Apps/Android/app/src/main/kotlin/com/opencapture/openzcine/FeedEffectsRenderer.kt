@@ -545,9 +545,8 @@ private val EFFECTS_AGSL =
                 // reject it and this gate is what keeps shadows from sparkling. It arrives already
                 // scaled for the feed's encoding, so there is no mode policy here.
                 float gate = clamp(
-                    (peakingNoiseGate == 0.0 ? 0.0
-                        : (coarse - peakingNoiseGate * PEAKING_GATE_FLOOR)
-                            / (peakingNoiseGate * (1.0 - PEAKING_GATE_FLOOR))),
+                    (coarse - peakingNoiseGate * PEAKING_GATE_FLOOR)
+                        / max(peakingNoiseGate * (1.0 - PEAKING_GATE_FLOOR), 1e-9),
                     0.0,
                     1.0);
                 // LINEAR ramps, deliberately not smoothstep: Core Image reaches these with a

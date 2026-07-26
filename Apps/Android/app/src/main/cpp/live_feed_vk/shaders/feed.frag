@@ -155,9 +155,8 @@ void main() {
             // reject it and this gate is what keeps shadows from sparkling. It arrives already
             // scaled for the feed's encoding, so there is no mode policy here.
             float gate = clamp(
-                (u.peakingNoiseGate == 0.0 ? 0.0
-                    : (coarse - u.peakingNoiseGate * PEAKING_GATE_FLOOR)
-                        / (u.peakingNoiseGate * (1.0 - PEAKING_GATE_FLOOR))),
+                (coarse - u.peakingNoiseGate * PEAKING_GATE_FLOOR)
+                    / max(u.peakingNoiseGate * (1.0 - PEAKING_GATE_FLOOR), 1e-9),
                 0.0,
                 1.0);
             // LINEAR ramps, deliberately not smoothstep: Core Image reaches these with a
