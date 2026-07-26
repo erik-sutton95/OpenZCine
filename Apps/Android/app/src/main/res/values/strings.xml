@@ -42,7 +42,13 @@
     <string name="wifi_scanner_key_description">Scanned network key. Check the camera screen before using it.</string>
     <string name="wifi_scanner_failure_title">Scanner unavailable</string>
     <string name="wifi_scanner_camera_unavailable">The rear camera could not start. Close other camera apps and try again.</string>
-    <string name="wifi_scanner_recognizer_unavailable">On-device text recognition is not ready. Try again in a moment.</string>
+    <string name="wifi_scanner_recognizer_unavailable">On-device text recognition is not ready. Try again, or enter the details yourself.</string>
+    <string name="wifi_scanner_recognizer_unsupported">This phone can\'t run OpenZCine\'s on-device text recognition. Enter the camera\'s details below instead.</string>
+    <string name="wifi_scanner_manual_title">Enter Wi‑Fi Details</string>
+    <string name="wifi_scanner_manual_intro">Copy the SSID and key exactly as they appear on the camera screen.</string>
+    <string name="wifi_scanner_manual_invalid">Enter the complete SSID and an 8–63 character Wi‑Fi key.</string>
+    <string name="wifi_scanner_enter_manually">Enter manually</string>
+    <string name="wifi_scanner_back_to_scan">Back to scan</string>
     <string name="wifi_scanner_core_unavailable">The shared camera core is unavailable. Rebuild OpenZCine before scanning.</string>
     <string name="wifi_scanner_viewfinder_description">Camera viewfinder scanning the Connection wizard</string>
 
