@@ -154,6 +154,70 @@ enum MediaThumbnailSize: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 }
 
+/// Geometry for a media popup panel anchored to its trigger button.
+///
+/// The preferred width is a *preference, not a promise*: a 400pt panel cannot fit a 393pt phone,
+/// and no clamp rescues a width that does not fit — a trailing-aligned `min(max(…))` silently
+/// inverts and shoves the panel off the leading edge. So the width is bounded by the safe
+/// viewport first, which is precisely what makes the two-edge clamp well-formed afterwards.
+///
+/// Pure and host-local (the values feed straight into `.offset`/`.frame`) so the phone-width
+/// matrix is covered by unit tests instead of twenty screenshots.
+struct MediaPopupPlacement: Equatable {
+    /// Leading edge relative to the host origin.
+    let x: CGFloat
+    /// Top edge relative to the host origin.
+    let y: CGFloat
+    let width: CGFloat
+    let maxHeight: CGFloat
+
+    /// Gap kept between the panel and every safe-area edge.
+    static let margin: CGFloat = 12
+
+    /// Width and leading edge — the rule every anchored media popup shares. Only the vertical
+    /// rule differs between the below-anchor and above-anchor panels.
+    static func fitted(
+        anchor: CGRect,
+        host: CGRect,
+        safeArea: MonitorEdgeInsets,
+        preferredWidth: CGFloat
+    ) -> (x: CGFloat, width: CGFloat) {
+        let minX = host.minX + max(0, CGFloat(safeArea.leading))
+        let maxX = host.maxX - max(0, CGFloat(safeArea.trailing))
+        let width = max(0, min(preferredWidth, maxX - minX - margin * 2))
+        // Trailing-align to the trigger, then clamp inside BOTH margins. With the width already
+        // bounded, `minX + margin <= maxX - width - margin`, so the outer `min` can no longer
+        // overrule the inner `max`.
+        let trailing = anchor.width > 1 ? anchor.maxX : maxX - margin
+        let x = min(max(trailing - width, minX + margin), maxX - width - margin)
+        return (x - host.minX, width)
+    }
+
+    /// Panel hanging below its trigger, kept clear of every safe-area edge. A stale anchor (one
+    /// frame behind a rotation or an iPad window resize) can shift the panel but can no longer
+    /// push it off-screen: both axes are clamped into the live safe viewport every layout pass.
+    static func below(
+        anchor: CGRect,
+        host: CGRect,
+        safeArea: MonitorEdgeInsets,
+        preferredWidth: CGFloat,
+        minimumHeight: CGFloat
+    ) -> MediaPopupPlacement {
+        let (x, width) = fitted(
+            anchor: anchor, host: host, safeArea: safeArea, preferredWidth: preferredWidth)
+        let minY = host.minY + max(0, CGFloat(safeArea.top))
+        let maxY = host.maxY - max(0, CGFloat(safeArea.bottom))
+        let desiredTop = anchor.width > 1 ? anchor.maxY + 8 : minY + 120
+        let top = max(minY + margin, min(desiredTop, maxY - margin - minimumHeight))
+        return MediaPopupPlacement(
+            x: x,
+            y: top - host.minY,
+            width: width,
+            maxHeight: max(0, maxY - margin - top)
+        )
+    }
+}
+
 /// Full-screen Media page: sidebar navigation, filter popup, and a clip grid with progressive
 /// on-camera playback when a clip is opened.
 struct MediaBrowserView: View {
@@ -377,20 +441,20 @@ struct MediaBrowserView: View {
         .mediaDeliveryShareSheet(enabled: playingClip == nil)
     }
 
+    /// Preferred, not guaranteed — see ``MediaPopupPlacement``.
     private let filterPopupWidth: CGFloat = 400
 
     private var filterPopupOverlay: some View {
         GeometryReader { proxy in
-            let host = proxy.frame(in: .global)
-            let button = filterButtonFrame
-            let hasButton = button.width > 1
-            let trailing = hasButton ? button.maxX : host.maxX - 24
-            let leading = min(
-                max(trailing - filterPopupWidth, host.minX + 12),
-                host.maxX - filterPopupWidth - 12
+            // Recomputed every layout pass, so rotation and iPad window resizes re-place the
+            // panel instead of reusing the geometry it opened with.
+            let place = MediaPopupPlacement.below(
+                anchor: filterButtonFrame,
+                host: proxy.frame(in: .global),
+                safeArea: safeArea,
+                preferredWidth: filterPopupWidth,
+                minimumHeight: 180
             )
-            let top = hasButton ? button.maxY + 8 : host.minY + 120
-            let maxHeight = max(180, host.maxY - top - 24)
 
             ZStack(alignment: .topLeading) {
                 Color.black.opacity(0.18)
@@ -401,9 +465,9 @@ struct MediaBrowserView: View {
                     isFilterPopupPresented = false
                 }
                 .environment(model)
-                .frame(width: filterPopupWidth)
-                .frame(maxHeight: maxHeight, alignment: .top)
-                .offset(x: leading - host.minX, y: top - host.minY)
+                .frame(width: place.width)
+                .frame(maxHeight: place.maxHeight, alignment: .top)
+                .offset(x: place.x, y: place.y)
             }
         }
         .ignoresSafeArea()
@@ -415,6 +479,7 @@ struct MediaBrowserView: View {
             anchorFrame: deliveryAnchorFrame,
             placement: .belowAnchor,
             preferredDestination: deliveryRequest?.preferredDestination,
+            safeArea: safeArea,
             onBeginDelivery: { request in
                 deliveryRequest = nil
                 startDelivery(request)
@@ -1029,10 +1094,9 @@ private struct MediaFilterPopup: View {
     @Environment(NativeAppModel.self) private var model
     let onClose: () -> Void
 
-    private let filterChipColumns = [
-        GridItem(.flexible(), spacing: 5),
-        GridItem(.flexible(), spacing: 5),
-    ]
+    /// Two chips where they fit, one where they do not. `.adaptive` is SwiftUI's own column
+    /// collapse, so the narrow case needs no width plumbed into the popup.
+    private let filterChipColumns = [GridItem(.adaptive(minimum: 120), spacing: 5)]
 
     var body: some View {
         GlassPanel(

@@ -30,11 +30,14 @@ struct MediaDeliveryPopupOverlay: View {
     let anchorFrame: CGRect
     let placement: MediaDeliveryPopupPlacement
     var preferredDestination: MediaDeliveryDestination? = nil
+    /// Safe area of the host surface — the popup itself is full-bleed.
+    var safeArea: MonitorEdgeInsets = .zero
     let onBeginDelivery: (MediaDeliveryBeginRequest) -> Void
     let onDismiss: () -> Void
 
     @Environment(NativeAppModel.self) private var model
 
+    /// Preferred, not guaranteed: `MediaPopupPlacement` shrinks it to fit a compact phone.
     static let width: CGFloat = 420
 
     var body: some View {
@@ -50,7 +53,7 @@ struct MediaDeliveryPopupOverlay: View {
 
                 switch placement {
                 case .belowAnchor:
-                    belowAnchorPanel(host: host, button: button, hasButton: hasButton)
+                    belowAnchorPanel(host: host, button: button)
                 case .aboveAnchor:
                     aboveAnchorPanel(host: host, button: button, hasButton: hasButton)
                 }
@@ -60,23 +63,23 @@ struct MediaDeliveryPopupOverlay: View {
     }
 
     @ViewBuilder
-    private func belowAnchorPanel(host: CGRect, button: CGRect, hasButton: Bool) -> some View {
-        let trailing = hasButton ? button.maxX : host.maxX - 24
-        let leading = min(
-            max(trailing - Self.width, host.minX + 12),
-            host.maxX - Self.width - 12
-        )
-        let top = hasButton ? button.maxY + 8 : host.minY + 120
-        let maxHeight = max(220, host.maxY - top - 24)
+    private func belowAnchorPanel(host: CGRect, button: CGRect) -> some View {
+        let place = MediaPopupPlacement.below(
+            anchor: button, host: host, safeArea: safeArea,
+            preferredWidth: Self.width, minimumHeight: 220)
 
-        panel(maxHeight: maxHeight)
-            .frame(width: Self.width)
-            .offset(x: leading - host.minX, y: top - host.minY)
+        panel(maxHeight: place.maxHeight)
+            .frame(width: place.width)
+            .offset(x: place.x, y: place.y)
     }
 
     @ViewBuilder
     private func aboveAnchorPanel(host: CGRect, button: CGRect, hasButton: Bool) -> some View {
-        let trailingInset = hasButton ? host.maxX - button.maxX : 24
+        // Same width/leading rule as every other media popup; only the vertical anchor differs
+        // (the panel sizes to its content upwards, so it hangs off a bottom inset).
+        let place = MediaPopupPlacement.fitted(
+            anchor: button, host: host, safeArea: safeArea, preferredWidth: Self.width)
+        let trailingInset = max(0, host.width - place.x - place.width)
         let bottomInset = hasButton ? host.maxY - button.minY + 8 : 80
         let maxHeight = hasButton ? max(220, button.minY - host.minY - 24) : 520
 
@@ -85,7 +88,7 @@ struct MediaDeliveryPopupOverlay: View {
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 panel(maxHeight: maxHeight)
-                    .frame(width: Self.width)
+                    .frame(width: place.width)
             }
             .padding(.trailing, trailingInset)
             .padding(.bottom, bottomInset)
