@@ -97,7 +97,8 @@ import Testing
         FocusResetReleasePolicy.shouldDemoteSubjectArea(
             focusArea: "Single", liveViewFocus: tracking))
     #expect(
-        FocusResetReleasePolicy.shouldDemoteSubjectArea(focusArea: "Subject tracking", liveViewFocus: nil))
+        FocusResetReleasePolicy.shouldDemoteSubjectArea(
+            focusArea: "Subject tracking", liveViewFocus: nil))
     #expect(
         !FocusResetReleasePolicy.shouldDemoteSubjectArea(
             focusArea: "Single", liveViewFocus: idle))

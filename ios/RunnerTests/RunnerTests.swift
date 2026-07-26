@@ -1430,4 +1430,69 @@ extension RunnerTests {
         XCTAssertEqual(model.mfDriveNetPulses, 0)
         XCTAssertNil(model.mfDriveAtEnd)
     }
+
+    // MARK: - Picker option sourcing (#274)
+
+    /// Every function picker must name the PTP property whose descriptor drives its drum. A nil
+    /// here is a picker silently rendering the app's fixed union again — the whole #274 defect.
+    /// (Which property each one names is asserted in the shared core's `PickerOptionPolicyTests`,
+    /// where the descriptor decoders live; this target does not link the core module.)
+    func testEveryFunctionPickerNamesItsDescriptorProperty() {
+        let sourced: [(CameraPicker, Int)] = [
+            (.mode, 0), (.stillMode, 0), (.stillMode, 1), (.stillDrive, 0),
+            (.stillFocus, 0), (.stillFocus, 1), (.stillFocus, 2),
+            (.stillFlash, 0), (.stillMeter, 0), (.stillQuality, 0), (.stillPicture, 0),
+            (.focus, 0), (.focus, 1), (.focus, 2),
+        ]
+        for (picker, mode) in sourced {
+            XCTAssertNotNil(
+                picker.optionProperty(forMode: mode),
+                "\(picker.rawValue) mode \(mode) is not sourced from the camera")
+        }
+        // Focus mode / area / subject are three separate Nikon settings, so the three tabs must
+        // read three different properties — never collapsed onto one.
+        for picker: CameraPicker in [.focus, .stillFocus] {
+            let properties = (0...2).compactMap { picker.optionProperty(forMode: $0) }
+            XCTAssertEqual(Set(properties).count, 3, "\(picker.rawValue) conflates its focus tabs")
+        }
+        // The Drive picker's two Timer tabs are app state, not camera enums.
+        XCTAssertNil(CameraPicker.stillDrive.optionProperty(forMode: 1))
+        XCTAssertNil(CameraPicker.stillDrive.optionProperty(forMode: 2))
+    }
+
+    /// The fallback a body without a descriptor gets must be conservative: no user banks (the
+    /// reported Zf), and the drive ladder in the body's release order (the reported Z6III).
+    func testPickerFallbackLaddersAreConservativeAndInBodyOrder() {
+        for picker: CameraPicker in [.mode, .stillMode] {
+            XCTAssertFalse(
+                picker.options.contains { $0.hasPrefix("U") },
+                "\(picker.rawValue) invents user banks without a descriptor")
+        }
+        XCTAssertEqual(CameraPicker.stillMode.modes[0].options, ["Auto", "P", "S", "A", "M"])
+        XCTAssertEqual(
+            CameraPicker.stillDrive.options,
+            [
+                "Single", "Continuous L", "Continuous H", "Continuous H+", "C15", "C30", "C60",
+                "C120",
+            ]
+        )
+    }
+
+    /// Focus AREA and subject DETECTION are separate Nikon settings, and neither tab may wear the
+    /// other's name. The core suite proves these exact labels encode back to their own raw values.
+    func testFocusAreaLabelsNameTheBodysSettings() {
+        for picker: CameraPicker in [.focus, .stillFocus] {
+            let areas = picker.modes[1].options
+            let subjects = picker.modes[2].options
+            // The bare forms are the reported confusion: "Subject" reads as the detection tab and
+            // "3D" is not what the body calls 3D-tracking.
+            XCTAssertFalse(areas.contains("Subject"), "\(picker.rawValue) area tab says 'Subject'")
+            XCTAssertFalse(areas.contains("3D"), "\(picker.rawValue) area tab says bare '3D'")
+            // Only "Auto" legitimately names a position in both spaces.
+            XCTAssertTrue(Set(areas).intersection(subjects).isSubset(of: ["Auto"]))
+        }
+        // Each chrome's own tracking position, spelled the way the body spells it.
+        XCTAssertTrue(CameraPicker.focus.modes[1].options.contains("Subject tracking"))
+        XCTAssertTrue(CameraPicker.stillFocus.modes[1].options.contains("3D tracking"))
+    }
 }
