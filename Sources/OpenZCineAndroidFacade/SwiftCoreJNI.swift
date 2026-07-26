@@ -230,6 +230,20 @@
         return javaString(env, parsed)
     }
 
+    /// `SwiftCore.manualCameraWifiCredentials(ssid, key): String?` — validates
+    /// credentials the operator typed off the camera screen when on-device OCR
+    /// is unavailable. Same shared policy as the iOS manual-entry form, so the
+    /// fallback cannot drift between shells. Never logs or stores either field.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_manualCameraWifiCredentials")
+    public func swiftCoreManualCameraWifiCredentials(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, ssid: jstring?, key: jstring?
+    ) -> jstring? {
+        guard let ssid = swiftString(env, ssid), let key = swiftString(env, key),
+            let wire = AndroidCameraWiFiScreenParserWire.manual(ssid: ssid, key: key)
+        else { return nil }
+        return javaString(env, wire)
+    }
+
     /// `SwiftCore.resolveDisplayName(rawName): String` — operator-facing device
     /// title from the raw PTP name (`ZR_6001234` → `Nikon ZR`).
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_resolveDisplayName")

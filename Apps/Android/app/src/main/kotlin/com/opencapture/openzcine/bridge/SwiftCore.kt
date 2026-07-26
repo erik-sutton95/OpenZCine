@@ -62,6 +62,15 @@ object SwiftCore {
      */
     external fun parseCameraWifiScreen(transcript: String): String?
 
+    /**
+     * Validates credentials the operator typed off the camera's Connection
+     * wizard when on-device OCR is unavailable. Returns the same
+     * `SSID<unit-separator>key` wire as [parseCameraWifiScreen], or null when
+     * either field fails the shared contract. Callers must never log or persist
+     * the arguments — the key is the camera's Wi-Fi passphrase.
+     */
+    external fun manualCameraWifiCredentials(ssid: String, key: String): String?
+
     // ── Frame.io (OAuth/API policy remains in the portable Swift core) ──
 
     /**
