@@ -9,6 +9,7 @@ import java.io.DataOutputStream
 import java.security.MessageDigest
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -43,10 +44,22 @@ internal enum class MediaThumbnailSize(
     LARGE("Large thumbnails", 280),
 }
 
-/** Operator-selected camera container metadata filters. */
-internal enum class MediaContainerFilter(val title: String) {
+/**
+ * One value the media browser can offer in its FORMAT chip row — the Kotlin mirror of the shared
+ * core's `MediaFormatChip` (`Sources/OpenZCineCore/MediaClipFilename.swift`).
+ *
+ * Kotlin never decides a still's format: the still titles are exactly the `formatLabel` token the
+ * core puts on the listing wire, so a `.HIF` counts as HEIF because the core classified it that
+ * way, not because this file knows Nikon's extensions.
+ */
+internal enum class MediaFormatFilter(val title: String) {
     MOV("MOV"),
     MP4("MP4"),
+    JPEG("JPEG"),
+    HEIF("HEIF"),
+    NEF("NEF"),
+    TIFF("TIFF"),
+    PNG("PNG"),
 }
 
 /** Authoritative pixel-width buckets shown by the Android media browser. */
@@ -57,20 +70,78 @@ internal enum class MediaResolutionFilter(val title: String) {
     SIX_K("6K"),
 }
 
+/**
+ * Nikon still image-size classes (L / M / S) — the Kotlin mirror of the core's
+ * `MediaPhotoSizeClass`. A pixel width cannot name its own class (L is 6048 px on a ZR but
+ * 8256 px on a Z8), so the class is ranked against the still sizes present in the listing.
+ */
+internal enum class MediaPhotoSizeFilter(val title: String) {
+    LARGE("L"),
+    MEDIUM("M"),
+    SMALL("S"),
+}
+
+/** Relative capture-date windows — the Kotlin mirror of the core's `MediaDateWindow`. */
+internal enum class MediaDateWindowFilter(val title: String, val dayCount: Long) {
+    TODAY("TODAY", 1),
+    LAST_7_DAYS("7 DAYS", 7),
+    LAST_30_DAYS("30 DAYS", 30),
+    ;
+
+    /**
+     * True when a PTP `YYYYMMDDThhmmss` capture date falls inside the window. Future-dated
+     * captures (a body with a skewed clock) fall outside every window.
+     */
+    fun contains(captureDate: String, today: LocalDate): Boolean {
+        val day = captureDay(captureDate) ?: return false
+        return !day.isAfter(today) && !day.isBefore(today.minusDays(dayCount - 1))
+    }
+
+    private companion object {
+        fun captureDay(captureDate: String): LocalDate? {
+            val token = captureDate.take(8)
+            if (token.length != 8 || !token.all { it in '0'..'9' }) return null
+            return try {
+                LocalDate.parse(token, DateTimeFormatter.BASIC_ISO_DATE)
+            } catch (_: DateTimeParseException) {
+                null
+            }
+        }
+    }
+}
+
 /** Camera-scoped filters composed with AND semantics across filter groups. */
 internal data class MediaLibraryFilters(
-    val containers: Set<MediaContainerFilter> = emptySet(),
+    val formats: Set<MediaFormatFilter> = emptySet(),
     val resolutions: Set<MediaResolutionFilter> = emptySet(),
-    val todayOnly: Boolean = false,
+    val photoSizes: Set<MediaPhotoSizeFilter> = emptySet(),
+    /** Single window: the ranges nest, so they are mutually exclusive rather than a set. */
+    val dateWindow: MediaDateWindowFilter? = null,
     val storageId: Long? = null,
 ) {
     /** Number displayed in the filter badge; category tabs are intentionally excluded. */
     val activeCount: Int
         get() =
-            containers.size +
+            formats.size +
                 resolutions.size +
-                (if (todayOnly) 1 else 0) +
+                photoSizes.size +
+                (if (dateWindow != null) 1 else 0) +
                 (if (storageId != null) 1 else 0)
+
+    /**
+     * Drops every chip the current listing no longer offers (iOS
+     * `pruneMediaFiltersToOfferedChips`). Switching from Videos to Photos must not leave an
+     * invisible MOV filter behind — the grid would empty with nothing in the popup to explain it.
+     * Storage slots are deliberately untouched: they are scoped by the inserted cards, not by the
+     * category's media, and have their own staleness rule below.
+     */
+    fun retainingOfferedChips(options: MediaFilterOptions): MediaLibraryFilters =
+        copy(
+            formats = formats intersect options.formats.toSet(),
+            resolutions = resolutions intersect options.resolutions.toSet(),
+            photoSizes = photoSizes intersect options.photoSizes.toSet(),
+            dateWindow = dateWindow?.takeIf { it in options.dateWindows },
+        )
 
     /** Drops a stale card selection whenever the source or connected camera changes. */
     fun retainingAvailableStorage(
@@ -429,6 +500,31 @@ internal class MediaLibraryListingCheckpoint(
 
 /** Pure category filtering and ordering based on the shared core's action wire. */
 internal object MediaLibraryFiltering {
+    /**
+     * The active category's listing before any chip filter (iOS `mediaCategoryTabClips`). The
+     * filter popup derives its chips from exactly this, so a category is only ever offered values
+     * its own media can match.
+     */
+    fun categoryScoped(
+        clips: List<MediaClipRecord>,
+        category: MediaLibraryCategory,
+        favoriteIDs: Set<String>,
+        cameraID: String,
+        libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
+    ): List<MediaClipRecord> =
+        when (category) {
+            MediaLibraryCategory.ALL -> clips
+            MediaLibraryCategory.VIDEOS ->
+                clips.filter {
+                    it.contentKind == MediaContentKind.PLAYABLE_PROXY ||
+                        it.contentKind == MediaContentKind.R3D_MASTER
+                }
+            MediaLibraryCategory.PHOTOS ->
+                clips.filter { it.contentKind == MediaContentKind.STILL_PHOTO }
+            MediaLibraryCategory.FAVORITES ->
+                clips.filter { libraryKey(it) in favoriteIDs }
+        }
+
     fun displayed(
         clips: List<MediaClipRecord>,
         category: MediaLibraryCategory,
@@ -436,33 +532,29 @@ internal object MediaLibraryFiltering {
         cameraID: String,
         sortOrder: MediaLibrarySortOrder,
         filters: MediaLibraryFilters = MediaLibraryFilters(),
-        todayToken: String = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
+        today: LocalDate = LocalDate.now(),
         /** Offline multi-camera libraries resolve favorites with the owning bucket. */
         libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
         /** Offline multi-camera libraries pair RAW+JPEG within the owning bucket. */
         ownerOf: (MediaClipRecord) -> String = { _ -> cameraID },
     ): List<MediaClipRecord> {
-        var filtered =
-            when (category) {
-                MediaLibraryCategory.ALL -> clips
-                MediaLibraryCategory.VIDEOS ->
-                    clips.filter {
-                        it.contentKind == MediaContentKind.PLAYABLE_PROXY ||
-                            it.contentKind == MediaContentKind.R3D_MASTER
-                    }
-                MediaLibraryCategory.PHOTOS ->
-                    clips.filter { it.contentKind == MediaContentKind.STILL_PHOTO }
-                MediaLibraryCategory.FAVORITES ->
-                    clips.filter { libraryKey(it) in favoriteIDs }
-            }
-        if (filters.containers.isNotEmpty()) {
-            filtered = filtered.filter { clip -> clip.containerFilter() in filters.containers }
+        val scoped = categoryScoped(clips, category, favoriteIDs, cameraID, libraryKey)
+        var filtered = scoped
+        if (filters.formats.isNotEmpty()) {
+            filtered = filtered.filter { clip -> clip.formatFilter() in filters.formats }
         }
         if (filters.resolutions.isNotEmpty()) {
             filtered = filtered.filter { clip -> clip.resolutionFilter() in filters.resolutions }
         }
-        if (filters.todayOnly) {
-            filtered = filtered.filter { clip -> clip.captureDate.startsWith(todayToken) }
+        if (filters.photoSizes.isNotEmpty()) {
+            val stillWidths = scoped.stillPixelWidths()
+            filtered =
+                filtered.filter { clip ->
+                    clip.photoSizeFilter(stillWidths) in filters.photoSizes
+                }
+        }
+        filters.dateWindow?.let { window ->
+            filtered = filtered.filter { clip -> window.contains(clip.captureDate, today) }
         }
         filters.storageId?.let { selectedStorage ->
             filtered = filtered.filter { clip -> clip.storageId == selectedStorage }
@@ -502,13 +594,113 @@ internal object MediaLibraryFiltering {
         }
 }
 
-/** Container metadata is the sanitized camera object filename supplied by the shared core. */
-internal fun MediaClipRecord.containerFilter(): MediaContainerFilter? =
-    when (codecLabel) {
-        "MOV", "M4V" -> MediaContainerFilter.MOV
-        "MP4" -> MediaContainerFilter.MP4
-        else -> null
+/**
+ * The FORMAT chip one listed object belongs to.
+ *
+ * Stills decode the shared core's `formatLabel` straight off the listing wire, so which
+ * extensions count as HEIF or NEF stays a Swift-only decision. Only the two video containers are
+ * named from the extension, and that is the same `codecLabel` the grid badge already renders.
+ */
+internal fun MediaClipRecord.formatFilter(): MediaFormatFilter? =
+    stillPhoto?.let { still ->
+        MediaFormatFilter.entries.firstOrNull { it.title == still.formatLabel }
     }
+        ?: when (codecLabel) {
+            "MOV", "M4V" -> MediaFormatFilter.MOV
+            "MP4" -> MediaFormatFilter.MP4
+            else -> null
+        }
+
+/** Full-image widths of the stills in a listing, the domain L/M/S is ranked against. */
+internal fun List<MediaClipRecord>.stillPixelWidths(): List<Int> =
+    filter { it.contentKind == MediaContentKind.STILL_PHOTO }.map { it.pixelWidth }
+
+/**
+ * Ranks this still's width among the widths present, widest first (core
+ * `MediaPhotoSizeClass.rank`). Null for videos and for a still whose dimensions the camera never
+ * reported, so an unknown size is left unclassified rather than guessed at.
+ */
+internal fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? {
+    if (contentKind != MediaContentKind.STILL_PHOTO || pixelWidth <= 0) return null
+    val index = presentWidths.filter { it > 0 }.distinct().sortedDescending().indexOf(pixelWidth)
+    if (index < 0) return null
+    return MediaPhotoSizeFilter.entries.getOrNull(index)
+}
+
+/** The chips a filter popup may offer — the Kotlin mirror of the core's `MediaFilterOptions`. */
+internal data class MediaFilterOptions(
+    val formats: List<MediaFormatFilter> = emptyList(),
+    val resolutions: List<MediaResolutionFilter> = emptyList(),
+    val photoSizes: List<MediaPhotoSizeFilter> = emptyList(),
+    val dateWindows: List<MediaDateWindowFilter> = emptyList(),
+) {
+    val isEmpty: Boolean
+        get() =
+            formats.isEmpty() &&
+                resolutions.isEmpty() &&
+                photoSizes.isEmpty() &&
+                dateWindows.isEmpty()
+}
+
+/**
+ * Derives the browser's filter chips from the listing the operator is actually looking at — the
+ * Kotlin mirror of the core's `MediaFilterDerivation`.
+ *
+ * One rule governs every row: a chip is offered only when it matches at least one listed object
+ * and excludes at least one. A chip matching nothing is dead (the Photos tab used to offer MOV,
+ * MP4, and 6K, none of which a still can be), and a chip matching everything filters nothing.
+ * Deriving is also what keeps the two media kinds apart: resolution buckets are classified for
+ * videos only and L/M/S for stills only, so Photos produces no RESOLUTION row and Videos no SIZE
+ * row without either being told which category it is.
+ */
+internal object MediaFilterDerivation {
+    private fun <T> partitioning(
+        candidates: List<T>,
+        itemCount: Int,
+        matchCount: (T) -> Int,
+    ): List<T> {
+        if (itemCount <= 0) return emptyList()
+        return candidates.filter { candidate ->
+            val matched = matchCount(candidate)
+            matched > 0 && matched < itemCount
+        }
+    }
+
+    fun options(
+        clips: List<MediaClipRecord>,
+        today: LocalDate = LocalDate.now(),
+    ): MediaFilterOptions {
+        if (clips.isEmpty()) return MediaFilterOptions()
+        val count = clips.size
+        val formats = clips.map { it.formatFilter() }
+        val stillWidths = clips.stillPixelWidths()
+        val sizes = clips.map { it.photoSizeFilter(stillWidths) }
+        // Resolution buckets describe video frame sizes; a still's rank belongs in the SIZE row.
+        val buckets =
+            clips.map { clip ->
+                if (clip.contentKind == MediaContentKind.STILL_PHOTO) null
+                else clip.resolutionFilter()
+            }
+        return MediaFilterOptions(
+            formats =
+                partitioning(MediaFormatFilter.entries, count) { chip ->
+                    formats.count { it == chip }
+                },
+            resolutions =
+                partitioning(MediaResolutionFilter.entries, count) { bucket ->
+                    buckets.count { it == bucket }
+                },
+            photoSizes =
+                partitioning(MediaPhotoSizeFilter.entries, count) { size ->
+                    sizes.count { it == size }
+                },
+            dateWindows =
+                partitioning(MediaDateWindowFilter.entries, count) { window ->
+                    clips.count { window.contains(it.captureDate, today) }
+                },
+        )
+    }
+}
 
 /** Resolution filtering follows shared source, proxy, then filename precedence. */
 internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
