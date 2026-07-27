@@ -650,6 +650,36 @@ public struct PTPCameraFileTypeMode: Equatable, Sendable {
     public let raw: UInt32
     /// Short display label, e.g. "H.265".
     public let label: String
+
+    /// Advertised bit depth, read straight out of the packed value's depth byte
+    /// (`0x0001_0A00` → 10). Never inferred from the label.
+    public var bitDepth: Int { Int((raw >> 8) & 0xFF) }
+
+    /// Caption for the codec picker's bit-depth buttons ("10-bit"), so both shells word it the
+    /// same way as the widened row labels.
+    public var bitDepthLabel: String { "\(bitDepth)-bit" }
+}
+
+/// One row of the codec picker: a codec family plus every bit depth the body advertises for it.
+///
+/// A body that records H.265 at 8-bit and 10-bit advertises two `MovFileType` values differing
+/// only in their depth byte. Two near-identical rows read badly, so the picker shows one "H.265"
+/// row flanked by the two depths — the same shape as white balance's −10 / +10. A family the body
+/// advertises once keeps a plain row with no buttons: a depth the body never advertised must
+/// never be offerable.
+public struct PTPCameraCodecFamily: Equatable, Sendable {
+    public init(label: String, depths: [PTPCameraFileTypeMode]) {
+        self.label = label
+        self.depths = depths
+    }
+    /// The picker row's label — the family name when the row carries a depth choice, otherwise
+    /// the (possibly widened) label of the single advertised mode it writes.
+    public let label: String
+    /// The advertised modes this row can write, ascending by bit depth.
+    public let depths: [PTPCameraFileTypeMode]
+    /// Whether this row gets the flanking bit-depth pair. Shells must not decide this themselves —
+    /// it is the one place that knows the body advertised more than one depth for the family.
+    public var offersBitDepthChoice: Bool { depths.count == 2 }
 }
 
 /// Whether the camera's shutter readout is in angle (°) or speed (1/x) mode.
@@ -870,6 +900,55 @@ public enum PTPCameraPropertyDecoders {
     ) -> PTPCameraFileTypeMode? {
         guard let fileType else { return nil }
         return modes.first { Self.fileType($0.raw) == fileType }
+    }
+
+    /// Groups the advertised codec modes into picker rows, collapsing a family the body offers at
+    /// two bit depths into ONE row carrying both — the picker flanks that row with depth buttons
+    /// instead of listing near-identical rows (#276 follow-up).
+    ///
+    /// Collapsing is deliberately narrow: it happens only when bit depth is the *sole* axis
+    /// separating a family's advertised values, and only for exactly two of them, because the
+    /// affordance is a two-sided pair. Everything else — a single variant, two variants at the
+    /// same depth (a second container), three depths — stays one row per advertised value under
+    /// the labels `fileTypeModes(fromEnum:)` already widened, so every row still writes exactly
+    /// one advertised raw and no button can name a combination the body did not offer.
+    // ponytail: two depths is the whole real domain (Nikon ships 8/10-bit H.264/H.265 and
+    // single-depth RAW). A three-depth family degrades to three plain rows — truthful, just not
+    // pretty; give it a dedicated control if a body ever ships one.
+    public static func codecFamilies(
+        _ modes: [PTPCameraFileTypeMode]
+    ) -> [PTPCameraCodecFamily] {
+        var order: [String] = []
+        var grouped: [String: [PTPCameraFileTypeMode]] = [:]
+        for mode in modes {
+            let family = MonitorTextFormat.codecShortLabel(fileType(mode.raw))
+            if grouped[family] == nil { order.append(family) }
+            grouped[family, default: []].append(mode)
+        }
+        return order.flatMap { family -> [PTPCameraCodecFamily] in
+            let group = grouped[family] ?? []
+            guard group.count == 2, Set(group.map(\.bitDepth)).count == 2 else {
+                return group.map { PTPCameraCodecFamily(label: $0.label, depths: [$0]) }
+            }
+            return [
+                PTPCameraCodecFamily(
+                    label: family, depths: group.sorted { $0.bitDepth < $1.bitDepth })
+            ]
+        }
+    }
+
+    /// The picker row the body's current `MovFileType` readback belongs to, matched on the exact
+    /// decoded value like `fileTypeMode(forFileType:in:)` — so a collapsed family still resolves
+    /// through whichever depth the body is actually on. Nil while the descriptor and the readback
+    /// have not both landed.
+    public static func codecFamily(
+        forFileType fileType: String?,
+        in families: [PTPCameraCodecFamily]
+    ) -> PTPCameraCodecFamily? {
+        guard let fileType else { return nil }
+        return families.first { family in
+            family.depths.contains { Self.fileType($0.raw) == fileType }
+        }
     }
 
     /// Decodes white balance mode from raw value.

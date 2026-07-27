@@ -105,6 +105,85 @@ private let z6iiiFileTypeEnum: [UInt32] = [
     #expect(modes.map(\.label) == ["H.265 10-bit", "H.265 8-bit"])
 }
 
+// MARK: - #276 follow-up · one codec row, the advertised depths beside it
+
+@Test func aFamilyAdvertisedAtTwoDepthsBecomesOneRowCarryingBoth() {
+    let families = PTPCameraPropertyDecoders.codecFamilies(
+        PTPCameraPropertyDecoders.fileTypeModes(fromEnum: z6iiiFileTypeEnum))
+
+    // H.264 keeps a plain row; the two H.265 values collapse into one row with a depth choice.
+    #expect(families.map(\.label) == ["H.264", "H.265"])
+    #expect(families.map(\.offersBitDepthChoice) == [false, true])
+    let hevc = try! #require(families.last)
+    // Lower depth first: the picker puts 8-bit on the left, 10-bit on the right.
+    #expect(hevc.depths.map(\.bitDepth) == [8, 10])
+    #expect(hevc.depths.map(\.bitDepthLabel) == ["8-bit", "10-bit"])
+    #expect(hevc.depths.map(\.raw) == [0x0001_0800, 0x0001_0A00])
+}
+
+@Test func aSingleVariantFamilyGetsNoDepthButtonsAndKeepsItsOwnRow() {
+    // Never show a depth button the body cannot honour — a one-variant family is a plain row,
+    // and its row label is still the exact label its write resolves through.
+    let modes = PTPCameraPropertyDecoders.fileTypeModes(
+        fromEnum: [0x0031_0A03, 0x0002_0C02, 0x0001_0A01])
+    let families = PTPCameraPropertyDecoders.codecFamilies(modes)
+    #expect(families.map(\.label) == ["R3D NE", "N-RAW", "H.265"])
+    #expect(families.allSatisfy { !$0.offersBitDepthChoice })
+    #expect(families.flatMap { $0.depths.map(\.raw) } == modes.map(\.raw))
+}
+
+@Test func theDepthButtonWritesTheAdvertisedRawAndSurvivesAReopen() {
+    let modes = PTPCameraPropertyDecoders.fileTypeModes(fromEnum: z6iiiFileTypeEnum)
+    let families = PTPCameraPropertyDecoders.codecFamilies(modes)
+    let hevc = try! #require(families.first { $0.label == "H.265" })
+
+    // Tapping "10-bit" writes the advertised 10-bit value, byte for byte.
+    let tenBit = try! #require(hevc.depths.last)
+    let write = PTPCameraPropertyWrite.fileType(raw: tenBit.raw)
+    #expect(write.data == Data(ByteCoding.uint32LE(0x0001_0A00)))
+
+    // The body echoes it; closing and reopening the picker lands on the same row AND the same
+    // depth, because both are resolved from the readback rather than remembered.
+    let readback = PTPCameraPropertySnapshot().applying(
+        property: .movieFileType, data: write.data)
+    let reopened = PTPCameraPropertyDecoders.codecFamily(
+        forFileType: readback.fileType, in: families)
+    #expect(reopened?.label == "H.265")
+    #expect(
+        PTPCameraPropertyDecoders.fileTypeMode(forFileType: readback.fileType, in: modes)?.bitDepth
+            == 10)
+}
+
+@Test func aFamilySplitByContainerRatherThanDepthStaysSeparateRows() {
+    // Two H.265 10-bit values differing only by container: a depth button could not name either
+    // of them unambiguously, so the row must not collapse.
+    let families = PTPCameraPropertyDecoders.codecFamilies(
+        PTPCameraPropertyDecoders.fileTypeModes(fromEnum: [0x0001_0A00, 0x0001_0A01]))
+    #expect(families.count == 2)
+    #expect(families.allSatisfy { !$0.offersBitDepthChoice })
+    // Each row keeps the label `fileTypeModes` widened it to, which is already distinct.
+    #expect(families.map(\.label) == ["H.265 10-bit", "H.265 10-bit MP4"])
+    #expect(families.flatMap { $0.depths.map(\.raw) } == [0x0001_0A00, 0x0001_0A01])
+}
+
+@Test func aThreeDepthFamilyDegradesToPlainRowsRatherThanHidingOne() {
+    // The affordance is a pair; three depths would leave one unreachable. Falling back to the
+    // widened per-value rows keeps every advertised depth selectable.
+    let families = PTPCameraPropertyDecoders.codecFamilies(
+        PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: [0x0001_0800, 0x0001_0A00, 0x0001_0C00]))
+    #expect(families.map(\.label) == ["H.265 8-bit", "H.265 10-bit", "H.265 12-bit"])
+    #expect(families.allSatisfy { !$0.offersBitDepthChoice })
+}
+
+@Test func aCodecTheBodyNeverAdvertisedResolvesToNoRow() {
+    let families = PTPCameraPropertyDecoders.codecFamilies(
+        PTPCameraPropertyDecoders.fileTypeModes(fromEnum: z6iiiFileTypeEnum))
+    #expect(
+        PTPCameraPropertyDecoders.codecFamily(forFileType: "N-RAW 12-bit NEV", in: families) == nil)
+    #expect(PTPCameraPropertyDecoders.codecFamily(forFileType: nil, in: families) == nil)
+}
+
 // MARK: - #274 · the body's values, in the body's order
 
 @Test func zfIsNeverOfferedUserBanksItDoesNotHave() {
