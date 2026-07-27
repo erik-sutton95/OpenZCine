@@ -671,3 +671,11 @@ private func splitEraConfiguration(
     // Command's dashboard tiles open the value pickers, so pop-ups stay allowed there.
     #expect(MonitorChromePolicy.allowsPopups(in: .command))
 }
+
+@Test func commandKeepsTheHeaderStreamUpForLiveTimecode() {
+    // Timecode rides the live-view frame header only, so the mode that shows a hero timecode and
+    // no image must not end live view (#271).
+    #expect(MonitorChromePolicy.streamsHeaderOnly(in: .command))
+    #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .live))
+    #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .clean))
+}

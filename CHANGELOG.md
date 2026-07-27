@@ -14,9 +14,10 @@ All notable changes to this project are documented here. The format is based on
   balance, size, quality (RAW + JPEG/HEIF), and picture profile (incl. downloaded cloud profiles).
   Portrait photography layout, an EV meter fed by the body's exposure indicator, and photo-mode
   scopes/false color that read the stills preview (sRGB or HLG).
-- **Focus dial**: on-feed manual focus-by-wire pull in photo mode — a relative near↔infinity drum,
-  toggled in the FOCUS popup, decoupled from the command tick so it tracks the finger. The release
-  preserves the dialed focus (no re-AF) on iOS; the Android mirror is pending.
+- **Focus dial**: on-feed manual focus-by-wire pull in **photo and video** mode (iOS + Android) — a
+  relative near↔infinity drum, toggled in the FOCUS popup, decoupled from the command tick so it
+  tracks the finger. Off by default; an operator's explicit choice is preserved. The release
+  preserves the dialed focus (no re-AF).
 - **Burst series**: continuous-drive frames group into one stack that opens to a full-screen
   scrubbing pager with multi-select delete/share, spanning both cards.
 - **Body-fired capture sync**: shots released on the camera body register in the app (shutter
@@ -25,6 +26,10 @@ All notable changes to this project are documented here. The format is based on
 - **Instant playback** assist (iOS + Android): the last shot reviews full screen — thumb first,
   full image streaming in — with an optional focus point frozen at capture, capture info, and an
   in-place favorite star written to the card.
+- **Keep a view-assist tool visible in clean view.** Every tool now carries a per-tool clean-view
+  pin in Settings ▸ Display, so an operator who wants (say) the histogram or the delivery guides on
+  the otherwise bare DISP 2 image can keep exactly that one. Off for every tool by default. Both
+  platforms.
 - Playback and live **desqueeze**: scales the picture (not only guides), with 1.6× and custom
   1.00–2.00× (0.01 steps) on iOS and Android.
 - **Auto ISO** for non-R3D movie codecs (N-RAW / ProRes / H.26x): Auto On/Off controls movie ISO
@@ -67,6 +72,18 @@ All notable changes to this project are documented here. The format is based on
 - **Focus-area and subject-detection names match the camera's.** 3D tracking and subject tracking
   are AF-area modes and are now named as such, so neither reads as the separate subject-detection
   control beside it.
+- **Clean view (DISP 2) is genuinely clean.** Scopes, traffic lights, the status deck, the side
+  rails, feed overlays and pop-ups all stayed up, because every surface decided for itself what
+  clean meant. One shared rule now answers that question for both shells. Clean shows the image
+  and nothing else — apart from four deliberate exceptions: camera fault and thermal/card warnings,
+  the recording tally, the record control while a take is rolling, and the DISP key itself (the way
+  back out). Any tool can be pinned back on per tool. Both platforms.
+- **Command view (DISP 3) no longer freezes the timecode.** It hid the image and ended live view to
+  keep the camera cool — but timecode only exists in the live-view frame header, so the dashboard's
+  hero clock stopped at whatever the last frame before the switch carried, which looks plausible
+  and is wrong while the camera is rolling. Command now keeps the stream at the smallest frame the
+  body offers and reads only its header, skipping decode, display and analysis. Wi-Fi and USB.
+  Both platforms.
 - **Focus peaking now tracks the focus plane.** It measured edge contrast, which scales with how
   bright an edge is as much as with how sharp it is — so a defocused specular highlight outranked
   genuinely sharp low-contrast detail, painting background bokeh while skipping the subject. It

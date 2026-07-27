@@ -3863,7 +3863,7 @@ final class NativeAppModel {
     /// up at the *smallest* frame the body will send and is pulled on a slow cadence, with decode,
     /// display, the watch relay and scope sampling all skipped.
     private var streamsHeaderOnly: Bool {
-        displayMode == .command && !activePanelHidesLiveFeed
+        MonitorChromePolicy.streamsHeaderOnly(in: displayMode) && !activePanelHidesLiveFeed
     }
 
     /// How long the loop waits between header-only pulls in Command mode — the same cadence the

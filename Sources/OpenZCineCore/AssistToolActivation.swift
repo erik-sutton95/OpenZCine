@@ -64,6 +64,16 @@ public enum MonitorChromePolicy {
     /// Clean defers them — the operator asked for a bare image. Full-screen destinations the
     /// operator navigates to deliberately (Settings, Media) are not pop-ups and are unaffected.
     public static func allowsPopups(in mode: DispMode) -> Bool { mode != .clean }
+
+    /// Whether `mode` shows no image but still shows live camera telemetry, so the live-view
+    /// stream must stay up purely as a carrier for its frame header.
+    ///
+    /// Timecode and record state exist ONLY in the live-view frame header — there is no PTP
+    /// timecode property — so a mode that hides the image and ends live view freezes both. That
+    /// is exactly what Command (DISP 3) did to its own hero timecode readout (#271). A shell in
+    /// this state keeps the stream at the smallest frame the body offers and skips decode,
+    /// display, the wearable relay and scope sampling.
+    public static func streamsHeaderOnly(in mode: DispMode) -> Bool { mode == .command }
 }
 
 /// Pure on/off semantics for the live-monitor and playback view-assist tools.
