@@ -798,7 +798,7 @@ class OperatorSettingsTest {
     }
 
     @Test
-    fun `sections a mode does not own are not togglable`() {
+    fun `sections a mode does not own are not toggleable`() {
         val settings = OperatorSettings(store)
 
         assertFalse(ChromeSection.STATUS_BAR.isConfigurableIn(MonitorDisplayMode.COMMAND))

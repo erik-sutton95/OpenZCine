@@ -314,7 +314,7 @@ import Testing
     #expect(!prefs.chrome(for: .live).statusBarVisible, "resetting one mode must not touch another")
 }
 
-@Test func sectionsAModeDoesNotOwnAreNotTogglable() {
+@Test func sectionsAModeDoesNotOwnAreNotToggleable() {
     // Command has no feed, so no status bar to reveal; clean's rail renders its two essentials
     // whatever the operator does, and `.cleanEssentials` carries no lock key.
     #expect(!DisplayChromeVisibility.isConfigurable(.statusBar, in: .command))
