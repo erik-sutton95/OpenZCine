@@ -851,7 +851,7 @@
     <string name="settings_disp_live_caption">The full monitor. Set what it shows in Edit view, and which tools reach the tool bar.</string>
     <string name="settings_disp_clean_caption">A stripped-back image. Same elements as DISP 1 — the rail, focus box and batteries start on, everything else off.</string>
     <string name="settings_layout_for">Layout For</string>
-    <string name="settings_layout_for_help">Video and photo keep their own monitor layouts, so a cinema rig and a stills body do not fight over the same chrome. This picks which one the DISP sections below are setting up; the camera\'s own mode dial picks which one the monitor renders.</string>
+    <string name="settings_layout_for_help">Video and photo keep separate layouts. This picks which one the sections below set up; the camera picks which one it renders.</string>
     <string name="settings_layout_for_other_side">Switch the camera to %1$s to arrange this on the monitor.</string>
     <string name="settings_disp_command_caption">The data dashboard — no feed, so no image assists. Only the side rail is on screen.</string>
     <string name="settings_chrome_edit_title">Editing %1$s</string>

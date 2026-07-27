@@ -494,10 +494,14 @@ private fun CameraFocusOverlay(
     // rectangle round the entire image would name nothing.
     if (editModifier != null && primaryRect != null) {
         with(LocalDensity.current) {
+            // Offset and size FIRST: `chromeEditable`'s `onGloballyPositioned` reports the bounds
+            // of its own node, and an offset applied inside it moves only the child — the badge
+            // landed at the overlay's origin instead of on the box.
             Box(
-                editModifier
+                Modifier
                     .absoluteOffset(primaryRect.left.toDp(), primaryRect.top.toDp())
-                    .size(primaryRect.width.toDp(), primaryRect.height.toDp()),
+                    .size(primaryRect.width.toDp(), primaryRect.height.toDp())
+                    .then(editModifier),
             )
         }
     }
