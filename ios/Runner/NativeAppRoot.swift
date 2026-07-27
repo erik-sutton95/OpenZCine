@@ -922,12 +922,19 @@ final class NativeAppModel {
     @ObservationIgnored private var thumbnailWaiters: [String: [CheckedContinuation<Void, Never>]] =
         [:]
     /// Media browser chrome: source bucket, tabs, chip filters, and sort (sort persists).
-    var mediaBrowserSource: MediaBrowserSource = .camera
+    var mediaBrowserSource: MediaBrowserSource = .camera {
+        didSet {
+            guard oldValue != mediaBrowserSource else { return }
+            pruneMediaFiltersToOfferedChips()
+        }
+    }
     var mediaCategoryTab: MediaCategoryTab = .videos {
         didSet {
-            guard oldValue != mediaCategoryTab, mediaBrowserSource == .camera,
-                cameraSession != nil
-            else { return }
+            guard oldValue != mediaCategoryTab else { return }
+            // Chips the new tab cannot offer would keep filtering invisibly — a MOV filter
+            // carried onto Photos empties the grid with nothing in the popup to explain it.
+            pruneMediaFiltersToOfferedChips()
+            guard mediaBrowserSource == .camera, cameraSession != nil else { return }
             // Tabs are pure filters over already-discovered clips. A pass that completed on
             // All/Favorites enumerated every handle (`scopedHandles`), and one completed on
             // this same tab already covered it — only a tab whose handles the previous scope
@@ -942,9 +949,12 @@ final class NativeAppModel {
             scheduleFetchClipsFromCamera()
         }
     }
-    var mediaFormatFilters: Set<MediaFormatFilter> = []
+    var mediaFormatFilters: Set<MediaFormatChip> = []
     var mediaResolutionFilters: Set<MediaResolutionBucket> = []
-    var mediaTodayOnly = false
+    /// Still L/M/S size chips — ranked against the sizes present, so this is stills-only.
+    var mediaPhotoSizeFilters: Set<MediaPhotoSizeClass> = []
+    /// Single relative capture-date window; the windows nest, so they are mutually exclusive.
+    var mediaDateWindow: MediaDateWindow?
     var mediaStorageSlotFilter: UInt32?
     var mediaSortOrder: MediaSortOrder = PreferencesStore.loadMediaSortOrder() {
         didSet { PreferencesStore.saveMediaSortOrder(mediaSortOrder) }
@@ -9620,27 +9630,35 @@ extension NativeAppModel {
         mediaClips
     }
 
-    /// Tab + chip filters composed with AND semantics (format/resolution chips OR within type).
-    var filteredMediaClips: [MediaClip] {
-        var clips = mediaBrowserSourceClips
-        let proxyStems = MediaClipFilename.playableProxyStems(
-            in: clips.map(\.filename))
-        clips = clips.filter {
+    /// The active tab's listing before any popup chip is applied — what the filter popup derives
+    /// its chips from, so a tab is only ever offered values its own media can match.
+    var mediaCategoryTabClips: [MediaClip] {
+        let clips = mediaBrowserSourceClips
+        let proxyStems = MediaClipFilename.playableProxyStems(in: clips.map(\.filename))
+        let visible = clips.filter {
             MediaClipFilename.shouldShowInMediaBrowser(
                 filename: $0.filename,
                 playableProxyStems: proxyStems)
         }
 
         switch mediaCategoryTab {
-        case .all: break
-        case .videos:
-            clips = clips.filter { MediaClipFilename.isPlayableProxy($0.filename) }
-        case .photos:
-            clips = clips.filter { MediaClipFilename.isPhoto($0.filename) }
+        case .all: return visible
+        case .videos: return visible.filter { MediaClipFilename.isPlayableProxy($0.filename) }
+        case .photos: return visible.filter { MediaClipFilename.isPhoto($0.filename) }
         case .favorites:
             // Local heart OR any camera star — shots rated during the shoot count as favorites.
-            clips = clips.filter(\.isFavorited)
+            return visible.filter(\.isFavorited)
         }
+    }
+
+    /// The chips the filter popup may offer for the active tab, derived from the listing itself.
+    var mediaFilterOptions: MediaFilterOptions {
+        MediaFilterDerivation.options(for: mediaCategoryTabClips.map(\.filterItem))
+    }
+
+    /// Tab + chip filters composed with AND semantics (format/resolution chips OR within type).
+    var filteredMediaClips: [MediaClip] {
+        var clips = mediaCategoryTabClips
 
         if !mediaFormatFilters.isEmpty {
             clips = clips.filter { clip in
@@ -9655,8 +9673,20 @@ extension NativeAppModel {
             }
         }
 
-        if mediaTodayOnly {
-            clips = clips.filter(\.isCapturedToday)
+        if !mediaPhotoSizeFilters.isEmpty {
+            let stillWidths = mediaCategoryTabClips.compactMap { clip -> UInt32? in
+                clip.mediaKind == .photo ? clip.pixelWidth : nil
+            }
+            clips = clips.filter { clip in
+                guard clip.mediaKind == .photo, let width = clip.pixelWidth,
+                    let size = MediaPhotoSizeClass.rank(pixelWidth: width, among: stillWidths)
+                else { return false }
+                return mediaPhotoSizeFilters.contains(size)
+            }
+        }
+
+        if let window = mediaDateWindow {
+            clips = clips.filter { window.contains(ptpCaptureDate: $0.captureDate) }
         }
 
         if let slot = mediaStorageSlotFilter {
@@ -9752,12 +9782,13 @@ extension NativeAppModel {
         return MediaClipFormatting.byteLabel(mediaBrowserCacheByteCount)
     }
 
-    /// Active sheet/chip filters (format, resolution, today, storage slot) — not category tabs.
+    /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.
     var mediaActiveFilterCount: Int {
         MediaBrowserFilterMetrics.activeCount(
             formatFilters: mediaFormatFilters,
             resolutionFilters: mediaResolutionFilters,
-            todayOnly: mediaTodayOnly,
+            photoSizeFilters: mediaPhotoSizeFilters,
+            dateWindow: mediaDateWindow,
             storageSlotFilter: mediaStorageSlotFilter
         )
     }
@@ -9766,8 +9797,24 @@ extension NativeAppModel {
     func clearMediaFilters() {
         mediaFormatFilters = []
         mediaResolutionFilters = []
-        mediaTodayOnly = false
+        mediaPhotoSizeFilters = []
+        mediaDateWindow = nil
         mediaStorageSlotFilter = nil
+    }
+
+    /// Drops any active chip the current tab no longer offers.
+    ///
+    /// Switching from Videos to Photos must not leave an invisible MOV filter behind — the grid
+    /// would go empty with nothing in the popup explaining why. Storage slots are deliberately
+    /// untouched: they are scoped by the inserted cards, not by the tab's media.
+    func pruneMediaFiltersToOfferedChips() {
+        let offered = mediaFilterOptions
+        mediaFormatFilters.formIntersection(offered.formats)
+        mediaResolutionFilters.formIntersection(offered.resolutions)
+        mediaPhotoSizeFilters.formIntersection(offered.photoSizes)
+        if let window = mediaDateWindow, !offered.dateWindows.contains(window) {
+            mediaDateWindow = nil
+        }
     }
 
     /// Cycles newest → oldest → name.
@@ -9775,20 +9822,21 @@ extension NativeAppModel {
         mediaSortOrder = mediaSortOrder.next
     }
 
-    func toggleMediaFormatFilter(_ filter: MediaFormatFilter) {
-        if mediaFormatFilters.contains(filter) {
-            mediaFormatFilters.remove(filter)
-        } else {
-            mediaFormatFilters.insert(filter)
-        }
+    func toggleMediaFormatFilter(_ filter: MediaFormatChip) {
+        mediaFormatFilters.formSymmetricDifference([filter])
     }
 
     func toggleMediaResolutionFilter(_ bucket: MediaResolutionBucket) {
-        if mediaResolutionFilters.contains(bucket) {
-            mediaResolutionFilters.remove(bucket)
-        } else {
-            mediaResolutionFilters.insert(bucket)
-        }
+        mediaResolutionFilters.formSymmetricDifference([bucket])
+    }
+
+    func toggleMediaPhotoSizeFilter(_ size: MediaPhotoSizeClass) {
+        mediaPhotoSizeFilters.formSymmetricDifference([size])
+    }
+
+    /// Date windows nest, so selecting one replaces the other; tapping the active one clears it.
+    func toggleMediaDateWindow(_ window: MediaDateWindow) {
+        mediaDateWindow = mediaDateWindow == window ? nil : window
     }
 
     /// Refreshes per-slot storage cards from the connected camera (no-op when offline).
