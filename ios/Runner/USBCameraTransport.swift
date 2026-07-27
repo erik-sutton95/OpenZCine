@@ -242,9 +242,11 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
     /// Reclaims delegate duties for a device whose transport is done with it, leaving the ICC
     /// session open — the warm catalog makes the next connect adopt instantly instead of paying
     /// the enumeration sweep again. The session ends with the cable, not the app-level connect.
-    fileprivate func parkSession(for device: ICDevice) {
-        lock.withLock { if liveTransport?.device === device { liveTransport = nil } }
-        device.delegate = prewarmDelegate
+    /// Deregisters by transport identity, not by device: a late close from a superseded transport
+    /// must not deregister the one currently driving the session.
+    fileprivate func parkSession(for transport: USBCameraTransport) {
+        lock.withLock { if liveTransport === transport { liveTransport = nil } }
+        transport.device.delegate = prewarmDelegate
     }
 
     /// Card-scan readiness for a USB camera row. `ready` (the session-open ack) is the moment a
@@ -445,7 +447,7 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
         // finished card catalog, so the next connect would pay the whole enumeration sweep again.
         // Park the delegate back on the browser; the session dies with the cable (didRemove), not
         // with an app-level disconnect. [verify-on-HW: ZR reconnect-after-disconnect over USB-C]
-        USBCameraDeviceBrowser.shared.parkSession(for: device)
+        USBCameraDeviceBrowser.shared.parkSession(for: self)
     }
 
     /// Closes a stale adopted session and waits (bounded) for ICC's ack so a fresh open can
