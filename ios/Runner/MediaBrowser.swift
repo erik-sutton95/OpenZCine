@@ -736,6 +736,10 @@ struct MediaBrowserView: View {
                         filterButton
                         sortButton
                     }
+                    // Both pills keep their intrinsic width; the title absorbs any squeeze. The
+                    // active-filter badge used to steal the difference from these two, wrapping
+                    // the label to "FILTE / R" and clipping SORT to "SO…" on a 393pt phone.
+                    .fixedSize()
                 }
 
                 if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }),
