@@ -134,6 +134,26 @@ struct AnnouncedPropertyQueueTests {
         #expect(queue.pending == [.movieFNumber, .exposureIndicateStatus])
     }
 
+    @Test func aPendingAnnouncementShortensThePollStrideUntilItDrains() {
+        // #268 round two: the read was gated to the idle round-robin cadence, so a body-side
+        // change the app had already *heard about* still waited out a poll interval sized for
+        // background work. A pending announcement shortens the stride; draining restores it.
+        var queue = CameraAnnouncedPropertyQueue()
+        #expect(queue.pollStride == CameraAnnouncedPropertyQueue.idlePollStride)
+
+        queue.note(.movieFNumber)
+        #expect(queue.pollStride == CameraAnnouncedPropertyQueue.announcedPollStride)
+        #expect(queue.pollStride < CameraAnnouncedPropertyQueue.idlePollStride)
+
+        _ = queue.nextBatch()
+        #expect(queue.isEmpty)
+        #expect(queue.pollStride == CameraAnnouncedPropertyQueue.idlePollStride)
+
+        // The fast stride stays bounded: servicing every frame would make a chatty body a
+        // per-frame PTP round trip on the channel carrying the feed.
+        #expect(CameraAnnouncedPropertyQueue.announcedPollStride >= 2)
+    }
+
     @Test func theBatchIsCappedAndTheRemainderSurvives() {
         // A chatty body must not monopolise the poll loop — and must not lose announcements
         // either: what the cap defers is read on the next tick, not dropped.

@@ -4575,7 +4575,12 @@ final class NativeAppModel {
                 }
             }
         }
-        guard pollEveryCall || frameCounter.isMultiple(of: 8) else { return }
+        // A pending camera-announced change jumps the background cadence — the operator's own hand
+        // on the body should not wait out a poll interval sized for idle round-robin. The stride
+        // and its bound live on the queue itself, next to the batch limit they balance against.
+        guard
+            pollEveryCall || frameCounter.isMultiple(of: cameraAnnouncedPropertyChanges.pollStride)
+        else { return }
         if isRecording {
             let now = Date()
             guard

@@ -1495,7 +1495,16 @@ class SwiftCoreCameraSession internal constructor(
         const val SELECTOR_POLL_INTERVAL_MILLIS: Long = 750L
         /** A property write slower than this stalls the feed behind the transaction gate. */
         const val SLOW_WRITE_THRESHOLD_MILLIS: Long = 1_500L
-        const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 250L
+        /**
+         * Coalescing window before an announced-change burst is read back.
+         *
+         * A camera-announced change is the operator's own hand on the body, so this stays short:
+         * 250 ms was long enough that a turned aperture ring visibly lagged the camera. The window
+         * is non-resetting and the drain is capped, so a body that announces continuously still
+         * costs one read per window rather than one per announcement — matching the every-other-
+         * frame stride the iOS safe point uses while announcements are pending.
+         */
+        const val PROPERTY_EVENT_DEBOUNCE_MILLIS: Long = 100L
         /** Max rate for command RTT StateFlow updates (LV frames fire every present). */
         const val ROUND_TRIP_PUBLISH_INTERVAL_NANOS: Long = 250_000_000L
         /** Announcements re-read per drain — mirrors the core's `CameraAnnouncedPropertyQueue`. */

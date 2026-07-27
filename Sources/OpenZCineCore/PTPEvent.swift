@@ -119,6 +119,22 @@ public struct CameraAnnouncedPropertyQueue: Equatable, Sendable {
     /// comes back round ~20 s later.
     public static let batchLimit = 4
 
+    /// Frames between control safe points while nothing has been announced — the background
+    /// round-robin cadence, deliberately slow to spare the radio and the feed.
+    public static let idlePollStride = 8
+
+    /// Frames between control safe points while an announcement is pending.
+    ///
+    /// A camera-announced change is the operator's own hand on the body, so it jumps the
+    /// background cadence: at 24 fps this is ~83 ms rather than ~330 ms. Bounded at every-other
+    /// frame on purpose — servicing every frame would let a body that announces continuously turn
+    /// the poll loop into a per-frame PTP round trip, which is the radio traffic the thermal audit
+    /// cares about.
+    public static let announcedPollStride = 2
+
+    /// Frames the shell should wait before its next control safe point.
+    public var pollStride: Int { isEmpty ? Self.idlePollStride : Self.announcedPollStride }
+
     /// Creates an empty queue.
     public init() {}
 
