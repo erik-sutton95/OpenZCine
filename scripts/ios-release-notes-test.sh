@@ -22,11 +22,15 @@ expect_fail() {
 }
 
 cat > "${temp_dir}/valid.txt" <<'EOF'
-What's changed
+New and changed
 
 - Find and pair no longer gets stuck while looking for cameras through Personal Hotspot.
 
-Please test
+Fixes
+
+- Pairing no longer stalls when the camera drops off mid-search.
+
+What to test
 
 - Connect your Nikon camera to your iPhone's Personal Hotspot, then open Find and pair.
 - Confirm the camera appears and completes pairing.
@@ -40,40 +44,52 @@ if [[ "$printed_notes" == *"check passed"* || "$printed_notes" != *"Find and pai
 fi
 
 cat > "${temp_dir}/jargon.txt" <<'EOF'
-What's changed
+New and changed
 
 - Repaired hotspot pairing after GUID migration.
 
-Please test
+Fixes
+
+- Pairing no longer stalls when the camera drops off mid-search.
+
+What to test
 
 - Try pairing a camera.
 EOF
 expect_fail "${temp_dir}/jargon.txt"
 
 cat > "${temp_dir}/wrong-platform.txt" <<'EOF'
-What's changed
+New and changed
 
 - Added a new Android monitor layout.
 
-Please test
+Fixes
+
+- Pairing no longer stalls when the camera drops off mid-search.
+
+What to test
 
 - Open the monitor.
 EOF
 expect_fail "${temp_dir}/wrong-platform.txt"
 
 cat > "${temp_dir}/commit-title.txt" <<'EOF'
-What's changed
+New and changed
 
 - feat(ios): add a better monitor shell
 
-Please test
+Fixes
+
+- Pairing no longer stalls when the camera drops off mid-search.
+
+What to test
 
 - Open the monitor.
 EOF
 expect_fail "${temp_dir}/commit-title.txt"
 
 cat > "${temp_dir}/too-many.txt" <<'EOF'
-What's changed
+New and changed
 
 - First visible change.
 - Second visible change.
@@ -81,19 +97,80 @@ What's changed
 - Fourth visible change.
 - Fifth visible change.
 - Sixth visible change.
+- Seventh visible change.
 
-Please test
+Fixes
+
+- Pairing no longer stalls when the camera drops off mid-search.
+
+What to test
 
 - Try the updated behavior.
 EOF
 expect_fail "${temp_dir}/too-many.txt"
 
+# The Fixes section has its own, larger cap — a release can answer a lot of reports.
+cat > "${temp_dir}/too-many-fixes.txt" <<'EOF'
+New and changed
+
+- A visible change.
+
+Fixes
+
+- First fix.
+- Second fix.
+- Third fix.
+- Fourth fix.
+- Fifth fix.
+- Sixth fix.
+- Seventh fix.
+- Eighth fix.
+- Ninth fix.
+
+What to test
+
+- Try the updated behavior.
+EOF
+expect_fail "${temp_dir}/too-many-fixes.txt"
+
+# Order is part of the contract: fixes come after what is new, before what to test.
+cat > "${temp_dir}/out-of-order.txt" <<'EOF'
+Fixes
+
+- Pairing no longer stalls when the camera drops off mid-search.
+
+New and changed
+
+- A visible change.
+
+What to test
+
+- Try the updated behavior.
+EOF
+expect_fail "${temp_dir}/out-of-order.txt"
+
+# All three sections are required — a release with no Fixes section is a format error.
+cat > "${temp_dir}/missing-fixes.txt" <<'EOF'
+New and changed
+
+- A visible change.
+
+What to test
+
+- Try the updated behavior.
+EOF
+expect_fail "${temp_dir}/missing-fixes.txt"
+
 cat > "${temp_dir}/missing-action.txt" <<'EOF'
-What's changed
+New and changed
 
 - Pairing is more reliable through Personal Hotspot.
 
-Please test
+Fixes
+
+- Pairing no longer stalls when the camera drops off mid-search.
+
+What to test
 EOF
 expect_fail "${temp_dir}/missing-action.txt"
 

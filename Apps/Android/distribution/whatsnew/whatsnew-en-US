@@ -1,5 +1,5 @@
-- Photography mode: a real shutter (hold for a burst), tap-to-AF, self-timers, and the full picker set.
-- Focus dial: pull the lens focus on the live view (photo mode). Body-fired shots sync to instant playback.
-- Burst stacks open to a scrubbing pager; multi-select to delete or share.
-- Delete photos/videos (RAW+JPEG or MP4+master) with progress; backup shots under both cards; ratings.
-- Focus peaking follows the focus plane, and matches the iPhone app and photo/video.
+- Fixed: changes made on the camera - aperture, ISO, shutter - now reach the app promptly instead of lagging or never arriving.
+- Fixed: connecting a second body no longer changes its settings, and pickers only offer what your camera supports.
+- Fixed: a dropped cable or a power cycle no longer wedges the app; you keep the last frame and get Retry.
+- Clean view is genuinely clean, with a per-tool pin if you want one tool kept on it.
+- Focus dial now works in video too, off by default.

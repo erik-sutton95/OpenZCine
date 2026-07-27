@@ -60,6 +60,26 @@ All notable changes to this project are documented here. The format is based on
   reconnect runs, then gets **Retry connection** / **Operator menu**. The retry rule lives in the
   shared core, so both shells retry, back off, and give up identically. Both platforms.
 
+- **A change made on the camera reaches the app promptly, in every mode.** Field testing found the
+  first fix incomplete in two ways. The Nikon event queue that carries `DevicePropChanged` was only
+  polled in photography chrome — it had inherited the chrome test from the body-fired-stills
+  consumer, which applies that test itself — so cinema mode had no fast path at all and fell back
+  to a round-robin that revisits any one property roughly every 20 s. Over USB, where there is no
+  event socket, nothing else could have covered it. Separately the read itself was gated to that
+  same background cadence, so a change the app had already *heard about* still waited out a poll
+  interval sized for idle work; a pending announcement now shortens the stride until it drains,
+  bounded so a continuously-announcing body cannot turn the loop into a per-frame round trip.
+  Both platforms.
+
+- **A pulled USB-C cable ends the session it belongs to.** Only the device-level removal callback
+  was wired to teardown, and on a cable pull it did not fire, so the event stream stayed open and
+  nothing raised recovery — Wi-Fi worked only because a dead socket fails on its own. Two further
+  faults made it wedge rather than merely go quiet: closing the transport never resumed the
+  in-flight transaction, so the shutdown that reconnect waits on queued behind a completion that
+  never came; and the stall counter measured wall clock spent in the attempt rather than time
+  spent streaming, so against a dead link every attempt reset the streak and escalation was never
+  reached. iOS; the Android host already had all three legs.
+
 - **The H.265 picker no longer collapses 8-bit and 10-bit.** A body advertising both wore one
   "H.265" row backed by whichever value came first, so leaving H.265 and returning to it silently
   landed on 8-bit. The depth is now chosen with **8-bit / 10-bit buttons flanking the codec row**,

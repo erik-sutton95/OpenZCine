@@ -1,14 +1,26 @@
-What's changed
+New and changed
 
-- Photography mode: a real shutter (tap to shoot, hold for a burst in CL/CH continuous drives, tap-to-AF, bulb/time), built-in and app self-timers (the app timer beeps through the silent switch and pulses a white screen-edge tally), and capture-bar pickers for mode (incl. U1-U3), ISO Auto, focus mode/area/subject, drive, white balance, size, quality (RAW + JPEG/HEIF), and picture profile including downloaded cloud profiles. Portrait is redone: a full 3:2 feed with the tiles below it and no edge cropping.
-- Focus dial (new): a thin dial on the live view drives the lens focus for a manual pull - photo mode only, switched on and off in the FOCUS popup. It tracks your finger and shows a relative near-to-infinity position, and once you dial focus the shutter keeps it instead of re-focusing on the box.
-- Shots fired on the camera body now register in the app - the shutter animates and the frame appears in instant playback, just like an app-fired shot. Instant playback shows the last shot full screen with an optional focus point (now frozen at the moment of capture) and capture info, plus a one-tap favorite star.
-- Burst stacks (new): a continuous-drive burst groups into one stack that opens to a full-screen pager with a scrubbing filmstrip; multi-select to delete or share frames, and "Delete all" clears the burst on both cards.
-- Media page: delete photos (RAW+JPEG together) or videos (the MP4 plus its R3D/NEV master) with a progress bar and a single refresh at the end; two-card backup shots appear under both slots and delete every copy; 1-5 star ratings written to the card, RAW+JPEG shown as one item, images auto-rotate, and pinch zoom stays under your fingers. The EV meter, photo-mode scopes and false color, and focus peaking round out assist - peaking now follows the focus plane instead of whatever is brightest, so it stops outlining blurry background highlights and starts catching soft, low-contrast subjects that really are in focus, and it matches between photo and video.
+- Clean view is finally clean. DISP 2 now shows the picture and nothing else - scopes, indicators and pop-ups all step aside. If you want to keep one tool on the clean image anyway, you can pin it per tool in Settings > Display.
+- The focus dial works in video as well as photo. It is now off by default and lives in the FOCUS popup; if you had already switched it on, it stays on.
+- H.265 8-bit and 10-bit are separate choices. When your camera offers both, the codec popup shows one H.265 row with 8-bit and 10-bit either side of it, so you pick the depth directly.
+- New installs start on the Quality live-view preset, so the picture and the focus and exposure tools get the largest preview your camera will send.
+- Losing the camera no longer drops you out of the monitor. You stay on the last frame with the link marked as gone, and get Retry connection and Operator menu to choose from.
 
-Please test
+Fixes
 
-- Focus dial: switch it on in the FOCUS popup (photo mode), pull focus with it, then take a shot - the focus should hold, not snap back to the AF box.
-- Fire the shutter on the camera body - the app should flash the shutter and show that frame in instant playback.
-- Shoot a burst (hold the shutter in CL/CH), open the stack in the media page, scrub the filmstrip, and multi-select frames to delete - confirm they clear on both cards and the progress count reads right; also delete a video (its MP4 plus master) and a RAW+JPEG photo.
-- Rotate to portrait in photo mode (the feed fills with the tiles below and the EV meter at the bottom), and compare focus peaking between photo and video - it should match.
+- Changes you make on the camera reach the app quickly again. Turning the aperture ring, ISO or shutter on the body used to take up to twenty seconds to show - or in video, never. This was the most-reported problem and the one worth hammering.
+- Connecting a second camera no longer changes its settings. Moving between bodies could flip shutter angle back to shutter speed and disturb other settings; connecting is now read-only.
+- Pickers show what your camera actually supports, in the order it uses. Bodies without U1-U3 are no longer offered them, drive modes read Single, CL, CH, CH+, and 3D tracking and subject detection are named apart instead of both reading "Subject".
+- Unplugging the cable or power-cycling the camera used to wedge the app until you force-quit it. Both now recover on their own, or offer you Retry.
+- The first connection attempt no longer needs cancelling and retrying before it will work.
+- Command view keeps the timecode running. It used to freeze at whatever the clock read when you switched, which looked convincing and was wrong while rolling.
+- The focus dial no longer stalls and take tap-to-focus down with it, so you no longer need to fire a frame to get focus responding again.
+- The media filter pop-up fits on smaller phones instead of sliding off the edge of the screen.
+
+What to test
+
+- Turn the aperture ring on the camera while watching IRIS in the app, in video and in photo. It should track you as you turn, not lag behind or stop.
+- Pull the cable mid-shot, and separately switch the camera off and on. Both should hold the last frame and offer Retry connection - and Operator menu should leave straight away.
+- Connect one body, disconnect, then connect a differently configured one. Nothing on the second camera should change just because you connected.
+- Cycle DISP through Live, Clean and Command while recording. Clean should be bare, Command's timecode should keep running, and going back should show the current time rather than catching up.
+- Open the codec pop-up on a body that shoots H.265 both ways, pick 10-bit, then close and reopen it. It should still read 10-bit, and the camera should agree.
