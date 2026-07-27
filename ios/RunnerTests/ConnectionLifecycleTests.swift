@@ -63,6 +63,8 @@ struct ConnectionLifecycleTests {
         let cancelled = model()
         cancelled.connectToCamera()
         cancelled.cancelConnectionAttempt()
+        // Settle both, or this compares a finished failure against a still-unwinding cancel.
+        await settle(cancelled)
 
         let failed = model()
         failed.connectToCamera()
@@ -75,7 +77,14 @@ struct ConnectionLifecycleTests {
         #expect(failed.connectedIdentity == nil)
         #expect(cancelled.connectedIdentity == nil)
         #expect(failed.sessionRecovery == cancelled.sessionRecovery)
-        #expect(failed.connection == .disconnected)
+        // `connection` is deliberately NOT compared. `settle` waits for the establishment latch,
+        // but with no monitor up the discovery loop then resumes asynchronously, flipping
+        // .disconnected → .scanning on each model's own schedule — so both an absolute
+        // `== .disconnected` and an `a == b` comparison race, in either direction. The invariant
+        // that actually holds is that neither attempt left a live connection behind; the
+        // lifecycle state asserted above is what #264 is about.
+        #expect(failed.connection != .connected)
+        #expect(cancelled.connection != .connected)
     }
 
     @Test("A failed attempt surfaces a retryable failure rather than spinning")
