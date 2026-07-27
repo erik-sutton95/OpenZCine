@@ -981,9 +981,18 @@ class MediaLibraryStateTest {
             pixelHeight = 2160,
             filename = filename,
             contentKind = kind,
+            // Label agrees with the extension, as the listing wire does in production.
             stillPhoto =
                 if (kind == MediaContentKind.STILL_PHOTO) {
-                    StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE)
+                    val label =
+                        when (filename.substringAfterLast('.').lowercase()) {
+                            "nef", "nrw", "dng" -> "NEF"
+                            "hif", "heif", "heic" -> "HEIF"
+                            "tif", "tiff" -> "TIFF"
+                            "png" -> "PNG"
+                            else -> "JPEG"
+                        }
+                    StillPhotoClassification(label, StillPreviewStrategy.PROGRESSIVE)
                 } else {
                     null
                 },

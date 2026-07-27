@@ -213,14 +213,19 @@ extension MediaClip {
     }
 
     /// True for Nikon RAW stills (`.NEF` / `.NRW` / `.DNG`) — the tag-along side of a RAW+JPEG pair.
+    ///
+    /// Asks the core rather than carrying its own extension list: the shell held a duplicate of
+    /// the same set, and a duplicate only stays correct until one copy learns a new extension.
+    /// That is not hypothetical here — `.HIF` was missing from the core's HEIF set while two other
+    /// places already special-cased it, and every Nikon HEIF went unlisted as a result.
     var isRawPhoto: Bool {
-        ["nef", "nrw", "dng"].contains(fileExtension)
+        MediaClipFilename.formatChip(for: filename) == .nef
     }
 
     /// True for JPEG stills — the display side of a RAW+JPEG pair (NEF has no quicklook-decodable
     /// full preview, so the JPEG carries the grid cell and opens the viewer).
     var isJPEGPhoto: Bool {
-        ["jpg", "jpeg", "jpe"].contains(fileExtension)
+        MediaClipFilename.formatChip(for: filename) == .jpeg
     }
 
     /// Favorited for the Media page: the local heart OR any camera star (≥1). Rating writes
