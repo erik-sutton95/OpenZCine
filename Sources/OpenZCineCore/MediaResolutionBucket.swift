@@ -60,15 +60,19 @@ public enum MediaPhotoSizeClass: String, CaseIterable, Codable, Sendable {
     /// Ranks one still's width among the distinct still widths present in the listing: widest
     /// present is L, next M, next S.
     ///
-    /// Nil when the width is unknown/zero or ranks below S, so a still whose dimensions the
-    /// camera never reported is silently left unclassified rather than guessed at.
+    /// Nil when the width is unknown or zero, so a still whose dimensions the camera never
+    /// reported is left unclassified rather than guessed at — and nil for *every* still once the
+    /// listing holds more than three distinct widths. Nikon's image size is a three-way, so a
+    /// wider spread is not an L/M/S shoot (a mixed FX and DX-crop card, say); ranking it anyway
+    /// would strand the fourth size behind chips claiming to cover everything, so the SIZE row
+    /// drops out entirely instead.
     public static func rank(
         pixelWidth: UInt32,
         among presentWidths: some Sequence<UInt32>
     ) -> MediaPhotoSizeClass? {
         guard pixelWidth > 0 else { return nil }
         let ranked = Set(presentWidths.filter { $0 > 0 }).sorted(by: >)
-        guard let index = ranked.firstIndex(of: pixelWidth), index < allCases.count else {
+        guard ranked.count <= allCases.count, let index = ranked.firstIndex(of: pixelWidth) else {
             return nil
         }
         return allCases[index]

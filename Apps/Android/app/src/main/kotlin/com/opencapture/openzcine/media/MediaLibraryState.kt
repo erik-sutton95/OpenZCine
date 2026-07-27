@@ -618,11 +618,17 @@ internal fun List<MediaClipRecord>.stillPixelWidths(): List<Int> =
 /**
  * Ranks this still's width among the widths present, widest first (core
  * `MediaPhotoSizeClass.rank`). Null for videos and for a still whose dimensions the camera never
- * reported, so an unknown size is left unclassified rather than guessed at.
+ * reported, so an unknown size is left unclassified rather than guessed at — and null for *every*
+ * still once the listing holds more than three distinct widths. Nikon's image size is a
+ * three-way, so a wider spread is not an L/M/S shoot (a mixed FX and DX-crop card, say); ranking
+ * it anyway would strand the fourth size behind chips claiming to cover everything, so the SIZE
+ * row drops out entirely instead.
  */
 internal fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? {
     if (contentKind != MediaContentKind.STILL_PHOTO || pixelWidth <= 0) return null
-    val index = presentWidths.filter { it > 0 }.distinct().sortedDescending().indexOf(pixelWidth)
+    val ranked = presentWidths.filter { it > 0 }.distinct().sortedDescending()
+    if (ranked.size > MediaPhotoSizeFilter.entries.size) return null
+    val index = ranked.indexOf(pixelWidth)
     if (index < 0) return null
     return MediaPhotoSizeFilter.entries.getOrNull(index)
 }

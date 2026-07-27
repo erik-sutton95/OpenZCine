@@ -835,6 +835,21 @@ class MediaLibraryStateTest {
     }
 
     @Test
+    fun `more than three still sizes drops the whole size row`() {
+        // A mixed FX and DX-crop card has four distinct widths. Nikon's image size is a
+        // three-way, so ranking would strand the fourth behind chips claiming to cover everything.
+        val fxAndDX = listOf(6_048, 4_528, 3_984, 3_024)
+        val clips =
+            fxAndDX.mapIndexed { index, width ->
+                still(index + 1L, "DSC_000$index.JPG", "JPEG").copy(pixelWidth = width)
+            }
+        val widths = clips.stillPixelWidths()
+
+        clips.forEach { assertNull(it.photoSizeFilter(widths)) }
+        assertTrue(MediaFilterDerivation.options(clips, TODAY).photoSizes.isEmpty())
+    }
+
+    @Test
     fun `date windows cover today seven and thirty days and only when they split the listing`() {
         fun daysAgo(days: Long) = TODAY.minusDays(days).format(DateTimeFormatter.BASIC_ISO_DATE) + "T120000"
 

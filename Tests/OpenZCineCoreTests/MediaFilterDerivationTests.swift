@@ -142,6 +142,26 @@ private func options(_ items: [MediaFilterItem]) -> MediaFilterOptions {
     #expect(MediaPhotoSizeClass.rank(pixelWidth: 1024, among: widths) == nil)
 }
 
+@Test func moreThanThreeStillSizesDropsTheWholeSizeRow() {
+    // A mixed FX and DX-crop card has four distinct widths. Nikon's image size is a three-way, so
+    // ranking would strand the fourth behind chips claiming to cover everything.
+    let fxAndDX: [UInt32] = [6048, 4528, 3984, 3024]
+    for width in fxAndDX {
+        #expect(MediaPhotoSizeClass.rank(pixelWidth: width, among: fxAndDX) == nil)
+    }
+
+    let derived = options(
+        fxAndDX.enumerated().map { index, width in
+            MediaFilterItem(
+                filename: "DSC_000\(index).JPG",
+                pixelWidth: width,
+                captureDate: captureDate(daysAgo: 0))
+        })
+    #expect(derived.photoSizes.isEmpty)
+    // The other rows are unaffected — only the size ranking is out of its depth.
+    #expect(derived.formats.isEmpty)  // all four are JPEG, so the chip filters nothing
+}
+
 @Test func sizeRowIsOmittedWhenStillsCarryNoDimensions() {
     // The camera reported no ImagePixWidth for these stills: no SIZE chip is faked.
     let derived = options([
