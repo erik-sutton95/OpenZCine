@@ -42,6 +42,36 @@ All notable changes to this project are documented here. The format is based on
 - Repository foundation: governance docs, tooling (`just`, meta-checks), native CI, and agent
   configuration.
 
+### Fixed
+
+- **Focus peaking now tracks the focus plane.** It measured edge contrast, which scales with how
+  bright an edge is as much as with how sharp it is — so a defocused specular highlight outranked
+  genuinely sharp low-contrast detail, painting background bokeh while skipping the subject. It
+  now measures blur radius (a two-scale gradient ratio), which is independent of contrast.
+  Separately, peaking ran on a stretch that flattened the top of the range, so in-focus highlight
+  detail could never register at all. Measured against a real focus sweep from the camera, a fully
+  defocused frame now paints nothing at all.
+- **Peaking behaves the same on iPhone and on Android, and the same in photo mode as in video.**
+  The two platforms were running detectors that only resembled each other, each with its own
+  thresholds, so "Med" did not mean the same thing on a phone as on an iPhone. There is now one
+  detector definition that both render. And because the photography feed is a display-referred
+  preview rather than log, the same scene used to read as sharper in photo mode than in video —
+  a sensitivity step silently meant something stricter in one mode than the other. Both platforms
+  now correct for the feed's encoding. One difference remains: Android does not yet smooth the
+  finished overlay the way iOS does, so at the same setting it reads slightly grainier.
+- Android: the media page no longer crawls after the first long-press — selecting one item used to
+  make every later tap re-hash the whole library, and stale hit-test rectangles could send a tap to
+  an off-screen item.
+- Android: the shutter no longer re-focuses when focus was set with the focus dial, matching iOS.
+- Android: star ratings write to the card as they always did — the star's tap target was far
+  smaller than the minimum and gave no press feedback, so taps missed silently.
+
+- Media: backup (two-card) shots appear under both slots and delete every copy; context-aware
+  delete copy and companion handling (RAW+JPEG pairs; a video plus its R3D/NEV master); EXIF
+  auto-rotation; and a batch-delete progress bar that refreshes the grid once at the end.
+- Instant playback freezes the reviewed shot's focus box at capture time, so it no longer drifts if
+  the AF point moves while the preview loads.
+
 ### Changed
 
 - Google Play **internal** uploads automate like TestFlight: merge Android-relevant paths to `main`
@@ -51,16 +81,6 @@ All notable changes to this project are documented here. The format is based on
   successful apply (see `docs/android-control-writes.md`).
 - TestFlight notes are now reviewed, tester-written copy with concrete test steps. CI rejects stale
   notes, commit titles, and common implementation jargon before an iOS build can ship.
-
-### Fixed
-
-- Focus peaking de-logs with the active mode's tone curve, so it looks identical in photo and video
-  (was hardcoded to the movie log curve).
-- Media: backup (two-card) shots appear under both slots and delete every copy; context-aware
-  delete copy and companion handling (RAW+JPEG pairs; a video plus its R3D/NEV master); EXIF
-  auto-rotation; and a batch-delete progress bar that refreshes the grid once at the end.
-- Instant playback freezes the reviewed shot's focus box at capture time, so it no longer drifts if
-  the AF point moves while the preview loads.
 
 ### Security
 

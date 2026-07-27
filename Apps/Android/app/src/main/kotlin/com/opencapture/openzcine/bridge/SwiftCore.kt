@@ -668,7 +668,7 @@ object SwiftCore {
      * Fires one still release on the active session (photo mode). Returns a
      * `RECORDING_COMMAND_*` result; completion lands via [sessionPollStillRelease].
      */
-    external fun sessionInitiateStillCapture(): Int
+    external fun sessionInitiateStillCapture(preserveFocus: Boolean): Int
 
     /**
      * One readiness poll while a still release is in flight: 0 complete,

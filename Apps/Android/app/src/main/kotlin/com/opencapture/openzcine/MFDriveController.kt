@@ -54,6 +54,21 @@ internal class MFDriveController(
     /** Fired once per exhausted retry run (the body kept refusing), with the code. */
     var onRefusalExhausted: ((String) -> Unit)? = null
 
+    /**
+     * True once the operator drove focus with the dial and hasn't tapped to AF since — the still
+     * release then fires WITHOUT AF so the manually-set focus is preserved (iOS
+     * `focusManuallyDialed`). Cleared by [clearManualFocus] on a tap-to-AF; deliberately NOT
+     * cleared by a focus-mode change or a focus-point recenter, matching iOS.
+     */
+    @Volatile
+    var focusManuallyDialed: Boolean = false
+        private set
+
+    /** The operator chose to AF at a point — subsequent releases resume normal AF focus. */
+    fun clearManualFocus() {
+        focusManuallyDialed = false
+    }
+
     private var pendingPulses = 0
     private var driveJob: Job? = null
     private var retries = 0
@@ -84,6 +99,8 @@ internal class MFDriveController(
     fun drive(scope: CoroutineScope, pulses: Int) {
         if (pulses == 0) return
         pendingPulses += pulses
+        // Focus is now operator-set; the next release preserves it (no AF) until a tap-to-AF.
+        focusManuallyDialed = true
         // Advance the dial position on the DRAG, not the ack — the drum tracks the finger
         // smoothly instead of stepping at the command round-trip rate. Clamp to pinned ends.
         _netPulses.value =

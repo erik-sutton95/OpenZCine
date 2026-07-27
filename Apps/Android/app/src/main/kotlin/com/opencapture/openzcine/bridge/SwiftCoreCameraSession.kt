@@ -116,7 +116,8 @@ internal interface SwiftCoreSessionBridge {
 
     fun applyControl(control: CameraControl, label: String): Int
 
-    fun initiateStillCapture(): Int = SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
+    fun initiateStillCapture(preserveFocus: Boolean): Int =
+        SwiftCore.RECORDING_COMMAND_TRANSPORT_FAILED
 
     fun pollStillRelease(): Int = -2
 
@@ -220,7 +221,8 @@ internal interface SwiftCoreSessionBridge {
         override fun applyControl(control: CameraControl, label: String): Int =
             SwiftCore.sessionApplyControl(control.nativeSelector, label)
 
-        override fun initiateStillCapture(): Int = SwiftCore.sessionInitiateStillCapture()
+        override fun initiateStillCapture(preserveFocus: Boolean): Int =
+            SwiftCore.sessionInitiateStillCapture(preserveFocus)
 
         override fun pollStillRelease(): Int = SwiftCore.sessionPollStillRelease()
 
@@ -709,8 +711,8 @@ class SwiftCoreCameraSession internal constructor(
      * other camera command. The release itself is activation-style — poll
      * [pollStillRelease] for completion.
      */
-    override suspend fun initiateStillCapture() {
-        runStillCommand { core.initiateStillCapture() }
+    override suspend fun initiateStillCapture(preserveFocus: Boolean) {
+        runStillCommand { core.initiateStillCapture(preserveFocus) }
     }
 
     override suspend fun pollStillRelease(): StillReleasePoll {

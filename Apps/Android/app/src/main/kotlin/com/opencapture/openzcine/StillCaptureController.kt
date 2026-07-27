@@ -56,9 +56,11 @@ internal class StillCaptureController(
     /**
      * Finger-down on the shutter control. [continuousDrive] latches the release
      * until [released]; a press while a bulb/time exposure holds the shutter
-     * open ends it instead.
+     * open ends it instead. [preserveFocus] releases without the AF-driving step so a focus
+     * set with the dial survives the shutter; it is read once here so a chained burst keeps
+     * the value the press started with.
      */
-    fun pressed(scope: CoroutineScope, continuousDrive: Boolean) {
+    fun pressed(scope: CoroutineScope, continuousDrive: Boolean, preserveFocus: Boolean = false) {
         // Gate on the CAPTURING state, not the job handle: the previous run's
         // job stays briefly active while its post-run refresh detaches, and a
         // job-handle guard silently swallowed the timer chain's next shot
@@ -72,7 +74,7 @@ internal class StillCaptureController(
         }
         held.set(true)
         latchedContinuous.set(continuousDrive)
-        runJob = scope.launch { runRelease(continuousDrive, scope) }
+        runJob = scope.launch { runRelease(continuousDrive, preserveFocus, scope) }
     }
 
     /**
@@ -87,7 +89,11 @@ internal class StillCaptureController(
         }
     }
 
-    private suspend fun runRelease(continuous: Boolean, scope: CoroutineScope) {
+    private suspend fun runRelease(
+        continuous: Boolean,
+        preserveFocus: Boolean,
+        scope: CoroutineScope,
+    ) {
         _isCapturing.value = true
         openShutter.set(false)
         var chained = 0
@@ -99,7 +105,7 @@ internal class StillCaptureController(
                 runCatching { session.setStillBurstBracket(true) }
                     .onSuccess { bracketOpen = true }
             }
-            session.initiateStillCapture()
+            session.initiateStillCapture(preserveFocus)
             val startedAt = System.nanoTime()
             while (true) {
                 delay(pollDelayMillis)
@@ -111,7 +117,7 @@ internal class StillCaptureController(
                             // command release delivers a bounded run of frames,
                             // so the hold itself drives the burst.
                             chained += 1
-                            session.initiateStillCapture()
+                            session.initiateStillCapture(preserveFocus)
                         } else {
                             break
                         }

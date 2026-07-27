@@ -86,18 +86,16 @@ internal class FeedEffectsGlProgram(
             floatArrayOf(limitsWeightCube.cubeSize.toFloat()),
         )
         program.setFloatsUniform("uLimitsOn", flag(plan.limitsReady))
-        program.setFloatsUniform(
-            "uDeLogCurve0To3",
-            configuration.deLogCurve.copyOfRange(0, 4),
-        )
-        program.setFloatsUniform("uDeLogCurve4", floatArrayOf(configuration.deLogCurve[4]))
         program.setFloatsUniform("uPeakingOn", flag(plan.effects.peaking))
         program.setFloatsUniform("uPeakingColor", configuration.peakingColor)
         program.setFloatsUniform(
-            "uPeakingThreshold",
-            floatArrayOf(configuration.peakingThreshold),
+            "uPeakingRatioThreshold",
+            floatArrayOf(configuration.peakingRatioThreshold),
         )
-        program.setFloatsUniform("uPeakingRamp", floatArrayOf(configuration.peakingRamp))
+        program.setFloatsUniform(
+            "uPeakingNoiseGate",
+            floatArrayOf(configuration.peakingNoiseGate),
+        )
         program.setFloatsUniform(
             "uZebraHighlightOn",
             flag(plan.effects.zebra && configuration.highlightEnabled),

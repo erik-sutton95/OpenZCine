@@ -107,6 +107,15 @@ public enum StillCapturePolicy: Sendable {
         }
     }
 
+    /// First parameter of the media capture op (`CaptureSort`). `0xFFFFFFFE` runs AF driving and
+    /// THEN releases — a half-press-then-fire, like the body's own shutter button. `0xFFFFFFFF` is
+    /// a plain release with NO AF-driving step, used to hold the focus the operator set with the
+    /// focus dial; an AF release would re-focus at the box and undo the manual pull.
+    /// [verify-on-HW: 0xFFFFFFFF skips AF while the body is in an AF focus mode]
+    public static func captureSortParameter(preserveFocus: Bool) -> UInt32 {
+        preserveFocus ? 0xFFFF_FFFF : 0xFFFF_FFFE
+    }
+
     /// Properties polled while the body is in photo mode (in addition to shared health).
     /// ExposureTime (0x500D) and ExposureIndex (0x500F) are deliberately absent: the
     /// fraction-packed ShutterSpeed and the 32-bit controlled-ISO readout supersede both.

@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene site-check testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation swift-lint swift-test
+check: hygiene site-check testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -187,6 +187,21 @@ android-build:
 # Run Android JVM unit tests.
 android-test:
     cd Apps/Android && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}" ./gradlew test
+
+# Recompile the committed Vulkan SPIR-V from its GLSL source. Nothing in the Gradle
+# build does this, so editing feed.frag without running this ships the old shader.
+android-shaders:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src=Apps/Android/app/src/main/cpp/live_feed_vk/shaders
+    out=Apps/Android/app/src/main/assets/shaders/vulkan
+    glslc -fshader-stage=vert "$src/feed.vert" -o "$out/feed.vert.spv"
+    glslc -fshader-stage=frag "$src/feed.frag" -o "$out/feed.frag.spv"
+    echo "recompiled Vulkan SPIR-V"
+
+# Verify the committed Vulkan SPIR-V still matches its GLSL source.
+check-vulkan-shaders:
+    ./scripts/check-vulkan-shaders.sh
 
 # Compile the Android instrumentation-test APK without requiring a device.
 # `android-check` includes this gate so UI-test source never silently rots in CI.

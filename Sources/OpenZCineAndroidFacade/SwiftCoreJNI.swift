@@ -1454,18 +1454,19 @@
         }
     }
 
-    /// `SwiftCore.sessionInitiateStillCapture(): Int` — fires one still
-    /// release (AF-then-release to the card). 0 = the release started; poll
-    /// `sessionPollStillRelease` between frames for completion.
+    /// `SwiftCore.sessionInitiateStillCapture(preserveFocus: Boolean): Int` — fires one still
+    /// release to the card. 0 = the release started; poll `sessionPollStillRelease` between
+    /// frames for completion. `preserveFocus` skips the AF-driving step so a focus set with
+    /// the dial survives the shutter.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_sessionInitiateStillCapture")
     public func swiftCoreSessionInitiateStillCapture(
-        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
+        env _: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, preserveFocus: jboolean
     ) -> jint {
         guard let session = ActiveSessionSlot.shared.current() else {
             return RecordingCommandResult.noSession.rawValue
         }
         do {
-            try session.initiateStillCapture()
+            try session.initiateStillCapture(preserveFocus: preserveFocus != 0)
             return RecordingCommandResult.accepted.rawValue
         } catch let error as PTPIPClientSessionError {
             switch error {

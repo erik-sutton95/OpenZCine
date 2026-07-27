@@ -3918,6 +3918,15 @@ struct OperatorSettingsPanel: View {
                     model.setQualityBias(value == "Quality" ? .detail : .latency)
                 }
             }
+            #if DEBUG
+                SettingsInlineRow(
+                    title: "Capture Frames",
+                    help:
+                        "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end."
+                ) {
+                    LiveViewCaptureControl()
+                }
+            #endif
             SettingsInlineRow(
                 title: "Connection Action",
                 help:
@@ -5620,3 +5629,35 @@ struct MFDriveVerticalScrub: View {
         }
     }
 }
+
+#if DEBUG
+    /// Debug trigger for the focus-peaking frame corpus.
+    ///
+    /// Polls `DemoHarness` rather than being pushed to, so the capture path stays lock-only and
+    /// never hops to the main actor once a second while the stream is running. Polling only ticks
+    /// while this row is on screen.
+    private struct LiveViewCaptureControl: View {
+        @State private var status: String?
+
+        var body: some View {
+            HStack(spacing: 10) {
+                if let status {
+                    Text(status)
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(LiveDesign.muted)
+                        .lineLimit(1)
+                }
+                SettingsActionPill(title: status == nil ? "Start" : "Restart") {
+                    DemoHarness.startLiveViewCapture()
+                    status = DemoHarness.liveViewCaptureStatus()
+                }
+            }
+            .task {
+                while !Task.isCancelled {
+                    status = DemoHarness.liveViewCaptureStatus()
+                    try? await Task.sleep(for: .milliseconds(400))
+                }
+            }
+        }
+    }
+#endif

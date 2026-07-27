@@ -2410,8 +2410,6 @@ final class NativeAppModel {
     @ObservationIgnored private var lastScopeSampleTime: CFAbsoluteTime = 0
     /// True while `sampleLiveScopeAssist` is in flight — skip starting another decode-heavy sample.
     @ObservationIgnored private var scopeSampleInFlight = false
-    @ObservationIgnored private var lastFrameDisplayTime: CFAbsoluteTime = 0
-    @ObservationIgnored private var lastFocusDisplayTime: CFAbsoluteTime = 0
     @ObservationIgnored private var lastLevelUpdateTime: CFAbsoluteTime = 0
     /// Thermal-shedding-only display gate; NOT a general cap (see `publishLiveFrameDisplay`). A
     /// wall-clock "every N seconds" gate against a ~fixed-period source (the ZR delivers ~30 fps)
@@ -2419,9 +2417,7 @@ final class NativeAppModel {
     /// deliver 15 fps, silently halving the feed. Fine as a bounded degraded mode under real
     /// thermal pressure (`ThermalTier`); wrong as an always-on cap. Decode, watchdog, and scope
     /// sampling still run every camera frame.
-    private static let liveFrameDisplayMinInterval: CFAbsoluteTime = 1.0 / 24.0
     /// AF / subject-detection box overlay update cap (~15 Hz).
-    private static let liveFocusDisplayMinInterval: CFAbsoluteTime = 1.0 / 15.0
     /// Virtual-horizon low-pass update cap when the level assist is on (~10 Hz).
     private static let levelAngleMinInterval: CFAbsoluteTime = 1.0 / 10.0
 
@@ -3589,11 +3585,7 @@ final class NativeAppModel {
     /// progress. A smaller preview is less sensor-readout/encode work for the body to do while
     /// things are hot. Never enlarges beyond the operator's chosen preset.
     private var effectiveStreamImageSize: UInt8 {
-        LiveViewLoadPolicy.effectiveImageSize(
-            requested: preferences.streamPreset.liveViewImageSize,
-            isRecording: isRecording,
-            thermalTier: thermalTier,
-            cameraOverheating: cameraPropertySnapshot.warningStatus.isOverheating)
+        preferences.streamPreset.liveViewImageSize
     }
 
     /// Restarts live view when `effectiveStreamImageSize` has moved since the last configure — e.g.
@@ -3948,8 +3940,6 @@ final class NativeAppModel {
                     lastGoodFrameAt = Date()
                     consecutiveBadLiveFrames = 0
                     frameRate = FrameRateSampler()
-                    lastFrameDisplayTime = 0
-                    lastFocusDisplayTime = 0
                     lastLevelUpdateTime = 0
                     lastScopeSampleTime = 0
                     nextFrameTask = liveFrameTask(session)
@@ -4248,23 +4238,22 @@ final class NativeAppModel {
     /// Publishes decoded frames to SwiftUI every camera frame by default — the feed must track the
     /// camera's delivery rate exactly (matching the FPS counter) to read as smooth. Only gates the
     /// publish rate under genuine thermal pressure (`.serious`/`.critical`) as a bounded degraded
-    /// mode. `lastFrameDisplayTime` resets to 0 on pause/restart, so the first frame after any
+    /// mode. The publish path has no cadence gate, so the first frame after any
     /// pause always publishes.
+    /// Publishes every frame the camera delivers. No cadence cap, by design.
+    ///
+    /// There used to be a 1/24 s floor here, multiplied further when the phone warmed up. Both are
+    /// gone. The cap could only ever make the feed less smooth than the stream the operator paid
+    /// for, and worse, a wall-clock `elapsed >= interval` gate against a fixed-period source
+    /// cannot land on an arbitrary target rate — it can only pass every Nth frame. Against a
+    /// 28 fps stream the "gentle" 1.5x thermal multiplier therefore halved the feed rather than
+    /// slowing it by half as much, and the documented 12 fps floor was really about 9.
+    ///
+    /// The identity and equality checks below are the only filtering that remains, and they
+    /// suppress redundant observable writes rather than frames.
     private func publishLiveFrameDisplay(image: UIImage, focus: PTPLiveViewFocusInfo?) {
-        let now = CFAbsoluteTimeGetCurrent()
-        if !thermalTier.isSheddingLoad
-            || now - lastFrameDisplayTime
-                >= thermalTier.sheddingInterval(base: Self.liveFrameDisplayMinInterval)
-        {
-            lastFrameDisplayTime = now
-            if liveFrameImage !== image {
-                liveFrameImage = image
-            }
-        }
-        if now - lastFocusDisplayTime >= Self.liveFocusDisplayMinInterval {
-            lastFocusDisplayTime = now
-            if liveViewFocus != focus { liveViewFocus = focus }
-        }
+        if liveFrameImage !== image { liveFrameImage = image }
+        if liveViewFocus != focus { liveViewFocus = focus }
     }
 
     private func focusResetStepAfterCancel(_ context: FocusResetContext) -> FocusResetStep {

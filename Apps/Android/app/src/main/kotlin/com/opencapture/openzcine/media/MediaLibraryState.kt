@@ -11,6 +11,7 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /** The two safe library sources exposed by the Android browser. */
 internal enum class MediaLibrarySource(val title: String) {
@@ -768,9 +769,25 @@ private fun normalizedRegistryValue(value: String): String? =
             candidate.none { character -> character == '\u0000' || character.code < 0x20 }
     }
 
-private fun digest(value: String): String {
+// Library/pair keys are hashed on every recomposition of the browse grid — once for each visible
+// cell and, while anything is selected, once for every clip in the library. `getInstance` is a JCA
+// provider lookup, so doing it per call dominated the cost and made multiselect crawl. The digest
+// is a pure function of its input, so memoize it and keep one digester per thread.
+// ponytail: capacity-capped rather than LRU — distinct keys are bounded by the card's object count,
+// and a full clear on overflow just re-hashes lazily.
+private const val DIGEST_CACHE_LIMIT = 50_000
+private val digestCache = ConcurrentHashMap<String, String>()
+private val digester = ThreadLocal.withInitial { MessageDigest.getInstance("SHA-256") }
+
+private fun digest(value: String): String =
+    digestCache[value] ?: computeDigest(value).also {
+        if (digestCache.size >= DIGEST_CACHE_LIMIT) digestCache.clear()
+        digestCache[value] = it
+    }
+
+private fun computeDigest(value: String): String {
     val hex = "0123456789abcdef"
-    val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+    val bytes = digester.get().digest(value.toByteArray(Charsets.UTF_8))
     return buildString(bytes.size * 2) {
         bytes.forEach { byte ->
             val unsigned = byte.toInt() and 0xFF

@@ -550,12 +550,8 @@ final class NativeCameraSession: @unchecked Sendable {
     /// by polling ``pollStillReleaseReadiness()`` between live-view frames.
     func initiateStillCapture(preserveFocus: Bool = false) async throws {
         let op = operationPolicy.stillCaptureOperation
-        // Media capture, p1 = CaptureSort: 0xFFFFFFFE runs AF driving THEN releases (a
-        // half-press-then-fire, like the body's shutter button); 0xFFFFFFFF is a plain release
-        // with NO AF-driving step, used to hold the focus the operator set with the focus dial
-        // (an AF release would re-focus at the box and undo the manual pull). p2 targets the
-        // card. [verify-on-HW: 0xFFFFFFFF skips AF while the body is in an AF focus mode]
-        let captureSort: UInt32 = preserveFocus ? 0xFFFF_FFFF : 0xFFFF_FFFE
+        // p1 = CaptureSort (see StillCapturePolicy), p2 targets the card.
+        let captureSort = StillCapturePolicy.captureSortParameter(preserveFocus: preserveFocus)
         let parameters: [UInt32] =
             op == .initiateCaptureRecInMedia ? [captureSort, 0x0000] : []
         let result = try await transact(
@@ -627,6 +623,7 @@ final class NativeCameraSession: @unchecked Sendable {
                 result.operationResponse.responseCode
             )
         }
+        DemoHarness.captureLiveViewObject(result.data)
         return try PTPLiveViewObject.frame(from: result.data)
     }
 
