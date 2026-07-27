@@ -11,6 +11,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -122,6 +123,7 @@ import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
+import com.opencapture.openzcine.settings.CaptureLayoutMode
 import com.opencapture.openzcine.settings.ChromeSection
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.labelResource
@@ -152,31 +154,6 @@ private data class LiveAssistOptionsRequest(
 internal fun LiveAssistOptionsBackHandler(visible: Boolean, onDismiss: () -> Unit) {
     BackHandler(enabled = visible, onBack = onDismiss)
 }
-
-/** Which landscape rail controls remain mounted for one chrome/recording state. */
-internal data class LandscapeSideRailPlan(
-    val fullRailsVisible: Boolean,
-    val settingsRecoveryVisible: Boolean,
-    val recordingSafetyVisible: Boolean,
-)
-
-/**
- * Hiding side rails never removes the Settings recovery path. An active or
- * pending recording also retains its record control until the camera settles.
- */
-internal fun landscapeSideRailPlan(
-    sideRailsVisible: Boolean,
-    recording: Boolean,
-    recordCommandPending: Boolean,
-    recordConfirmationPending: Boolean,
-): LandscapeSideRailPlan =
-    LandscapeSideRailPlan(
-        fullRailsVisible = sideRailsVisible,
-        settingsRecoveryVisible = !sideRailsVisible,
-        recordingSafetyVisible =
-            !sideRailsVisible &&
-                (recording || recordCommandPending || recordConfirmationPending),
-    )
 
 /**
  * A live capture picker stays mounted while its real camera command is in
@@ -1385,19 +1362,23 @@ internal fun MonitorScreen(
         val showsChrome = monitorShowsChrome(effectiveDisplayMode)
         // Chrome is per DISP mode (iOS `OperatorPreferences.chrome(for:)`) — read this mode's set,
         // never the global one, or DISP 2's bare image leaks back into DISP 1.
-        val chrome = operatorSettings.chrome(effectiveDisplayMode)
+        // …and per capture side: a cinema rig and a stills body keep separate layouts (iOS
+        // `NativeAppModel.captureLayoutMode`).
+        val captureLayoutMode =
+            if (isPhotographyMode) CaptureLayoutMode.PHOTO else CaptureLayoutMode.VIDEO
+        val chrome = operatorSettings.chrome(effectiveDisplayMode, captureLayoutMode)
         // The Edit view force-mounts every element the mode owns — hidden ones at 30% with a
         // badge — so nothing can be switched off beyond reach (iOS `chromeSectionMounts`).
         val chromeEditorMode = operatorSettings.chromeEditorMode
+        val editingThisMode =
+            chromeEditorMode != null && chromeEditorMode == effectiveDisplayMode
         val mounts: (ChromeSection) -> Boolean = { section ->
-            (chromeEditorMode == effectiveDisplayMode &&
-                chromeEditorMode != null &&
-                section.isConfigurableIn(chromeEditorMode)) || chrome[section].value
+            (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) ||
+                chrome[section].value
         }
         val statusBarVisible = mounts(ChromeSection.STATUS_BAR)
         val assistToolbarVisible = mounts(ChromeSection.ASSIST_TOOLBAR)
         val cameraValuesVisible = mounts(ChromeSection.CAMERA_VALUES)
-        val sideRailsVisible = mounts(ChromeSection.SIDE_RAILS)
         val chromeEditBoxes = remember { mutableStateMapOf<ChromeSection, Rect>() }
         val recordChromeEditBounds: (ChromeSection, Rect) -> Unit = { section, rect ->
             chromeEditBoxes[section] = rect
@@ -1724,19 +1705,33 @@ internal fun MonitorScreen(
                     liveAudioLevels = frame.audioLevels
                 }
         }
+        // Every rail control is the operator's to hide, per DISP mode and capture side. The core
+        // rule (mirrored in `OperatorSettings.sideRailPlan`) applies the two guarantees that keep a
+        // configuration from locking the operator inside it: record while a take is rolling, and
+        // Settings when no enabled DISP mode carries one.
         val railPlan =
-            landscapeSideRailPlan(
-                sideRailsVisible = sideRailsVisible && showsChrome,
-                recording = recording,
-                recordCommandPending = recordCommandPending,
-                recordConfirmationPending = pendingRecordTarget != null,
-            ).let { plan ->
-                // Clean view (DISP 2) strips the rails as non-critical chrome (#256), and the
-                // Settings recovery affordance is chrome too — the operator chose a bare image and
-                // swipes up on the feed to come back. The rolling-take stop control is the one
-                // documented exception the plan already models, so it stays.
-                if (showsChrome) plan else plan.copy(settingsRecoveryVisible = false)
+            operatorSettings.sideRailPlan(
+                mode = effectiveDisplayMode,
+                capture = captureLayoutMode,
+                interfaceLocked = locked,
+                recordingOrPending =
+                    recording || recordCommandPending || pendingRecordTarget != null,
+            )
+        val railMounts: (ChromeSection) -> Boolean = { section ->
+            if (editingThisMode && section.isConfigurableIn(effectiveDisplayMode)) {
+                true
+            } else {
+                when (section) {
+                    ChromeSection.LOCK_BUTTON -> railPlan.lock
+                    ChromeSection.BATTERY_INDICATORS -> railPlan.batteries
+                    ChromeSection.RAIL_DISP -> railPlan.disp
+                    ChromeSection.RAIL_RECORD -> railPlan.record
+                    ChromeSection.RAIL_MEDIA -> railPlan.media
+                    ChromeSection.RAIL_SETTINGS -> railPlan.settings
+                    else -> mounts(section)
+                }
             }
+        }
         val physicalViewport = ZoneFrame(0f, 0f, viewportWidth, viewportHeight)
         // Photography's landscape feed: the still image-area's shape centred in
         // the clear box between the chrome lanes — the rail and capture band
@@ -1786,9 +1781,7 @@ internal fun MonitorScreen(
                     isCommand = isCommand,
                     assistToolbarVisible = assistToolbarVisible,
                     cameraValuesVisible = cameraValuesVisible,
-                    landscapeFullSideRails = railPlan.fullRailsVisible,
-                    landscapeSettingsRecovery = railPlan.settingsRecoveryVisible,
-                    landscapeRecordingSafety = railPlan.recordingSafetyVisible,
+                    landscapeRail = railPlan,
                 )
             }
         val analysisPanelLayout =
@@ -2131,6 +2124,20 @@ internal fun MonitorScreen(
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
+                    focusBoxVisible = mounts(ChromeSection.FOCUS_BOX),
+                    focusBoxAlpha =
+                        if (editingThisMode && !chrome[ChromeSection.FOCUS_BOX].value) 0.3f else 1f,
+                    focusBoxEditModifier =
+                        if (chromeEditorMode == null) {
+                            null
+                        } else {
+                            Modifier.chromeEditable(
+                                ChromeSection.FOCUS_BOX,
+                                chromeEditorMode,
+                                operatorSettings,
+                                recordChromeEditBounds,
+                            )
+                        },
                     evIndicatorSixths = cameraProperties.evIndicatorSixths,
                     evIndicatorLit = cameraProperties.evIndicatorLit,
                 )
@@ -2293,7 +2300,6 @@ internal fun MonitorScreen(
                                             operatorSettings,
                                             recordChromeEditBounds,
                                         ),
-                                    compact = isClean && chromeEditorMode == null,
                                     recording = recording,
                                     timecodeRetention = timecodeRetention,
                                     sessionState = sessionState,
@@ -2311,10 +2317,14 @@ internal fun MonitorScreen(
                                     onPillBounds = { kind, frame ->
                                         measuredTopPills[kind] = frame
                                     },
-                                    recReadoutVisible = chrome.recReadout.value,
-                                    codecReadoutVisible = chrome.codecReadout.value,
-                                    mediaReadoutVisible = chrome.mediaReadout.value,
-                                    fpsReadoutVisible = chrome.fpsReadout.value,
+                                    recReadoutVisible = mounts(ChromeSection.REC_READOUT),
+                                    timecodeReadoutVisible =
+                                        mounts(ChromeSection.TIMECODE_READOUT),
+                                    resolutionReadoutVisible =
+                                        mounts(ChromeSection.RESOLUTION_READOUT),
+                                    codecReadoutVisible = mounts(ChromeSection.CODEC_READOUT),
+                                    mediaReadoutVisible = mounts(ChromeSection.MEDIA_READOUT),
+                                    fpsReadoutVisible = mounts(ChromeSection.FPS_READOUT),
                                     signalBars = actualLinkHealth.presentation.signalBars,
                                     resolution = readoutRetention.resolution,
                                     codec = readoutRetention.codec,
@@ -2574,78 +2584,59 @@ internal fun MonitorScreen(
                     )
                 }
 
-                if (railPlan.fullRailsVisible) {
-                    // The rail's controls place themselves by absolute slot frame, so there is no
-                    // single view to outline — and the zone map's system cluster unions in the
-                    // top-left lock button, which spans the whole screen. Badge the column the
-                    // operator actually sees (iOS `MonitorShell.railColumnFrame`).
-                    if (chromeEditorMode != null) {
-                        Box(
-                            Modifier.zone(railColumnFrame(zones))
-                                .chromeEditable(
-                                    ChromeSection.SIDE_RAILS,
-                                    chromeEditorMode,
-                                    operatorSettings,
-                                    recordChromeEditBounds,
-                                ),
-                        )
-                    }
-                    // Persistent side rails: lock + authoritative batteries +
-                    // record / configured DISP / media / settings. The whole
-                    // leading cluster nudges left off the feed edge; the lock and
-                    // the battery shift by the SAME amount so their deliberate gap
-                    // is preserved.
-                    if (monitorShowsLockControl(
-                            effectiveDisplayMode,
-                            mounts(ChromeSection.LOCK_BUTTON),
-                            locked,
-                        )
-                    ) {
-                        LockButton(
-                            locked,
+                // Side rails: lock + authoritative batteries + record / DISP / media / settings,
+                // each on its own switch (iOS `MonitorSystemCluster` off `sideRailPlan`). The
+                // whole leading cluster nudges left off the feed edge; the lock and the battery
+                // shift by the SAME amount so their deliberate gap is preserved.
+                if (railMounts(ChromeSection.LOCK_BUTTON)) {
+                    LockButton(
+                        locked,
+                        Modifier.zone(
+                            zones.lock.copy(x = zones.lock.x - LEADING_RAIL_LEFT_NUDGE_DP),
+                        ).chromeEditable(
+                            ChromeSection.LOCK_BUTTON,
+                            chromeEditorMode,
+                            operatorSettings,
+                            recordChromeEditBounds,
+                        ),
+                    ) { locked = !locked }
+                }
+                // Like iOS seating the combined indicator directly under the
+                // lock button, the two battery rows stack at the top of the
+                // leading lane, just below the lock's clearance.
+                zones.batteryPhone?.takeIf {
+                    railMounts(ChromeSection.BATTERY_INDICATORS)
+                }?.let { anchor ->
+                    BatteryRowStack(
+                        phonePercent = phoneBatteryReadout.percent,
+                        cameraPercent = cameraReadouts.batteryPercent,
+                        modifier =
                             Modifier.zone(
-                                zones.lock.copy(x = zones.lock.x - LEADING_RAIL_LEFT_NUDGE_DP),
+                                batteryRowStackFrame(
+                                    anchor =
+                                        anchor.copy(
+                                            x = anchor.x - LEADING_RAIL_LEFT_NUDGE_DP,
+                                        ),
+                                    lock = zones.lock,
+                                ),
                             ).chromeEditable(
-                                ChromeSection.LOCK_BUTTON,
+                                ChromeSection.BATTERY_INDICATORS,
                                 chromeEditorMode,
                                 operatorSettings,
                                 recordChromeEditBounds,
                             ),
-                        ) { locked = !locked }
-                    }
-                    // Like iOS seating the combined indicator directly under the
-                    // lock button, the two battery rows stack at the top of the
-                    // leading lane, just below the lock's clearance.
-                    zones.batteryPhone?.takeIf {
-                        monitorShowsBatteryIndicators(
-                            effectiveDisplayMode,
-                            mounts(ChromeSection.BATTERY_INDICATORS),
-                        )
-                    }?.let { anchor ->
-                        BatteryRowStack(
-                            phonePercent = phoneBatteryReadout.percent,
-                            cameraPercent = cameraReadouts.batteryPercent,
-                            modifier =
-                                Modifier.zone(
-                                    batteryRowStackFrame(
-                                        anchor =
-                                            anchor.copy(
-                                                x = anchor.x - LEADING_RAIL_LEFT_NUDGE_DP,
-                                            ),
-                                        lock = zones.lock,
-                                    ),
-                                ).chromeEditable(
-                                    ChromeSection.BATTERY_INDICATORS,
-                                    chromeEditorMode,
-                                    operatorSettings,
-                                    recordChromeEditBounds,
-                                ),
-                            phoneExternalPower = phoneBatteryReadout.externalPower,
-                            cameraExternalPower = cameraReadouts.externalPower,
-                        )
-                    }
+                        phoneExternalPower = phoneBatteryReadout.externalPower,
+                        cameraExternalPower = cameraReadouts.externalPower,
+                    )
+                }
+                if (railMounts(ChromeSection.RAIL_SETTINGS)) {
                     AuxCircleButton(
-                        Modifier.zone(zones.settings),
+                        Modifier.zone(zones.settings).chromeEditable(
+                            ChromeSection.RAIL_SETTINGS,
+                            chromeEditorMode,
+                            operatorSettings,
+                            recordChromeEditBounds,
+                        ),
                         onClick = {
                             if (pendingCommandControl == null) activeMonitorPickerKind = null
                             onOpenSettings()
@@ -2653,8 +2644,15 @@ internal fun MonitorScreen(
                     ) { glyphModifier, tint ->
                         GearGlyph(tint, glyphModifier)
                     }
+                }
+                if (railMounts(ChromeSection.RAIL_MEDIA)) {
                     AuxCircleButton(
-                        Modifier.zone(zones.media),
+                        Modifier.zone(zones.media).chromeEditable(
+                            ChromeSection.RAIL_MEDIA,
+                            chromeEditorMode,
+                            operatorSettings,
+                            recordChromeEditBounds,
+                        ),
                         onClick = {
                             if (pendingCommandControl == null) activeMonitorPickerKind = null
                             onOpenMedia()
@@ -2662,16 +2660,25 @@ internal fun MonitorScreen(
                     ) { glyphModifier, tint ->
                         // Photo glyph reads better as "media" on the stills side;
                         // cinema keeps the film-roll glyph (iOS `mediaButton`).
-                        if (prefersPhotographyChrome(cameraProperties)) {
+                        if (isPhotographyMode) {
                             PhotoGlyph(tint, glyphModifier)
                         } else {
                             MediaStackGlyph(tint, glyphModifier)
                         }
                     }
-                    if (prefersPhotographyChrome(cameraProperties)) {
+                }
+                if (railMounts(ChromeSection.RAIL_RECORD)) {
+                    val recordModifier =
+                        Modifier.zone(zones.record).chromeEditable(
+                            ChromeSection.RAIL_RECORD,
+                            chromeEditorMode,
+                            operatorSettings,
+                            recordChromeEditBounds,
+                        )
+                    if (isPhotographyMode) {
                         PhotographyShutterButton(
                             isCapturing = stillCapturing,
-                            modifier = Modifier.zone(zones.record),
+                            modifier = recordModifier,
                             timerRemaining = photoTimerRemaining,
                             bodyShutterPulse = bodyShutterPulse,
                             onPressed = photoShutterPressed,
@@ -2680,63 +2687,27 @@ internal fun MonitorScreen(
                     } else {
                         RecordButton(
                             recording = recording,
-                            modifier = Modifier.zone(zones.record),
+                            modifier = recordModifier,
                             enabled = recordControlEnabled,
                             onClick = requestRecordToggle,
                         )
                     }
+                }
+                if (railMounts(ChromeSection.RAIL_DISP)) {
                     DispButton(
                         activeIndex = displayModeOrder.indexOf(effectiveDisplayMode),
                         modeCount = displayModeOrder.size,
                         isLiveActive = effectiveDisplayMode == MonitorDisplayMode.LIVE,
-                        modifier = Modifier.zone(zones.disp),
+                        modifier =
+                            Modifier.zone(zones.disp).chromeEditable(
+                                ChromeSection.RAIL_DISP,
+                                chromeEditorMode,
+                                operatorSettings,
+                                recordChromeEditBounds,
+                            ),
                     ) {
                         activeAssistOptions = null
                         displayMode = nextDisplayModeInOrder(displayModeOrder, effectiveDisplayMode)
-                    }
-                } else {
-                    // Clean view keeps the DISP key: it is the control for this feature and the
-                    // rest of the cycle is only reachable through it, so hiding it would strand
-                    // the operator in a bare image (#256).
-                    if (!showsChrome) {
-                        DispButton(
-                            activeIndex = displayModeOrder.indexOf(effectiveDisplayMode),
-                            modeCount = displayModeOrder.size,
-                            isLiveActive = effectiveDisplayMode == MonitorDisplayMode.LIVE,
-                            modifier = Modifier.zone(zones.disp),
-                        ) {
-                            activeAssistOptions = null
-                            displayMode =
-                                nextDisplayModeInOrder(displayModeOrder, effectiveDisplayMode)
-                        }
-                    }
-                    if (railPlan.recordingSafetyVisible) {
-                        if (prefersPhotographyChrome(cameraProperties)) {
-                            PhotographyShutterButton(
-                                isCapturing = stillCapturing,
-                                modifier = Modifier.zone(zones.record),
-                                timerRemaining = photoTimerRemaining,
-                                onPressed = photoShutterPressed,
-                                onReleased = photoShutterReleased,
-                            )
-                        } else {
-                            RecordButton(
-                                recording = recording,
-                                modifier = Modifier.zone(zones.record),
-                                enabled = recordControlEnabled,
-                                onClick = requestRecordToggle,
-                            )
-                        }
-                    }
-                    if (railPlan.settingsRecoveryVisible) {
-                        LandscapeSettingsRecoveryButton(
-                            modifier = Modifier.zone(zones.settings),
-                            onOpenSettings = {
-                                activeAssistOptions = null
-                                if (pendingCommandControl == null) activeMonitorPickerKind = null
-                                onOpenSettings()
-                            },
-                        )
                     }
                 }
             }
@@ -3053,8 +3024,21 @@ internal fun MonitorScreen(
                 mode = chromeEditorMode,
                 boxes = chromeEditBoxes,
                 settings = operatorSettings,
-                isPortrait = isPortrait,
-                onDone = { operatorSettings.endChromeEditing() },
+                feed = effectiveFeed,
+                // Just clear of the bottom bars, whose top corners carry badges that straddle the
+                // edge — a bottom-centred banner sat on the tool bar's eye and swallowed the tap.
+                bannerBottomDp =
+                    if (isPortrait) {
+                        effectiveFeed.y + effectiveFeed.height - 12f
+                    } else {
+                        (zones.assistStrip?.y ?: (effectiveFeed.y + effectiveFeed.height)) - 18f
+                    },
+                onDone = {
+                    operatorSettings.endChromeEditing()
+                    // Done returns to where the operator came from — Display settings — not to the
+                    // live monitor with no way back but the rail they may have just hidden.
+                    onOpenSettings()
+                },
             )
         }
     }
@@ -3171,11 +3155,12 @@ private fun RecOptionItem(text: String, onClick: () -> Unit) {
 @Composable
 private fun InfoPill(
     modifier: Modifier = Modifier,
-    compact: Boolean,
     recording: Boolean,
     timecodeRetention: MonitorTimecodeRetention,
     sessionState: CameraSessionState,
     recReadoutVisible: Boolean,
+    timecodeReadoutVisible: Boolean,
+    resolutionReadoutVisible: Boolean,
     codecReadoutVisible: Boolean,
     mediaReadoutVisible: Boolean,
     fpsReadoutVisible: Boolean,
@@ -3208,14 +3193,20 @@ private fun InfoPill(
         // Photography swaps the movie readouts for stills ones in the same
         // pill (iOS InfoPillContent): shots remaining takes the timecode slot,
         // image size and quality take resolution and codec as popup buttons.
+        // Every cell is the operator's to hide, in every DISP mode. Clean used to strip the deck
+        // to timecode + FPS with a hard-coded `compact` flag, so hiding CODEC or MEDIA there did
+        // nothing — the cells were dropped either way. The configuration IS the compact deck now
+        // (iOS `InfoPillContent`).
         if (isPhotography) {
-            ShotsRemainingReadout(
-                shotsRemaining,
-                storage = photoStorage,
-                showsStorage = photoPillShowsStorage,
-                onToggle = onTogglePhotoPill,
-            )
-            if (!compact) {
+            if (timecodeReadoutVisible) {
+                ShotsRemainingReadout(
+                    shotsRemaining,
+                    storage = photoStorage,
+                    showsStorage = photoPillShowsStorage,
+                    onToggle = onTogglePhotoPill,
+                )
+            }
+            if (resolutionReadoutVisible) {
                 // The SIZE pill drops the Area | Size drum down exactly like
                 // the cinema resolution/codec pills (iOS imageAreaButton).
                 ReadoutPill(
@@ -3231,37 +3222,39 @@ private fun InfoPill(
                 ) { tint ->
                     PhotoGlyph(tint, Modifier.size(14.dp, 11.dp))
                 }
-                if (codecReadoutVisible) {
-                    ReadoutPill(
-                        stillQuality ?: "—",
-                        active = activePicker == MonitorPickerKind.QUALITY,
-                        onClick = {
-                            if (pickersEnabled) onOpenPicker(MonitorPickerKind.QUALITY)
-                        },
-                        onBoundsInRoot =
-                            onPillBounds?.let { report ->
-                                { frame -> report(MonitorPickerKind.QUALITY, frame) }
-                            },
-                    ) { tint ->
-                        ApertureGlyph(tint, Modifier.size(12.dp))
-                    }
-                }
-                // No MEDIA cell in photo mode — the SHOTS readout tap-toggles
-                // to the storage form instead (iOS).
             }
+            if (codecReadoutVisible) {
+                ReadoutPill(
+                    stillQuality ?: "—",
+                    active = activePicker == MonitorPickerKind.QUALITY,
+                    onClick = {
+                        if (pickersEnabled) onOpenPicker(MonitorPickerKind.QUALITY)
+                    },
+                    onBoundsInRoot =
+                        onPillBounds?.let { report ->
+                            { frame -> report(MonitorPickerKind.QUALITY, frame) }
+                        },
+                ) { tint ->
+                    ApertureGlyph(tint, Modifier.size(12.dp))
+                }
+            }
+            // No MEDIA cell in photo mode — the SHOTS readout tap-toggles
+            // to the storage form instead (iOS).
             if (fpsReadoutVisible) {
                 FpsChip(signalBars, fps)
             }
             return@Row
         }
         if (recReadoutVisible) RecordChip(recording)
-        RetainedCameraTimecodeReadout(
-            retention = timecodeRetention,
-            sessionState = sessionState,
-            sizeSp = 20f,
-            weight = FontWeight.Medium,
-        )
-        if (!compact) {
+        if (timecodeReadoutVisible) {
+            RetainedCameraTimecodeReadout(
+                retention = timecodeRetention,
+                sessionState = sessionState,
+                sizeSp = 20f,
+                weight = FontWeight.Medium,
+            )
+        }
+        if (resolutionReadoutVisible) {
             // Resolution/codec readouts are ALWAYS buttons like iOS's top-bar
             // readout buttons — press feedback included. The tap no-ops only
             // while locked / command-gated (`pickersEnabled`), matching iOS
@@ -3280,28 +3273,28 @@ private fun InfoPill(
             ) { tint ->
                 VideoGlyph(tint)
             }
-            if (codecReadoutVisible) {
-                ReadoutPill(
-                    codec,
-                    active = activePicker == MonitorPickerKind.CODEC,
-                    onClick = {
-                        if (pickersEnabled) onOpenPicker(MonitorPickerKind.CODEC)
+        }
+        if (codecReadoutVisible) {
+            ReadoutPill(
+                codec,
+                active = activePicker == MonitorPickerKind.CODEC,
+                onClick = {
+                    if (pickersEnabled) onOpenPicker(MonitorPickerKind.CODEC)
+                },
+                onBoundsInRoot =
+                    onPillBounds?.let { report ->
+                        { frame -> report(MonitorPickerKind.CODEC, frame) }
                     },
-                    onBoundsInRoot =
-                        onPillBounds?.let { report ->
-                            { frame -> report(MonitorPickerKind.CODEC, frame) }
-                        },
-                ) { tint ->
-                    FilmGlyph(tint)
-                }
+            ) { tint ->
+                FilmGlyph(tint)
             }
-            if (mediaReadoutVisible) {
-                // iOS media cell: tap cycles capacity <-> remaining minutes;
-                // deliberately NOT lock-gated (it is a readout mode, not a
-                // camera command).
-                ReadoutPill(media, onClick = onToggleMediaReadout) { tint ->
-                    SdCardGlyph(tint)
-                }
+        }
+        if (mediaReadoutVisible) {
+            // iOS media cell: tap cycles capacity <-> remaining minutes;
+            // deliberately NOT lock-gated (it is a readout mode, not a
+            // camera command).
+            ReadoutPill(media, onClick = onToggleMediaReadout) { tint ->
+                SdCardGlyph(tint)
             }
         }
         if (fpsReadoutVisible) {
@@ -3371,27 +3364,35 @@ private fun PortraitChrome(
     LaunchedEffect(isFill, isCommand) {
         if (!isFill || isCommand) railExpanded = false
     }
-    // Chrome is per DISP mode, so portrait answers to the same switches landscape does — the top
-    // bar used to ignore the operator's Status Bar choice entirely.
-    val chrome = operatorSettings.chrome(displayMode)
+    // Chrome is per DISP mode and capture side, so portrait answers to the same switches landscape
+    // does — the top bar used to ignore the operator's Status Bar choice entirely, and its cells
+    // honoured none of the per-readout switches at all.
+    val captureLayoutMode =
+        if (isPhotography) CaptureLayoutMode.PHOTO else CaptureLayoutMode.VIDEO
+    val chrome = operatorSettings.chrome(displayMode, captureLayoutMode)
     val chromeEditorMode = operatorSettings.chromeEditorMode
     val mounts: (ChromeSection) -> Boolean = { section ->
         (chromeEditorMode == displayMode &&
             chromeEditorMode != null &&
-            section.isConfigurableIn(chromeEditorMode)) || chrome[section].value
+            section.isConfigurableIn(displayMode)) || chrome[section].value
     }
+    val railPlan =
+        operatorSettings.sideRailPlan(
+            mode = displayMode,
+            capture = captureLayoutMode,
+            interfaceLocked = locked,
+            recordingOrPending = recording,
+        )
     if (mounts(ChromeSection.STATUS_BAR)) {
         PortraitInfoBar(
             timecodeRetention = timecodeRetention,
             sessionState = sessionState,
             media = cameraReadouts.media,
+            showsTimecode = mounts(ChromeSection.TIMECODE_READOUT),
+            showsMedia = mounts(ChromeSection.MEDIA_READOUT),
             // The bar's battery gauge answers to the Monitor Chrome battery switch, like the
             // landscape rail's pair (iOS `InfoBarContent`).
-            showsBattery =
-                monitorShowsBatteryIndicators(
-                    displayMode,
-                    mounts(ChromeSection.BATTERY_INDICATORS),
-                ),
+            showsBattery = mounts(ChromeSection.BATTERY_INDICATORS),
             cameraBatteryPercent = cameraReadouts.batteryPercent,
             cameraExternalPower = cameraReadouts.externalPower,
             modifier =
@@ -3406,10 +3407,9 @@ private fun PortraitChrome(
     }
 
     // REC-options button (iOS PortraitRecOptionsButton): a glass circle at the
-    // feed's top-trailing corner, under the top bar. iOS always mounts it in
-    // non-command portrait (dimmed while locked) and always offers both menu
-    // rows; showPicker itself no-ops while locked.
-    if (!isCommand && showsChrome) {
+    // feed's top-trailing corner, under the top bar. It rides with the record control — hiding
+    // record hides its options too — and steps aside while the Edit view is open.
+    if (!isCommand && mounts(ChromeSection.RAIL_RECORD) && chromeEditorMode == null) {
         var recOptionsExpanded by remember { mutableStateOf(false) }
         val recOptionsFrame =
             ZoneFrame(
@@ -3584,30 +3584,45 @@ private fun PortraitChrome(
     }
 
     // Bottom system band: equal gaps around natural control sizes (iOS
-    // `PortraitSystemBar` uses equal spacers, not equal columns).
-    // Clean view (DISP 2) strips the band to the essentials (#256): the DISP key — the way out,
-    // without which the rest of the cycle is unreachable — and, while a take is rolling, the
-    // record control. Everything else in the band is non-critical chrome.
-    val cleanBand = !showsChrome
-    val bandShowsRecord = showsChrome || recording
-    // Opaque band behind the system controls through the physical bottom
-    // edge, so the record button never floats on bare black (iOS R4).
-    Box(
-        Modifier.zone(
-            ZoneFrame(
-                zones.systemCluster.x,
-                zones.systemCluster.y,
-                zones.systemCluster.width,
-                maxOf(0f, viewportHeight - zones.systemCluster.y),
-            ),
-        ).background(LiveDesign.glass),
-    )
+    // `PortraitSystemBar` uses equal spacers, not equal columns). Every control answers to its own
+    // switch; the opaque glass draws only when the band still carries one, because an empty band
+    // over the letterbox is just a black stripe.
+    val railMounts: (ChromeSection) -> Boolean = { section ->
+        if (chromeEditorMode == displayMode && chromeEditorMode != null &&
+            section.isConfigurableIn(displayMode)
+        ) {
+            true
+        } else {
+            when (section) {
+                ChromeSection.LOCK_BUTTON -> railPlan.lock
+                ChromeSection.RAIL_DISP -> railPlan.disp
+                ChromeSection.RAIL_RECORD -> railPlan.record
+                ChromeSection.RAIL_MEDIA -> railPlan.media
+                ChromeSection.RAIL_SETTINGS -> railPlan.settings
+                else -> mounts(section)
+            }
+        }
+    }
+    if (!railPlan.isEmpty || chromeEditorMode == displayMode) {
+        // Opaque band behind the system controls through the physical bottom
+        // edge, so the record button never floats on bare black (iOS R4).
+        Box(
+            Modifier.zone(
+                ZoneFrame(
+                    zones.systemCluster.x,
+                    zones.systemCluster.y,
+                    zones.systemCluster.width,
+                    maxOf(0f, viewportHeight - zones.systemCluster.y),
+                ),
+            ).background(LiveDesign.glass),
+        )
+    }
     Row(
         Modifier.zone(zones.systemCluster),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.weight(1f))
-        if (monitorShowsLockControl(displayMode, mounts(ChromeSection.LOCK_BUTTON), locked)) {
+        if (railMounts(ChromeSection.LOCK_BUTTON)) {
             LockButton(
                 locked,
                 Modifier.size(40.dp).chromeEditable(
@@ -3620,19 +3635,34 @@ private fun PortraitChrome(
             )
             Spacer(Modifier.weight(1f))
         }
-        DispButton(
-            activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
-            modeCount = enabledDisplayModeOrder.size,
-            isLiveActive = displayMode == MonitorDisplayMode.LIVE,
-            modifier = Modifier.size(width = 74.dp, height = 44.dp),
-            onClick = onDisp,
-        )
-        Spacer(Modifier.weight(1f))
-        if (bandShowsRecord) {
+        if (railMounts(ChromeSection.RAIL_DISP)) {
+            DispButton(
+                activeIndex = enabledDisplayModeOrder.indexOf(displayMode),
+                modeCount = enabledDisplayModeOrder.size,
+                isLiveActive = displayMode == MonitorDisplayMode.LIVE,
+                modifier =
+                    Modifier.size(width = 74.dp, height = 44.dp).chromeEditable(
+                        ChromeSection.RAIL_DISP,
+                        chromeEditorMode,
+                        operatorSettings,
+                        onChromeEditBounds,
+                    ),
+                onClick = onDisp,
+            )
+            Spacer(Modifier.weight(1f))
+        }
+        if (railMounts(ChromeSection.RAIL_RECORD)) {
+            val recordModifier =
+                Modifier.size(83.dp).chromeEditable(
+                    ChromeSection.RAIL_RECORD,
+                    chromeEditorMode,
+                    operatorSettings,
+                    onChromeEditBounds,
+                )
             if (isPhotography) {
                 PhotographyShutterButton(
                     isCapturing = stillCapturing,
-                    modifier = Modifier.size(83.dp),
+                    modifier = recordModifier,
                     timerRemaining = photoTimerRemaining,
                     bodyShutterPulse = bodyShutterPulse,
                     onPressed = onShutterPressed,
@@ -3641,15 +3671,23 @@ private fun PortraitChrome(
             } else {
                 RecordButton(
                     recording = recording,
-                    modifier = Modifier.size(83.dp),
+                    modifier = recordModifier,
                     enabled = recordEnabled,
                     onClick = onRecord,
                 )
             }
             Spacer(Modifier.weight(1f))
         }
-        if (!cleanBand) {
-            AuxCircleButton(Modifier.size(63.dp), onClick = onOpenMedia) { glyphModifier, tint ->
+        if (railMounts(ChromeSection.RAIL_MEDIA)) {
+            AuxCircleButton(
+                Modifier.size(63.dp).chromeEditable(
+                    ChromeSection.RAIL_MEDIA,
+                    chromeEditorMode,
+                    operatorSettings,
+                    onChromeEditBounds,
+                ),
+                onClick = onOpenMedia,
+            ) { glyphModifier, tint ->
                 if (isPhotography) {
                     PhotoGlyph(tint, glyphModifier)
                 } else {
@@ -3657,7 +3695,17 @@ private fun PortraitChrome(
                 }
             }
             Spacer(Modifier.weight(1f))
-            AuxCircleButton(Modifier.size(63.dp), onClick = onOpenSettings) { glyphModifier, tint ->
+        }
+        if (railMounts(ChromeSection.RAIL_SETTINGS)) {
+            AuxCircleButton(
+                Modifier.size(63.dp).chromeEditable(
+                    ChromeSection.RAIL_SETTINGS,
+                    chromeEditorMode,
+                    operatorSettings,
+                    onChromeEditBounds,
+                ),
+                onClick = onOpenSettings,
+            ) { glyphModifier, tint ->
                 GearGlyph(tint, glyphModifier)
             }
             Spacer(Modifier.weight(1f))
@@ -3678,24 +3726,30 @@ private fun PortraitInfoBar(
     cameraBatteryPercent: Int?,
     cameraExternalPower: Boolean?,
     modifier: Modifier = Modifier,
+    showsTimecode: Boolean = true,
+    showsMedia: Boolean = true,
     showsBattery: Boolean = true,
 ) {
     val cameraBattery =
         monitorBatteryPresentation(cameraBatteryPercent, cameraExternalPower)
     Box(modifier.background(LiveDesign.glass).padding(horizontal = 16.dp)) {
-        Text(
-            media,
-            style = chromeStyle(13f, FontWeight.Medium),
-            color = LiveDesign.muted,
-            maxLines = 1,
-            modifier = Modifier.align(Alignment.Center),
-        )
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            RetainedCameraTimecodeReadout(
-                retention = timecodeRetention,
-                sessionState = sessionState,
-                sizeSp = 15f,
+        if (showsMedia) {
+            Text(
+                media,
+                style = chromeStyle(13f, FontWeight.Medium),
+                color = LiveDesign.muted,
+                maxLines = 1,
+                modifier = Modifier.align(Alignment.Center),
             )
+        }
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            if (showsTimecode) {
+                RetainedCameraTimecodeReadout(
+                    retention = timecodeRetention,
+                    sessionState = sessionState,
+                    sizeSp = 15f,
+                )
+            }
             Spacer(Modifier.weight(1f))
             if (showsBattery) {
                 Row(
@@ -3910,7 +3964,10 @@ private fun ChromeEditOverlay(
     mode: MonitorDisplayMode,
     boxes: Map<ChromeSection, Rect>,
     settings: OperatorSettings,
-    isPortrait: Boolean,
+    /** The image area the banner centres on — not the screen; the rails sit outside it. */
+    feed: ZoneFrame,
+    /** Where the banner's bottom edge sits, in the same dp space as [feed]. */
+    bannerBottomDp: Float,
     onDone: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -3943,13 +4000,15 @@ private fun ChromeEditOverlay(
                 modifier = Modifier.offset(placement.left.dp, placement.top.dp),
             )
         }
-        ChromeEditBanner(
-            mode = mode,
-            onDone = onDone,
-            modifier =
-                Modifier.align(Alignment.BottomCenter)
-                    .padding(bottom = if (isPortrait) 82.dp else 88.dp),
-        )
+        // Anchored by its BOTTOM edge and centred on the feed, so the banner's own height never
+        // matters and it never lands on a badge (iOS `MonitorShell`'s banner overlay).
+        Box(
+            Modifier.absoluteOffset(feed.x.dp, feed.y.dp)
+                .size(feed.width.dp, (bannerBottomDp - feed.y).coerceAtLeast(0f).dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            ChromeEditBanner(mode = mode, onDone = onDone)
+        }
     }
 }
 
