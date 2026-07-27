@@ -49,6 +49,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Media filters match the tab you are on.** The filter popup offered the same chips everywhere,
+  so the Photos tab advertised MOV, MP4, and HD/4K/5.4K/6K — none of which a still can ever be, and
+  nothing that describes one. Chips are now derived from the listing in front of the operator:
+  Photos offers **JPEG / HEIF / NEF** and an **L / M / S** size row, Videos keeps its containers and
+  resolution buckets, and DATE gained **7 days** and **30 days** beside Today. A chip only appears
+  when it matches something in the tab *and* excludes something, so no row ever advertises a value
+  that would return an empty grid or filter nothing at all; stills whose dimensions the camera never
+  reported get no size row rather than a dead one. Switching tabs clears any chip the new tab cannot
+  offer, so a MOV filter carried onto Photos no longer empties the grid with nothing to explain it.
+  Both platforms.
+
+- **Nikon HEIF stills (`.HIF`) show up in the media browser.** The shared classifier knew `.heif`
+  and `.heic` but not the extension a Z body actually writes, so every HEIF on the card was treated
+  as an unsupported object and never listed at all. Both platforms.
+
 - **A dropped camera no longer needs an app restart, and a stalled first connect no longer needs
   a cancel.** A failed connection attempt now disposes exactly as thoroughly as tapping Cancel —
   the single-flight latch is released with the attempt it belonged to, so an immediate retry is
