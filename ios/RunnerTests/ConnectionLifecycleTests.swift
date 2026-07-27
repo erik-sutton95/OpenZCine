@@ -1,4 +1,5 @@
 import Foundation
+import ImageCaptureCore
 import Testing
 
 @testable import Runner
@@ -208,5 +209,79 @@ struct SessionRecoveryLifecycleTests {
 
         #expect(model.debugHasSessionRecoveryTask == false)
         #expect(model.sessionRecovery == .idle)
+    }
+
+    /// #254's headline case: a physical detach is NOT an app-level disconnect. The cable pull has
+    /// to hold the monitor and arm the bounded loop; the operator's own Disconnect has to leave.
+    @Test("A transport detach arms recovery where an app-level disconnect does not")
+    func transportDetachArmsRecoveryUnlikeDisconnect() async {
+        let detached = NativeAppModel()
+        detached.cameraHost = "usb:recovery-tests-not-attached"
+        detached.isMonitorPresented = true
+
+        detached.debugSimulateTransportDetach()
+
+        #expect(detached.debugHasSessionRecoveryTask)
+        #expect(detached.isMonitorPresented)
+        #expect(detached.connection == .reconnecting)
+        #expect(detached.liveFPS == SessionRecoveryCopy.heldFrameBadge)
+        for _ in 0..<200 where !detached.sessionRecovery.isRecovering {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(detached.sessionRecovery.isRecovering)
+        detached.exitMonitorToOperatorMenu()
+
+        let disconnected = NativeAppModel()
+        disconnected.cameraHost = "usb:recovery-tests-not-attached"
+        disconnected.isMonitorPresented = true
+
+        disconnected.disconnect()
+
+        #expect(disconnected.debugHasSessionRecoveryTask == false)
+        #expect(disconnected.sessionRecovery == .idle)
+        #expect(disconnected.isMonitorPresented == false)
+    }
+}
+
+/// The USB transport's detach contract (#254). ImageCaptureCore reports a removal per device, and
+/// the transport backing the live session must die with its own cable — and only its own.
+@Suite("USB transport detach")
+struct USBCameraTransportDetachTests {
+    @Test("Detaching the session's own device ends the event stream")
+    func detachEndsEventStream() async {
+        let device = ICCameraDevice()
+        let transport = USBCameraTransport(device: device)
+
+        transport.closeIfDetached(device)
+
+        // What the session's drain loop reads, and the only signal that reaches
+        // `recoverFromEndedEventChannel`. Before the fix the stream stayed open forever.
+        await #expect(throws: NativeCameraSessionError.self) {
+            _ = try await transport.nextEvent()
+        }
+    }
+
+    @Test("Detaching an unrelated camera leaves the live session's stream open")
+    func unrelatedDetachIsIgnored() async {
+        let device = ICCameraDevice()
+        let transport = USBCameraTransport(device: device)
+
+        transport.closeIfDetached(ICCameraDevice())
+
+        let streamEnded = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                _ = try? await transport.nextEvent()
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(100))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        #expect(streamEnded == false, "an unrelated camera's detach killed a live session")
+        transport.close()
     }
 }
