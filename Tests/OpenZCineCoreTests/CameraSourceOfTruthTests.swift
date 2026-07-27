@@ -96,6 +96,77 @@ struct MonitoredPropertyChangeTests {
     }
 }
 
+// MARK: - #268 · the announcement queue drains a whole burst, in order
+
+struct AnnouncedPropertyQueueTests {
+    /// One detent of an aperture ring: the aperture the operator turned, then its dependents.
+    private let ringDetentBurst: [PTPPropertyCode] = [
+        .movieFNumber, .exposureIndicateStatus, .isoControlSensitivity,
+    ]
+
+    @Test func aWholeBurstDrainsOnTheTickThatSeesIt() {
+        // The regression: one property per tick left the rest queued, so a burst took as many
+        // frame-gated ticks as it had entries to land.
+        var queue = CameraAnnouncedPropertyQueue()
+        for property in ringDetentBurst { queue.note(property) }
+
+        #expect(queue.nextBatch() == ringDetentBurst)
+        #expect(queue.isEmpty)
+    }
+
+    @Test func announcementOrderIsPreserved() {
+        // Draining a `Set` with `popFirst()` returned an arbitrary hash-order element, so the one
+        // value the operator was staring at could be passed over tick after tick.
+        var queue = CameraAnnouncedPropertyQueue()
+        let reversed = Array(ringDetentBurst.reversed())
+        for property in reversed { queue.note(property) }
+
+        #expect(queue.nextBatch() == reversed)
+    }
+
+    @Test func aReAnnouncementIsNotReordered() {
+        var queue = CameraAnnouncedPropertyQueue()
+        queue.note(.movieFNumber)
+        queue.note(.exposureIndicateStatus)
+        // The operator keeps turning: the body re-announces the aperture it already queued.
+        queue.note(.movieFNumber)
+
+        #expect(queue.pending == [.movieFNumber, .exposureIndicateStatus])
+    }
+
+    @Test func theBatchIsCappedAndTheRemainderSurvives() {
+        // A chatty body must not monopolise the poll loop — and must not lose announcements
+        // either: what the cap defers is read on the next tick, not dropped.
+        var queue = CameraAnnouncedPropertyQueue()
+        let burst = Array(
+            PTPPropertyCode.liveMonitorPollOrder.prefix(
+                CameraAnnouncedPropertyQueue.batchLimit + 2))
+        for property in burst { queue.note(property) }
+
+        let first = queue.nextBatch()
+        #expect(first.count == CameraAnnouncedPropertyQueue.batchLimit)
+        #expect(first == Array(burst.prefix(CameraAnnouncedPropertyQueue.batchLimit)))
+        #expect(!queue.isEmpty)
+        #expect(queue.nextBatch() == Array(burst.dropFirst(first.count)))
+        #expect(queue.isEmpty)
+    }
+
+    @Test func onlyDecodableAnnouncementsAreQueued() {
+        var queue = CameraAnnouncedPropertyQueue()
+        queue.note(.liveViewImageSize)
+        #expect(queue.isEmpty)
+        #expect(queue.nextBatch().isEmpty)
+    }
+
+    @Test func aConfirmedWriteCancelsItsPendingReRead() {
+        var queue = CameraAnnouncedPropertyQueue()
+        for property in ringDetentBurst { queue.note(property) }
+        queue.cancel(.movieFNumber)
+
+        #expect(queue.nextBatch() == [.exposureIndicateStatus, .isoControlSensitivity])
+    }
+}
+
 // MARK: - #268 · bounded polling fallback
 
 struct MonitorPollFallbackTests {

@@ -228,6 +228,7 @@ final class FakeZRServer: @unchecked Sendable {
     private var focusAreaRaw: UInt16
     private var focusSubjectRaw: UInt8
     private var eventConnection: Int32 = -1
+    private var queuedDeviceEvents: [(code: UInt16, parameters: [UInt32])] = []
 
     init(options: Options = Options()) throws {
         self.options = options
@@ -426,6 +427,17 @@ final class FakeZRServer: @unchecked Sendable {
         return true
     }
 
+    /// Queues one event on the body's Nikon event queue, where `GetEventEx` (0x941C) reads it.
+    ///
+    /// This is the channel a real body uses for `DevicePropChanged` and for a shutter fired ON
+    /// THE BODY — distinct from ``sendEvent(rawEventCode:transactionID:parameters:)``, which
+    /// pushes an asynchronous packet down the PTP-IP event socket.
+    func queueDeviceEvent(rawEventCode: UInt16, parameters: [UInt32] = []) {
+        lock.lock()
+        queuedDeviceEvents.append((code: rawEventCode, parameters: parameters))
+        lock.unlock()
+    }
+
     /// Simulates the camera dropping only its PTP-IP event socket. The serve
     /// thread owns the eventual close; shutdown merely wakes its blocked read
     /// without racing descriptor reuse in this test server.
@@ -601,6 +613,20 @@ final class FakeZRServer: @unchecked Sendable {
             sendResponse(connection, code: response, transactionID: transactionID)
         case .getDeviceInfo:
             sendDataIn(connection, data: deviceInfoDataset(), transactionID: transactionID)
+        case .getEventEx:
+            // Parameter1 = 0 tells the body to clear the queue after the read (the production
+            // poll always does), so the same events are never handed out twice.
+            lock.lock()
+            let events = queuedDeviceEvents
+            if parameters.first == 0 { queuedDeviceEvents.removeAll() }
+            lock.unlock()
+            var payload = ByteCoding.uint32LE(UInt32(events.count))
+            for event in events {
+                payload += ByteCoding.uint16LE(event.code)
+                payload += ByteCoding.uint16LE(UInt16(event.parameters.count))
+                for parameter in event.parameters { payload += ByteCoding.uint32LE(parameter) }
+            }
+            sendDataIn(connection, data: Data(payload), transactionID: transactionID)
         case .startLiveView:
             lock.lock()
             liveViewActive = true
