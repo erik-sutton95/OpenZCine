@@ -263,51 +263,95 @@ import Testing
 
 @Test func hiddenLockKeyStillRendersWhileControlsAreLocked() {
     // The lock key is the only control that clears the lock on either shell, so hiding it must
-    // never strand an operator who locked first and hid it after.
+    // never strand an operator who locked first and hid it after. Clean can now carry (and
+    // therefore engage) the lock, so the guarantee has to hold there too.
     var prefs = OperatorPreferences.defaults
-    prefs.displayChrome.lockButtonVisible = false
+    for mode in DispMode.allCases {
+        prefs.setChrome(
+            {
+                var chrome = prefs.chrome(for: mode, capture: .video)
+                chrome.lockButtonVisible = false
+                return chrome
+            }(), for: mode, capture: .video)
+    }
 
-    #expect(
-        !MonitorChromePolicy.showsLockControl(
-            mode: .live, preferences: prefs, interfaceLocked: false))
+    for mode in DispMode.allCases {
+        #expect(
+            !MonitorChromePolicy.showsLockControl(
+                mode: mode, preferences: prefs, capture: .video, interfaceLocked: false),
+            "\(mode) must honour the hide while unlocked")
+        #expect(
+            MonitorChromePolicy.showsLockControl(
+                mode: mode, preferences: prefs, capture: .video, interfaceLocked: true),
+            "\(mode) must reveal the lock key while locked")
+        #expect(
+            MonitorChromePolicy.sideRailPlan(
+                mode: mode, preferences: prefs, capture: .video, interfaceLocked: true,
+                recordingOrPending: false
+            ).lock)
+    }
+    // Clean ships with the key off, so the stock configuration exercises the same guarantee.
     #expect(
         MonitorChromePolicy.showsLockControl(
-            mode: .live, preferences: prefs, interfaceLocked: true))
-    #expect(
-        MonitorChromePolicy.showsLockControl(
-            mode: .command, preferences: prefs, interfaceLocked: true))
-    // Clean strips the whole rail either way — it is not a fourth clean-view exception.
-    #expect(
-        !MonitorChromePolicy.showsLockControl(
-            mode: .clean, preferences: OperatorPreferences.defaults, interfaceLocked: true))
+            mode: .clean, preferences: OperatorPreferences.defaults, capture: .video,
+            interfaceLocked: true))
 }
 
-@Test func hidingTheSideRailKeepsSettingsAndTheRollingRecordControl() {
+@Test func everyRailControlIsHideableButRecordAndSettingsCannotStrandTheOperator() {
     var prefs = OperatorPreferences.defaults
     let full = MonitorChromePolicy.sideRailPlan(
-        mode: .live, preferences: prefs, recordingOrPending: false)
-    #expect(full.fullRail)
-    #expect(!full.settingsRecovery)
-    #expect(!full.recordSafety)
+        mode: .live, preferences: prefs, capture: .video, interfaceLocked: false,
+        recordingOrPending: false)
+    #expect(full.disp && full.record && full.media && full.settings)
 
-    prefs.displayChrome.sideRailsVisible = false
-    // Settings is the only route back to the toggle that hid the rail.
-    let standby = MonitorChromePolicy.sideRailPlan(
-        mode: .live, preferences: prefs, recordingOrPending: false)
-    #expect(!standby.fullRail)
-    #expect(standby.settingsRecovery)
-    #expect(!standby.recordSafety)
+    // Every rail control off, in every enabled mode.
+    for mode in DispMode.allCases {
+        for section in DisplayChromeVisibility.Section.railControls {
+            prefs.toggleChrome(section, for: mode, capture: .video)
+        }
+    }
+    let stripped = MonitorChromePolicy.sideRailPlan(
+        mode: .live, preferences: prefs, capture: .video, interfaceLocked: false,
+        recordingOrPending: false)
+    #expect(!stripped.disp, "the feed swipe is the DISP key's way out, so it needs no guarantee")
+    #expect(!stripped.media)
+    #expect(!stripped.record, "standby record is the operator's to hide")
+    #expect(stripped.settings, "Settings is the only route back to these switches")
 
-    let rolling = MonitorChromePolicy.sideRailPlan(
-        mode: .live, preferences: prefs, recordingOrPending: true)
-    #expect(rolling.recordSafety)
+    // Rolling: the record control comes back regardless of configuration.
+    #expect(
+        MonitorChromePolicy.sideRailPlan(
+            mode: .live, preferences: prefs, capture: .video, interfaceLocked: false,
+            recordingOrPending: true
+        ).record)
+}
 
-    // Clean keeps its own rail configuration: hiding DISP 1's rail must not touch DISP 2, whose
-    // rail carries the way out of the bare image.
-    let clean = MonitorChromePolicy.sideRailPlan(
-        mode: .clean, preferences: prefs, recordingOrPending: false)
-    #expect(clean.fullRail)
-    #expect(!clean.settingsRecovery)
+@Test func hidingSettingsInOneModeIsHonouredWhileAnotherModeStillCarriesIt() {
+    var prefs = OperatorPreferences.defaults
+    prefs.toggleChrome(.railSettings, for: .clean, capture: .video)
+
+    #expect(
+        !MonitorChromePolicy.sideRailPlan(
+            mode: .clean, preferences: prefs, capture: .video, interfaceLocked: false,
+            recordingOrPending: false
+        ).settings,
+        "DISP 1 still has Settings, so clean's hide is real")
+    #expect(
+        MonitorChromePolicy.sideRailPlan(
+            mode: .live, preferences: prefs, capture: .video, interfaceLocked: false,
+            recordingOrPending: false
+        ).settings)
+
+    // Only the enabled modes count — a Settings key on a mode the DISP key never reaches is not a
+    // route back.
+    prefs.toggleChrome(.railSettings, for: .live, capture: .video)
+    prefs.enabledDispModes = [.live, .clean]
+    #expect(
+        MonitorChromePolicy.sideRailPlan(
+            mode: .live, preferences: prefs, capture: .video, interfaceLocked: false,
+            recordingOrPending: false
+        ).settings,
+        "no enabled mode carries Settings, so it must come back")
 }
 
 // MARK: - Per-DISP-mode chrome
@@ -315,118 +359,202 @@ import Testing
 @Test func chromeIsConfiguredPerDispModeAndDefaultsToABareClean() {
     let prefs = OperatorPreferences.defaults
 
-    #expect(prefs.chrome(for: .live) == DisplayChromeVisibility())
-    #expect(prefs.chrome(for: .clean) == DisplayChromeVisibility.cleanDefaults)
-    #expect(prefs.chrome(for: .command) == DisplayChromeVisibility())
+    #expect(prefs.chrome(for: .live, capture: .video) == DisplayChromeVisibility())
+    #expect(prefs.chrome(for: .clean, capture: .video) == DisplayChromeVisibility.cleanDefaults)
+    #expect(prefs.chrome(for: .command, capture: .video) == DisplayChromeVisibility())
 
-    // Clean's stock look: bare image, but the rail still carries the DISP key out of it.
-    #expect(!prefs.chrome(for: .clean).statusBarVisible)
-    #expect(!prefs.chrome(for: .clean).assistToolbarVisible)
-    #expect(!prefs.chrome(for: .clean).cameraValuesVisible)
-    #expect(!prefs.chrome(for: .clean).batteryIndicatorsVisible)
-    #expect(prefs.chrome(for: .clean).sideRailsVisible)
+    // Clean's stock look: a bare image plus the rail, the focus box and the batteries.
+    let clean = prefs.chrome(for: .clean, capture: .video)
+    #expect(!clean.statusBarVisible)
+    #expect(!clean.assistToolbarVisible)
+    #expect(!clean.cameraValuesVisible)
+    #expect(!clean.lockButtonVisible)
+    #expect(clean.batteryIndicatorsVisible)
+    #expect(clean.focusBoxVisible)
+    #expect(clean.railDispVisible && clean.railRecordVisible)
+    #expect(clean.railMediaVisible && clean.railSettingsVisible)
 }
 
 @Test func togglingOneModesChromeLeavesTheOthersAlone() {
     var prefs = OperatorPreferences.defaults
-    prefs.toggleChrome(.statusBar, for: .clean)
+    prefs.toggleChrome(.statusBar, for: .clean, capture: .video)
 
-    #expect(prefs.chrome(for: .clean).statusBarVisible)
-    #expect(prefs.chrome(for: .live).statusBarVisible)
-    prefs.toggleChrome(.statusBar, for: .live)
-    #expect(!prefs.chrome(for: .live).statusBarVisible)
-    #expect(prefs.chrome(for: .clean).statusBarVisible)
+    #expect(prefs.chrome(for: .clean, capture: .video).statusBarVisible)
+    #expect(prefs.chrome(for: .live, capture: .video).statusBarVisible)
+    prefs.toggleChrome(.statusBar, for: .live, capture: .video)
+    #expect(!prefs.chrome(for: .live, capture: .video).statusBarVisible)
+    #expect(prefs.chrome(for: .clean, capture: .video).statusBarVisible)
 
-    prefs.resetChrome(for: .clean)
-    #expect(!prefs.chrome(for: .clean).statusBarVisible)
-    #expect(!prefs.chrome(for: .live).statusBarVisible, "resetting one mode must not touch another")
+    prefs.resetChrome(for: .clean, capture: .video)
+    #expect(!prefs.chrome(for: .clean, capture: .video).statusBarVisible)
+    #expect(
+        !prefs.chrome(for: .live, capture: .video).statusBarVisible,
+        "resetting one mode must not touch another")
+}
+
+@Test func videoAndPhotoLayoutsAreIndependent() {
+    var prefs = OperatorPreferences.defaults
+    prefs.toggleChrome(.assistToolbar, for: .live, capture: .photo)
+
+    #expect(!prefs.chrome(for: .live, capture: .photo).assistToolbarVisible)
+    #expect(
+        prefs.chrome(for: .live, capture: .video).assistToolbarVisible,
+        "a stills operator's layout must not reshape the cinema one")
+
+    prefs.resetChrome(for: .live, capture: .photo)
+    #expect(prefs.chrome(for: .live, capture: .photo).assistToolbarVisible)
+}
+
+@Test func cleanOffersExactlyTheSameElementsAsLive() {
+    // Clean is DISP 1 with different defaults, not a smaller feature.
+    #expect(
+        DisplayChromeVisibility.configurableSections(in: .clean)
+            == DisplayChromeVisibility.configurableSections(in: .live))
+    #expect(DisplayChromeVisibility.isConfigurable(.lockButton, in: .clean))
+    for section in DisplayChromeVisibility.Section.railControls {
+        #expect(DisplayChromeVisibility.isConfigurable(section, in: .clean))
+    }
 }
 
 @Test func sectionsAModeDoesNotOwnAreNotToggleable() {
-    // Command has no feed, so no status bar to reveal; clean's rail renders its two essentials
-    // whatever the operator does, and `.cleanEssentials` carries no lock key.
+    // Command has no feed, so no status bar, readouts, strips or AF box to reveal — the rail
+    // cluster only. `sideRails` is the retired whole-rail blob and belongs to nobody.
     #expect(!DisplayChromeVisibility.isConfigurable(.statusBar, in: .command))
+    #expect(!DisplayChromeVisibility.isConfigurable(.focusBox, in: .command))
+    #expect(!DisplayChromeVisibility.isConfigurable(.sideRails, in: .live))
     #expect(!DisplayChromeVisibility.isConfigurable(.sideRails, in: .clean))
-    #expect(!DisplayChromeVisibility.isConfigurable(.lockButton, in: .clean))
+    #expect(!DisplayChromeVisibility.isConfigurable(.sideRails, in: .command))
     #expect(DisplayChromeVisibility.isConfigurable(.lockButton, in: .command))
-    #expect(DisplayChromeVisibility.configurableSections(in: .live).count == 10)
+    #expect(DisplayChromeVisibility.configurableSections(in: .live).count == 16)
     #expect(
         DisplayChromeVisibility.configurableSections(in: .command) == [
-            .sideRails, .lockButton, .batteryIndicators,
+            .lockButton, .batteryIndicators, .railRecord, .railMedia, .railSettings, .railDisp,
         ])
 
     var prefs = OperatorPreferences.defaults
-    prefs.toggleChrome(.statusBar, for: .command)
-    #expect(prefs.chrome(for: .command).statusBarVisible, "a non-owned section must not flip")
+    prefs.toggleChrome(.statusBar, for: .command, capture: .video)
+    #expect(
+        prefs.chrome(for: .command, capture: .video).statusBarVisible,
+        "a non-owned section must not flip")
 }
 
 @Test func olderPayloadsMigrateTheGlobalChromeOntoDisp1AndDisp3() throws {
     // The single stored set was the global one. It becomes DISP 1's, DISP 3 inherits it so a
     // hidden rail stays hidden on the dashboard, and DISP 2 lands on the documented bare image.
     var prefs = OperatorPreferences.defaults
-    prefs.displayChrome.sideRailsVisible = false
     prefs.displayChrome.batteryIndicatorsVisible = false
     var dict = try #require(
         try JSONSerialization.jsonObject(with: try JSONEncoder().encode(prefs)) as? [String: Any])
-    dict.removeValue(forKey: "cleanChrome")
+    dict.removeValue(forKey: "cleanChromeV2")
     dict.removeValue(forKey: "commandChrome")
+    dict.removeValue(forKey: "photoDisplayChrome")
+    dict.removeValue(forKey: "photoCleanChrome")
+    dict.removeValue(forKey: "photoCommandChrome")
 
     let decoded = try JSONDecoder().decode(
         OperatorPreferences.self, from: try JSONSerialization.data(withJSONObject: dict))
 
-    #expect(decoded.chrome(for: .live) == prefs.displayChrome)
-    #expect(decoded.chrome(for: .command) == prefs.displayChrome)
-    #expect(decoded.chrome(for: .clean) == DisplayChromeVisibility.cleanDefaults)
+    #expect(decoded.chrome(for: .live, capture: .video) == prefs.displayChrome)
+    #expect(decoded.chrome(for: .command, capture: .video) == prefs.displayChrome)
+    #expect(decoded.chrome(for: .clean, capture: .video) == DisplayChromeVisibility.cleanDefaults)
+    // Every DISP mode's configuration carries into BOTH capture sides, so nothing moves the first
+    // time the body switches to stills.
+    for mode in DispMode.allCases {
+        #expect(
+            decoded.chrome(for: mode, capture: .photo) == decoded.chrome(for: mode, capture: .video)
+        )
+    }
     // The rest of the blob survives — a missing new key never resets the preferences.
     #expect(decoded.dispOrder == OperatorPreferences.defaults.dispOrder)
     #expect(decoded.streamPreset == OperatorPreferences.defaults.streamPreset)
 }
 
+@Test func aStoredSideRailBlobExpandsToAllFourRailControls() throws {
+    // The rail used to be one switch. An operator who hid it must not find it back on their
+    // monitor after the split — the single stored value is their choice for all four.
+    let legacy =
+        #"{"statusBarVisible":true,"sideRailsVisible":false,"assistToolbarVisible":true,"#
+        + #""cameraValuesVisible":true}"#
+    let hidden = try JSONDecoder().decode(DisplayChromeVisibility.self, from: Data(legacy.utf8))
+    #expect(!hidden.railRecordVisible)
+    #expect(!hidden.railMediaVisible)
+    #expect(!hidden.railSettingsVisible)
+    #expect(!hidden.railDispVisible)
+    // Elements that were never part of the rail blob keep their own default.
+    #expect(hidden.focusBoxVisible)
+    #expect(hidden.timecodeReadoutVisible)
+    #expect(hidden.resolutionReadoutVisible)
+
+    let kept =
+        #"{"statusBarVisible":true,"sideRailsVisible":true,"assistToolbarVisible":true,"#
+        + #""cameraValuesVisible":true}"#
+    let shown = try JSONDecoder().decode(DisplayChromeVisibility.self, from: Data(kept.utf8))
+    #expect(shown.railRecordVisible && shown.railMediaVisible)
+    #expect(shown.railSettingsVisible && shown.railDispVisible)
+}
+
 @Test func perModeChromeRoundTrips() throws {
     var prefs = OperatorPreferences.defaults
-    prefs.toggleChrome(.statusBar, for: .clean)
-    prefs.toggleChrome(.fpsReadout, for: .clean)
-    prefs.toggleChrome(.sideRails, for: .command)
+    prefs.toggleChrome(.statusBar, for: .clean, capture: .video)
+    prefs.toggleChrome(.fpsReadout, for: .clean, capture: .video)
+    prefs.toggleChrome(.railMedia, for: .command, capture: .video)
+    prefs.toggleChrome(.focusBox, for: .live, capture: .photo)
 
     let decoded = try JSONDecoder().decode(
         OperatorPreferences.self, from: try JSONEncoder().encode(prefs))
 
-    #expect(decoded.chrome(for: .clean).statusBarVisible)
-    #expect(!decoded.chrome(for: .clean).fpsReadoutVisible)
-    #expect(!decoded.chrome(for: .command).sideRailsVisible)
-    #expect(decoded.chrome(for: .live) == DisplayChromeVisibility())
+    #expect(decoded.chrome(for: .clean, capture: .video).statusBarVisible)
+    #expect(!decoded.chrome(for: .clean, capture: .video).fpsReadoutVisible)
+    #expect(!decoded.chrome(for: .command, capture: .video).railMediaVisible)
+    #expect(!decoded.chrome(for: .live, capture: .photo).focusBoxVisible)
+    #expect(decoded.chrome(for: .live, capture: .video) == DisplayChromeVisibility())
 }
 
 @Test func aBareCleanRendersNothingItWasNotToldTo() {
     let prefs = OperatorPreferences.defaults
-    for section in DisplayChromeVisibility.Section.allCases
-    where section != .sideRails
-        && !DisplayChromeVisibility.Section.statusBarReadouts
-            .contains(section)
-    {
+    // Clean's stock keeps the rail, the focus box and the batteries — everything an operator needs
+    // to work in it and get back out. The status-bar cells stay switched on so putting the bar
+    // back yields a complete one; they simply have no bar to render into.
+    let cleanKeeps: Set<DisplayChromeVisibility.Section> =
+        Set(DisplayChromeVisibility.Section.railControls)
+        .union(DisplayChromeVisibility.Section.statusBarReadouts)
+        .union([.batteryIndicators, .focusBox])
+    for section in DisplayChromeVisibility.configurableSections(in: .clean)
+    where !cleanKeeps.contains(section) {
         #expect(
-            !MonitorChromePolicy.showsSection(section, mode: .clean, preferences: prefs),
+            !MonitorChromePolicy.showsSection(
+                section, mode: .clean, capture: .video, preferences: prefs),
             "\(section) must be off in stock clean view")
+    }
+    for section in DisplayChromeVisibility.configurableSections(in: .live) {
         #expect(
-            MonitorChromePolicy.showsSection(section, mode: .live, preferences: prefs),
+            MonitorChromePolicy.showsSection(
+                section, mode: .live, capture: .video, preferences: prefs),
             "\(section) must be on in stock live view")
     }
 }
 
 @Test func batteryIndicatorsHideOnRequestPerDispMode() {
     var prefs = OperatorPreferences.defaults
-    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .live, preferences: prefs))
-    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .command, preferences: prefs))
-    // Clean ships bare, so its own configuration already has them off.
-    #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .clean, preferences: prefs))
+    for mode in DispMode.allCases {
+        #expect(
+            MonitorChromePolicy.showsBatteryIndicators(
+                mode: mode, capture: .video, preferences: prefs),
+            "\(mode) ships with the batteries on")
+    }
 
     for mode in DispMode.allCases {
-        prefs.toggleChrome(.batteryIndicators, for: mode)
+        prefs.toggleChrome(.batteryIndicators, for: mode, capture: .video)
     }
-    #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .live, preferences: prefs))
-    #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .command, preferences: prefs))
-    // Clean's toggle flipped the other way — the point of per-mode chrome.
-    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .clean, preferences: prefs))
+    for mode in DispMode.allCases {
+        #expect(
+            !MonitorChromePolicy.showsBatteryIndicators(
+                mode: mode, capture: .video, preferences: prefs))
+    }
+    // Photo keeps its own answer — the toggles above were the video side only.
+    #expect(
+        MonitorChromePolicy.showsBatteryIndicators(
+            mode: .live, capture: .photo, preferences: prefs))
 }
 
 @Test func assistConfigurationPersistsThroughJSONRoundTrip() throws {
