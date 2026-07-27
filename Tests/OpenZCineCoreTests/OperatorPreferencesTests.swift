@@ -212,6 +212,60 @@ import Testing
     #expect(decoded.codecReadoutVisible)
     #expect(decoded.mediaReadoutVisible)
     #expect(decoded.fpsReadoutVisible)
+    // The lock key and battery cluster were added later still, on the same terms.
+    #expect(decoded.lockButtonVisible)
+    #expect(decoded.batteryIndicatorsVisible)
+}
+
+@Test func lockAndBatteryChromeDefaultVisibleAndRoundTrip() throws {
+    #expect(DisplayChromeVisibility().lockButtonVisible)
+    #expect(DisplayChromeVisibility().batteryIndicatorsVisible)
+    #expect(OperatorPreferences.defaults.displayChrome.lockButtonVisible)
+    #expect(OperatorPreferences.defaults.displayChrome.batteryIndicatorsVisible)
+
+    var chrome = DisplayChromeVisibility()
+    chrome.toggle(.lockButton)
+    chrome.toggle(.batteryIndicators)
+    #expect(!chrome.lockButtonVisible)
+    #expect(!chrome.batteryIndicatorsVisible)
+    let decoded = try JSONDecoder().decode(
+        DisplayChromeVisibility.self, from: try JSONEncoder().encode(chrome))
+    #expect(decoded == chrome)
+}
+
+@Test func hiddenLockKeyStillRendersWhileControlsAreLocked() {
+    // The lock key is the only control that clears the lock on either shell, so hiding it must
+    // never strand an operator who locked first and hid it after.
+    var prefs = OperatorPreferences.defaults
+    prefs.displayChrome.lockButtonVisible = false
+
+    #expect(
+        !MonitorChromePolicy.showsLockControl(
+            mode: .live, preferences: prefs, interfaceLocked: false))
+    #expect(
+        MonitorChromePolicy.showsLockControl(
+            mode: .live, preferences: prefs, interfaceLocked: true))
+    #expect(
+        MonitorChromePolicy.showsLockControl(
+            mode: .command, preferences: prefs, interfaceLocked: true))
+    // Clean strips the whole rail either way — it is not a fourth clean-view exception.
+    #expect(
+        !MonitorChromePolicy.showsLockControl(
+            mode: .clean, preferences: OperatorPreferences.defaults, interfaceLocked: true))
+}
+
+@Test func batteryIndicatorsHideOnRequestAndAlwaysInClean() {
+    var prefs = OperatorPreferences.defaults
+    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .live, preferences: prefs))
+    #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .command, preferences: prefs))
+    #expect(!MonitorChromePolicy.showsBatteryIndicators(mode: .clean, preferences: prefs))
+
+    prefs.displayChrome.batteryIndicatorsVisible = false
+    for mode in DispMode.allCases {
+        #expect(
+            !MonitorChromePolicy.showsBatteryIndicators(mode: mode, preferences: prefs),
+            "batteries must stay hidden in \(mode)")
+    }
 }
 
 @Test func assistConfigurationPersistsThroughJSONRoundTrip() throws {

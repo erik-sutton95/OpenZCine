@@ -99,6 +99,8 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         case sideRails
         case assistToolbar
         case cameraValues
+        case lockButton
+        case batteryIndicators
     }
 
     public init(
@@ -109,7 +111,9 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         recReadoutVisible: Bool = true,
         codecReadoutVisible: Bool = true,
         mediaReadoutVisible: Bool = true,
-        fpsReadoutVisible: Bool = true
+        fpsReadoutVisible: Bool = true,
+        lockButtonVisible: Bool = true,
+        batteryIndicatorsVisible: Bool = true
     ) {
         self.statusBarVisible = statusBarVisible
         self.sideRailsVisible = sideRailsVisible
@@ -119,6 +123,8 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         self.codecReadoutVisible = codecReadoutVisible
         self.mediaReadoutVisible = mediaReadoutVisible
         self.fpsReadoutVisible = fpsReadoutVisible
+        self.lockButtonVisible = lockButtonVisible
+        self.batteryIndicatorsVisible = batteryIndicatorsVisible
     }
 
     public var statusBarVisible: Bool
@@ -132,10 +138,16 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
     public var codecReadoutVisible: Bool
     public var mediaReadoutVisible: Bool
     public var fpsReadoutVisible: Bool
+    /// The rail's lock key. Hiding it is honoured only while controls are unlocked — see
+    /// ``MonitorChromePolicy/showsLockControl(mode:preferences:interfaceLocked:)``.
+    public var lockButtonVisible: Bool
+    /// The camera/phone battery cluster on the lock-side rail.
+    public var batteryIndicatorsVisible: Bool
 
     private enum CodingKeys: String, CodingKey {
         case statusBarVisible, sideRailsVisible, assistToolbarVisible, cameraValuesVisible,
-            recReadoutVisible, codecReadoutVisible, mediaReadoutVisible, fpsReadoutVisible
+            recReadoutVisible, codecReadoutVisible, mediaReadoutVisible, fpsReadoutVisible,
+            lockButtonVisible, batteryIndicatorsVisible
     }
 
     public init(from decoder: any Decoder) throws {
@@ -150,6 +162,11 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         codecReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .codecReadoutVisible) ?? true
         mediaReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible) ?? true
         fpsReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .fpsReadoutVisible) ?? true
+        // Same story for the lock key and the battery cluster: added after these blobs were
+        // written, so an absent key means "the operator never chose" — keep them visible.
+        lockButtonVisible = try c.decodeIfPresent(Bool.self, forKey: .lockButtonVisible) ?? true
+        batteryIndicatorsVisible =
+            try c.decodeIfPresent(Bool.self, forKey: .batteryIndicatorsVisible) ?? true
     }
 
     public mutating func toggle(_ section: Section) {
@@ -162,6 +179,10 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
             assistToolbarVisible.toggle()
         case .cameraValues:
             cameraValuesVisible.toggle()
+        case .lockButton:
+            lockButtonVisible.toggle()
+        case .batteryIndicators:
+            batteryIndicatorsVisible.toggle()
         }
     }
 }

@@ -60,6 +60,31 @@ public enum MonitorChromePolicy {
     /// status readouts — renders. Clean strips all of it; command replaces it with the dashboard.
     public static func showsChrome(in mode: DispMode) -> Bool { mode != .clean }
 
+    /// Whether the rail's lock key renders.
+    ///
+    /// The operator may hide it (Settings ▸ Display ▸ Monitor Chrome), but a **locked** monitor
+    /// shows it regardless: on both shells the lock key is the only control that clears the lock,
+    /// so honouring the hide while locked would strand the operator behind dead camera controls.
+    /// This is not a fourth clean-view exception — clean hides the key either way, and clean
+    /// never locks anything.
+    public static func showsLockControl(
+        mode: DispMode,
+        preferences: OperatorPreferences,
+        interfaceLocked: Bool
+    ) -> Bool {
+        guard showsChrome(in: mode) else { return false }
+        return preferences.displayChrome.lockButtonVisible || interfaceLocked
+    }
+
+    /// Whether the battery cluster renders. Pure chrome — clean strips it, and the operator may
+    /// hide it in any other mode.
+    public static func showsBatteryIndicators(
+        mode: DispMode,
+        preferences: OperatorPreferences
+    ) -> Bool {
+        showsChrome(in: mode) && preferences.displayChrome.batteryIndicatorsVisible
+    }
+
     /// Whether a transient pop-up (camera-value picker, assist options drawer) may present.
     /// Clean defers them — the operator asked for a bare image. Full-screen destinations the
     /// operator navigates to deliberately (Settings, Media) are not pop-ups and are unaffected.
