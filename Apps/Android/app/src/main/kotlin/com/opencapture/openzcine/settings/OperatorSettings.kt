@@ -507,6 +507,13 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val mediaReadoutVisible: Toggle = Toggle("display.mediaReadout", default = true)
     public val fpsReadoutVisible: Toggle = Toggle("display.fpsReadout", default = true)
 
+    // Display chrome, second pass (iOS `lockButtonVisible` / `batteryIndicatorsVisible`).
+    // Both default visible so no existing monitor changes on update. Hiding the lock key is
+    // honoured only while controls are UNLOCKED — see `showsLockControl` below.
+    public val lockButtonVisible: Toggle = Toggle("display.lockButton", default = true)
+    public val batteryIndicatorsVisible: Toggle =
+        Toggle("display.batteryIndicators", default = true)
+
     // Controls — all four are app-local behavior and therefore safe to expose
     // before Android has camera-property writes.
     public val recordConfirmationEnabled: Toggle =
@@ -999,6 +1006,28 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             .apply()
     }
 
+    /** Clears the clean-view keep list, restoring the stock bare image. */
+    public fun resetCleanViewPins() {
+        cleanViewPinnedToolsState.value = emptySet()
+        preferences.edit().putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, linkedSetOf()).apply()
+    }
+
+    /** Restores every monitor-chrome section to visible. */
+    public fun resetChromeVisibility() {
+        chromeVisibilityToggles.forEach { it.value = true }
+    }
+
+    /** The Monitor Chrome section's switches, in the order the settings grid shows them. */
+    public val chromeVisibilityToggles: List<Toggle> =
+        listOf(
+            statusBarVisible,
+            sideRailsVisible,
+            assistToolbarVisible,
+            cameraValuesVisible,
+            lockButtonVisible,
+            batteryIndicatorsVisible,
+        )
+
     /** Moves [tool] directly to [targetIndex] and persists the normalized order. */
     public fun moveAssistToolbarTool(tool: AssistTool, targetIndex: Int) {
         val current = assistToolbarOrderState.value
@@ -1063,6 +1092,8 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             levelAssistEnabled,
             evMeterAssistEnabled,
             desqueezeEnabled,
+            lockButtonVisible,
+            batteryIndicatorsVisible,
         )
 
     private fun loadDisplayModeOrder(): List<MonitorDisplayMode> {

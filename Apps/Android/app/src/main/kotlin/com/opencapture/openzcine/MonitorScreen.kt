@@ -2528,16 +2528,28 @@ internal fun MonitorScreen(
                     // leading cluster nudges left off the feed edge; the lock and
                     // the battery shift by the SAME amount so their deliberate gap
                     // is preserved.
-                    LockButton(
-                        locked,
-                        Modifier.zone(
-                            zones.lock.copy(x = zones.lock.x - LEADING_RAIL_LEFT_NUDGE_DP),
-                        ),
-                    ) { locked = !locked }
+                    if (monitorShowsLockControl(
+                            effectiveDisplayMode,
+                            operatorSettings.lockButtonVisible.value,
+                            locked,
+                        )
+                    ) {
+                        LockButton(
+                            locked,
+                            Modifier.zone(
+                                zones.lock.copy(x = zones.lock.x - LEADING_RAIL_LEFT_NUDGE_DP),
+                            ),
+                        ) { locked = !locked }
+                    }
                     // Like iOS seating the combined indicator directly under the
                     // lock button, the two battery rows stack at the top of the
                     // leading lane, just below the lock's clearance.
-                    zones.batteryPhone?.let { anchor ->
+                    zones.batteryPhone?.takeIf {
+                        monitorShowsBatteryIndicators(
+                            effectiveDisplayMode,
+                            operatorSettings.batteryIndicatorsVisible.value,
+                        )
+                    }?.let { anchor ->
                         BatteryRowStack(
                             phonePercent = phoneBatteryReadout.percent,
                             cameraPercent = cameraReadouts.batteryPercent,
@@ -3265,6 +3277,13 @@ private fun PortraitChrome(
             timecodeRetention = timecodeRetention,
             sessionState = sessionState,
             media = cameraReadouts.media,
+            // The bar's battery gauge answers to the Monitor Chrome battery switch, like the
+            // landscape rail's pair (iOS `InfoBarContent`).
+            showsBattery =
+                monitorShowsBatteryIndicators(
+                    displayMode,
+                    operatorSettings.batteryIndicatorsVisible.value,
+                ),
             cameraBatteryPercent = cameraReadouts.batteryPercent,
             cameraExternalPower = cameraReadouts.externalPower,
             modifier = Modifier.zone(zones.infoBar),
@@ -3462,7 +3481,7 @@ private fun PortraitChrome(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.weight(1f))
-        if (!cleanBand) {
+        if (monitorShowsLockControl(displayMode, operatorSettings.lockButtonVisible.value, locked)) {
             LockButton(locked, Modifier.size(40.dp), onClick = onLock)
             Spacer(Modifier.weight(1f))
         }
@@ -3524,6 +3543,7 @@ private fun PortraitInfoBar(
     cameraBatteryPercent: Int?,
     cameraExternalPower: Boolean?,
     modifier: Modifier = Modifier,
+    showsBattery: Boolean = true,
 ) {
     val cameraBattery =
         monitorBatteryPresentation(cameraBatteryPercent, cameraExternalPower)
@@ -3542,26 +3562,28 @@ private fun PortraitInfoBar(
                 sizeSp = 15f,
             )
             Spacer(Modifier.weight(1f))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                BatteryGlyph(
-                    cameraBattery.percent,
-                    if (cameraBattery.percent == null && !cameraBattery.externalPower) {
-                        LiveDesign.faint
-                    } else {
-                        LiveDesign.accent
-                    },
-                    modifier = Modifier.size(22.dp, 11.dp),
-                    externalPower = cameraBattery.externalPower,
-                )
-                Text(
-                    cameraBattery.label,
-                    style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
-                    color = LiveDesign.text.copy(alpha = 0.72f),
-                )
-                CameraGlyph(LiveDesign.muted, Modifier.size(15.dp, 12.dp))
+            if (showsBattery) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BatteryGlyph(
+                        cameraBattery.percent,
+                        if (cameraBattery.percent == null && !cameraBattery.externalPower) {
+                            LiveDesign.faint
+                        } else {
+                            LiveDesign.accent
+                        },
+                        modifier = Modifier.size(22.dp, 11.dp),
+                        externalPower = cameraBattery.externalPower,
+                    )
+                    Text(
+                        cameraBattery.label,
+                        style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
+                        color = LiveDesign.text.copy(alpha = 0.72f),
+                    )
+                    CameraGlyph(LiveDesign.muted, Modifier.size(15.dp, 12.dp))
+                }
             }
         }
     }

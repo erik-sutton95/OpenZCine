@@ -41,6 +41,31 @@ internal fun monitorShowsChrome(mode: MonitorDisplayMode): Boolean =
     mode != MonitorDisplayMode.CLEAN
 
 /**
+ * Whether the rail's lock key renders. Mirrors
+ * `MonitorChromePolicy.showsLockControl(mode:preferences:interfaceLocked:)`.
+ *
+ * The operator may hide it (Operator Setup ▸ Display ▸ Monitor Chrome), but a **locked** monitor
+ * shows it regardless: the lock key is the only control that clears the lock, so honouring the
+ * hide while locked would strand the operator behind dead camera controls. Clean strips the key
+ * either way — this is not a fourth clean-view exception.
+ */
+internal fun monitorShowsLockControl(
+    mode: MonitorDisplayMode,
+    lockButtonVisible: Boolean,
+    interfaceLocked: Boolean,
+): Boolean = monitorShowsChrome(mode) && (lockButtonVisible || interfaceLocked)
+
+/**
+ * Whether the battery indicators render. Mirrors
+ * `MonitorChromePolicy.showsBatteryIndicators(mode:preferences:)` — pure chrome, so clean strips
+ * them and the operator may hide them in any other mode.
+ */
+internal fun monitorShowsBatteryIndicators(
+    mode: MonitorDisplayMode,
+    batteryIndicatorsVisible: Boolean,
+): Boolean = monitorShowsChrome(mode) && batteryIndicatorsVisible
+
+/**
  * Whether a transient pop-up (camera-value picker, assist options drawer) may
  * present in [mode]. Mirrors `MonitorChromePolicy.allowsPopups(in:)`.
  */

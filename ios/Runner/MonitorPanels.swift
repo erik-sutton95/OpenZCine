@@ -4097,7 +4097,7 @@ struct OperatorSettingsPanel: View {
                     { model.toggleChrome(.cameraValues) }
                 ),
                 (
-                    "Lock Key", model.preferences.displayChrome.lockButtonVisible,
+                    "Lock Button", model.preferences.displayChrome.lockButtonVisible,
                     { model.toggleChrome(.lockButton) }
                 ),
                 (
