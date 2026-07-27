@@ -43,14 +43,20 @@ struct MediaBrowseTests {
 
         let clips = try collect(session.beginMediaBrowse())
 
-        // 10 objects on card → 8 visible: the folder is not media, and the
+        // 12 objects on card → 10 visible: the folder is not media, and the
         // proxy-paired R3D master is hidden (iOS browse parity).
-        #expect(clips.count == 8)
+        #expect(clips.count == 10)
         let filenames = clips.map(\.filename)
         #expect(!filenames.contains("100NIKON"))
         #expect(!filenames.contains("A001_C003_0713RC.R3D"))
         #expect(filenames.contains("A001_C003_0713RC.MP4"))
         #expect(filenames.contains("A001_C004_0714RC.R3D"))  // unpaired master stays
+        // Stills on vendor object-format codes survive on the filename fallback, `.HIF` included.
+        #expect(filenames.contains("DSC_0007.NEF"))
+        #expect(filenames.contains("DSC_0009.HIF"))
+        let hif = try #require(clips.first(where: { $0.filename == "DSC_0009.HIF" }))
+        #expect(hif.contentClassification.kind == .stillPhoto)
+        #expect(hif.contentClassification.stillPreview?.formatLabel == "HEIF")
 
         let newest = try #require(clips.first(where: { $0.filename == "C0008.MOV" }))
         #expect(newest.handle == 0x1009)
@@ -94,12 +100,12 @@ struct MediaBrowseTests {
         #expect(infoCount == 3)
         #expect(page.inspectedObjectCount == 3)
         #expect(page.hasMore)
-        // Newest handles first: the inspected tail is 100NIKON (filtered),
-        // C0008.MOV, DSC_0007.JPG.
-        #expect(page.clips.map(\.filename) == ["C0008.MOV", "DSC_0007.JPG"])
+        // Newest handles first: the inspected tail is DSC_0009.HIF, DSC_0007.NEF,
+        // 100NIKON (filtered).
+        #expect(page.clips.map(\.filename) == ["DSC_0009.HIF", "DSC_0007.NEF"])
 
         let remaining = try collect(cursor, pageSize: 3)
-        #expect((page.clips + remaining).count == 8)
+        #expect((page.clips + remaining).count == 10)
         #expect(
             server.receivedOperations().filter { $0 == .getObjectInfo }.count
                 == FakeZRMediaCard.objects.count)
@@ -175,7 +181,7 @@ struct MediaBrowseTests {
                 4097\t65537\t1284505600\t20260713T101010\t5760\t3240\t6048\t3402\t1\tproxy\t\t\tC0001.MOV
                 4104\t65537\t8400000\t20260714T102030\t8256\t5504\t0\t0\t0\tstill\tprogressive\tJPEG\tDSC_0007.JPG
                 4106\t65537\t10400000\t20260714T103030\t8256\t5504\t0\t0\t0\tstill\tcomplete\tHEIF\tDSC_0008.HEIC
-                4107\t65537\t50400000\t20260714T104030\t8256\t5504\t0\t0\t0\tstill\tthumbnail\tNikon RAW\tDSC_0009.NEF
+                4107\t65537\t50400000\t20260714T104030\t8256\t5504\t0\t0\t0\tstill\tthumbnail\tNEF\tDSC_0009.NEF
                 """)
         #expect(MediaListWire.encode([]).isEmpty)
     }
@@ -350,7 +356,7 @@ struct MediaBrowseTests {
         // A fresh enumeration no longer surfaces the deleted object.
         let clips = try collect(session.beginMediaBrowse())
         #expect(!clips.map(\.filename).contains("C0001.MOV"))
-        #expect(clips.count == 7)
+        #expect(clips.count == 9)
 
         // The card refuses a second delete of the same handle.
         #expect(throws: PTPIPClientSessionError.self) {

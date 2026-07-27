@@ -736,6 +736,10 @@ struct MediaBrowserView: View {
                         filterButton
                         sortButton
                     }
+                    // Both pills keep their intrinsic width; the title absorbs any squeeze. The
+                    // active-filter badge used to steal the difference from these two, wrapping
+                    // the label to "FILTE / R" and clipping SORT to "SO…" on a 393pt phone.
+                    .fixedSize()
                 }
 
                 if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }),
@@ -1122,47 +1126,82 @@ private struct MediaFilterPopup: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        filterSection(title: "FORMAT") {
-                            LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                ForEach(MediaFormatFilter.allCases, id: \.self) { format in
-                                    MediaFilterChip(
-                                        title: format.rawValue,
-                                        expands: true,
-                                        isActive: model.mediaFormatFilters.contains(format)
-                                    ) {
-                                        model.toggleMediaFormatFilter(format)
+                        let options = model.mediaFilterOptions
+
+                        if !options.formats.isEmpty {
+                            filterSection(title: "FORMAT") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.formats, id: \.self) { format in
+                                        MediaFilterChip(
+                                            title: format.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaFormatFilters.contains(format)
+                                        ) {
+                                            model.toggleMediaFormatFilter(format)
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        filterSection(title: "RESOLUTION") {
-                            LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                ForEach(MediaResolutionBucket.allCases, id: \.self) { bucket in
-                                    MediaFilterChip(
-                                        title: bucket.rawValue,
-                                        expands: true,
-                                        isActive: model.mediaResolutionFilters.contains(bucket)
-                                    ) {
-                                        model.toggleMediaResolutionFilter(bucket)
+                        if !options.resolutions.isEmpty {
+                            filterSection(title: "RESOLUTION") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.resolutions, id: \.self) { bucket in
+                                        MediaFilterChip(
+                                            title: bucket.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaResolutionFilters.contains(bucket)
+                                        ) {
+                                            model.toggleMediaResolutionFilter(bucket)
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        filterSection(title: "DATE") {
-                            LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                MediaFilterChip(
-                                    title: "TODAY",
-                                    expands: true,
-                                    isActive: model.mediaTodayOnly
-                                ) {
-                                    model.mediaTodayOnly.toggle()
+                        if !options.photoSizes.isEmpty {
+                            filterSection(title: "SIZE") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.photoSizes, id: \.self) { size in
+                                        MediaFilterChip(
+                                            title: size.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaPhotoSizeFilters.contains(size)
+                                        ) {
+                                            model.toggleMediaPhotoSizeFilter(size)
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        if model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
+                        if !options.dateWindows.isEmpty {
+                            filterSection(title: "DATE") {
+                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
+                                    ForEach(options.dateWindows, id: \.self) { window in
+                                        MediaFilterChip(
+                                            title: window.rawValue,
+                                            expands: true,
+                                            isActive: model.mediaDateWindow == window
+                                        ) {
+                                            model.toggleMediaDateWindow(window)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let hasStorageSection =
+                            model.mediaBrowserSource == .camera && !model.mediaStorageSlots.isEmpty
+                        if options.isEmpty, !hasStorageSection {
+                            Text("Nothing in this tab to filter by.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(LiveDesign.faint)
+                                .padding(.vertical, 2)
+                        }
+
+                        if hasStorageSection {
                             filterSection(title: "STORAGE") {
                                 LazyVGrid(columns: filterChipColumns, spacing: 5) {
                                     ForEach(model.mediaStorageSlots) { slot in

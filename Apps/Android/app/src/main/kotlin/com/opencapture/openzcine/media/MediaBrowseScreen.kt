@@ -819,6 +819,26 @@ internal fun MediaBrowseScreen(
                 ownerOf = ::ownerCameraID,
             )
         }
+    // The chips the popup may offer, derived from the category's own listing before any chip is
+    // applied — so a category never advertises a value its media cannot match.
+    val filterOptions =
+        remember(loadedClips, options.category, favorites, cameraID, offlineClipOwners) {
+            MediaFilterDerivation.options(
+                MediaLibraryFiltering.categoryScoped(
+                    clips = loadedClips,
+                    category = options.category,
+                    favoriteIDs = favorites,
+                    cameraID = cameraID,
+                    libraryKey = ::clipKey,
+                ),
+            )
+        }
+    // Only an operator navigation prunes, never a discovery batch: chips derived from a listing
+    // that is still streaming in must not clear a selection the operator just made.
+    LaunchedEffect(options.category, librarySource) {
+        val retained = filters.retainingOfferedChips(filterOptions)
+        if (retained != filters) filters = retained
+    }
     // One key pass over the library, reused by every lookup below. Rebuilding this per call was
     // the other half of the multiselect stall.
     val clipsByKey = remember(displayedClips) { displayedClips.associateBy(::clipKey) }
@@ -1618,6 +1638,7 @@ internal fun MediaBrowseScreen(
         if (filterDialogPresented) {
             MediaFilterDialog(
                 filters = filters,
+                options = filterOptions,
                 storageIds = visibleStorageSlots.map(MediaStorageSlotPresentation::storageId),
                 onFiltersChanged = ::updateFilters,
                 onDismiss = { filterDialogPresented = false },
@@ -2519,6 +2540,7 @@ private fun ThumbnailSizeControl(
 @Composable
 private fun MediaFilterDialog(
     filters: MediaLibraryFilters,
+    options: MediaFilterOptions,
     storageIds: List<Long>,
     onFiltersChanged: (MediaLibraryFilters) -> Unit,
     onDismiss: () -> Unit,
@@ -2559,28 +2581,65 @@ private fun MediaFilterDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    FilterSection("FORMAT") {
-                        MediaContainerFilter.entries.forEach { value ->
-                            FilterChoice(value.title, value in filters.containers) {
-                                onFiltersChanged(
-                                    filters.copy(containers = filters.containers.toggled(value)),
-                                )
+                    if (options.formats.isNotEmpty()) {
+                        FilterSection("FORMAT") {
+                            options.formats.forEach { value ->
+                                FilterChoice(value.title, value in filters.formats) {
+                                    onFiltersChanged(
+                                        filters.copy(formats = filters.formats.toggled(value)),
+                                    )
+                                }
                             }
                         }
                     }
-                    FilterSection("RESOLUTION") {
-                        MediaResolutionFilter.entries.forEach { value ->
-                            FilterChoice(value.title, value in filters.resolutions) {
-                                onFiltersChanged(
-                                    filters.copy(resolutions = filters.resolutions.toggled(value)),
-                                )
+                    if (options.resolutions.isNotEmpty()) {
+                        FilterSection("RESOLUTION") {
+                            options.resolutions.forEach { value ->
+                                FilterChoice(value.title, value in filters.resolutions) {
+                                    onFiltersChanged(
+                                        filters.copy(
+                                            resolutions = filters.resolutions.toggled(value),
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
-                    FilterSection("DATE") {
-                        FilterChoice("TODAY", filters.todayOnly) {
-                            onFiltersChanged(filters.copy(todayOnly = !filters.todayOnly))
+                    if (options.photoSizes.isNotEmpty()) {
+                        FilterSection("SIZE") {
+                            options.photoSizes.forEach { value ->
+                                FilterChoice(value.title, value in filters.photoSizes) {
+                                    onFiltersChanged(
+                                        filters.copy(
+                                            photoSizes = filters.photoSizes.toggled(value),
+                                        ),
+                                    )
+                                }
+                            }
                         }
+                    }
+                    if (options.dateWindows.isNotEmpty()) {
+                        FilterSection("DATE") {
+                            options.dateWindows.forEach { value ->
+                                // The windows nest, so selecting one replaces the other; tapping
+                                // the active one clears it.
+                                FilterChoice(value.title, filters.dateWindow == value) {
+                                    onFiltersChanged(
+                                        filters.copy(
+                                            dateWindow =
+                                                if (filters.dateWindow == value) null else value,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (options.isEmpty && storageIds.isEmpty()) {
+                        Text(
+                            "Nothing in this tab to filter by.",
+                            style = chromeStyle(12f, FontWeight.Normal),
+                            color = LiveDesign.faint,
+                        )
                     }
                     if (storageIds.isNotEmpty()) {
                         FilterSection("STORAGE") {

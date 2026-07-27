@@ -181,20 +181,24 @@ enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
     }
 }
 
-/// File-type chip filters (MOV / MP4).
-enum MediaFormatFilter: String, CaseIterable, Sendable {
-    case mov = "MOV"
-    case mp4 = "MP4"
-
+extension MediaFormatChip {
+    /// True when the clip belongs to this FORMAT chip. The extension-to-chip rule is the shared
+    /// core's, so both shells and the JNI listing wire agree on what a `.HIF` or `.NEF` is.
     func matches(_ clip: MediaClip) -> Bool {
-        switch self {
-        case .mov: ["mov", "m4v"].contains(clip.fileExtension)
-        case .mp4: clip.fileExtension == "mp4"
-        }
+        MediaClipFilename.formatChip(for: clip.filename) == self
     }
 }
 
 extension MediaClip {
+    /// The per-object facts the shared chip derivation needs.
+    var filterItem: MediaFilterItem {
+        MediaFilterItem(
+            filename: filename,
+            pixelWidth: pixelWidth,
+            sourcePixelWidth: sourcePixelWidth,
+            captureDate: captureDate)
+    }
+
     /// Inferred from filename — videos are playable proxies; stills use `MediaClipFilename.isPhoto`.
     var mediaKind: MediaKind {
         MediaClipFilename.isPhoto(filename) ? .photo : .video
@@ -206,11 +210,6 @@ extension MediaClip {
             filename: filename,
             pixelWidth: pixelWidth,
             sourcePixelWidth: sourcePixelWidth)
-    }
-
-    /// Whether the PTP capture date falls on the device's current calendar day.
-    var isCapturedToday: Bool {
-        MediaClipFormatting.isCapturedToday(captureDate)
     }
 
     /// True for Nikon RAW stills (`.NEF` / `.NRW` / `.DNG`) — the tag-along side of a RAW+JPEG pair.
@@ -275,21 +274,6 @@ struct MediaStorageSlotDisplay: Identifiable, Equatable, Sendable {
 }
 
 enum MediaClipFormatting {
-    private static let ptpDayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        return formatter
-    }()
-
-    static func isCapturedToday(_ captureDate: String) -> Bool {
-        guard captureDate.count >= 8 else { return false }
-        let dayToken = String(captureDate.prefix(8))
-        guard let date = ptpDayFormatter.date(from: dayToken) else { return false }
-        return Calendar.current.isDateInToday(date)
-    }
-
     static func byteLabel(_ bytes: UInt64) -> String {
         guard bytes > 0 else { return "0 B" }
         let mb = Double(bytes) / 1_000_000
@@ -310,13 +294,14 @@ enum MediaClipFormatting {
 /// Counts active chip/sheet filters for the Media browser badge (excludes category tabs).
 enum MediaBrowserFilterMetrics {
     static func activeCount(
-        formatFilters: Set<MediaFormatFilter>,
+        formatFilters: Set<MediaFormatChip>,
         resolutionFilters: Set<MediaResolutionBucket>,
-        todayOnly: Bool,
+        photoSizeFilters: Set<MediaPhotoSizeClass>,
+        dateWindow: MediaDateWindow?,
         storageSlotFilter: UInt32?
     ) -> Int {
-        formatFilters.count + resolutionFilters.count + (todayOnly ? 1 : 0)
-            + (storageSlotFilter != nil ? 1 : 0)
+        formatFilters.count + resolutionFilters.count + photoSizeFilters.count
+            + (dateWindow != nil ? 1 : 0) + (storageSlotFilter != nil ? 1 : 0)
     }
 }
 
