@@ -34,44 +34,6 @@ internal fun monitorPreviewFrameSource(
 internal fun monitorTimecodeFrameSource(source: LiveFrameSource?): LiveFrameSource? = source
 
 /**
- * Whether [mode] renders the *full* chrome layer — the auxiliary rail keys (Settings, Media) and
- * the opaque system band behind them. Mirrors the shared core's
- * `MonitorChromePolicy.showsChrome(in:)`.
- *
- * Per-element visibility is no longer this call's business: each DISP mode owns its own
- * `OperatorSettings.chrome(mode)`, and clean simply ships with everything off. What survives here
- * is the one rule configuration cannot express — clean's rail collapses to its two essentials (the
- * DISP key, and the record control while a take is rolling) so there is always a way out.
- */
-internal fun monitorShowsChrome(mode: MonitorDisplayMode): Boolean =
-    mode != MonitorDisplayMode.CLEAN
-
-/**
- * Whether the rail's lock key renders. Mirrors
- * `MonitorChromePolicy.showsLockControl(mode:preferences:interfaceLocked:)`.
- *
- * The operator may hide it (Operator Setup ▸ Display ▸ Monitor Chrome), but a **locked** monitor
- * shows it regardless: the lock key is the only control that clears the lock, so honouring the
- * hide while locked would strand the operator behind dead camera controls. Clean strips the key
- * either way — this is not a fourth clean-view exception.
- */
-internal fun monitorShowsLockControl(
-    mode: MonitorDisplayMode,
-    lockButtonVisible: Boolean,
-    interfaceLocked: Boolean,
-): Boolean = monitorShowsChrome(mode) && (lockButtonVisible || interfaceLocked)
-
-/**
- * Whether the battery indicators render. Mirrors
- * `MonitorChromePolicy.showsBatteryIndicators(mode:preferences:)` — pure chrome, configured per
- * DISP mode, so the caller passes that mode's own flag (clean ships with it off).
- */
-internal fun monitorShowsBatteryIndicators(
-    @Suppress("UNUSED_PARAMETER") mode: MonitorDisplayMode,
-    batteryIndicatorsVisible: Boolean,
-): Boolean = batteryIndicatorsVisible
-
-/**
  * Whether a transient pop-up (camera-value picker, assist options drawer) may
  * present in [mode]. Mirrors `MonitorChromePolicy.allowsPopups(in:)`.
  */

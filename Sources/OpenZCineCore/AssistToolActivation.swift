@@ -8,11 +8,13 @@ import Foundation
 /// what a mode shows is configuration, not a hard-coded per-mode branch. The stock configurations:
 ///
 /// - `.live` (DISP 1): everything the operator switched on.
-/// - `.clean` (DISP 2): **a bare image**. Every view-assist tool, the status deck, the bottom
-///   strips and every non-critical pop-up start hidden. A tool comes back only when the operator
-///   lists it in ``OperatorPreferences/cleanViewPinnedTools`` — off for all 17 by default. Leaving
-///   clean restores the prior visibility exactly, because the list is a *filter*: clean never
-///   mutates the operator's on/off set.
+/// - `.clean` (DISP 2): **the image, the rail and the focus box**. Clean offers exactly the same
+///   element list as live — it is DISP 1 with different defaults, not a smaller feature — but the
+///   status deck, both bottom strips and the lock key start hidden. Every view-assist tool starts
+///   hidden too, and comes back only when the operator lists it in
+///   ``OperatorPreferences/cleanViewPinnedTools`` — off for all 17 by default. Leaving clean
+///   restores the prior visibility exactly, because the list is a *filter*: clean never mutates
+///   the operator's on/off set.
 /// - `.command` (DISP 3): the data dashboard owns the screen; there is no feed, so no feed overlay
 ///   or scope renders regardless of pins.
 ///
@@ -24,11 +26,12 @@ import Foundation
 /// itself. Clean view must never remove the way to STOP a take. Analysis chrome — scopes, traffic
 /// lights, histograms, meters — is never critical.
 ///
-/// Clean also keeps the **DISP key** itself: it is the control for this feature, and the rest of
-/// the cycle is only reachable through it, so hiding it would strand the operator in clean. Both
-/// shells therefore render exactly two rail controls in clean — DISP always, record while rolling
-/// — and strip the batteries, lock, Settings, Media, status deck and every bar. The feed swipe
-/// (down → clean, up → live) remains a second way out.
+/// **No mode can be locked from the inside.** Every rail control is now the operator's to hide,
+/// so two of them carry guarantees instead (see ``sideRailPlan(mode:preferences:capture:interfaceLocked:recordingOrPending:)``):
+/// the record control returns while a take is rolling, and the Settings key returns when no
+/// enabled DISP mode still carries one. The DISP key needs no guarantee because the feed swipe
+/// (down → clean, up → live) changes mode without it. The lock key returns while the interface is
+/// locked, because it is the only control that clears the lock.
 public enum MonitorChromePolicy {
     /// Whether `tool` renders right now: switched on for `context`, and permitted by `mode`.
     public static func isToolVisible(
@@ -59,80 +62,95 @@ public enum MonitorChromePolicy {
         }
     }
 
-    /// Whether `mode` renders the *full* chrome layer — the auxiliary rail keys (Settings, Media)
-    /// and the opaque system band behind them.
-    ///
-    /// Per-element visibility is no longer this call's business: each DISP mode owns its own
-    /// ``DisplayChromeVisibility`` (``OperatorPreferences/chrome(for:)``), and clean simply ships
-    /// with everything off. What survives here is the one rule configuration cannot express —
-    /// clean's rail collapses to its two essentials (the DISP key, and the record control while a
-    /// take is rolling) so the operator always has a way out of the bare image.
-    public static func showsChrome(in mode: DispMode) -> Bool { mode != .clean }
-
     /// Whether `section` renders in `mode` right now. The one read every chrome mount site should
     /// use, so a mode's configuration cannot drift between shells or orientations.
     public static func showsSection(
         _ section: DisplayChromeVisibility.Section,
         mode: DispMode,
+        capture: CaptureLayoutMode,
         preferences: OperatorPreferences
     ) -> Bool {
-        preferences.chrome(for: mode).isVisible(section)
+        preferences.chrome(for: mode, capture: capture).isVisible(section)
     }
 
     /// Whether the rail's lock key renders.
     ///
-    /// The operator may hide it (Settings ▸ Display ▸ Monitor Chrome), but a **locked** monitor
-    /// shows it regardless: on both shells the lock key is the only control that clears the lock,
-    /// so honouring the hide while locked would strand the operator behind dead camera controls.
-    /// This is not a fourth clean-view exception — clean hides the key either way, and clean
-    /// never locks anything.
+    /// The operator may hide it in any mode (Settings ▸ Display), but a **locked** monitor shows
+    /// it regardless: on both shells the lock key is the only control that clears the lock, so
+    /// honouring the hide while locked would strand the operator behind dead camera controls. The
+    /// guarantee is unconditional — clean can now carry the key and can therefore lock, so the
+    /// old "clean never locks anything" escape clause no longer holds.
     public static func showsLockControl(
         mode: DispMode,
         preferences: OperatorPreferences,
+        capture: CaptureLayoutMode,
         interfaceLocked: Bool
     ) -> Bool {
-        guard showsChrome(in: mode) else { return false }
-        return preferences.chrome(for: mode).lockButtonVisible || interfaceLocked
+        preferences.chrome(for: mode, capture: capture).lockButtonVisible || interfaceLocked
     }
 
-    /// Whether the battery cluster renders. Pure chrome, configured per DISP mode — clean ships
-    /// with it off, and the operator may hide it in any other mode.
+    /// Whether the battery cluster renders. Pure chrome, configured per DISP mode.
     public static func showsBatteryIndicators(
         mode: DispMode,
+        capture: CaptureLayoutMode,
         preferences: OperatorPreferences
     ) -> Bool {
-        preferences.chrome(for: mode).batteryIndicatorsVisible
+        preferences.chrome(for: mode, capture: capture).batteryIndicatorsVisible
     }
 
-    /// What the side rail still mounts for one chrome/recording state.
+    /// Which side-rail controls mount for one chrome / lock / recording state.
+    ///
+    /// One boolean per control, because the rail is six independent elements and used to be one
+    /// switch — which is exactly why record, Media, Settings and DISP had no visibility controls
+    /// of their own.
     public struct SideRailPlan: Equatable, Sendable {
-        /// The whole rail — batteries, lock, DISP, record, Media, Settings.
-        public let fullRail: Bool
-        /// A lone Settings key, mounted only when the rail is hidden.
-        public let settingsRecovery: Bool
-        /// A lone record control, mounted only when the rail is hidden mid-take.
-        public let recordSafety: Bool
+        public let lock: Bool
+        public let batteries: Bool
+        public let disp: Bool
+        public let record: Bool
+        public let media: Bool
+        public let settings: Bool
+
+        /// Whether the rail mounts anything at all — the portrait system band draws only then.
+        public var isEmpty: Bool {
+            !(lock || batteries || disp || record || media || settings)
+        }
     }
 
     /// Resolves the side rail for `mode`.
     ///
-    /// Hiding the rail (Settings ▸ Display ▸ Monitor Chrome) must never remove the route back to
-    /// Settings — that is the only place the rail can be switched on again, so without it the
-    /// operator is stranded — nor the way to STOP a rolling take. Clean is separate: it keeps the
-    /// DISP key and the rolling record control instead, because the feed swipe and DISP are its
-    /// documented ways out.
+    /// Two of the six are guaranteed, because hiding them would leave the operator with no way
+    /// out of their own configuration:
+    ///
+    /// - **Record** stays while a take is rolling or a record command is in flight. Nothing may
+    ///   remove the way to STOP a take.
+    /// - **Settings** stays when no enabled DISP mode carries one, because Settings is the only
+    ///   place these switches live. Hidden in *some* modes it really is hidden — the operator
+    ///   reaches Settings by cycling DISP (or the feed swipe) to a mode that keeps it.
+    ///
+    /// The DISP key itself carries no such guarantee: the feed swipe (down → clean, up → live) is
+    /// a second, always-present way to change mode, and Settings ▸ Display switches it back on.
+    /// The lock key's own guarantee lives in ``showsLockControl(mode:preferences:capture:interfaceLocked:)``.
     public static func sideRailPlan(
         mode: DispMode,
         preferences: OperatorPreferences,
+        capture: CaptureLayoutMode,
+        interfaceLocked: Bool,
         recordingOrPending: Bool
     ) -> SideRailPlan {
-        let visible = preferences.chrome(for: mode).sideRailsVisible
+        let chrome = preferences.chrome(for: mode, capture: capture)
+        let settingsReachable = preferences.enabledDispModes.contains {
+            preferences.chrome(for: $0, capture: capture).railSettingsVisible
+        }
         return SideRailPlan(
-            fullRail: visible,
-            // Clean already strips the rail by design and offers DISP as its way out; a second
-            // recovery key there would just put chrome back on the bare image.
-            settingsRecovery: !visible && showsChrome(in: mode),
-            recordSafety: !visible && recordingOrPending)
+            lock: showsLockControl(
+                mode: mode, preferences: preferences, capture: capture,
+                interfaceLocked: interfaceLocked),
+            batteries: chrome.batteryIndicatorsVisible,
+            disp: chrome.railDispVisible,
+            record: chrome.railRecordVisible || recordingOrPending,
+            media: chrome.railMediaVisible,
+            settings: chrome.railSettingsVisible || !settingsReachable)
     }
 
     /// Whether a transient pop-up (camera-value picker, assist options drawer) may present.

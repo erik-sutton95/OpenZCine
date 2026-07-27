@@ -3633,6 +3633,9 @@ struct OperatorSettingsPanel: View {
     /// Which DISP section on the Display tab is open. All three start collapsed — the tab is a
     /// short list of modes at a glance, and you open the one you want to set up.
     @State private var expandedDispSection: DispMode?
+    /// Which capture side the Display tab's DISP sections are editing. `nil` until the operator
+    /// picks one, so the tab opens on whichever side the camera is actually in.
+    @State private var displayCaptureMode: CaptureLayoutMode?
     /// Standalone setup is already a root cover, so its report flow is presented above that cover.
     /// Camera-backed setup uses the root-owned presentation instead, which survives an AP hop.
     @State private var standaloneBugReportPresented = false
@@ -4062,9 +4065,40 @@ struct OperatorSettingsPanel: View {
     }
 
     /// The Display tab is one card per DISP mode: each mode owns what it shows, and each opens on
-    /// tap. Collapsed, the whole tab reads as "DISP 1, DISP 2, DISP 3, button order" instead of
-    /// ~50 controls in one scroll.
+    /// tap. Collapsed, the whole tab reads as "Video/Photo, DISP 1, DISP 2, DISP 3, button order"
+    /// instead of ~50 controls in one scroll.
+    ///
+    /// Video and photo keep separate layouts, and the switch for that is **one segmented control
+    /// at the top of the tab**, not a second copy of each section. Six stacked DISP cards would
+    /// double the length of the tab to express one bit; a single "which layout am I editing"
+    /// control reads at a glance and leaves the three sections exactly as they were.
     @ViewBuilder private var displayRows: some View {
+        SettingsRowCard {
+            SettingsInlineRow(
+                title: "Layout For",
+                help:
+                    "Video and photo keep their own monitor layouts, so a cinema rig and a stills body do not fight over the same chrome. This picks which one the DISP sections below are setting up; the camera's own mode dial picks which one the monitor renders.",
+                showTopDivider: false
+            ) {
+                SettingsSegmented(
+                    options: CaptureLayoutMode.allCases.map(\.title),
+                    selected: editedCaptureMode.title
+                ) { value in
+                    guard
+                        let mode = CaptureLayoutMode.allCases.first(where: { $0.title == value })
+                    else { return }
+                    editedCaptureMode = mode
+                }
+            }
+        }
+        // Coming back from the Edit view lands on the section that was being edited, open, rather
+        // than at the top of the tab with everything collapsed again.
+        .onAppear {
+            guard let returning = model.chromeEditorReturnMode else { return }
+            expandedDispSection = returning
+            model.chromeEditorReturnMode = nil
+        }
+
         dispSectionCard(.live)
         dispSectionCard(.clean)
         dispSectionCard(.command)
@@ -4080,26 +4114,48 @@ struct OperatorSettingsPanel: View {
         )
     }
 
+    /// Which capture side the DISP sections are editing. Follows the camera on first open — the
+    /// layout you are looking at is the one you most likely came to change.
+    private var editedCaptureMode: CaptureLayoutMode {
+        get { displayCaptureMode ?? model.captureLayoutMode }
+        nonmutating set { displayCaptureMode = newValue }
+    }
+
+    /// The Edit view is the live monitor, so it can only arrange the layout the body is actually
+    /// rendering. Editing the other one falls back to the plain switch list.
+    private var editsTheLiveLayout: Bool { editedCaptureMode == model.captureLayoutMode }
+
     @ViewBuilder private func dispSectionCard(_ mode: DispMode) -> some View {
+        let capture = editedCaptureMode
         SettingsGroupCard(
             title: "DISP \(dispNumber(mode)) · \(mode.title)",
             caption: dispCaption(mode),
-            onReset: { model.resetChromeVisibility(for: mode) },
+            onReset: { model.resetChromeVisibility(for: mode, capture: capture) },
             expansion: Binding(
                 get: { expandedDispSection == mode },
                 set: { expandedDispSection = $0 ? mode : nil }),
             content: {
-                dispSectionBody(mode)
+                dispSectionBody(mode, capture: capture)
             }
         )
     }
 
-    @ViewBuilder private func dispSectionBody(_ mode: DispMode) -> some View {
+    @ViewBuilder private func dispSectionBody(_ mode: DispMode, capture: CaptureLayoutMode)
+        -> some View
+    {
         VStack(alignment: .leading, spacing: 10) {
             // Command is a fixed dashboard grid, not the live chrome — there is no live view
-            // to place badges on, so it gets the plain list.
-            if mode == .command {
-                displayToggleGrid(chromeToggles(for: mode))
+            // to place badges on, so it gets the plain list. So does the capture side the body
+            // is not currently in: badges belong on the real thing, not on a stand-in.
+            if mode == .command || !editsTheLiveLayout {
+                if mode != .command {
+                    Text(
+                        "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor."
+                    )
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LiveDesign.muted)
+                }
+                displayToggleGrid(chromeToggles(for: mode, capture: capture))
             } else {
                 SettingsActionPill(title: "Edit view") { model.beginChromeEditing(mode) }
                     .accessibilityHint(
@@ -4130,20 +4186,20 @@ struct OperatorSettingsPanel: View {
         case .live:
             "The full monitor. Set what it shows in Edit view, and which tools reach the tool bar."
         case .clean:
-            "A bare image. Anything you switch on here survives clean view; the DISP key always stays so you can get back out."
+            "A stripped-back image. Same elements as DISP 1 — the rail, focus box and batteries start on, everything else off."
         case .command:
             "The data dashboard — no feed, so no image assists. Only the side rail is on screen."
         }
     }
 
-    private func chromeToggles(for mode: DispMode)
+    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode)
         -> [(title: String, isOn: Bool, action: () -> Void)]
     {
         DisplayChromeVisibility.configurableSections(in: mode).map { section in
             (
                 section.title,
-                model.preferences.chrome(for: mode).isVisible(section),
-                { model.toggleChrome(section, for: mode) }
+                model.preferences.chrome(for: mode, capture: capture).isVisible(section),
+                { model.toggleChrome(section, for: mode, capture: capture) }
             )
         }
     }

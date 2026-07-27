@@ -25,6 +25,7 @@
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */; };
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
+		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
 		331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */; };
 		7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */; };
@@ -199,6 +200,7 @@
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStoreTests.swift; sourceTree = "<group>"; };
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
+		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTimecodeTests.swift; sourceTree = "<group>"; };
@@ -349,6 +351,7 @@
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
+				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
 				331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */,
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
@@ -672,6 +675,7 @@
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
+				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
 				331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */,
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,

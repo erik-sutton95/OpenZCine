@@ -764,17 +764,107 @@ class OperatorSettingsTest {
     @Test
     fun `chrome is configured per DISP mode and clean defaults to a bare image`() {
         val settings = OperatorSettings(store)
+        val clean = settings.chrome(MonitorDisplayMode.CLEAN)
 
         assertTrue(settings.chrome(MonitorDisplayMode.LIVE).statusBar.value)
-        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).statusBar.value)
-        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).assistToolbar.value)
-        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).cameraValues.value)
-        assertFalse(settings.chrome(MonitorDisplayMode.CLEAN).batteryIndicators.value)
-        // The rail is where clean's two essentials live — the DISP key and the rolling record
-        // control — so it stays on even in the bare image.
-        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).sideRails.value)
+        assertFalse(clean.statusBar.value)
+        assertFalse(clean.assistToolbar.value)
+        assertFalse(clean.cameraValues.value)
+        assertFalse(clean.lockButton.value)
+        // Clean keeps what the operator needs to work in it and get back out.
+        assertTrue(clean.batteryIndicators.value)
+        assertTrue(clean.focusBox.value)
+        assertTrue(clean.railDisp.value)
+        assertTrue(clean.railRecord.value)
+        assertTrue(clean.railMedia.value)
+        assertTrue(clean.railSettings.value)
         // Switching the bar back on in clean should yield a complete bar.
-        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).fpsReadout.value)
+        assertTrue(clean.fpsReadout.value)
+    }
+
+    @Test
+    fun `video and photo layouts are independent and start identical`() {
+        val settings = OperatorSettings(store)
+
+        assertTrue(
+            settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO).assistToolbar.value,
+        )
+        settings.toggleChrome(
+            ChromeSection.ASSIST_TOOLBAR,
+            MonitorDisplayMode.LIVE,
+            CaptureLayoutMode.PHOTO,
+        )
+        assertFalse(
+            settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO).assistToolbar.value,
+        )
+        assertTrue(
+            settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.VIDEO).assistToolbar.value,
+            "a stills operator's layout must not reshape the cinema one",
+        )
+    }
+
+    @Test
+    fun `every rail control is hideable but record and settings cannot strand the operator`() {
+        val settings = OperatorSettings(store)
+        val full =
+            settings.sideRailPlan(
+                MonitorDisplayMode.LIVE,
+                CaptureLayoutMode.VIDEO,
+                interfaceLocked = false,
+                recordingOrPending = false,
+            )
+        assertTrue(full.disp && full.record && full.media && full.settings)
+
+        MonitorDisplayMode.entries.forEach { mode ->
+            ChromeSection.railControls.forEach { settings.chrome(mode)[it].value = false }
+        }
+        val stripped =
+            settings.sideRailPlan(
+                MonitorDisplayMode.LIVE,
+                CaptureLayoutMode.VIDEO,
+                interfaceLocked = false,
+                recordingOrPending = false,
+            )
+        assertFalse(stripped.disp, "the feed swipe is the DISP key's way out")
+        assertFalse(stripped.media)
+        assertFalse(stripped.record, "standby record is the operator's to hide")
+        assertTrue(stripped.settings, "Settings is the only route back to these switches")
+        assertTrue(
+            settings.sideRailPlan(
+                MonitorDisplayMode.LIVE,
+                CaptureLayoutMode.VIDEO,
+                interfaceLocked = false,
+                recordingOrPending = true,
+            ).record,
+        )
+    }
+
+    @Test
+    fun `a hidden lock key still renders while controls are locked`() {
+        val settings = OperatorSettings(store)
+        MonitorDisplayMode.entries.forEach {
+            // Clean already ships with the key off, so set rather than toggle.
+            settings.chrome(it)[ChromeSection.LOCK_BUTTON].value = false
+        }
+        MonitorDisplayMode.entries.forEach { mode ->
+            assertFalse(
+                settings.sideRailPlan(
+                    mode,
+                    CaptureLayoutMode.VIDEO,
+                    interfaceLocked = false,
+                    recordingOrPending = false,
+                ).lock,
+            )
+            assertTrue(
+                settings.sideRailPlan(
+                    mode,
+                    CaptureLayoutMode.VIDEO,
+                    interfaceLocked = true,
+                    recordingOrPending = false,
+                ).lock,
+                "the lock key is the only control that clears the lock",
+            )
+        }
     }
 
     @Test
@@ -802,15 +892,25 @@ class OperatorSettingsTest {
         val settings = OperatorSettings(store)
 
         assertFalse(ChromeSection.STATUS_BAR.isConfigurableIn(MonitorDisplayMode.COMMAND))
+        assertFalse(ChromeSection.FOCUS_BOX.isConfigurableIn(MonitorDisplayMode.COMMAND))
+        assertFalse(ChromeSection.SIDE_RAILS.isConfigurableIn(MonitorDisplayMode.LIVE))
         assertFalse(ChromeSection.SIDE_RAILS.isConfigurableIn(MonitorDisplayMode.CLEAN))
-        assertFalse(ChromeSection.LOCK_BUTTON.isConfigurableIn(MonitorDisplayMode.CLEAN))
+        // Clean is DISP 1 with different defaults, not a smaller feature.
+        assertTrue(ChromeSection.LOCK_BUTTON.isConfigurableIn(MonitorDisplayMode.CLEAN))
+        assertEquals(
+            ChromeSection.configurableIn(MonitorDisplayMode.LIVE),
+            ChromeSection.configurableIn(MonitorDisplayMode.CLEAN),
+        )
         assertTrue(ChromeSection.LOCK_BUTTON.isConfigurableIn(MonitorDisplayMode.COMMAND))
-        assertEquals(10, ChromeSection.configurableIn(MonitorDisplayMode.LIVE).size)
+        assertEquals(16, ChromeSection.configurableIn(MonitorDisplayMode.LIVE).size)
         assertEquals(
             listOf(
-                ChromeSection.SIDE_RAILS,
                 ChromeSection.LOCK_BUTTON,
                 ChromeSection.BATTERY_INDICATORS,
+                ChromeSection.RAIL_RECORD,
+                ChromeSection.RAIL_MEDIA,
+                ChromeSection.RAIL_SETTINGS,
+                ChromeSection.RAIL_DISP,
             ),
             ChromeSection.configurableIn(MonitorDisplayMode.COMMAND),
         )
@@ -830,11 +930,19 @@ class OperatorSettingsTest {
 
         val settings = OperatorSettings(store)
 
-        assertFalse(settings.chrome(MonitorDisplayMode.LIVE).sideRails.value)
-        assertFalse(settings.chrome(MonitorDisplayMode.COMMAND).sideRails.value)
+        // The one stored whole-rail value expands into all four of its controls, so an operator
+        // who hid the rail does not find it back on their monitor after the split.
+        ChromeSection.railControls.forEach {
+            assertFalse(settings.chrome(MonitorDisplayMode.LIVE)[it].value)
+            assertFalse(settings.chrome(MonitorDisplayMode.COMMAND)[it].value)
+            // …and into both capture sides.
+            assertFalse(settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO)[it].value)
+        }
         assertFalse(settings.chrome(MonitorDisplayMode.COMMAND).batteryIndicators.value)
         // Clean still lands on its own documented default, not the inherited one.
-        assertTrue(settings.chrome(MonitorDisplayMode.CLEAN).sideRails.value)
+        ChromeSection.railControls.forEach {
+            assertTrue(settings.chrome(MonitorDisplayMode.CLEAN)[it].value)
+        }
     }
 
     @Test

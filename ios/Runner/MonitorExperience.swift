@@ -565,15 +565,55 @@ private struct LiveFeedFocusOverlay: View {
     let lockProgress: CGFloat
 
     var body: some View {
-        // The AF box shows in live AND clean (DISP 1 & 2) — focus feedback the operator relies on
-        // even in the stripped-back view. (Command never mounts the feed, so no guard needed.)
-        if let focus = model.liveViewFocus, !focus.boxes.isEmpty {
+        // The AF box is an element like any other: on by default in DISP 1 and DISP 2 (focus
+        // feedback the operator relies on even in the stripped-back view), and hideable in both.
+        // (Command never mounts the feed, so no mode guard is needed.)
+        if model.chromeSectionMounts(.focusBox), let focus = model.liveViewFocus,
+            !focus.boxes.isEmpty
+        {
             // Focus metadata repeats identically on most frames — the Equatable guard skips the
             // Canvas redraw unless a box, lock, or progress changed.
             LiveFocusBoxOverlay(
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress
             )
             .equatable()
+            // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
+            // below), and this Canvas draws the boxes itself.
+            .opacity(focusBoxEditDimmed ? 0.3 : 1)
+            // The badge goes on the primary AF box, not the whole feed — a dashed outline round
+            // the entire image would name nothing.
+            .overlay { focusBoxEditTarget(focus) }
+        }
+    }
+
+    /// The AF box is force-mounted while editing a mode that has it switched off — dim it so the
+    /// operator sees it is off and can switch it back on from its badge.
+    private var focusBoxEditDimmed: Bool {
+        guard let mode = model.chromeEditorMode,
+            DisplayChromeVisibility.isConfigurable(.focusBox, in: mode)
+        else { return false }
+        return !model.preferences.chrome(for: mode, capture: model.captureLayoutMode)
+            .focusBoxVisible
+    }
+
+    /// A zero-content proxy sized to the primary AF box, so the Edit view's outline and badge land
+    /// on the box the operator sees. Mounted only while editing.
+    @ViewBuilder private func focusBoxEditTarget(_ focus: PTPLiveViewFocusInfo) -> some View {
+        if model.chromeEditorMode != nil, focus.coordinateWidth > 0, focus.coordinateHeight > 0,
+            let box = focus.boxes.first
+        {
+            GeometryReader { proxy in
+                let scaleX = proxy.size.width / CGFloat(focus.coordinateWidth)
+                let scaleY = proxy.size.height / CGFloat(focus.coordinateHeight)
+                let width = CGFloat(box.width) * scaleX
+                let height = CGFloat(box.height) * scaleY
+                Color.clear
+                    .frame(width: width, height: height)
+                    .chromeEditable(.focusBox, editing: model.chromeEditorMode)
+                    .position(
+                        x: CGFloat(box.centerX) * scaleX,
+                        y: CGFloat(box.centerY) * scaleY)
+            }
         }
     }
 }

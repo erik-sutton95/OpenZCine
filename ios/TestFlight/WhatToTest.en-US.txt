@@ -1,7 +1,7 @@
 New and changed
 
-- Display settings are rebuilt around the three DISP modes. Each one gets its own section saying what it shows, and DISP 1 and DISP 2 have an "Edit view" button that opens the monitor itself: tap the eye on any element - top bar, rail, lock key, batteries, readouts, tool bar - to show or hide it for that mode. Anything you hide stays on screen at 30% while you are editing, so you can always turn it back on.
-- Clean view is finally clean. DISP 2 shows the picture and nothing else, apart from the recording tally, the record control while a take is rolling, camera warnings, and the DISP key so you can get back out.
+- Display settings are rebuilt around the three DISP modes, and video and photo keep separate layouts (one switch at the top of the tab). DISP 1 and DISP 2 have an "Edit view" that opens the monitor itself: tap the eye on any element - top bar and each of its readouts, focus box, batteries, lock, tool bar, camera values, and record / Media / Settings / DISP individually - to show or hide it. Anything you hide stays on screen at 30% while you edit, so you can always turn it back on.
+- DISP 2 now offers exactly the same elements as DISP 1, with different defaults: the picture, the side rail, the focus box and the batteries, everything else off. Switch on whatever else you want. The recording tally, the record control while rolling and camera warnings always stay.
 - The focus dial works in video as well as photo. It is off by default and lives in the FOCUS popup; if you had already switched it on, it stays on.
 - H.265 8-bit and 10-bit are separate choices. When your camera offers both, the codec popup shows one H.265 row with 8-bit and 10-bit either side of it, so you pick the depth directly.
 - Stream Preset and Quality Bias now both read Fast, Balanced, Quality. Quality Bias had only two positions before, so the middle grade your camera offers was unreachable. New installs start on the Quality preset.
@@ -20,7 +20,7 @@ Fixes
 
 What to test
 
-- Open Settings, Display, DISP 1, then Edit view. Hide a couple of things, tap Done, and confirm they are gone from the live monitor - then go back in and turn them on again. Try the same for DISP 2 and check the two keep separate settings.
+- Open Settings, Display, DISP 2, then Edit view. Hide a few things - a rail key, the focus box, a readout - tap Done (which brings you back to Display), and confirm the live monitor matches. Then check DISP 1 kept its own layout, and that switching Layout For to Photo shows a separate set.
 - On the Photos tab, open Filter: you should see JPEG/HEIF/NEF and L/M/S, not MOV and 6K. If you shoot HEIF, check those frames are actually listed.
 - Turn the aperture ring on the camera while watching IRIS, in video and in photo. It should track you as you turn, close to real time.
 - Connect one body, disconnect, then connect a differently configured one. Nothing on the second camera should change just because you connected.

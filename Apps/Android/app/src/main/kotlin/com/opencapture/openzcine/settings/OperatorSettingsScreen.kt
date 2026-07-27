@@ -614,6 +614,15 @@ private fun SettingsContentPane(
         // Storage card complete in that window rather than leaving its clear
         // result half-hidden below a scroll edge.
         val condensed = maxHeight < 300.dp
+        // Which capture side the body is actually in — the Display tab opens on that layout.
+        val paneCameraProperties =
+            if (session == null) null else session.cameraProperties.collectAsState().value
+        val liveCaptureMode =
+            if (paneCameraProperties != null && prefersPhotographyChrome(paneCameraProperties)) {
+                CaptureLayoutMode.PHOTO
+            } else {
+                CaptureLayoutMode.VIDEO
+            }
         Column(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(if (condensed) 6.dp else 10.dp),
@@ -690,6 +699,7 @@ private fun SettingsContentPane(
                                     onInteraction,
                                     scrollState,
                                     viewportBounds,
+                                    liveCaptureMode = liveCaptureMode,
                                     onEditView = { mode ->
                                         // The Edit view IS the monitor, so Operator Setup steps
                                         // aside for it.
@@ -2521,17 +2531,38 @@ private fun DisplayRows(
     onInteraction: () -> Unit,
     parentScrollState: ScrollState,
     viewportBounds: Rect?,
+    liveCaptureMode: CaptureLayoutMode,
     onEditView: (MonitorDisplayMode) -> Unit,
 ) {
     // One card per DISP mode: each mode owns what it shows, and each opens on tap. Collapsed, the
     // whole tab is four short rows instead of ~50 controls in one scroll (iOS `displayRows`).
+    //
+    // Video and photo keep separate layouts, and the switch for that is ONE segmented control at
+    // the top — six stacked DISP cards would double the longest tab in the app to express one bit.
     var expandedSection by rememberSaveable { mutableStateOf<MonitorDisplayMode?>(null) }
+    var pickedCapture by rememberSaveable { mutableStateOf<CaptureLayoutMode?>(null) }
+    val capture = pickedCapture ?: liveCaptureMode
+    SettingsGroupCard(
+        title = stringResource(R.string.settings_layout_for),
+        caption = stringResource(R.string.settings_layout_for_help),
+        captionMaxLines = 3,
+    ) {
+        SettingsSegmented(
+            options = CaptureLayoutMode.entries.map { it.title },
+            selected = capture.title,
+        ) { value ->
+            CaptureLayoutMode.entries.firstOrNull { it.title == value }?.let {
+                pickedCapture = it
+                onInteraction()
+            }
+        }
+    }
     MonitorDisplayMode.entries.forEach { mode ->
         SettingsGroupCard(
             title = "DISP ${mode.ordinal + 1} · ${stringResource(mode.labelResource())}",
             caption = stringResource(dispSectionCaption(mode)),
             onReset = {
-                settings.resetChromeVisibility(mode)
+                settings.resetChromeVisibility(mode, capture)
                 onInteraction()
             },
             // The caption IS the mode's explanation here — never let it truncate.
@@ -2543,14 +2574,25 @@ private fun DisplayRows(
             },
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (mode == MonitorDisplayMode.COMMAND) {
-                    // Command is a fixed dashboard grid, not the live chrome — there is no live
-                    // view to place badges on, so it gets the plain list.
+                // Command is a fixed dashboard grid, not the live chrome — there is no live view
+                // to place badges on, so it gets the plain list. So does the capture side the body
+                // is not currently in: badges belong on the real thing, not on a stand-in.
+                if (mode == MonitorDisplayMode.COMMAND || capture != liveCaptureMode) {
+                    if (mode != MonitorDisplayMode.COMMAND) {
+                        Text(
+                            stringResource(
+                                R.string.settings_layout_for_other_side,
+                                capture.title.lowercase(),
+                            ),
+                            style = chromeStyle(11f, FontWeight.SemiBold),
+                            color = LiveDesign.muted,
+                        )
+                    }
                     DisplayToggleGrid(
                         compact = compact,
                         entries =
                             ChromeSection.configurableIn(mode).map { section ->
-                                val toggle = settings.chrome(mode)[section]
+                                val toggle = settings.chrome(mode, capture)[section]
                                 DisplayToggleEntry(section.title, toggle.value) {
                                     onToggle(toggle)
                                 }
@@ -2561,9 +2603,9 @@ private fun DisplayRows(
                         title = stringResource(R.string.settings_edit_view),
                         onClick = { onEditView(mode) },
                     )
-                    // The four status-bar readouts. iOS nests their badges inside the deck pill
-                    // in the Edit view; here they stay a grid, because a 26dp badge inside a 28dp
-                    // pill on a phone-density Compose deck is not a reliable touch target.
+                    // The status-bar cells. iOS nests their badges inside the deck pill in the Edit
+                    // view; here they stay a grid, because a 26dp badge inside a 28dp pill on a
+                    // phone-density Compose deck is not a reliable touch target.
                     Text(
                         stringResource(R.string.settings_live_readouts),
                         style = chromeStyle(11f, FontWeight.SemiBold),
@@ -2573,7 +2615,7 @@ private fun DisplayRows(
                         compact = compact,
                         entries =
                             ChromeSection.statusBarReadouts.map { section ->
-                                val toggle = settings.chrome(mode)[section]
+                                val toggle = settings.chrome(mode, capture)[section]
                                 DisplayToggleEntry(section.title, toggle.value) { onToggle(toggle) }
                             },
                     )

@@ -36,10 +36,7 @@ class MonitorCleanViewPolicyTest {
     }
 
     @Test
-    fun `clean strips chrome and defers popups`() {
-        assertTrue(monitorShowsChrome(MonitorDisplayMode.LIVE))
-        assertFalse(monitorShowsChrome(MonitorDisplayMode.CLEAN))
-        assertTrue(monitorShowsChrome(MonitorDisplayMode.COMMAND))
+    fun `clean defers popups`() {
         assertTrue(monitorAllowsPopups(MonitorDisplayMode.LIVE))
         assertFalse(monitorAllowsPopups(MonitorDisplayMode.CLEAN))
         // Command's dashboard tiles open the value pickers, so pop-ups stay allowed there.
@@ -128,45 +125,6 @@ class MonitorCleanViewPolicyTest {
             renderedFramingAssists(configuration, MonitorDisplayMode.CLEAN, setOf(AssistTool.GUIDES))
         assertTrue(pinnedGuides.guidesVisible)
         assertFalse(pinnedGuides.gridVisible)
-    }
-
-    @Test
-    fun `a hidden lock button still renders while controls are locked`() {
-        // The lock button is the only control that clears the lock, so hiding it must never
-        // strand an operator who locked first and hid it after. Same rule as the core's
-        // `MonitorChromePolicy.showsLockControl`.
-        assertTrue(
-            monitorShowsLockControl(MonitorDisplayMode.LIVE, lockButtonVisible = true, interfaceLocked = false),
-        )
-        assertFalse(
-            monitorShowsLockControl(MonitorDisplayMode.LIVE, lockButtonVisible = false, interfaceLocked = false),
-        )
-        assertTrue(
-            monitorShowsLockControl(MonitorDisplayMode.LIVE, lockButtonVisible = false, interfaceLocked = true),
-        )
-        assertTrue(
-            monitorShowsLockControl(MonitorDisplayMode.COMMAND, lockButtonVisible = false, interfaceLocked = true),
-        )
-        // Clean strips the rail either way — not a fourth clean-view exception.
-        assertFalse(
-            monitorShowsLockControl(MonitorDisplayMode.CLEAN, lockButtonVisible = true, interfaceLocked = true),
-        )
-    }
-
-    @Test
-    fun `battery indicators answer to the mode's own switch`() {
-        // Chrome is per DISP mode now: the caller passes that mode's flag, and clean's own set
-        // ships with the batteries off — so the policy no longer hard-codes the clean case.
-        for (mode in MonitorDisplayMode.entries) {
-            assertTrue(
-                monitorShowsBatteryIndicators(mode, batteryIndicatorsVisible = true),
-                "batteries must show in $mode when that mode has them on",
-            )
-            assertFalse(
-                monitorShowsBatteryIndicators(mode, batteryIndicatorsVisible = false),
-                "batteries must stay hidden in $mode",
-            )
-        }
     }
 
     @Test
