@@ -1,26 +1,27 @@
 New and changed
 
-- Clean view is finally clean. DISP 2 now shows the picture and nothing else - scopes, indicators and pop-ups all step aside. If you want to keep one tool on the clean image anyway, you can pin it per tool in Settings > Display.
-- The focus dial works in video as well as photo. It is now off by default and lives in the FOCUS popup; if you had already switched it on, it stays on.
+- Display settings are rebuilt around the three DISP modes. Each one gets its own section saying what it shows, and DISP 1 and DISP 2 have an "Edit view" button that opens the monitor itself: tap the eye on any element - top bar, rail, lock key, batteries, readouts, tool bar - to show or hide it for that mode. Anything you hide stays on screen at 30% while you are editing, so you can always turn it back on.
+- Clean view is finally clean. DISP 2 shows the picture and nothing else, apart from the recording tally, the record control while a take is rolling, camera warnings, and the DISP key so you can get back out.
+- The focus dial works in video as well as photo. It is off by default and lives in the FOCUS popup; if you had already switched it on, it stays on.
 - H.265 8-bit and 10-bit are separate choices. When your camera offers both, the codec popup shows one H.265 row with 8-bit and 10-bit either side of it, so you pick the depth directly.
-- New installs start on the Quality live-view preset, so the picture and the focus and exposure tools get the largest preview your camera will send.
-- Losing the camera no longer drops you out of the monitor. You stay on the last frame with the link marked as gone, and get Retry connection and Operator menu to choose from.
+- Stream Preset and Quality Bias now both read Fast, Balanced, Quality. Quality Bias had only two positions before, so the middle grade your camera offers was unreachable. New installs start on the Quality preset.
+- Media filters match the tab you are on. Photos offers JPEG, HEIF and NEF, an L/M/S size row, and Today, 7 days or 30 days - instead of the video formats and resolutions it used to show.
 
 Fixes
 
 - Changes you make on the camera reach the app quickly again. Turning the aperture ring, ISO or shutter on the body used to take up to twenty seconds to show - or in video, never. This was the most-reported problem and the one worth hammering.
+- Photos shot as HEIF now appear in the media browser at all. The app did not recognise the file type Nikon writes, so every one of them was silently missing from the list.
 - Connecting a second camera no longer changes its settings. Moving between bodies could flip shutter angle back to shutter speed and disturb other settings; connecting is now read-only.
 - Pickers show what your camera actually supports, in the order it uses. Bodies without U1-U3 are no longer offered them, drive modes read Single, CL, CH, CH+, and 3D tracking and subject detection are named apart instead of both reading "Subject".
-- Unplugging the cable or power-cycling the camera used to wedge the app until you force-quit it. Both now recover on their own, or offer you Retry.
+- Unplugging the cable or power-cycling the camera used to wedge the app until you force-quit it. Both now recover on their own, or offer you Retry connection and Operator menu on the last frame.
 - The first connection attempt no longer needs cancelling and retrying before it will work.
 - Command view keeps the timecode running. It used to freeze at whatever the clock read when you switched, which looked convincing and was wrong while rolling.
-- The focus dial no longer stalls and take tap-to-focus down with it, so you no longer need to fire a frame to get focus responding again.
-- The media filter pop-up fits on smaller phones instead of sliding off the edge of the screen.
+- The focus dial no longer stalls and take tap-to-focus down with it, and the media filter popup fits on smaller phones instead of sliding off the edge.
 
 What to test
 
-- Turn the aperture ring on the camera while watching IRIS in the app, in video and in photo. It should track you as you turn, not lag behind or stop.
-- Pull the cable mid-shot, and separately switch the camera off and on. Both should hold the last frame and offer Retry connection - and Operator menu should leave straight away.
+- Open Settings, Display, DISP 1, then Edit view. Hide a couple of things, tap Done, and confirm they are gone from the live monitor - then go back in and turn them on again. Try the same for DISP 2 and check the two keep separate settings.
+- On the Photos tab, open Filter: you should see JPEG/HEIF/NEF and L/M/S, not MOV and 6K. If you shoot HEIF, check those frames are actually listed.
+- Turn the aperture ring on the camera while watching IRIS, in video and in photo. It should track you as you turn, close to real time.
 - Connect one body, disconnect, then connect a differently configured one. Nothing on the second camera should change just because you connected.
-- Cycle DISP through Live, Clean and Command while recording. Clean should be bare, Command's timecode should keep running, and going back should show the current time rather than catching up.
-- Open the codec pop-up on a body that shoots H.265 both ways, pick 10-bit, then close and reopen it. It should still read 10-bit, and the camera should agree.
+- Pull the cable mid-shot and separately switch the camera off and on: both should hold the last frame and offer Retry, and Operator menu should leave straight away.

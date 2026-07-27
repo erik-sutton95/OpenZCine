@@ -1,5 +1,5 @@
 - Fixed: changes made on the camera - aperture, ISO, shutter - now reach the app promptly instead of lagging or never arriving.
+- Fixed: HEIF photos were missing from the media browser entirely; they are listed now.
 - Fixed: connecting a second body no longer changes its settings, and pickers only offer what your camera supports.
-- Fixed: a dropped cable or a power cycle no longer wedges the app; you keep the last frame and get Retry.
-- Clean view is genuinely clean, with a per-tool pin if you want one tool kept on it.
-- Focus dial now works in video too, off by default.
+- Display settings are per DISP mode, with an Edit view for showing or hiding monitor elements.
+- Photo filters are photo filters: JPEG/HEIF/NEF, L/M/S, date ranges.
