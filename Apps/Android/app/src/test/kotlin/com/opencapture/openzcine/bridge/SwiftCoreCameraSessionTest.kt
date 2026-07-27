@@ -937,6 +937,83 @@ class SwiftCoreCameraSessionTest {
     }
 
     @Test
+    fun `a burst past the cap is finished on the next pass, in announcement order`() = runTest {
+        // #268: the drain used to `take(cap)` and then clear, so everything past the cap was
+        // silently dropped and that readout stayed stale until the ~20 s round-robin.
+        val bridge = FakeBridge()
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                propertyPollIntervalMillis = 60_000,
+                selectorPollIntervalMillis = 60_000,
+                propertyEventDebounceMillis = 250,
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        runCurrent()
+        bridge.clearRefreshRequests()
+
+        val burst = listOf(0xD0A4L, 0xD1A1L, 0xD1A2L, 0xD1A3L, 0xD1A4L, 0xD1A5L)
+        burst.forEach { bridge.eventListeners.single().onEvent(0x4006, 9, longArrayOf(it)) }
+
+        advanceTimeBy(250)
+        runCurrent()
+        // MAX_EVENT_PROPERTY_REFRESHES (private) — matches the core's
+        // CameraAnnouncedPropertyQueue.batchLimit.
+        assertEquals(burst.take(4), bridge.refreshRequests().map { it.propertyCode })
+
+        // The overflow was kept, not dropped: a follow-up pass reads it.
+        advanceTimeBy(250)
+        runCurrent()
+        assertEquals(burst, bridge.refreshRequests().map { it.propertyCode })
+
+        session.disconnect()
+    }
+
+    @Test
+    fun `a body that keeps announcing cannot defer the read indefinitely`() = runTest {
+        // #268: cancel-and-reschedule made this a RESETTING debounce, so an operator holding an
+        // aperture ring pushed the read out for as long as the turn lasted.
+        val bridge = FakeBridge()
+        val session =
+            SwiftCoreCameraSession(
+                host = "192.168.1.1",
+                phaseLogger = { _, _ -> },
+                core = bridge,
+                propertyRefreshScope = this,
+                propertyRefreshDispatcher = StandardTestDispatcher(testScheduler),
+                propertyPollIntervalMillis = 60_000,
+                selectorPollIntervalMillis = 60_000,
+                propertyEventDebounceMillis = 250,
+            )
+        val connecting = async { session.connect() }
+        runCurrent()
+        bridge.listeners.single().onConnected("ZR", "NIKON ZR", "6001234")
+        connecting.await()
+        runCurrent()
+        bridge.clearRefreshRequests()
+
+        bridge.eventListeners.single().onEvent(0x4006, 9, longArrayOf(0xD0A4))
+        advanceTimeBy(200)
+        runCurrent()
+        // Still turning: a second detent lands before the window closes.
+        bridge.eventListeners.single().onEvent(0x4006, 10, longArrayOf(0xD1A1))
+        advanceTimeBy(50)
+        runCurrent()
+
+        // 250 ms after the FIRST announcement, both have been read.
+        assertEquals(listOf(0xD0A4L, 0xD1A1L), bridge.refreshRequests().map { it.propertyCode })
+
+        session.disconnect()
+    }
+
+    @Test
     fun `property refresh is single flight with concurrent manual requests`() = runTest {
         val bridge = FakeBridge()
         val session =
