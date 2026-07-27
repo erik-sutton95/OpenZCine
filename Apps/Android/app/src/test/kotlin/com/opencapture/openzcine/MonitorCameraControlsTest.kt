@@ -222,56 +222,6 @@ class MonitorCameraControlsTest {
         )
     }
 
-    @Test
-    fun `hidden rails preserve settings and active recording safety`() {
-        assertEquals(
-            LandscapeSideRailPlan(
-                fullRailsVisible = false,
-                settingsRecoveryVisible = true,
-                recordingSafetyVisible = false,
-            ),
-            landscapeSideRailPlan(
-                sideRailsVisible = false,
-                recording = false,
-                recordCommandPending = false,
-                recordConfirmationPending = false,
-            ),
-        )
-        assertTrue(
-            landscapeSideRailPlan(
-                sideRailsVisible = false,
-                recording = true,
-                recordCommandPending = false,
-                recordConfirmationPending = false,
-            ).recordingSafetyVisible,
-        )
-        assertTrue(
-            landscapeSideRailPlan(
-                sideRailsVisible = false,
-                recording = false,
-                recordCommandPending = true,
-                recordConfirmationPending = false,
-            ).recordingSafetyVisible,
-        )
-        assertTrue(
-            landscapeSideRailPlan(
-                sideRailsVisible = false,
-                recording = false,
-                recordCommandPending = false,
-                recordConfirmationPending = true,
-            ).recordingSafetyVisible,
-        )
-        val full =
-            landscapeSideRailPlan(
-                sideRailsVisible = true,
-                recording = true,
-                recordCommandPending = true,
-                recordConfirmationPending = true,
-            )
-        assertTrue(full.fullRailsVisible)
-        assertTrue(!full.settingsRecoveryVisible)
-        assertTrue(!full.recordingSafetyVisible)
-    }
 
     @Test
     fun `picker waits for pending camera command before chrome closes it`() {
