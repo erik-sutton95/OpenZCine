@@ -264,7 +264,11 @@ struct MonitorInfoBar: View {
 
                     Spacer(minLength: 8)
 
-                    cameraBattery
+                    if MonitorChromePolicy.showsBatteryIndicators(
+                        mode: model.displayMode, preferences: model.preferences)
+                    {
+                        cameraBattery
+                    }
                 }
             }
             .frame(maxWidth: .infinity)
@@ -780,10 +784,19 @@ struct MonitorSystemCluster: View {
     /// Absolute (landscape) or column-relative (portrait) frames for the five controls.
     var slots: MonitorSystemSlotFrames
     var axis: MonitorZoneStyle
-    /// Renders only what clean view (DISP 2) keeps: the DISP key — the way back OUT of clean,
-    /// without which the rest of the cycle is unreachable — and, when `showsRecordControl` is
-    /// still true, the record control. The rest of the rail is non-critical chrome (#256).
-    var cleanEssentials: Bool = false
+    /// Which subset of the cluster mounts.
+    enum Style: Equatable {
+        /// Everything: lock, DISP, record, Media, Settings.
+        case full
+        /// Clean view (DISP 2) keeps the DISP key — the way back OUT of clean, without which the
+        /// rest of the cycle is unreachable — and, when `showsRecordControl` is still true, the
+        /// record control. The rest is non-critical chrome (#256).
+        case cleanEssentials
+        /// The operator switched the rail off. A lone Settings key — the only route back to the
+        /// toggle — plus the record control mid-take. See `MonitorChromePolicy.sideRailPlan`.
+        case railRecovery
+    }
+    var style: Style = .full
     /// Whether the record control mounts at all. Clean standby drops it; a rolling take never
     /// does — clean must never remove the way to STOP a take.
     var showsRecordControl: Bool = true
@@ -807,21 +820,41 @@ struct MonitorSystemCluster: View {
 
     // MARK: - .axisVertical (former `LockButtonModule` + `RightRailControlsModule`)
 
+    /// Honours the operator's hide only while controls are UNLOCKED — see
+    /// ``MonitorChromePolicy/showsLockControl(mode:preferences:interfaceLocked:)``. Also false in
+    /// clean, which is what `.cleanEssentials` already says for the rest of the rail.
+    private var showsLock: Bool {
+        MonitorChromePolicy.showsLockControl(
+            mode: model.displayMode,
+            preferences: model.preferences,
+            interfaceLocked: model.interfaceLocked)
+    }
+
     @ViewBuilder private var landscapeBody: some View {
-        if !cleanEssentials {
-            lockButton
-                .monitorModuleFrame(slots.lock)
+        switch style {
+        case .full:
+            if showsLock {
+                lockButton
+                    .monitorModuleFrame(slots.lock)
+            }
             settingsButton
                 .monitorModuleFrame(slots.settings)
             mediaButton
                 .monitorModuleFrame(slots.media)
+        case .railRecovery:
+            settingsButton
+                .monitorModuleFrame(slots.settings)
+        case .cleanEssentials:
+            EmptyView()
         }
         if showsRecordControl {
             recordButton
                 .monitorModuleFrame(slots.record)
         }
-        displayButton
-            .monitorModuleFrame(slots.disp)
+        if style != .railRecovery {
+            displayButton
+                .monitorModuleFrame(slots.disp)
+        }
     }
 
     private var lockButton: some View {
@@ -938,7 +971,7 @@ struct MonitorSystemCluster: View {
         // column left DISP nearly touching record while far from lock.
         HStack(spacing: 0) {
             Spacer(minLength: 14)
-            if !cleanEssentials {
+            if style == .full, showsLock {
                 lockButton
                 Spacer(minLength: 14)
             }
@@ -951,7 +984,7 @@ struct MonitorSystemCluster: View {
                 recordButton
                 Spacer(minLength: 14)
             }
-            if !cleanEssentials {
+            if style == .full {
                 mediaButton
                 Spacer(minLength: 14)
                 settingsButton
@@ -1239,9 +1272,15 @@ struct MonitorShell: View {
                 // controls: the DISP key — hiding it would strand the operator, since the rest
                 // of the cycle is only reachable through it — and, while a take is rolling, the
                 // record control. Both are documented exceptions on `MonitorChromePolicy`.
-                if chrome.sideRailsVisible {
+                let railPlan = MonitorChromePolicy.sideRailPlan(
+                    mode: model.displayMode, preferences: model.preferences,
+                    recordingOrPending: model.isRecordingOrPending)
+                if railPlan.fullRail {
                     canvasLayer {
-                        if showsChrome, let battery = map.batteryCluster {
+                        if MonitorChromePolicy.showsBatteryIndicators(
+                            mode: model.displayMode, preferences: model.preferences),
+                            let battery = map.batteryCluster
+                        {
                             if battery.style == .batteryInline {
                                 // Width-constrained (iPad): inline row beside the lock button.
                                 // The frame is a nominal band; content hugs its leading edge.
@@ -1263,8 +1302,20 @@ struct MonitorShell: View {
                         }
                         MonitorSystemCluster(
                             slots: map.systemSlots, axis: .axisVertical,
-                            cleanEssentials: !showsChrome,
+                            style: showsChrome ? .full : .cleanEssentials,
                             showsRecordControl: showsChrome || model.isRecordingOrPending
+                        )
+                        .environment(model)
+                    }
+                } else if railPlan.settingsRecovery || railPlan.recordSafety {
+                    // A hidden rail keeps the two things it must never take away: the route back
+                    // to Settings (the only place to switch the rail on again) and, mid-take, the
+                    // way to stop rolling. Both sit in their normal rail slots.
+                    canvasLayer {
+                        MonitorSystemCluster(
+                            slots: map.systemSlots, axis: .axisVertical,
+                            style: .railRecovery,
+                            showsRecordControl: railPlan.recordSafety
                         )
                         .environment(model)
                     }
@@ -1789,7 +1840,7 @@ struct MonitorShell: View {
             }
             MonitorSystemCluster(
                 slots: map.systemSlots, axis: .axisHorizontal,
-                cleanEssentials: cleanBand, showsRecordControl: bandShowsRecord
+                style: cleanBand ? .cleanEssentials : .full, showsRecordControl: bandShowsRecord
             )
             .environment(model)
             .frame(

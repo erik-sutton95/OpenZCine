@@ -5799,6 +5799,20 @@ final class NativeAppModel {
         preferences.toggleCleanViewPin(tool)
     }
 
+    /// Clears the clean-view keep list, restoring the stock bare image (Display settings).
+    func resetCleanViewPins() {
+        preferences.cleanViewPinnedTools = OperatorPreferences.defaults.cleanViewPinnedTools
+    }
+
+    /// Restores every monitor-chrome section to visible (Display settings).
+    func resetChromeVisibility() {
+        preferences.displayChrome = DisplayChromeVisibility(
+            recReadoutVisible: preferences.displayChrome.recReadoutVisible,
+            codecReadoutVisible: preferences.displayChrome.codecReadoutVisible,
+            mediaReadoutVisible: preferences.displayChrome.mediaReadoutVisible,
+            fpsReadoutVisible: preferences.displayChrome.fpsReadoutVisible)
+    }
+
     func resetExposureBarVisibility() {
         preferences.exposureBarVisibleControls =
             OperatorPreferences.defaults.exposureBarVisibleControls

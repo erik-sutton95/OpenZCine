@@ -585,9 +585,10 @@ where Item.ID == String {
     }
 }
 
-/// Assist-toolbar order, per-button visibility, and the per-tool clean-view pin for Display
-/// settings. The pin (#256) is offered for every tool, LUT included — clean view is bare unless
-/// the operator explicitly keeps a tool on it.
+/// Assist-toolbar order and per-button visibility for Display settings. One row, one question:
+/// "is this tool on the monitor bar?". Keeping a tool through clean view is a different question
+/// and lives in its own ``CleanViewPinStrip`` section — the two read as the same eye/pin control
+/// here and operators could not tell them apart.
 struct AssistToolbarOrderStrip: View {
     @Environment(NativeAppModel.self) private var model
 
@@ -598,7 +599,6 @@ struct AssistToolbarOrderStrip: View {
         ) { tool, index in
             let visible = model.preferences.isAssistToolbarButtonVisible(tool)
             let canToggleVisibility = tool != .lut
-            let pinnedToClean = model.preferences.cleanViewPinnedTools.contains(tool)
             HStack(spacing: 10) {
                 Text("\(index + 1)")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -616,19 +616,6 @@ struct AssistToolbarOrderStrip: View {
                 Text(tool.rawValue)
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(LiveDesign.faint)
-                // Keep-in-clean-view pin: clean (DISP 2) hides every tool unless it is pinned.
-                Button {
-                    model.toggleCleanViewPin(tool)
-                } label: {
-                    Image(systemName: pinnedToClean ? "pin.fill" : "pin.slash")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(pinnedToClean ? LiveDesign.accent : LiveDesign.faint)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.zcTapTarget)
-                .accessibilityLabel("Keep \(tool.displaySettingsTitle) in clean view")
-                .accessibilityValue(pinnedToClean ? "Pinned" : "Hidden in clean view")
                 if canToggleVisibility {
                     Button {
                         model.toggleAssistToolbarVisibility(tool)
@@ -648,9 +635,30 @@ struct AssistToolbarOrderStrip: View {
             .accessibilityLabel("\(tool.displaySettingsTitle), position \(index + 1)")
             .accessibilityHint(
                 canToggleVisibility
-                    ? "Tap the eye to show or hide on the monitor bar, the pin to keep it in clean view. Drag to reorder."
-                    : "Tap the pin to keep it in clean view. Drag to reorder."
+                    ? "Tap the eye to show or hide on the monitor bar. Drag to reorder."
+                    : "Always on the monitor bar. Drag to reorder."
             )
+        }
+    }
+}
+
+/// The clean-view (DISP 2) keep list: one switch per view-assist tool, in the canonical tool
+/// order. Clean is a bare image, and this is the whole of the exception list — so it gets its own
+/// titled section that says that in words, rather than a pin glyph hidden in the toolbar rows.
+struct CleanViewPinStrip: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], spacing: 7) {
+            ForEach(MonitorAssistTool.allCases) { tool in
+                DisplayToggleItem(
+                    title: tool.displaySettingsTitle,
+                    isOn: model.preferences.cleanViewPinnedTools.contains(tool)
+                ) {
+                    model.toggleCleanViewPin(tool)
+                }
+                .accessibilityLabel("Keep \(tool.displaySettingsTitle) in clean view")
+            }
         }
     }
 }

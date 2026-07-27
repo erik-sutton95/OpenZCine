@@ -4054,13 +4054,58 @@ struct OperatorSettingsPanel: View {
         SettingsGroupCard(
             title: "View Assist toolbar",
             caption:
-                "Drag to reorder; tap the eye to show or hide each tool on the monitor bar, and the pin to keep it visible in clean view (DISP 2).",
+                "Drag to reorder; tap the eye to show or hide each tool on the monitor bar.",
             onReset: { model.resetAssistToolbarPreferences() },
             content: {
                 AssistToolbarOrderStrip()
                     .environment(model)
             }
         )
+
+        SettingsGroupCard(
+            title: "Keep in Clean View",
+            caption:
+                "Clean view (DISP 2) shows the image and nothing else. Anything switched on here stays on screen anyway — everything else goes, and comes straight back when you leave clean.",
+            onReset: { model.resetCleanViewPins() },
+            content: {
+                CleanViewPinStrip()
+                    .environment(model)
+            }
+        )
+
+        SettingsGroupCard(
+            title: "Monitor Chrome",
+            caption:
+                "Hide the parts of the monitor you do not ride. Clean view (DISP 2) hides all of it regardless. The lock key stays put while controls are locked — it is the only way to unlock them.",
+            onReset: { model.resetChromeVisibility() }
+        ) {
+            displayToggleGrid([
+                (
+                    "Top Bar", model.preferences.displayChrome.statusBarVisible,
+                    { model.toggleChrome(.statusBar) }
+                ),
+                (
+                    "Side Rail", model.preferences.displayChrome.sideRailsVisible,
+                    { model.toggleChrome(.sideRails) }
+                ),
+                (
+                    "Tool Bar", model.preferences.displayChrome.assistToolbarVisible,
+                    { model.toggleChrome(.assistToolbar) }
+                ),
+                (
+                    "Camera Values", model.preferences.displayChrome.cameraValuesVisible,
+                    { model.toggleChrome(.cameraValues) }
+                ),
+                (
+                    "Lock Key", model.preferences.displayChrome.lockButtonVisible,
+                    { model.toggleChrome(.lockButton) }
+                ),
+                (
+                    "Batteries", model.preferences.displayChrome.batteryIndicatorsVisible,
+                    { model.toggleChrome(.batteryIndicators) }
+                ),
+            ])
+        }
 
         SettingsGroupCard(
             title: "Live Status Readouts", caption: "Hide readouts you do not ride during a take."

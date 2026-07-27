@@ -254,6 +254,32 @@ import Testing
             mode: .clean, preferences: OperatorPreferences.defaults, interfaceLocked: true))
 }
 
+@Test func hidingTheSideRailKeepsSettingsAndTheRollingRecordControl() {
+    var prefs = OperatorPreferences.defaults
+    let full = MonitorChromePolicy.sideRailPlan(
+        mode: .live, preferences: prefs, recordingOrPending: false)
+    #expect(full.fullRail)
+    #expect(!full.settingsRecovery)
+    #expect(!full.recordSafety)
+
+    prefs.displayChrome.sideRailsVisible = false
+    // Settings is the only route back to the toggle that hid the rail.
+    let standby = MonitorChromePolicy.sideRailPlan(
+        mode: .live, preferences: prefs, recordingOrPending: false)
+    #expect(!standby.fullRail)
+    #expect(standby.settingsRecovery)
+    #expect(!standby.recordSafety)
+
+    let rolling = MonitorChromePolicy.sideRailPlan(
+        mode: .live, preferences: prefs, recordingOrPending: true)
+    #expect(rolling.recordSafety)
+
+    // Clean already strips the rail and offers DISP as its way out — no second recovery key.
+    let clean = MonitorChromePolicy.sideRailPlan(
+        mode: .clean, preferences: prefs, recordingOrPending: false)
+    #expect(!clean.settingsRecovery)
+}
+
 @Test func batteryIndicatorsHideOnRequestAndAlwaysInClean() {
     var prefs = OperatorPreferences.defaults
     #expect(MonitorChromePolicy.showsBatteryIndicators(mode: .live, preferences: prefs))

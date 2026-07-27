@@ -85,6 +85,37 @@ public enum MonitorChromePolicy {
         showsChrome(in: mode) && preferences.displayChrome.batteryIndicatorsVisible
     }
 
+    /// What the side rail still mounts for one chrome/recording state.
+    public struct SideRailPlan: Equatable, Sendable {
+        /// The whole rail — batteries, lock, DISP, record, Media, Settings.
+        public let fullRail: Bool
+        /// A lone Settings key, mounted only when the rail is hidden.
+        public let settingsRecovery: Bool
+        /// A lone record control, mounted only when the rail is hidden mid-take.
+        public let recordSafety: Bool
+    }
+
+    /// Resolves the side rail for `mode`.
+    ///
+    /// Hiding the rail (Settings ▸ Display ▸ Monitor Chrome) must never remove the route back to
+    /// Settings — that is the only place the rail can be switched on again, so without it the
+    /// operator is stranded — nor the way to STOP a rolling take. Clean is separate: it keeps the
+    /// DISP key and the rolling record control instead, because the feed swipe and DISP are its
+    /// documented ways out.
+    public static func sideRailPlan(
+        mode: DispMode,
+        preferences: OperatorPreferences,
+        recordingOrPending: Bool
+    ) -> SideRailPlan {
+        let visible = preferences.displayChrome.sideRailsVisible
+        return SideRailPlan(
+            fullRail: visible,
+            // Clean already strips the rail by design and offers DISP as its way out; a second
+            // recovery key there would just put chrome back on the bare image.
+            settingsRecovery: !visible && showsChrome(in: mode),
+            recordSafety: !visible && recordingOrPending)
+    }
+
     /// Whether a transient pop-up (camera-value picker, assist options drawer) may present.
     /// Clean defers them — the operator asked for a bare image. Full-screen destinations the
     /// operator navigates to deliberately (Settings, Media) are not pop-ups and are unaffected.
