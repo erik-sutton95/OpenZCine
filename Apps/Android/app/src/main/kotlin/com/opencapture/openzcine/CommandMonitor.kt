@@ -68,6 +68,7 @@ import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
 import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.openzcine.core.CodecBitDepthOption
 import com.opencapture.openzcine.core.LiveFrameTimecode
 import com.opencapture.openzcine.settings.PanelCloseButton
 import kotlin.math.floor
@@ -144,6 +145,13 @@ internal data class CommandControlRequest(
     val control: CameraControl,
     val currentValue: String,
     val options: List<String>,
+    /**
+     * Bit depths flanking [currentValue] when the core reported a depth choice for that codec
+     * row. Empty for every other control and for codecs the body advertises at one depth.
+     */
+    val bitDepths: List<CodecBitDepthOption> = emptyList(),
+    /** Caption of the depth the body is recording at, so the pair can fill the active side. */
+    val bitDepthSelection: String? = null,
 )
 
 /** The user-visible outcome of an accepted or rejected control write. */
@@ -491,7 +499,23 @@ internal fun commandDashboardPresentation(
             kind = kind,
             title = title,
             value = displayValue ?: currentValue,
-            request = CommandControlRequest(title, control, currentValue, options),
+            request =
+                CommandControlRequest(
+                    title,
+                    control,
+                    currentValue,
+                    options,
+                    // Depth buttons belong to the codec drum only, and only to the row the core
+                    // grouped as a depth choice — never to resolution.
+                    bitDepths =
+                        if (control == CameraControl.CODEC) {
+                            capabilities.codecBitDepths
+                        } else {
+                            emptyList()
+                        },
+                    bitDepthSelection =
+                        snapshot.codecBitDepth.takeIf { control == CameraControl.CODEC },
+                ),
         )
     }
 
@@ -1092,7 +1116,13 @@ internal fun CameraPropertySnapshot.withOptimisticControlValue(
             }
         CameraControl.SHUTTER_LOCK -> copy(shutterLocked = label == "Locked")
         CameraControl.RESOLUTION_FRAMERATE -> copy(resolutionFrameRate = label)
-        CameraControl.CODEC -> copy(codecSelection = label)
+        // A bit-depth button writes a variant label ("H.265 10-bit"), which is not a drum row —
+        // resolve it back through the core-supplied table so the drum keeps its row and only the
+        // depth moves. Never by pulling the depth out of the label.
+        CameraControl.CODEC ->
+            controlCapabilities.codecBitDepths.firstOrNull { it.writeValue == label }
+                ?.let { copy(codecSelection = it.codec, codecBitDepth = it.label) }
+                ?: copy(codecSelection = label)
         CameraControl.VIBRATION_REDUCTION -> copy(vibrationReduction = label)
         CameraControl.ELECTRONIC_VR -> copy(electronicVr = label)
         CameraControl.STILL_DRIVE -> copy(stillCaptureMode = label)

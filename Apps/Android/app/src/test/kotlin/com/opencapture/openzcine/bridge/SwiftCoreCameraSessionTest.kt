@@ -12,6 +12,7 @@ import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraRecordingState
 import com.opencapture.openzcine.core.CameraSessionEvent
 import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.openzcine.core.CodecBitDepthOption
 import com.opencapture.openzcine.transport.UsbPtpTransport
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -41,6 +42,59 @@ import kotlinx.coroutines.test.advanceTimeBy
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SwiftCoreCameraSessionTest {
+    @Test
+    fun `codec bit depths decode as whole triples and the current depth rides beside them`() {
+        val rs = Char(0x1E)
+        val us = Char(0x1F)
+        val payload =
+            listOf(
+                "result\taccepted",
+                "codec\tH.265 10-bit MOV",
+                "codecSelection\tH.265",
+                "codecBitDepth\t10-bit",
+                "options.codec\tH.264${us}H.265",
+                "options.codecBitDepth\t" +
+                    "H.265${rs}8-bit${rs}H.265 8-bit$us" +
+                    "H.265${rs}10-bit${rs}H.265 10-bit",
+            ).joinToString("\n")
+
+        val decoded = CameraPropertySnapshotWire.decode(payload)
+
+        assertTrue(decoded.isValid)
+        assertEquals("H.265", decoded.snapshot.codecSelection)
+        assertEquals("10-bit", decoded.snapshot.codecBitDepth)
+        assertEquals(
+            listOf(
+                CodecBitDepthOption("H.265", "8-bit", "H.265 8-bit"),
+                CodecBitDepthOption("H.265", "10-bit", "H.265 10-bit"),
+            ),
+            decoded.snapshot.controlCapabilities.codecBitDepths,
+        )
+    }
+
+    @Test
+    fun `a truncated codec bit depth entry is dropped rather than half decoded`() {
+        val rs = Char(0x1E)
+        val us = Char(0x1F)
+        // A depth button must always know the exact advertised label it writes; a two-field entry
+        // does not, so it must not become a button.
+        val payload =
+            listOf(
+                "result\taccepted",
+                "options.codec\tH.265",
+                "options.codecBitDepth\t" +
+                    "H.265${rs}8-bit$us" +
+                    "H.265${rs}10-bit${rs}H.265 10-bit",
+            ).joinToString("\n")
+
+        val decoded = CameraPropertySnapshotWire.decode(payload)
+
+        assertEquals(
+            listOf(CodecBitDepthOption("H.265", "10-bit", "H.265 10-bit")),
+            decoded.snapshot.controlCapabilities.codecBitDepths,
+        )
+    }
+
     @Test
     fun `starts disconnected`() {
         assertEquals(

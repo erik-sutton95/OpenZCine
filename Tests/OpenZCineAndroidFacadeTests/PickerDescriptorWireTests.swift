@@ -44,16 +44,23 @@ struct PickerDescriptorWireTests {
             onPhase: { _, _ in })
     }
 
-    @Test func bothHEVCDepthsReachTheShellAsDistinctCodecOptions() throws {
+    @Test func bothHEVCDepthsReachTheShellBesideTheirCodecRow() throws {
         let server = try z6iii()
         defer { server.stop() }
         let session = try connect(to: server)
         defer { session.disconnect() }
 
         let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
-        #expect(controls.codecs == ["H.264", "H.265 8-bit", "H.265 10-bit"])
-        // And the drum's current selection names the depth the body is actually on.
-        #expect(controls.codec == "H.265 10-bit")
+        // One row per family; the two H.265 depths ride beside their row (#276 follow-up).
+        #expect(controls.codecs == ["H.264", "H.265"])
+        #expect(controls.codec == "H.265")
+        #expect(
+            controls.codecBitDepths == [
+                "H.265\u{1E}8-bit\u{1E}H.265 8-bit",
+                "H.265\u{1E}10-bit\u{1E}H.265 10-bit",
+            ])
+        // And the pair lights the depth the body is actually on.
+        #expect(controls.codecBitDepth == "10-bit")
     }
 
     @Test func pickingTenBitPutsTheAdvertisedTenBitValueOnTheWire() throws {
@@ -72,13 +79,33 @@ struct PickerDescriptorWireTests {
             .map { ByteCoding.readUInt32LE(Array($0.data), at: 0) }
         #expect(codecWrites == [0x0000_0801, 0x0001_0A00])
 
-        // Authoritative readback keeps it at 10-bit, and reopening the picker resolves to the
-        // same row. The old collapse landed here on 8-bit.
+        // Authoritative readback keeps it at 10-bit, and reopening the picker lands on the same
+        // row with the same depth lit. The old collapse landed here on 8-bit.
         let controls = session.refreshAndroidPropertySnapshot(.bootstrap).controls
-        #expect(controls.codec == "H.265 10-bit")
+        #expect(controls.codec == "H.265")
+        #expect(controls.codecBitDepth == "10-bit")
     }
 
-    @Test func anAmbiguousCodecLabelIsRefusedRatherThanGuessingADepth() throws {
+    @Test func settlingTheDrumOnACodecRowKeepsTheDepthTheBodyIsOn() throws {
+        let server = try z6iii()
+        defer { server.stop() }
+        let session = try connect(to: server)
+        defer { session.disconnect() }
+        _ = session.refreshAndroidPropertySnapshot(.bootstrap)
+
+        // H.264 is 8-bit here, so returning to the H.265 ROW records 8-bit; only the depth
+        // button moves it to 10. The row must never snap to the first advertised variant.
+        try session.applyControl(.codec, label: "H.264")
+        try session.applyControl(.codec, label: "H.265")
+        #expect(
+            session.refreshAndroidPropertySnapshot(.bootstrap).controls.codecBitDepth == "8-bit")
+
+        try session.applyControl(.codec, label: "H.265 10-bit")
+        #expect(
+            session.refreshAndroidPropertySnapshot(.bootstrap).controls.codecBitDepth == "10-bit")
+    }
+
+    @Test func aCodecLabelTheBodyNeverAdvertisedIsRefusedRatherThanGuessed() throws {
         let server = try z6iii()
         defer { server.stop() }
         let session = try connect(to: server)
@@ -86,9 +113,11 @@ struct PickerDescriptorWireTests {
         _ = session.refreshAndroidPropertySnapshot(.bootstrap)
         let baseline = server.receivedPropertyWrites().count
 
-        // "H.265" is not a row this body offers — two values wear that family. Refuse truthfully.
-        #expect(throws: (any Error).self) {
-            try session.applyControl(.codec, label: "H.265")
+        // A depth this body does not offer for that codec, and a codec it does not have at all.
+        for label in ["H.265 12-bit", "ProRes 422 HQ"] {
+            #expect(throws: (any Error).self) {
+                try session.applyControl(.codec, label: label)
+            }
         }
         #expect(server.receivedPropertyWrites().count == baseline)
     }
@@ -140,7 +169,8 @@ struct PickerDescriptorWireTests {
         let firstSession = try connect(to: z6)
         let first = firstSession.refreshAndroidPropertySnapshot(.bootstrap).controls
         firstSession.disconnect()
-        #expect(first.codecs.contains("H.265 10-bit"))
+        #expect(first.codecs.contains("H.265"))
+        #expect(first.codecBitDepths.contains { $0.hasSuffix("H.265 10-bit") })
         #expect(z6.receivedPropertyWrites().isEmpty)
 
         let zr = try FakeZRServer()  // default fixture: RAW-first ZR codec set, no banks
@@ -149,8 +179,9 @@ struct PickerDescriptorWireTests {
         defer { secondSession.disconnect() }
         let second = secondSession.refreshAndroidPropertySnapshot(.bootstrap).controls
 
-        // The second body's lists are its own — nothing of the Z6III's survives.
-        #expect(!second.codecs.contains("H.265 8-bit"))
+        // The second body's lists are its own — nothing of the Z6III's survives, including the
+        // depth pair, which this body never earns.
+        #expect(second.codecBitDepths.isEmpty)
         #expect(second.codecs != first.codecs)
         #expect(zr.receivedPropertyWrites().isEmpty)
     }

@@ -71,7 +71,9 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         driveModes: [String] = [],
         meteringModes: [String] = [],
         pictureControls: [String] = [],
-        rawCompressions: [String] = []
+        rawCompressions: [String] = [],
+        codecBitDepths: [String] = [],
+        codecBitDepth: String? = nil
     ) {
         self.resolutionFrameRate = resolutionFrameRate
         self.codec = codec
@@ -103,6 +105,8 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
         self.meteringModes = meteringModes
         self.pictureControls = pictureControls
         self.rawCompressions = rawCompressions
+        self.codecBitDepths = codecBitDepths
+        self.codecBitDepth = codecBitDepth
     }
 
     /// Current shared-core resolution/frame-rate label matching descriptor options.
@@ -167,6 +171,15 @@ public struct AndroidCameraControlCapabilities: Equatable, Sendable {
     /// NEF (RAW) recording compressions the body advertises — the modern trio on current bodies,
     /// the Compressed/Uncompressed pair on first-generation ones.
     public let rawCompressions: [String]
+    /// The bit depths behind the `codecs` rows, one entry per advertised variant of a codec the
+    /// body offers at more than one depth, as `row␞caption␞writeValue` (␞ = U+001E). `writeValue`
+    /// is the exact label the codec write resolves to a single advertised raw, so the shell picks
+    /// a depth without ever taking a raw across JNI or reading one out of a label. Empty when no
+    /// advertised codec has a depth choice — the core decides that, not the shell.
+    public let codecBitDepths: [String]
+    /// Caption of the depth the body is currently recording at ("10-bit"), so the shell can fill
+    /// the right side of the pair. Nil when the current codec has no depth choice.
+    public let codecBitDepth: String?
 
     /// Empty capabilities before a successful descriptor refresh.
     public static let empty = AndroidCameraControlCapabilities()
@@ -326,7 +339,9 @@ public enum AndroidCameraPropertyReadbackWire {
         appendOptions("options.whiteBalanceTint", values: controls.whiteBalanceTints, to: &fields)
         appendOptions(
             "options.resolutionFrameRate", values: controls.resolutionFrameRates, to: &fields)
+        append("codecBitDepth", value: controls.codecBitDepth, to: &fields)
         appendOptions("options.codec", values: controls.codecs, to: &fields)
+        appendOptions("options.codecBitDepth", values: controls.codecBitDepths, to: &fields)
         appendOptions(
             "options.vibrationReduction", values: controls.vibrationReduction, to: &fields)
         appendOptions("options.electronicVr", values: controls.electronicVR, to: &fields)

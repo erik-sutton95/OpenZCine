@@ -9,6 +9,7 @@ import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
 import com.opencapture.openzcine.core.CameraPropertySnapshot
 import com.opencapture.openzcine.core.CameraSessionState
 import com.opencapture.openzcine.core.CameraShutterMode
+import com.opencapture.openzcine.core.CodecBitDepthOption
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import kotlin.test.Test
@@ -498,6 +499,57 @@ class MonitorCameraControlsTest {
         assertEquals(measured.width, frame.width, 0.01f)
         assertEquals(measured.x + measured.width, frame.x + frame.width, 0.01f)
         assertEquals(measured.y - 10f, frame.y + frame.height, 0.01f)
+    }
+
+    @Test
+    fun `the codec picker carries the advertised bit depths and the body's current one`() {
+        val depths =
+            listOf(
+                CodecBitDepthOption("H.265", "8-bit", "H.265 8-bit"),
+                CodecBitDepthOption("H.265", "10-bit", "H.265 10-bit"),
+            )
+        val snapshot =
+            cameraSnapshot().copy(
+                codec = "H.265 10-bit MOV",
+                codecSelection = "H.265",
+                codecBitDepth = "10-bit",
+                controlCapabilities =
+                    cameraSnapshot().controlCapabilities.copy(
+                        codecs = listOf("H.264", "H.265"),
+                        codecBitDepths = depths,
+                    ),
+            )
+
+        val request =
+            monitorTopPillPickers(dashboard(snapshot), strings)[MonitorPickerKind.CODEC]
+                ?.modes
+                ?.single()
+                ?.request
+        assertNotNull(request)
+        assertEquals(listOf("H.264", "H.265"), request.options)
+        assertEquals("H.265", request.currentValue)
+        // The pair, and which side is lit, both come from the core — not from the label.
+        assertEquals(depths, request.bitDepths)
+        assertEquals("10-bit", request.bitDepthSelection)
+
+        // A depth tap writes the variant label, and the optimistic snapshot keeps the drum on the
+        // family row while moving only the depth.
+        val optimistic =
+            snapshot.withOptimisticControlValue(CameraControl.CODEC, "H.265 8-bit")
+        assertEquals("H.265", optimistic.codecSelection)
+        assertEquals("8-bit", optimistic.codecBitDepth)
+    }
+
+    @Test
+    fun `a codec the body advertises at one depth carries no depth pair`() {
+        val request =
+            monitorTopPillPickers(dashboard(cameraSnapshot()), strings)[MonitorPickerKind.CODEC]
+                ?.modes
+                ?.single()
+                ?.request
+        assertNotNull(request)
+        assertEquals(emptyList(), request.bitDepths)
+        assertNull(request.bitDepthSelection)
     }
 
     @Test

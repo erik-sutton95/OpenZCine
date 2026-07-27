@@ -316,6 +316,21 @@ public data class CameraStorageSlotStatus(
 )
 
 /**
+ * One bit depth a codec picker row can be recorded at, as grouped by the Swift core.
+ *
+ * [writeValue] is the label the codec write resolves to a single advertised value, so choosing a
+ * depth never means reading one out of a label or carrying a protocol raw across JNI.
+ */
+public data class CodecBitDepthOption(
+    /** The codec row this depth belongs to ("H.265"). */
+    val codec: String,
+    /** Button caption ("10-bit"). */
+    val label: String,
+    /** Exact advertised label to write for this depth ("H.265 10-bit"). */
+    val writeValue: String,
+)
+
+/**
  * Swift-authorized control labels whose protocol values remain in the native session.
  *
  * Values normally come from the connected body's descriptors. A Nikon ZR may also receive a
@@ -385,6 +400,12 @@ public data class CameraControlCapabilities(
      * Compressed/Uncompressed pair and reject the modern trio, so this must come from the body.
      */
     val rawCompressions: List<String> = emptyList(),
+    /**
+     * Bit depths behind the [codecs] rows. Present only for codecs the body advertises at more
+     * than one depth — the Swift core makes that call ([PTPCameraCodecFamily]), so a depth button
+     * can never name a combination this body did not offer.
+     */
+    val codecBitDepths: List<CodecBitDepthOption> = emptyList(),
 ) {
     /** Returns the advertised labels for one descriptor-dependent control. */
     public fun options(control: CameraControl): List<String> =
@@ -476,6 +497,8 @@ public data class CameraPropertySnapshot(
     val resolutionFrameRate: String? = null,
     /** Shared-core short codec label matching the active advertised option. */
     val codecSelection: String? = null,
+    /** Caption of the depth the body is recording at, when [codecSelection]'s row offers a choice. */
+    val codecBitDepth: String? = null,
     /** Active camera white-balance fine-tune label. */
     val whiteBalanceTint: String? = null,
     /** Battery percentage. */

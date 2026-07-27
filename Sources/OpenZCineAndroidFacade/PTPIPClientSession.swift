@@ -422,7 +422,7 @@ private struct AndroidRawControlCatalog: Sendable {
                     currentCodec: recognizedCodec,
                     usesNikonZRFallbacks: usesNikonZRFallbacks)
             },
-            codecs: fileTypes.map(\.label),
+            codecs: codecRows.map(\.label),
             vibrationReduction: vibrationReduction.map(\.label),
             // Unknown/raw codecs fail closed: only a recognized non-raw codec unlocks e-VR.
             electronicVR:
@@ -434,8 +434,43 @@ private struct AndroidRawControlCatalog: Sendable {
             driveModes: driveModes.map(\.label),
             meteringModes: meteringModes.map(\.label),
             pictureControls: pictureControls.map(\.label),
-            rawCompressions: rawCompressions.map(\.label)
+            rawCompressions: rawCompressions.map(\.label),
+            codecBitDepths: codecBitDepthWireEntries,
+            codecBitDepth: currentCodecBitDepthLabel(properties.fileType)
         )
+    }
+
+    /// The codec picker's rows, grouped by the shared core so both shells collapse a two-depth
+    /// family the same way instead of each deciding in UI code.
+    private var codecRows: [PTPCameraCodecFamily] {
+        PTPCameraPropertyDecoders.codecFamilies(fileTypes)
+    }
+
+    /// The depth choices behind those rows, flattened for the JNI wire as
+    /// `row␞caption␞writeValue`. Only depth-choice rows contribute, so the shell can never draw a
+    /// button for a depth this body did not advertise.
+    private var codecBitDepthWireEntries: [String] {
+        codecRows.filter(\.offersBitDepthChoice).flatMap { row in
+            row.depths.map { "\(row.label)\u{1E}\($0.bitDepthLabel)\u{1E}\($0.label)" }
+        }
+    }
+
+    /// Every label a codec write may legitimately name: the picker rows, plus each depth's own
+    /// advertised label for a row the core collapsed. Both shapes resolve to exactly one
+    /// advertised value in `fileTypeMode(forCodecLabel:currentFileType:)`.
+    var codecWriteLabels: [String] {
+        codecRows.map(\.label)
+            + codecRows.filter(\.offersBitDepthChoice).flatMap { $0.depths.map(\.label) }
+    }
+
+    /// The caption of the depth the body is recording at, when its codec row offers a choice.
+    private func currentCodecBitDepthLabel(_ codec: String?) -> String? {
+        guard
+            let row = PTPCameraPropertyDecoders.codecFamily(forFileType: codec, in: codecRows),
+            row.offersBitDepthChoice,
+            let mode = PTPCameraPropertyDecoders.fileTypeMode(forFileType: codec, in: fileTypes)
+        else { return nil }
+        return mode.bitDepthLabel
     }
 
     /// The body's current codec, resolved against the advertised catalog by its exact raw value
@@ -449,11 +484,27 @@ private struct AndroidRawControlCatalog: Sendable {
         return MonitorTextFormat.codecShortLabel(PTPCameraPropertyDecoders.fileType(mode.raw))
     }
 
-    /// The advertised codec ROW the body is currently on — the picker's selected option, carrying
-    /// the bit depth when the body offers several variants. Nil until the descriptor and readback
-    /// agree, so the drum never claims a selection the catalog cannot write back.
+    /// The advertised codec ROW the body is currently on — the picker's selected option. A family
+    /// the body offers at two bit depths is one row; the depth rides beside it (`codecBitDepth`)
+    /// rather than in the row label. Nil until the descriptor and readback agree, so the drum
+    /// never claims a selection the catalog cannot write back.
     private func currentCodecOptionLabel(_ codec: String?) -> String? {
-        PTPCameraPropertyDecoders.fileTypeMode(forFileType: codec, in: fileTypes)?.label
+        PTPCameraPropertyDecoders.codecFamily(forFileType: codec, in: codecRows)?.label
+    }
+
+    /// Resolves a codec pick to exactly one camera-advertised mode, matching iOS
+    /// `NativeAppRoot.codecMode(forPickedLabel:)`. A bit-depth button passes that variant's own
+    /// label and matches outright; a drum row passes the row label and resolves through the codec
+    /// family, keeping the depth the body is recording at when that family offers it. Nothing here
+    /// reads a depth out of a label — that guess is the #276 defect.
+    func fileTypeMode(forCodecLabel label: String, currentFileType: String?)
+        -> PTPCameraFileTypeMode?
+    {
+        if let exact = fileTypes.first(where: { $0.label == label }) { return exact }
+        guard let row = codecRows.first(where: { $0.label == label }) else { return nil }
+        let depth = PTPCameraPropertyDecoders.fileTypeMode(
+            forFileType: currentFileType, in: fileTypes)?.bitDepth
+        return row.depths.first { $0.bitDepth == depth } ?? row.depths.first
     }
 
     /// Resolves a picker label to a camera-advertised mode — same matching as iOS
@@ -2699,14 +2750,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
             )
             .map { [PTPCameraPropertyWrite.screenSize(raw: $0.raw)] } ?? []
         case .codec:
-            if let mode = androidControlCatalog.fileTypes.first(where: { $0.label == label }) {
-                return [PTPCameraPropertyWrite.fileType(raw: mode.raw)]
-            }
-            // Accept long camera strings ("R3D NE 12-bit R3D") against short labels.
-            let short = MonitorTextFormat.codecShortLabel(label)
-            return androidControlCatalog.fileTypes.first(where: {
-                $0.label == short || MonitorTextFormat.codecShortLabel($0.label) == short
-            })
+            return androidControlCatalog.fileTypeMode(
+                forCodecLabel: label,
+                currentFileType: androidPropertySnapshot.fileType
+            )
             .map { [PTPCameraPropertyWrite.fileType(raw: $0.raw)] } ?? []
         case .vibrationReduction:
             let writes = uint8DescriptorWrite(
@@ -2828,7 +2875,10 @@ public final class PTPIPClientSession: @unchecked Sendable {
         case .shutterLock: capabilities.shutterLocks
         case .whiteBalanceTint: capabilities.whiteBalanceTints
         case .resolutionFrameRate: capabilities.resolutionFrameRates
-        case .codec: capabilities.codecs
+        // A codec write is legitimately named two ways: the drum row, and — when the core
+        // collapsed a two-depth family into one row — the depth button's own advertised label.
+        // Both resolve to exactly one advertised value, so both belong in the write domain.
+        case .codec: androidControlCatalog.codecWriteLabels
         case .vibrationReduction: capabilities.vibrationReduction
         case .electronicVR: capabilities.electronicVR
         case .exposureMode: []

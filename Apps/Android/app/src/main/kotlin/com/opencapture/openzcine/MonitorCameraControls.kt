@@ -72,6 +72,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1704,7 +1705,8 @@ private fun PickerPanelBody(
                         selection = selectedLabel,
                         interactive = drumInteractive,
                         markedValues = mode.markedValues,
-                        // −10 / +10 flank the gold selected Kelvin in the centre band.
+                        // −10 / +10 flank the gold selected Kelvin in the centre band; the codec
+                        // drum reuses the pair for that codec's advertised bit depths.
                         sideAdjust =
                             if (isKelvinMode) {
                                 DrumSideAdjust(
@@ -1746,7 +1748,12 @@ private fun PickerPanelBody(
                                     },
                                 )
                             } else {
-                                null
+                                codecBitDepthAdjust(
+                                    request = mode.request,
+                                    row = selectedLabel,
+                                    enabled = drumInteractive,
+                                    onSelect = onSelect,
+                                )
                             },
                         modifier =
                             Modifier
@@ -2206,13 +2213,53 @@ internal fun MFDriveStrip(
     }
 }
 
-/** ±10 buttons flanking the gold selected row of a Kelvin drum. */
+/**
+ * A pair of buttons flanking the gold selected row: a Kelvin drum's ±10, and the codec drum's
+ * advertised bit depths (8-bit left, 10-bit right). Captions default to the Kelvin pair.
+ */
 internal data class DrumSideAdjust(
     val minusEnabled: Boolean,
     val plusEnabled: Boolean,
     val onMinus: () -> Unit,
     val onPlus: () -> Unit,
+    val minusLabel: String = "−10",
+    val plusLabel: String = "+10",
+    val minusDescription: String = "Decrease Kelvin by 10",
+    val plusDescription: String = "Increase Kelvin by 10",
+    /** Filled treatment for a side that IS the current camera value (the active bit depth). */
+    val minusSelected: Boolean = false,
+    val plusSelected: Boolean = false,
 )
+
+/**
+ * The advertised bit depths flanking a settled codec row, or null when this drum is not the
+ * codec picker or the body offers that codec at a single depth. The grouping decision is the
+ * Swift core's ([PTPCameraCodecFamily]); this only renders what it published.
+ */
+private fun codecBitDepthAdjust(
+    request: CommandControlRequest,
+    row: String,
+    enabled: Boolean,
+    onSelect: (CommandControlRequest, String) -> Unit,
+): DrumSideAdjust? {
+    if (request.control != CameraControl.CODEC) return null
+    val depths = request.bitDepths.filter { it.codec == row }
+    if (depths.size != 2) return null
+    val low = depths[0]
+    val high = depths[1]
+    return DrumSideAdjust(
+        minusEnabled = enabled,
+        plusEnabled = enabled,
+        onMinus = { onSelect(request, low.writeValue) },
+        onPlus = { onSelect(request, high.writeValue) },
+        minusLabel = low.label,
+        plusLabel = high.label,
+        minusDescription = "Record $row at ${low.label}",
+        plusDescription = "Record $row at ${high.label}",
+        minusSelected = request.bitDepthSelection == low.label,
+        plusSelected = request.bitDepthSelection == high.label,
+    )
+}
 
 private fun applyKelvinFineStep(
     modeIndex: Int,
@@ -2386,7 +2433,7 @@ internal fun AccentDrumWheel(
             Modifier.fillMaxWidth().height(1.dp).offset(y = rowHeight / 2)
                 .background(LiveDesign.hairlineStrong),
         )
-        // −10 / +10 on either side of the selected Kelvin — always on when set.
+        // The flanking pair on either side of the selected row — always on when set.
         sideAdjust?.let { adjust ->
             Row(
                 Modifier
@@ -2396,18 +2443,20 @@ internal fun AccentDrumWheel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                KelvinSideStepButton(
-                    label = "−10",
+                DrumSideStepButton(
+                    label = adjust.minusLabel,
                     enabled = adjust.minusEnabled,
-                    contentDescription = "Decrease Kelvin by 10",
+                    selected = adjust.minusSelected,
+                    contentDescription = adjust.minusDescription,
                     onClick = adjust.onMinus,
                 )
                 // Leave the centre open so the gold selected value stays readable.
                 Box(Modifier.weight(1f))
-                KelvinSideStepButton(
-                    label = "+10",
+                DrumSideStepButton(
+                    label = adjust.plusLabel,
                     enabled = adjust.plusEnabled,
-                    contentDescription = "Increase Kelvin by 10",
+                    selected = adjust.plusSelected,
+                    contentDescription = adjust.plusDescription,
                     onClick = adjust.onPlus,
                 )
             }
@@ -2416,31 +2465,40 @@ internal fun AccentDrumWheel(
 }
 
 @Composable
-private fun KelvinSideStepButton(
+private fun DrumSideStepButton(
     label: String,
     enabled: Boolean,
     contentDescription: String,
     onClick: () -> Unit,
+    selected: Boolean = false,
 ) {
     Box(
         Modifier
             .height(40.dp)
             .width(56.dp)
             .alpha(if (enabled) 1f else 0.35f)
-            .background(LiveDesign.accentDim, ChromeShape)
+            .background(if (selected) LiveDesign.accent else LiveDesign.accentDim, ChromeShape)
             .border(
                 1.5.dp,
                 if (enabled) LiveDesign.accent else LiveDesign.hairline,
                 ChromeShape,
             )
             .chromeClickable(enabled = enabled, onClick = onClick)
-            .semantics { this.contentDescription = contentDescription },
+            .semantics {
+                this.contentDescription = contentDescription
+                this.selected = selected
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
             style = chromeStyle(14f, FontWeight.Bold),
-            color = if (enabled) LiveDesign.accent else LiveDesign.faint,
+            color =
+                when {
+                    selected -> LiveDesign.background
+                    enabled -> LiveDesign.accent
+                    else -> LiveDesign.faint
+                },
             maxLines = 1,
         )
     }
