@@ -845,6 +845,14 @@
     <string name="settings_toggle_lock">Lock Button</string>
     <string name="settings_toggle_batteries">Batteries</string>
     <string name="settings_clean_view_section">Keep in Clean View</string>
+    <string name="settings_edit_view">Edit view</string>
+    <string name="settings_clean_view_tools">View assists that stay on in clean view</string>
+    <string name="settings_disp_live_caption">The full monitor. Set what it shows in Edit view, and which tools reach the tool bar.</string>
+    <string name="settings_disp_clean_caption">A bare image. Anything you switch on here survives clean view; the DISP key always stays so you can get back out.</string>
+    <string name="settings_disp_command_caption">The data dashboard — no feed, so no image assists. Only the side rail is on screen.</string>
+    <string name="settings_chrome_edit_title">Editing %1$s</string>
+    <string name="settings_chrome_edit_hint">Tap an eye to show or hide it</string>
+    <string name="settings_chrome_edit_done">Done</string>
     <string name="settings_clean_view_section_caption">Clean view (DISP 2) shows the image and nothing else. Anything switched on here stays on screen anyway.</string>
     <string name="settings_reset_clean_view">Reset clean view</string>
     <string name="settings_assist_toolbar">View Assist toolbar</string>

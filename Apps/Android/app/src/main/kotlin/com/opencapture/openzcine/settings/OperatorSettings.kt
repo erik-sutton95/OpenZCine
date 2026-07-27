@@ -49,6 +49,47 @@ public enum class MonitorDisplayMode(
     }
 }
 
+/**
+ * One switchable piece of monitor chrome, mirroring iOS
+ * `DisplayChromeVisibility.Section`. Each DISP mode owns its own set of these.
+ */
+public enum class ChromeSection(
+    /** Operator-facing label; matches the iOS `Section.title` strings. */
+    public val title: String,
+) {
+    STATUS_BAR("Status Bar"),
+    SIDE_RAILS("Side Rail"),
+    ASSIST_TOOLBAR("Tool Bar"),
+    CAMERA_VALUES("Camera Values"),
+    LOCK_BUTTON("Lock Button"),
+    BATTERY_INDICATORS("Batteries"),
+    REC_READOUT("REC"),
+    CODEC_READOUT("CODEC"),
+    MEDIA_READOUT("MEDIA"),
+    FPS_READOUT("FPS"),
+    ;
+
+    /**
+     * Whether the operator may show or hide this in [mode], mirroring
+     * `DisplayChromeVisibility.isConfigurable(_:in:)`. Command replaces the feed with the
+     * dashboard, so it only owns the rail cluster; clean's rail renders its two essentials
+     * whatever the operator does, and that stripped rail carries no lock key to reveal.
+     */
+    public fun isConfigurableIn(mode: MonitorDisplayMode): Boolean =
+        when (mode) {
+            MonitorDisplayMode.LIVE -> true
+            MonitorDisplayMode.CLEAN -> this != SIDE_RAILS && this != LOCK_BUTTON
+            MonitorDisplayMode.COMMAND ->
+                this == SIDE_RAILS || this == LOCK_BUTTON || this == BATTERY_INDICATORS
+        }
+
+    public companion object {
+        /** The sections [mode] lets the operator show or hide, in render order. */
+        public fun configurableIn(mode: MonitorDisplayMode): List<ChromeSection> =
+            entries.filter { it.isConfigurableIn(mode) }
+    }
+}
+
 /** Localized label used by phone monitor and settings presentation. */
 @StringRes
 internal fun MonitorDisplayMode.labelResource(): Int =
@@ -513,6 +554,158 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public val lockButtonVisible: Toggle = Toggle("display.lockButton", default = true)
     public val batteryIndicatorsVisible: Toggle =
         Toggle("display.batteryIndicators", default = true)
+
+    // Display chrome, third pass: chrome went per-DISP-mode (iOS
+    // `OperatorPreferences.chrome(for:)`). The ten toggles above keep their original keys and
+    // become DISP 1's, so no stored preference moves. DISP 2 gets the documented bare image, with
+    // the side rail still on because that is where clean's two essentials live — the DISP key and
+    // the record control mid-take — and the readouts on so switching the bar back on gives a
+    // complete bar. DISP 3 inherits DISP 1's *current* values, matching the Swift decode, so a
+    // rail or battery cluster the operator had hidden stays hidden on the dashboard.
+    public val cleanStatusBarVisible: Toggle = Toggle("display.clean.statusBar", default = false)
+    public val cleanSideRailsVisible: Toggle = Toggle("display.clean.sideRails", default = true)
+    public val cleanAssistToolbarVisible: Toggle =
+        Toggle("display.clean.assistToolbar", default = false)
+    public val cleanCameraValuesVisible: Toggle =
+        Toggle("display.clean.cameraValues", default = false)
+    public val cleanRecReadoutVisible: Toggle = Toggle("display.clean.recReadout", default = true)
+    public val cleanCodecReadoutVisible: Toggle =
+        Toggle("display.clean.codecReadout", default = true)
+    public val cleanMediaReadoutVisible: Toggle =
+        Toggle("display.clean.mediaReadout", default = true)
+    public val cleanFpsReadoutVisible: Toggle = Toggle("display.clean.fpsReadout", default = true)
+    public val cleanLockButtonVisible: Toggle = Toggle("display.clean.lockButton", default = false)
+    public val cleanBatteryIndicatorsVisible: Toggle =
+        Toggle("display.clean.batteryIndicators", default = false)
+
+    public val commandStatusBarVisible: Toggle =
+        Toggle("display.command.statusBar", default = statusBarVisible.value)
+    public val commandSideRailsVisible: Toggle =
+        Toggle("display.command.sideRails", default = sideRailsVisible.value)
+    public val commandAssistToolbarVisible: Toggle =
+        Toggle("display.command.assistToolbar", default = assistToolbarVisible.value)
+    public val commandCameraValuesVisible: Toggle =
+        Toggle("display.command.cameraValues", default = cameraValuesVisible.value)
+    public val commandRecReadoutVisible: Toggle =
+        Toggle("display.command.recReadout", default = recReadoutVisible.value)
+    public val commandCodecReadoutVisible: Toggle =
+        Toggle("display.command.codecReadout", default = codecReadoutVisible.value)
+    public val commandMediaReadoutVisible: Toggle =
+        Toggle("display.command.mediaReadout", default = mediaReadoutVisible.value)
+    public val commandFpsReadoutVisible: Toggle =
+        Toggle("display.command.fpsReadout", default = fpsReadoutVisible.value)
+    public val commandLockButtonVisible: Toggle =
+        Toggle("display.command.lockButton", default = lockButtonVisible.value)
+    public val commandBatteryIndicatorsVisible: Toggle =
+        Toggle("display.command.batteryIndicators", default = batteryIndicatorsVisible.value)
+
+    /** One DISP mode's chrome switches, mirroring iOS `DisplayChromeVisibility`. */
+    @Stable
+    public class ChromeVisibility internal constructor(
+        public val statusBar: Toggle,
+        public val sideRails: Toggle,
+        public val assistToolbar: Toggle,
+        public val cameraValues: Toggle,
+        public val recReadout: Toggle,
+        public val codecReadout: Toggle,
+        public val mediaReadout: Toggle,
+        public val fpsReadout: Toggle,
+        public val lockButton: Toggle,
+        public val batteryIndicators: Toggle,
+    ) {
+        public operator fun get(section: ChromeSection): Toggle =
+            when (section) {
+                ChromeSection.STATUS_BAR -> statusBar
+                ChromeSection.SIDE_RAILS -> sideRails
+                ChromeSection.ASSIST_TOOLBAR -> assistToolbar
+                ChromeSection.CAMERA_VALUES -> cameraValues
+                ChromeSection.LOCK_BUTTON -> lockButton
+                ChromeSection.BATTERY_INDICATORS -> batteryIndicators
+                ChromeSection.REC_READOUT -> recReadout
+                ChromeSection.CODEC_READOUT -> codecReadout
+                ChromeSection.MEDIA_READOUT -> mediaReadout
+                ChromeSection.FPS_READOUT -> fpsReadout
+            }
+    }
+
+    private val liveChrome =
+        ChromeVisibility(
+            statusBarVisible,
+            sideRailsVisible,
+            assistToolbarVisible,
+            cameraValuesVisible,
+            recReadoutVisible,
+            codecReadoutVisible,
+            mediaReadoutVisible,
+            fpsReadoutVisible,
+            lockButtonVisible,
+            batteryIndicatorsVisible,
+        )
+    private val cleanChrome =
+        ChromeVisibility(
+            cleanStatusBarVisible,
+            cleanSideRailsVisible,
+            cleanAssistToolbarVisible,
+            cleanCameraValuesVisible,
+            cleanRecReadoutVisible,
+            cleanCodecReadoutVisible,
+            cleanMediaReadoutVisible,
+            cleanFpsReadoutVisible,
+            cleanLockButtonVisible,
+            cleanBatteryIndicatorsVisible,
+        )
+    private val commandChrome =
+        ChromeVisibility(
+            commandStatusBarVisible,
+            commandSideRailsVisible,
+            commandAssistToolbarVisible,
+            commandCameraValuesVisible,
+            commandRecReadoutVisible,
+            commandCodecReadoutVisible,
+            commandMediaReadoutVisible,
+            commandFpsReadoutVisible,
+            commandLockButtonVisible,
+            commandBatteryIndicatorsVisible,
+        )
+
+    /** The chrome configuration [mode] renders. Each DISP mode owns its own set. */
+    public fun chrome(mode: MonitorDisplayMode): ChromeVisibility =
+        when (mode) {
+            MonitorDisplayMode.LIVE -> liveChrome
+            MonitorDisplayMode.CLEAN -> cleanChrome
+            MonitorDisplayMode.COMMAND -> commandChrome
+        }
+
+    /** Flips one chrome section for one DISP mode; sections the mode does not own are ignored. */
+    public fun toggleChrome(section: ChromeSection, mode: MonitorDisplayMode) {
+        if (!section.isConfigurableIn(mode)) return
+        chrome(mode)[section].toggle()
+    }
+
+    /** Restores one DISP mode's chrome to its stock configuration. */
+    public fun resetChromeVisibility(mode: MonitorDisplayMode) {
+        val chrome = chrome(mode)
+        ChromeSection.entries.forEach { chrome[it].value = chrome[it].default }
+    }
+
+    private val chromeEditorModeState = mutableStateOf<MonitorDisplayMode?>(null)
+
+    /**
+     * The DISP mode whose chrome the operator is editing on the monitor itself, or `null` when the
+     * monitor is live. Session-only — never persisted, so a crash or relaunch cannot strand the
+     * operator in the editor.
+     */
+    public val chromeEditorMode: MonitorDisplayMode?
+        get() = chromeEditorModeState.value
+
+    /** Opens the Edit view on [mode]. The caller dismisses Operator Setup. */
+    public fun beginChromeEditing(mode: MonitorDisplayMode) {
+        chromeEditorModeState.value = mode
+    }
+
+    public fun endChromeEditing() {
+        chromeEditorModeState.value = null
+    }
 
     // Controls — all four are app-local behavior and therefore safe to expose
     // before Android has camera-property writes.
@@ -1012,21 +1205,6 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         preferences.edit().putStringSet(CLEAN_VIEW_PINNED_TOOLS_KEY, linkedSetOf()).apply()
     }
 
-    /** Restores every monitor-chrome section to visible. */
-    public fun resetChromeVisibility() {
-        chromeVisibilityToggles.forEach { it.value = true }
-    }
-
-    /** The Monitor Chrome section's switches, in the order the settings grid shows them. */
-    public val chromeVisibilityToggles: List<Toggle> =
-        listOf(
-            statusBarVisible,
-            sideRailsVisible,
-            assistToolbarVisible,
-            cameraValuesVisible,
-            lockButtonVisible,
-            batteryIndicatorsVisible,
-        )
 
     /** Moves [tool] directly to [targetIndex] and persists the normalized order. */
     public fun moveAssistToolbarTool(tool: AssistTool, targetIndex: Int) {
@@ -1094,6 +1272,26 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             desqueezeEnabled,
             lockButtonVisible,
             batteryIndicatorsVisible,
+            cleanStatusBarVisible,
+            cleanSideRailsVisible,
+            cleanAssistToolbarVisible,
+            cleanCameraValuesVisible,
+            cleanRecReadoutVisible,
+            cleanCodecReadoutVisible,
+            cleanMediaReadoutVisible,
+            cleanFpsReadoutVisible,
+            cleanLockButtonVisible,
+            cleanBatteryIndicatorsVisible,
+            commandStatusBarVisible,
+            commandSideRailsVisible,
+            commandAssistToolbarVisible,
+            commandCameraValuesVisible,
+            commandRecReadoutVisible,
+            commandCodecReadoutVisible,
+            commandMediaReadoutVisible,
+            commandFpsReadoutVisible,
+            commandLockButtonVisible,
+            commandBatteryIndicatorsVisible,
         )
 
     private fun loadDisplayModeOrder(): List<MonitorDisplayMode> {

@@ -1372,10 +1372,13 @@ internal fun MonitorScreen(
         // as well (#256).
         val cleanViewPins = operatorSettings.cleanViewPinnedTools
         val showsChrome = monitorShowsChrome(effectiveDisplayMode)
-        val statusBarVisible = operatorSettings.statusBarVisible.value
-        val assistToolbarVisible = operatorSettings.assistToolbarVisible.value
-        val cameraValuesVisible = operatorSettings.cameraValuesVisible.value
-        val sideRailsVisible = operatorSettings.sideRailsVisible.value
+        // Chrome is per DISP mode (iOS `OperatorPreferences.chrome(for:)`) — read this mode's set,
+        // never the global one, or DISP 2's bare image leaks back into DISP 1.
+        val chrome = operatorSettings.chrome(effectiveDisplayMode)
+        val statusBarVisible = chrome.statusBar.value
+        val assistToolbarVisible = chrome.assistToolbar.value
+        val cameraValuesVisible = chrome.cameraValues.value
+        val sideRailsVisible = chrome.sideRails.value
         val visibleAssistTools = operatorSettings.visibleAssistToolbarTools
         val openAssistOptions: (AssistTool, Rect) -> Unit = { tool, anchor ->
             // Clean view defers transient pop-ups (#256) — the toolbar that opens them is hidden
@@ -1508,7 +1511,7 @@ internal fun MonitorScreen(
             liveFeedColorNoticeTopInsetDp(
                 feed = zones.feed,
                 infoBar = zones.infoBar,
-                statusBarVisible = operatorSettings.statusBarVisible.value,
+                statusBarVisible = statusBarVisible,
             )
         // The gauge is a HUD instrument, so its lower track must clear the
         // bottom strips actually mounted over the feed. Pass this local pixel
@@ -2237,7 +2240,7 @@ internal fun MonitorScreen(
                     // lane (see monitorLeadingInsetDp) starts the feed right of
                     // the lock, so the band always clears it — same as iPhone
                     // geometry.
-                    if (operatorSettings.statusBarVisible.value && showsChrome) {
+                    if (statusBarVisible) {
                         // Photography centres the deck pill group over the
                         // centred FEED, not the band (iOS centres the deck
                         // over the feed) — a band slice symmetric about the
@@ -2273,10 +2276,10 @@ internal fun MonitorScreen(
                                     onPillBounds = { kind, frame ->
                                         measuredTopPills[kind] = frame
                                     },
-                                    recReadoutVisible = operatorSettings.recReadoutVisible.value,
-                                    codecReadoutVisible = operatorSettings.codecReadoutVisible.value,
-                                    mediaReadoutVisible = operatorSettings.mediaReadoutVisible.value,
-                                    fpsReadoutVisible = operatorSettings.fpsReadoutVisible.value,
+                                    recReadoutVisible = chrome.recReadout.value,
+                                    codecReadoutVisible = chrome.codecReadout.value,
+                                    mediaReadoutVisible = chrome.mediaReadout.value,
+                                    fpsReadoutVisible = chrome.fpsReadout.value,
                                     signalBars = actualLinkHealth.presentation.signalBars,
                                     resolution = readoutRetention.resolution,
                                     codec = readoutRetention.codec,
@@ -2530,7 +2533,7 @@ internal fun MonitorScreen(
                     // is preserved.
                     if (monitorShowsLockControl(
                             effectiveDisplayMode,
-                            operatorSettings.lockButtonVisible.value,
+                            chrome.lockButton.value,
                             locked,
                         )
                     ) {
@@ -2547,7 +2550,7 @@ internal fun MonitorScreen(
                     zones.batteryPhone?.takeIf {
                         monitorShowsBatteryIndicators(
                             effectiveDisplayMode,
-                            operatorSettings.batteryIndicatorsVisible.value,
+                            chrome.batteryIndicators.value,
                         )
                     }?.let { anchor ->
                         BatteryRowStack(
@@ -3269,10 +3272,10 @@ private fun PortraitChrome(
     LaunchedEffect(isFill, isCommand) {
         if (!isFill || isCommand) railExpanded = false
     }
-    // The portrait info bar shows in live and command, independent of the
-    // status-bar toggle (which governs only the landscape pill). Clean strips
-    // it with the rest of the non-critical chrome (#256).
-    if (showsChrome) {
+    // Chrome is per DISP mode, so portrait answers to the same switches landscape does — the top
+    // bar used to ignore the operator's Status Bar choice entirely.
+    val chrome = operatorSettings.chrome(displayMode)
+    if (chrome.statusBar.value) {
         PortraitInfoBar(
             timecodeRetention = timecodeRetention,
             sessionState = sessionState,
@@ -3280,10 +3283,7 @@ private fun PortraitChrome(
             // The bar's battery gauge answers to the Monitor Chrome battery switch, like the
             // landscape rail's pair (iOS `InfoBarContent`).
             showsBattery =
-                monitorShowsBatteryIndicators(
-                    displayMode,
-                    operatorSettings.batteryIndicatorsVisible.value,
-                ),
+                monitorShowsBatteryIndicators(displayMode, chrome.batteryIndicators.value),
             cameraBatteryPercent = cameraReadouts.batteryPercent,
             cameraExternalPower = cameraReadouts.externalPower,
             modifier = Modifier.zone(zones.infoBar),
@@ -3332,7 +3332,7 @@ private fun PortraitChrome(
             },
             photography = isPhotography,
         )
-    if (!isCommand && operatorSettings.assistToolbarVisible.value) {
+    if (!isCommand && chrome.assistToolbar.value) {
         zones.assistStrip?.let { strip ->
             AssistToolbar(
                 assist,
@@ -3411,7 +3411,7 @@ private fun PortraitChrome(
         }
     }
 
-    if (!isCommand && isFill && operatorSettings.cameraValuesVisible.value) {
+    if (!isCommand && isFill && chrome.cameraValues.value) {
         zones.captureStrip?.let { strip ->
             Box(
                 Modifier.zone(strip).alpha(if (locked) 0.4f else 1f),
@@ -3434,12 +3434,12 @@ private fun PortraitChrome(
         }
     }
 
-    if (!isCommand && isFill && operatorSettings.assistToolbarVisible.value) {
+    if (!isCommand && isFill && chrome.assistToolbar.value) {
         val railFrame =
             portraitFillAssistRailFrame(
                 feed = zones.feed,
                 captureStrip = zones.captureStrip.takeIf {
-                    operatorSettings.cameraValuesVisible.value
+                    chrome.cameraValues.value
                 },
                 expanded = railExpanded,
             )
@@ -3481,7 +3481,7 @@ private fun PortraitChrome(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.weight(1f))
-        if (monitorShowsLockControl(displayMode, operatorSettings.lockButtonVisible.value, locked)) {
+        if (monitorShowsLockControl(displayMode, chrome.lockButton.value, locked)) {
             LockButton(locked, Modifier.size(40.dp), onClick = onLock)
             Spacer(Modifier.weight(1f))
         }
