@@ -1200,10 +1200,10 @@ struct MonitorShell: View {
         MonitorChromePolicy.showsChrome(in: model.displayMode)
     }
 
-    /// The feed frame the Edit view's banner centres on. Recomputed from the same zone map the
+    /// The zone map the Edit view's banner places against. Recomputed from the same inputs the
     /// shells use — the banner is mounted above `allowsHitTesting(false)`, outside the branch that
     /// already holds `map`, and only ever while the editor is open.
-    private var editorFeedFrame: MonitorFeedFrame {
+    private var editorZoneMap: MonitorZoneMap {
         MonitorZoneLayout.map(
             viewportWidth: context.viewportWidth,
             viewportHeight: context.viewportHeight,
@@ -1218,7 +1218,7 @@ struct MonitorShell: View {
                 ? (model.chromeSectionMounts(.assistToolbar)
                     ? MonitorPortraitLayout.assistToolbarHeight : 0)
                 : landscapeBottomBarHeight
-        ).feed
+        )
     }
 
     var body: some View {
@@ -1251,20 +1251,34 @@ struct MonitorShell: View {
         // The Edit view's own banner, over everything so "Done" is never behind a dimmed element.
         // Centred on the FEED frame, not the screen: the rails, the notch lane and the portrait
         // tile grid all sit outside the image, and a screen-centred banner reads as belonging to
-        // none of it. Near the feed's bottom edge — 88pt up in landscape to clear the bottom bars,
-        // 34pt in portrait where the feed's bottom edge already is the band's.
+        // none of it.
+        //
+        // Its BOTTOM edge is anchored (not its centre) so the banner's own height never matters:
+        // just clear of the bottom bars, whose top corners carry badges that straddle the edge —
+        // a bottom-centred banner sat on the tool bar's eye and swallowed the tap.
         .overlay {
             if let mode = model.chromeEditorMode {
-                let feed = editorFeedFrame
-                ZStack(alignment: .topLeading) {
+                let map = editorZoneMap
+                let feed = map.feed
+                let bannerBottom =
+                    context.isPortrait
+                    ? feed.y + feed.height - 12
+                        // Half a badge (13pt) plus a gap above the bars' top edge.
+                    : (map.assistStrip?.frame.y ?? (feed.y + feed.height)) - 18
+                ZStack(alignment: .bottom) {
+                    Color.clear
                     ChromeEditBanner(mode: mode)
                         .environment(model)
-                        .position(
-                            x: CGFloat(feed.x + feed.width / 2),
-                            y: CGFloat(feed.y + feed.height) - (context.isPortrait ? 34 : 88)
-                        )
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                .frame(
+                    width: CGFloat(feed.width),
+                    height: CGFloat(max(0, bannerBottom - feed.y))
+                )
+                .position(
+                    x: CGFloat(feed.x + feed.width / 2),
+                    y: CGFloat((feed.y + bannerBottom) / 2)
+                )
                 .ignoresSafeArea()
             }
         }
