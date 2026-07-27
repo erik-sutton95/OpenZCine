@@ -62,8 +62,11 @@ All notable changes to this project are documented here. The format is based on
 
 - **The H.265 picker no longer collapses 8-bit and 10-bit.** A body advertising both wore one
   "H.265" row backed by whichever value came first, so leaving H.265 and returning to it silently
-  landed on 8-bit. Each advertised variant is now its own row, labelled with its bit depth, and the
-  exact value the operator picked is what gets written and read back.
+  landed on 8-bit. The depth is now chosen with **8-bit / 10-bit buttons flanking the codec row**,
+  the same idiom as white balance's −10 / +10, and only for codecs the connected body actually
+  advertises at more than one depth — a single-variant codec keeps a plain row and no buttons. The
+  exact advertised value is what gets written, and the lit depth comes from the camera's own
+  readback, so it survives closing and reopening the picker. Both platforms.
 - **Pickers mirror the connected body instead of a fixed list of Nikon Z values.** Exposure mode,
   drive, focus mode/area/subject, metering, flash, image quality, NEF compression and picture
   control now come from the camera's own descriptors — its values, in its order. A body without

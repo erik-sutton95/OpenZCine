@@ -114,7 +114,24 @@ public class FakeCameraSession(
                 mutableProperties.update { it.copy(resolutionFrameRate = label) }
             CameraControl.CODEC ->
                 mutableProperties.update {
-                    it.copy(codec = label, codecSelection = label)
+                    // A depth button writes a variant label; resolve it back through the
+                    // advertised table so the drum keeps its row and only the depth moves,
+                    // exactly as an authoritative readback would report it.
+                    val depths = it.controlCapabilities.codecBitDepths
+                    val depth =
+                        depths.firstOrNull { option -> option.writeValue == label }
+                        // Settling the drum on a depth-choice ROW lands the body on a real
+                        // depth, exactly as a camera's readback would report one.
+                        ?: depths.firstOrNull { option -> option.codec == label }
+                    if (depth == null) {
+                        it.copy(codec = label, codecSelection = label, codecBitDepth = null)
+                    } else {
+                        it.copy(
+                            codec = depth.writeValue,
+                            codecSelection = depth.codec,
+                            codecBitDepth = depth.label,
+                        )
+                    }
                 }
             CameraControl.WHITE_BALANCE ->
                 mutableProperties.update {
@@ -231,13 +248,20 @@ public class FakeCameraSession(
                                 "6K · 50p",
                                 "4K · 60p",
                             ),
+                        // Picker ROWS, as the core groups them: H.265 is one row here because a
+                        // body offering both depths advertises them through codecBitDepths below.
                         codecs =
                             listOf(
                                 "R3D NE",
                                 "N-RAW",
                                 "ProRes RAW HQ",
                                 "ProRes 422 HQ",
-                                "H.265 10-bit",
+                                "H.265",
+                            ),
+                        codecBitDepths =
+                            listOf(
+                                CodecBitDepthOption("H.265", "8-bit", "H.265 8-bit"),
+                                CodecBitDepthOption("H.265", "10-bit", "H.265 10-bit"),
                             ),
                         // Nikon K dial steps (~10 mired; 5560 not 5600) + presets.
                         whiteBalanceValues =
