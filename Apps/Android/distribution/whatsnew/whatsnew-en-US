@@ -1,5 +1,5 @@
-- Fixed: changes made on the camera - aperture, ISO, shutter - now reach the app promptly instead of lagging or never arriving.
-- Fixed: HEIF photos were missing from the media browser entirely; they are listed now.
-- Fixed: connecting a second body no longer changes its settings, and pickers only offer what your camera supports.
-- Display settings are per DISP mode, with an Edit view for showing or hiding monitor elements.
-- Photo filters are photo filters: JPEG/HEIF/NEF, L/M/S, date ranges.
+- Fixed: a USB-C camera error or unplug could crash the app.
+- Fixed: the Wi-Fi detail scanner no longer gives up after one bad frame, and you can always type the network and key by hand.
+- Fixed: aperture, ISO and shutter changes made on the camera now reach the app promptly.
+- Fixed: HEIF photos were missing from the media browser; connecting a second body no longer alters its settings.
+- New: per-DISP display settings with an Edit view, and photo filters for photos.

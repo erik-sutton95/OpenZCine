@@ -147,6 +147,15 @@ All notable changes to this project are documented here. The format is based on
   ending the session. The camera-event reader could re-arm a transfer the system still owned; it now
   hands each one back before starting the next, and an unrecoverable event channel closes the USB
   session cleanly.
+- **Android: the Wi-Fi detail scanner no longer disables itself over one bad frame, and pairing
+  always has a manual path.** The bundled text recogniser loads its model lazily on the first frame,
+  so the client looks healthy and the *frames* fail; the analyser turned that very first failure
+  into a permanent "recogniser unavailable" and "Try again" re-entered the same one-strike loop. It
+  now tolerates a warm-up, distinguishes a permanent incompatibility from a temporary one, and keeps
+  a privacy-safe failure category in local diagnostics instead of discarding the cause. Android also
+  had **no manual SSID/key entry at all** — the first-pair wizard always opened the scanner, so a
+  failed scan dead-ended pairing entirely; it now reuses the shared core's credential validation,
+  the same one iOS has always had.
 - **The focus dial no longer stalls or blocks tap-to-focus.** A refused focus drive retried by
   count, and each attempt could spend seconds polling the camera for readiness — so one drag could
   own the single camera command channel long enough that the body answered every AF-area change
