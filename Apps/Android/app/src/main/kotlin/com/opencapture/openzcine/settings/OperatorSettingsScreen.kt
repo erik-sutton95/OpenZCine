@@ -2543,6 +2543,8 @@ private fun DisplayRows(
             settings.resetCleanViewPins()
             onInteraction()
         },
+        // The caption IS the feature explanation here — never let it truncate.
+        captionMaxLines = Int.MAX_VALUE,
     ) {
         DisplayToggleGrid(
             compact = compact,
@@ -2566,6 +2568,8 @@ private fun DisplayRows(
             settings.resetChromeVisibility()
             onInteraction()
         },
+        // Carries the unlock guarantee — a `…` here would hide a consequential rule.
+        captionMaxLines = Int.MAX_VALUE,
     ) {
         DisplayToggleGrid(
             compact = compact,

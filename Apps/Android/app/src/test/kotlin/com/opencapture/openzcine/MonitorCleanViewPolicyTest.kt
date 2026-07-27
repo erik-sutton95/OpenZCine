@@ -131,6 +131,42 @@ class MonitorCleanViewPolicyTest {
     }
 
     @Test
+    fun `a hidden lock button still renders while controls are locked`() {
+        // The lock button is the only control that clears the lock, so hiding it must never
+        // strand an operator who locked first and hid it after. Same rule as the core's
+        // `MonitorChromePolicy.showsLockControl`.
+        assertTrue(
+            monitorShowsLockControl(MonitorDisplayMode.LIVE, lockButtonVisible = true, interfaceLocked = false),
+        )
+        assertFalse(
+            monitorShowsLockControl(MonitorDisplayMode.LIVE, lockButtonVisible = false, interfaceLocked = false),
+        )
+        assertTrue(
+            monitorShowsLockControl(MonitorDisplayMode.LIVE, lockButtonVisible = false, interfaceLocked = true),
+        )
+        assertTrue(
+            monitorShowsLockControl(MonitorDisplayMode.COMMAND, lockButtonVisible = false, interfaceLocked = true),
+        )
+        // Clean strips the rail either way — not a fourth clean-view exception.
+        assertFalse(
+            monitorShowsLockControl(MonitorDisplayMode.CLEAN, lockButtonVisible = true, interfaceLocked = true),
+        )
+    }
+
+    @Test
+    fun `battery indicators hide on request and always in clean`() {
+        assertTrue(monitorShowsBatteryIndicators(MonitorDisplayMode.LIVE, batteryIndicatorsVisible = true))
+        assertTrue(monitorShowsBatteryIndicators(MonitorDisplayMode.COMMAND, batteryIndicatorsVisible = true))
+        assertFalse(monitorShowsBatteryIndicators(MonitorDisplayMode.CLEAN, batteryIndicatorsVisible = true))
+        for (mode in MonitorDisplayMode.entries) {
+            assertFalse(
+                monitorShowsBatteryIndicators(mode, batteryIndicatorsVisible = false),
+                "batteries must stay hidden in $mode",
+            )
+        }
+    }
+
+    @Test
     fun `command keeps the timecode source while dropping every preview consumer`() {
         val source = object : com.opencapture.openzcine.core.LiveFrameSource {
             override val frames = kotlinx.coroutines.flow.emptyFlow<com.opencapture.openzcine.core.LiveFrame>()

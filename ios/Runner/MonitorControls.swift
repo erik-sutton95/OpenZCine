@@ -354,11 +354,12 @@ struct SettingsGroupCard<Content: View>: View {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold, design: .default))
                         .foregroundStyle(LiveDesign.text)
+                    // Wraps rather than truncating: a card whose caption has to explain a rule
+                    // (clean view, monitor chrome) loses the explanation to a `…` at one line.
                     Text(caption)
                         .font(.system(size: 11.5, weight: .regular, design: .default))
                         .foregroundStyle(LiveDesign.muted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
                 if let onReset {

@@ -4065,7 +4065,7 @@ struct OperatorSettingsPanel: View {
         SettingsGroupCard(
             title: "Keep in Clean View",
             caption:
-                "Clean view (DISP 2) shows the image and nothing else. Anything switched on here stays on screen anyway — everything else goes, and comes straight back when you leave clean.",
+                "Clean view (DISP 2) shows the image and nothing else. Anything switched on here stays on screen anyway.",
             onReset: { model.resetCleanViewPins() },
             content: {
                 CleanViewPinStrip()
@@ -4076,36 +4076,37 @@ struct OperatorSettingsPanel: View {
         SettingsGroupCard(
             title: "Monitor Chrome",
             caption:
-                "Hide the parts of the monitor you do not ride. Clean view (DISP 2) hides all of it regardless. The lock key stays put while controls are locked — it is the only way to unlock them.",
-            onReset: { model.resetChromeVisibility() }
-        ) {
-            displayToggleGrid([
-                (
-                    "Top Bar", model.preferences.displayChrome.statusBarVisible,
-                    { model.toggleChrome(.statusBar) }
-                ),
-                (
-                    "Side Rail", model.preferences.displayChrome.sideRailsVisible,
-                    { model.toggleChrome(.sideRails) }
-                ),
-                (
-                    "Tool Bar", model.preferences.displayChrome.assistToolbarVisible,
-                    { model.toggleChrome(.assistToolbar) }
-                ),
-                (
-                    "Camera Values", model.preferences.displayChrome.cameraValuesVisible,
-                    { model.toggleChrome(.cameraValues) }
-                ),
-                (
-                    "Lock Button", model.preferences.displayChrome.lockButtonVisible,
-                    { model.toggleChrome(.lockButton) }
-                ),
-                (
-                    "Batteries", model.preferences.displayChrome.batteryIndicatorsVisible,
-                    { model.toggleChrome(.batteryIndicators) }
-                ),
-            ])
-        }
+                "Hide parts of the monitor you do not ride. Clean view hides all of it regardless; the lock button stays while controls are locked, since it is the only way to unlock them.",
+            onReset: { model.resetChromeVisibility() },
+            content: {
+                displayToggleGrid([
+                    (
+                        "Top Bar", model.preferences.displayChrome.statusBarVisible,
+                        { model.toggleChrome(.statusBar) }
+                    ),
+                    (
+                        "Side Rail", model.preferences.displayChrome.sideRailsVisible,
+                        { model.toggleChrome(.sideRails) }
+                    ),
+                    (
+                        "Tool Bar", model.preferences.displayChrome.assistToolbarVisible,
+                        { model.toggleChrome(.assistToolbar) }
+                    ),
+                    (
+                        "Camera Values", model.preferences.displayChrome.cameraValuesVisible,
+                        { model.toggleChrome(.cameraValues) }
+                    ),
+                    (
+                        "Lock Button", model.preferences.displayChrome.lockButtonVisible,
+                        { model.toggleChrome(.lockButton) }
+                    ),
+                    (
+                        "Batteries", model.preferences.displayChrome.batteryIndicatorsVisible,
+                        { model.toggleChrome(.batteryIndicators) }
+                    ),
+                ])
+            }
+        )
 
         SettingsGroupCard(
             title: "Live Status Readouts", caption: "Hide readouts you do not ride during a take."
