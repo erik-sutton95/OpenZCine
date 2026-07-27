@@ -1006,9 +1006,7 @@ private func splitEraConfiguration(
             .histogram, mode: .live, context: .playback, preferences: prefs))
 }
 
-@Test func cleanViewStripsChromeAndDefersPopups() {
-    #expect(MonitorChromePolicy.showsChrome(in: .live))
-    #expect(!MonitorChromePolicy.showsChrome(in: .clean))
+@Test func cleanViewDefersPopups() {
     #expect(MonitorChromePolicy.allowsPopups(in: .live))
     #expect(!MonitorChromePolicy.allowsPopups(in: .clean))
     // Command's dashboard tiles open the value pickers, so pop-ups stay allowed there.

@@ -2,4 +2,4 @@
 - Fixed: the Wi-Fi detail scanner no longer gives up after one bad frame, and you can always type the network and key by hand.
 - Fixed: aperture, ISO and shutter changes made on the camera now reach the app promptly.
 - Fixed: HEIF photos were missing from the media browser; connecting a second body no longer alters its settings.
-- New: per-DISP display settings with an Edit view, and photo filters for photos.
+- New: per-DISP display settings, an Edit view that hides any monitor element, split video/photo layouts.

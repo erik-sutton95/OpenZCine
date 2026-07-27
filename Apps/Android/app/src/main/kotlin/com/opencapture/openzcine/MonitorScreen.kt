@@ -1359,7 +1359,6 @@ internal fun MonitorScreen(
         // bare image unless the operator pinned a tool to it, and it strips the deck/rails/bands
         // as well (#256).
         val cleanViewPins = operatorSettings.cleanViewPinnedTools
-        val showsChrome = monitorShowsChrome(effectiveDisplayMode)
         // Chrome is per DISP mode (iOS `OperatorPreferences.chrome(for:)`) — read this mode's set,
         // never the global one, or DISP 2's bare image leaks back into DISP 1.
         // …and per capture side: a cinema rig and a stills body keep separate layouts (iOS
@@ -2156,7 +2155,6 @@ internal fun MonitorScreen(
                     zones = zones,
                     viewportHeight = viewportHeight,
                     isCommand = isCommand,
-                    showsChrome = showsChrome,
                     isFill = isPortraitFill,
                     locked = locked,
                     recording = recording,
@@ -3316,7 +3314,6 @@ private fun PortraitChrome(
     viewportHeight: Float,
     isCommand: Boolean,
     /** Whether non-critical chrome mounts; clean view (DISP 2) strips it all (#256). */
-    showsChrome: Boolean,
     isFill: Boolean,
     locked: Boolean,
     recording: Boolean,

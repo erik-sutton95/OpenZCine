@@ -116,6 +116,19 @@ All notable changes to this project are documented here. The format is based on
   and nothing else — apart from four deliberate exceptions: camera fault and thermal/card warnings,
   the recording tally, the record control while a take is rolling, and the DISP key itself (the way
   back out). Any tool can be pinned back on per tool. Both platforms.
+- **Every monitor element is its own switch, per DISP mode and per capture side.** The right rail
+  was one preference, so record, Media, Settings and DISP — the things most operators want gone —
+  had no control at all; the AF box and two status-bar cells had none either. All of them are
+  configurable now, and **DISP 2 offers exactly the same list as DISP 1**, with different defaults:
+  the image, the rail, the focus box and the batteries on, everything else off. Video and photo
+  keep separate layouts, chosen with one switch at the top of the Display tab. Nothing can be
+  locked from the inside: the record control returns while a take is rolling, the Settings key
+  returns when no enabled DISP mode carries one, the lock key returns whenever controls are locked,
+  and the feed swipe changes DISP mode with no key at all. Both platforms.
+- **The top bar obeys the switches.** Clean hard-coded its deck down to timecode and FPS, so the
+  Edit view showed CODEC and MEDIA badges, the operator switched them on, and closing the editor
+  dropped them again. The portrait bar honoured none of the per-cell switches at all. Both read
+  the same configuration as the landscape deck now. Both platforms.
 - **Command view (DISP 3) no longer freezes the timecode.** It hid the image and ended live view to
   keep the camera cool — but timecode only exists in the live-view frame header, so the dashboard's
   hero clock stopped at whatever the last frame before the switch carried, which looks plausible

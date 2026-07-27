@@ -1194,12 +1194,6 @@ struct MonitorShell: View {
         model.renderedFitScopes.count
     }
 
-    /// Whether the non-critical monitor chrome (decks, rails, system band, quick buttons) mounts.
-    /// One read of the core rule so no surface can drift out of clean view (#256).
-    private var showsChrome: Bool {
-        MonitorChromePolicy.showsChrome(in: model.displayMode)
-    }
-
     /// The zone map the Edit view's banner places against. Recomputed from the same inputs the
     /// shells use — the banner is mounted above `allowsHitTesting(false)`, outside the branch that
     /// already holds `map`, and only ever while the editor is open.

@@ -62,15 +62,6 @@ public enum MonitorChromePolicy {
         }
     }
 
-    /// Whether `mode` renders the incidental chrome that has no switch of its own — the portrait
-    /// REC-options key and the focus-recenter affordance's mode gate.
-    ///
-    /// Per-element visibility is not this call's business: each DISP/capture pair owns its own
-    /// ``DisplayChromeVisibility`` (``OperatorPreferences/chrome(for:capture:)``), and clean simply
-    /// ships with most of it off. Prefer ``showsSection(_:mode:capture:preferences:)`` or
-    /// ``sideRailPlan(mode:preferences:capture:interfaceLocked:recordingOrPending:)``.
-    public static func showsChrome(in mode: DispMode) -> Bool { mode != .clean }
-
     /// Whether `section` renders in `mode` right now. The one read every chrome mount site should
     /// use, so a mode's configuration cannot drift between shells or orientations.
     public static func showsSection(
