@@ -2296,6 +2296,14 @@ final class NativeAppModel {
             sessionRecovery = state
         }
 
+        /// Drives the entry point a physical detach reaches once the transport has closed and the
+        /// event drain has surfaced the ended channel. Unlike `forceSessionRecoveryState` this
+        /// starts the real bounded loop, so a test exercises the shipped path rather than a
+        /// painted state.
+        func debugSimulateTransportDetach() {
+            beginSessionRecovery(host: cameraHost, reason: "transport detached (debug)")
+        }
+
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
@@ -3705,7 +3713,14 @@ final class NativeAppModel {
                 if Task.isCancelled { return }
                 // A stream that ran healthily for a while before blipping resets the streak — only
                 // rapid back-to-back stalls (each <30s of streaming) count toward escalation.
-                let streamedHealthily = Date().timeIntervalSince(streamStart) > 30
+                // Measured from the last GOOD FRAME, not from wall clock: an attempt against a
+                // dead link spends 30s+ purely in transaction deadlines (worse over USB, where
+                // ImageCaptureCore does not fail fast), so the wall-clock reading reset the streak
+                // every pass and the escalation to bounded recovery never fired — the monitor
+                // restarted live view forever on a camera that was physically unplugged (#254).
+                // Android already counts pump deaths this way (`consecutivePumpEnds`).
+                let streamedHealthily =
+                    (lastGoodFrameAt ?? .distantPast).timeIntervalSince(streamStart) > 30
                 switch outcome {
                 case .taskCancelled:
                     return

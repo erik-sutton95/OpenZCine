@@ -94,6 +94,9 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
     /// not issue a second open while one is in flight — ICC swallows the duplicate and the reply
     /// for the first goes to the pre-warm delegate, so a connect started in that window would hang.
     private var prewarmOpensInFlight: Set<String> = []
+    /// The transport currently driving a session, so a cable pull can tear down that exact
+    /// session. Weak: the session owns the transport, and a closed one parks its device back here.
+    private weak var liveTransport: USBCameraTransport?
     private var isStarted = false
     private var authorizationStatus: ICAuthorizationStatus = .notDetermined
 
@@ -199,7 +202,16 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         lock.lock()
         devices.removeAll { $0 === device }
         prewarmOpensInFlight.remove(Self.hostKey(for: device))
+        let transport = liveTransport
         lock.unlock()
+        // The cable was pulled. This browser callback is the removal signal ImageCaptureCore is
+        // relied on to deliver; the session's own `didRemove` was the ONLY thing wired to teardown
+        // and in the field it never arrived, so the event stream stayed open, nothing reached
+        // `recoverFromEndedEventChannel`, and the monitor sat on a dead session until the operator
+        // force-quit (#254). Outside the lock, and identity-matched inside `closeIfDetached` so
+        // unplugging a second, unrelated camera cannot kill a live session; `close()` is idempotent
+        // so both callbacks arriving is harmless. [verify-on-HW: ZR, pull the USB-C cable]
+        transport?.closeIfDetached(device)
         usbLogger.info(
             "USB camera detached: \(device.name ?? "unnamed", privacy: .private(mask: .hash))")
         AppDiagnostics.shared.record(.usbCameraDetached)
@@ -221,11 +233,20 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
         lock.withLock { prewarmOpensInFlight.contains(Self.hostKey(for: device)) }
     }
 
+    /// Registers the transport that is taking a device over, so a detach of *that* device tears
+    /// down *that* session (see `deviceBrowser(_:didRemove:moreGoing:)`).
+    fileprivate func adoptSession(_ transport: USBCameraTransport) {
+        lock.withLock { liveTransport = transport }
+    }
+
     /// Reclaims delegate duties for a device whose transport is done with it, leaving the ICC
     /// session open — the warm catalog makes the next connect adopt instantly instead of paying
     /// the enumeration sweep again. The session ends with the cable, not the app-level connect.
-    fileprivate func parkSession(for device: ICDevice) {
-        device.delegate = prewarmDelegate
+    /// Deregisters by transport identity, not by device: a late close from a superseded transport
+    /// must not deregister the one currently driving the session.
+    fileprivate func parkSession(for transport: USBCameraTransport) {
+        lock.withLock { if liveTransport === transport { liveTransport = nil } }
+        transport.device.delegate = prewarmDelegate
     }
 
     /// Card-scan readiness for a USB camera row. `ready` (the session-open ack) is the moment a
@@ -240,7 +261,8 @@ final class USBCameraDeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecke
 /// USB-C camera transport over ImageCaptureCore: `requestSendPTPCommand` maps one call onto one
 /// PTP transaction (PIMA 15740 generic containers), and `didReceivePTPEvent` delegate callbacks
 /// feed the event channel. ICC owns the USB endpoints and the underlying PTP session; unplugging
-/// the cable surfaces as `connectionClosed` on the next transaction or event read.
+/// the cable is surfaced by `USBCameraDeviceBrowser`'s removal callback closing this transport,
+/// which ends the event stream and fails the in-flight command with `connectionClosed`.
 // SAFETY: `@unchecked Sendable` — mutable state (`nextTransactionID`, continuations, event
 // buffer) is guarded by `lock`; transactions are serialized by `transactionGate`.
 final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegate,
@@ -273,6 +295,10 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     // mistaken for a teardown by the didCloseSession delegate callback.
     private var recycleCloseContinuation: CheckedContinuation<Void, Never>?
     private var recycleCloseInFlight = false
+    /// The ICC command currently awaiting its completion block. At most one — `transactionGate`
+    /// serializes transactions — and `close()` fails it so a detach never leaves the gate held by
+    /// a call ImageCaptureCore will not answer.
+    private var inFlightTransaction: OneShotResultContinuation?
     // Events are pushed by delegate callbacks and pulled by the session's drain loop (a single
     // consumer), buffered so a sparse reader never loses a record start/stop notification.
     private var eventStreamIterator: AsyncStream<PTPEvent>.AsyncIterator
@@ -284,6 +310,7 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
     /// ignores it.
     func open(timeout: Duration = .seconds(30), recycleFirst: Bool = false) async throws {
         device.delegate = self
+        USBCameraDeviceBrowser.shared.adoptSession(self)
         // If the attach-time pre-warm's open is still in flight, wait it out instead of issuing a
         // duplicate requestOpenSession — ICC swallows the duplicate, so a connect started in that
         // window used to hang for the full timeout.
@@ -353,6 +380,8 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
         // Resume-once box: ICC's completion has no cancellation, so on deadline breach we resume
         // with a timeout and let the eventual completion fall into the already-resumed box.
         let box = OneShotResultContinuation()
+        lock.withLock { inFlightTransaction = box }
+        defer { lock.withLock { if inFlightTransaction === box { inFlightTransaction = nil } } }
         return try await withCheckedThrowingContinuation { continuation in
             box.store(continuation)
             let deadlineTask: Task<Void, Never>? = deadline.map { limit in
@@ -391,19 +420,34 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
         return event
     }
 
+    /// Closes this transport when `detached` is the device backing it. The detach signal is
+    /// broadcast per device, so the identity check is what keeps a second camera leaving the bus
+    /// from killing an unrelated live session.
+    func closeIfDetached(_ detached: ICDevice) {
+        guard detached === device else { return }
+        close()
+    }
+
     func close() {
         lock.lock()
         let alreadyClosed = isClosed
         isClosed = true
+        let pending = alreadyClosed ? nil : inFlightTransaction
+        if !alreadyClosed { inFlightTransaction = nil }
         lock.unlock()
         guard !alreadyClosed else { return }
         eventContinuation.finish()
+        // Fail the command ICC is still holding rather than waiting out its deadline. On a cable
+        // pull the completion block may never run, and until this transaction returns it owns
+        // `transactionGate` — so `stopLiveView`/`shutdown` queue behind it and recovery itself
+        // stalls. That queued teardown is the "stuck, had to force close the app" half of #254.
+        pending?.resume(throwing: NativeCameraSessionError.connectionClosed)
         resumeOpen(throwing: NativeCameraSessionError.connectionClosed)
         // Keep the ICC session warm instead of closing it: requestCloseSession discards the
         // finished card catalog, so the next connect would pay the whole enumeration sweep again.
         // Park the delegate back on the browser; the session dies with the cable (didRemove), not
         // with an app-level disconnect. [verify-on-HW: ZR reconnect-after-disconnect over USB-C]
-        USBCameraDeviceBrowser.shared.parkSession(for: device)
+        USBCameraDeviceBrowser.shared.parkSession(for: self)
     }
 
     /// Closes a stale adopted session and waits (bounded) for ICC's ack so a fresh open can
@@ -529,8 +573,10 @@ final class USBCameraTransport: NSObject, CameraTransport, ICCameraDeviceDelegat
 
     func didRemove(_ device: ICDevice) {
         // Unplugged: end the event stream (the drain loop surfaces connectionClosed) and fail
-        // any in-flight open.
-        close()
+        // any in-flight open. NOT the load-bearing detach path — field testing showed a cable pull
+        // that never reached here; the browser's own `didRemove` drives teardown and this is the
+        // duplicate that arrives when ICC does deliver it.
+        closeIfDetached(device)
     }
 
     // MARK: - ICCameraDeviceDelegate
