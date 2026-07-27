@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -1161,12 +1162,19 @@ internal fun CommandDashboard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RecordChip(recording)
-                // iOS CommandTimecodeReadout: monospaced 60pt.
-                RetainedCameraTimecodeReadout(
-                    retention = timecodeRetention,
-                    sessionState = sessionState,
-                    sizeSp = 60f,
-                )
+                // iOS CommandTimecodeReadout: monospaced 60pt, shrinking into whatever the
+                // chip leaves (`minimumScaleFactor(0.78)`) — the hero timecode is a hair too
+                // wide for the column on a 16:9 landscape deck, where the dashboard narrows to
+                // clear the side rail.
+                BoxWithConstraints(Modifier.weight(1f)) {
+                    FitScale(maxWidth) {
+                        RetainedCameraTimecodeReadout(
+                            retention = timecodeRetention,
+                            sessionState = sessionState,
+                            sizeSp = 60f,
+                        )
+                    }
+                }
             }
             CommandHealthStrip(
                 presentation = presentation,
@@ -1335,10 +1343,11 @@ private fun CommandStatusBlock(
         )
         Text(
             value,
-            // iOS: 12 medium mono
+            // iOS: 12 medium mono, shrinking to fit (`minimumScaleFactor(0.55)`).
             style = chromeStyle(12f, FontWeight.Medium, mono = true),
             color = if (good) LiveDesign.good else LiveDesign.text,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(6.6.sp, 12.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
     }
@@ -1582,9 +1591,11 @@ private fun CommandTile(
     ) {
         Text(
             tile.title.uppercase(),
+            // iOS CommandTile title: 10 bold, shrinking to fit (`minimumScaleFactor(0.64)`).
             style = chromeStyle(10f, FontWeight.Bold),
             color = LiveDesign.faint,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(6.4.sp, 10.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1820,11 +1831,13 @@ private fun CommandSmallTile(
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        // Both shrink to fit rather than clip, matching iOS's 0.66 / 0.55 minimum scale factors.
         Text(
             cell.title.uppercase(),
             style = chromeStyle(9f, FontWeight.Bold),
             color = LiveDesign.muted,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(5.9.sp, 9.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
         Text(
@@ -1832,6 +1845,7 @@ private fun CommandSmallTile(
             style = chromeStyle(15f, FontWeight.Medium, mono = true),
             color = valueColor,
             maxLines = 1,
+            autoSize = TextAutoSize.StepBased(8.2.sp, 15.sp, 0.5.sp),
             overflow = TextOverflow.Clip,
         )
     }
