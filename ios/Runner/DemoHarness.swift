@@ -406,24 +406,36 @@ enum DemoHarness {
                     }
                 }
                 if let raw = env["ZC_DEMO_CHROME_HIDE"] {
-                    // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated:
-                    // lock, battery, topbar, rail, toolbar, values) so each hidden state can be
-                    // captured headlessly — simctl cannot drive the Settings switches. Applies to
-                    // the DISP mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else DISP 1.
+                    // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated
+                    // `DisplayChromeVisibility.Section` raw values, e.g.
+                    // "lockButton,railMedia,focusBox") so each hidden state can be captured
+                    // headlessly — simctl cannot drive the Settings switches. Applies to the DISP
+                    // mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else the current one,
+                    // on the capture side the body reports.
                     let target = Self.demoDispMode(env) ?? model.displayMode
-                    var chrome = model.preferences.chrome(for: target)
+                    let capture = model.captureLayoutMode
+                    var chrome = model.preferences.chrome(for: target, capture: capture)
                     for value in raw.split(separator: ",") {
-                        switch value {
-                        case "lock": chrome.lockButtonVisible = false
-                        case "battery": chrome.batteryIndicatorsVisible = false
-                        case "topbar": chrome.statusBarVisible = false
-                        case "rail": chrome.sideRailsVisible = false
-                        case "toolbar": chrome.assistToolbarVisible = false
-                        case "values": chrome.cameraValuesVisible = false
-                        default: break
+                        // The short names the earlier hooks used, then the section raw values.
+                        let section: DisplayChromeVisibility.Section? =
+                            switch value {
+                            case "lock": .lockButton
+                            case "battery": .batteryIndicators
+                            case "topbar": .statusBar
+                            case "toolbar": .assistToolbar
+                            case "values": .cameraValues
+                            default: DisplayChromeVisibility.Section(rawValue: String(value))
+                            }
+                        if let section, chrome.isVisible(section) { chrome.toggle(section) }
+                        // "rail" is the retired whole-rail blob — expand it to the four controls.
+                        if value == "rail" {
+                            for control in DisplayChromeVisibility.Section.railControls
+                            where chrome.isVisible(control) {
+                                chrome.toggle(control)
+                            }
                         }
                     }
-                    model.preferences.setChrome(chrome, for: target)
+                    model.preferences.setChrome(chrome, for: target, capture: capture)
                 }
                 if let mode = Self.demoDispMode(env), env["ZC_DEMO_CHROME_EDIT"] != nil {
                     // Demo/screenshot affordance: open the Edit view on one DISP mode

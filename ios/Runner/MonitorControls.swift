@@ -1575,7 +1575,8 @@ struct ChromeEditable: ViewModifier {
 
     func body(content: Content) -> some View {
         if let mode, DisplayChromeVisibility.isConfigurable(section, in: mode) {
-            let on = model.preferences.chrome(for: mode).isVisible(section)
+            let on = model.preferences.chrome(for: mode, capture: model.captureLayoutMode)
+                .isVisible(section)
             content
                 .opacity(on ? 1 : 0.3)
                 .background {
@@ -1611,7 +1612,8 @@ struct ChromeEditBadge: View {
     let mode: DispMode
 
     var body: some View {
-        let on = model.preferences.chrome(for: mode).isVisible(section)
+        let on = model.preferences.chrome(for: mode, capture: model.captureLayoutMode)
+            .isVisible(section)
         Button {
             OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
             model.toggleChrome(section, for: mode)
@@ -1677,8 +1679,11 @@ struct ChromeEditBadgeLayer: View {
     }
 }
 
-/// The Edit view's own chrome: names the mode being edited and gets the operator back out. Floats
-/// bottom-centre over the feed, clear of the rails on both sides.
+/// The Edit view's own chrome: names the mode being edited and gets the operator back out.
+///
+/// Placed by its caller on the **feed frame**, not the screen: in landscape the rails and the
+/// notch lane sit outside the image, so a screen-centred banner reads as off to one side of the
+/// thing being edited.
 struct ChromeEditBanner: View {
     @Environment(NativeAppModel.self) private var model
     let mode: DispMode
@@ -1696,6 +1701,8 @@ struct ChromeEditBanner: View {
                     .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(LiveDesign.muted)
             }
+            // Done goes back to Display settings — the operator came from there and the other two
+            // DISP sections are what they came to arrange.
             Button {
                 model.endChromeEditing()
             } label: {
