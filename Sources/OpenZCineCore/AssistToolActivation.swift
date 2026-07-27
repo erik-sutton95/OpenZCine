@@ -4,12 +4,15 @@ import Foundation
 /// ask this instead of testing `displayMode == .clean` at each render site — scattered tests are
 /// exactly how scopes, traffic lights and pop-ups survived clean view (#256).
 ///
+/// Each mode owns its own ``DisplayChromeVisibility`` (``OperatorPreferences/chrome(for:)``), so
+/// what a mode shows is configuration, not a hard-coded per-mode branch. The stock configurations:
+///
 /// - `.live` (DISP 1): everything the operator switched on.
-/// - `.clean` (DISP 2): **a bare image**. Every view-assist tool, the status deck, the side rails,
-///   the bottom strips and every non-critical pop-up are hidden. A tool comes back only when the
-///   operator pins it via ``OperatorPreferences/cleanViewPinnedTools`` — that pin is per tool and
-///   off for all 17 by default. Leaving clean restores the prior visibility exactly, because the
-///   pin is a *filter*: clean never mutates the operator's on/off set.
+/// - `.clean` (DISP 2): **a bare image**. Every view-assist tool, the status deck, the bottom
+///   strips and every non-critical pop-up start hidden. A tool comes back only when the operator
+///   lists it in ``OperatorPreferences/cleanViewPinnedTools`` — off for all 17 by default. Leaving
+///   clean restores the prior visibility exactly, because the list is a *filter*: clean never
+///   mutates the operator's on/off set.
 /// - `.command` (DISP 3): the data dashboard owns the screen; there is no feed, so no feed overlay
 ///   or scope renders regardless of pins.
 ///
@@ -56,9 +59,25 @@ public enum MonitorChromePolicy {
         }
     }
 
-    /// Whether non-critical monitor chrome — status deck, side rails, assist/capture strips,
-    /// status readouts — renders. Clean strips all of it; command replaces it with the dashboard.
+    /// Whether `mode` renders the *full* chrome layer — the auxiliary rail keys (Settings, Media)
+    /// and the opaque system band behind them.
+    ///
+    /// Per-element visibility is no longer this call's business: each DISP mode owns its own
+    /// ``DisplayChromeVisibility`` (``OperatorPreferences/chrome(for:)``), and clean simply ships
+    /// with everything off. What survives here is the one rule configuration cannot express —
+    /// clean's rail collapses to its two essentials (the DISP key, and the record control while a
+    /// take is rolling) so the operator always has a way out of the bare image.
     public static func showsChrome(in mode: DispMode) -> Bool { mode != .clean }
+
+    /// Whether `section` renders in `mode` right now. The one read every chrome mount site should
+    /// use, so a mode's configuration cannot drift between shells or orientations.
+    public static func showsSection(
+        _ section: DisplayChromeVisibility.Section,
+        mode: DispMode,
+        preferences: OperatorPreferences
+    ) -> Bool {
+        preferences.chrome(for: mode).isVisible(section)
+    }
 
     /// Whether the rail's lock key renders.
     ///
@@ -73,16 +92,16 @@ public enum MonitorChromePolicy {
         interfaceLocked: Bool
     ) -> Bool {
         guard showsChrome(in: mode) else { return false }
-        return preferences.displayChrome.lockButtonVisible || interfaceLocked
+        return preferences.chrome(for: mode).lockButtonVisible || interfaceLocked
     }
 
-    /// Whether the battery cluster renders. Pure chrome — clean strips it, and the operator may
-    /// hide it in any other mode.
+    /// Whether the battery cluster renders. Pure chrome, configured per DISP mode — clean ships
+    /// with it off, and the operator may hide it in any other mode.
     public static func showsBatteryIndicators(
         mode: DispMode,
         preferences: OperatorPreferences
     ) -> Bool {
-        showsChrome(in: mode) && preferences.displayChrome.batteryIndicatorsVisible
+        preferences.chrome(for: mode).batteryIndicatorsVisible
     }
 
     /// What the side rail still mounts for one chrome/recording state.
@@ -107,7 +126,7 @@ public enum MonitorChromePolicy {
         preferences: OperatorPreferences,
         recordingOrPending: Bool
     ) -> SideRailPlan {
-        let visible = preferences.displayChrome.sideRailsVisible
+        let visible = preferences.chrome(for: mode).sideRailsVisible
         return SideRailPlan(
             fullRail: visible,
             // Clean already strips the rail by design and offers DISP as its way out; a second
