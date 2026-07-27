@@ -928,6 +928,9 @@ struct PickerPanel: View {
     @State private var screenModes: [String] = []
     /// Codecs the camera advertises, captured on appear (same rationale as `screenModes`).
     @State private var codecModes: [String] = []
+    /// The same codecs as picker rows, so a row the body offers at two bit depths can flank
+    /// itself with them. Captured on appear alongside `codecModes`.
+    @State private var codecRows: [PTPCameraCodecFamily] = []
 
     private var isShutterControlLocked: Bool {
         picker == .shutter && model.lockedControls.contains(.shutter)
@@ -975,6 +978,32 @@ struct PickerPanel: View {
             && activePickerModes[selectedMode].title == "Kelvin"
     }
 
+    /// The advertised bit depths flanking the settled CODEC row — 8-bit left, 10-bit right, the
+    /// same shape as WB Kelvin's −10 / +10 (Erik's ask on #276). Nil for every codec the body
+    /// advertises at a single depth, so a depth the connected body cannot record is never a
+    /// button. Both sides write an exact advertised value; the filled one is the depth the
+    /// camera's own readback reports, so the pair survives closing and reopening the picker.
+    private var codecDepthAdjust: DrumSideAdjust? {
+        guard picker == .codec,
+            let row = codecRows.first(where: { $0.label == selection }),
+            row.offersBitDepthChoice,
+            let low = row.depths.first, let high = row.depths.last
+        else { return nil }
+        let active = model.activeCodecMode?.bitDepth
+        return DrumSideAdjust(
+            minusEnabled: !isDrumInteractionLocked,
+            plusEnabled: !isDrumInteractionLocked,
+            onMinus: { model.applyPickerValue(low.label, for: .codec) },
+            onPlus: { model.applyPickerValue(high.label, for: .codec) },
+            minusTitle: low.bitDepthLabel,
+            plusTitle: high.bitDepthLabel,
+            minusAccessibilityLabel: "Record \(row.label) at \(low.bitDepth) bit",
+            plusAccessibilityLabel: "Record \(row.label) at \(high.bitDepth) bit",
+            minusSelected: active == low.bitDepth,
+            plusSelected: active == high.bitDepth,
+            hint: "Use the bit-depth buttons beside the codec to switch depth")
+    }
+
     private func applyKelvinSideStep(delta: Int) {
         guard
             let next = WhiteBalanceKelvinPolicy.fineAdjust(from: selection, delta: delta),
@@ -1009,9 +1038,11 @@ struct PickerPanel: View {
                         selection: $selection,
                         markedValues: markedValues,
                         isInteractive: !isDrumInteractionLocked,
-                        // −10 / +10 permanently flank the selected Kelvin value.
-                        sideAdjust: isKelvinMode
-                            ? DrumSideAdjust(
+                        // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
+                        // reuses the pair for the bit depths a body advertises for that codec.
+                        sideAdjust: !isKelvinMode
+                            ? codecDepthAdjust
+                            : DrumSideAdjust(
                                 minusEnabled: !isDrumInteractionLocked
                                     && WhiteBalanceKelvinPolicy.canFineAdjust(
                                         from: selection,
@@ -1028,7 +1059,7 @@ struct PickerPanel: View {
                                     applyKelvinSideStep(
                                         delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
                                 }
-                            ) : nil
+                            )
                     )
                     // Fresh wheel per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
                     // *and* the centred value at once, which `.scrollPosition` alone doesn't follow
@@ -1059,7 +1090,8 @@ struct PickerPanel: View {
                 screenModes = model.resolutionOptions
             }
             if picker == .codec {
-                codecModes = model.codecOptions
+                codecRows = model.codecFamilies
+                codecModes = codecRows.map(\.label)
             }
             // Dual-circuit pickers always open on the camera's active circuit (`movieBaseISO` /
             // `movieShutterMode`), never via overlapping ISO steps or `showPicker`'s default mode.
@@ -1557,12 +1589,24 @@ struct StabilizationPickerPanel: View {
 /// to each value like a drum, with the centred value enlarged and gold, the rest dimmed, bracketed
 /// by hairlines and faded at the edges. The centred value is reported through `selection`, updating
 /// as the drum locks onto each detent.
-/// −10 / +10 flanking the settled drum value (Kelvin fine-tune).
+/// A pair of buttons flanking the settled drum value: WB Kelvin's −10 / +10, and the CODEC
+/// drum's advertised bit depths (8-bit left, 10-bit right — same idiom, Erik's ask on #276).
+/// The captions default to the Kelvin pair so that call site stays as it was.
 struct DrumSideAdjust {
     var minusEnabled: Bool
     var plusEnabled: Bool
     var onMinus: () -> Void
     var onPlus: () -> Void
+    var minusTitle: String = "−10"
+    var plusTitle: String = "+10"
+    var minusAccessibilityLabel: String = "Decrease Kelvin by 10"
+    var plusAccessibilityLabel: String = "Increase Kelvin by 10"
+    /// Filled treatment for a side that IS the current camera value (the active bit depth).
+    /// Kelvin's steps are relative nudges, so neither side is ever "selected" there.
+    var minusSelected: Bool = false
+    var plusSelected: Bool = false
+    /// Accessibility hint for the drum carrying the pair.
+    var hint: String = "Use minus 10 and plus 10 beside the selected value to fine-adjust"
 }
 
 /// The photo Quality picker: two side-by-side drums — RAW on/off and the JPEG/HEIF tier —
@@ -1790,13 +1834,15 @@ struct AccentDrumWheel: View {
             .overlay {
                 if let sideAdjust {
                     HStack {
-                        kelvinSideButton(
-                            title: "−10", enabled: sideAdjust.minusEnabled,
-                            label: "Decrease Kelvin by 10", action: sideAdjust.onMinus)
+                        sideAdjustButton(
+                            title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
+                            selected: sideAdjust.minusSelected,
+                            label: sideAdjust.minusAccessibilityLabel, action: sideAdjust.onMinus)
                         Spacer(minLength: 0)
-                        kelvinSideButton(
-                            title: "+10", enabled: sideAdjust.plusEnabled,
-                            label: "Increase Kelvin by 10", action: sideAdjust.onPlus)
+                        sideAdjustButton(
+                            title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
+                            selected: sideAdjust.plusSelected,
+                            label: sideAdjust.plusAccessibilityLabel, action: sideAdjust.onPlus)
                     }
                     .padding(.horizontal, 4)
                     .frame(height: rowHeight)
@@ -1808,23 +1854,27 @@ struct AccentDrumWheel: View {
             .onAppear {
                 DispatchQueue.main.async { proxy.scrollTo(selection, anchor: .center) }
             }
-            .accessibilityHint(
-                sideAdjust != nil
-                    ? "Use minus 10 and plus 10 beside the selected value to fine-adjust" : "")
+            .accessibilityHint(sideAdjust?.hint ?? "")
         }
     }
 
-    private func kelvinSideButton(
-        title: String, enabled: Bool, label: String, action: @escaping () -> Void
+    /// One flanking button. `selected` fills it solid — the CODEC pair shows which bit depth the
+    /// body is on; Kelvin's relative steps never set it.
+    private func sideAdjustButton(
+        title: String, enabled: Bool, selected: Bool = false, label: String,
+        action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
+                .foregroundStyle(
+                    selected
+                        ? LiveDesign.background : (enabled ? LiveDesign.accent : LiveDesign.faint)
+                )
                 .frame(width: 56, height: 40)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(LiveDesign.accentDim)
+                        .fill(selected ? LiveDesign.accent : LiveDesign.accentDim)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1832,10 +1882,13 @@ struct AccentDrumWheel: View {
                             enabled ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
                 )
         }
-        .buttonStyle(.plain)
+        // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
+        // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
+        .buttonStyle(.zcTapTarget)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
         .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     @ViewBuilder private func optionRow(_ option: String, isCentered: Bool) -> some View {

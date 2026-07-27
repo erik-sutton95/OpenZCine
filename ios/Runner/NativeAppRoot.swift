@@ -744,8 +744,19 @@ final class NativeAppModel {
     }
     /// Codecs the camera advertises (`MovFileType` descriptor) — the only codec values we'll write.
     var cameraFileTypeModes: [PTPCameraFileTypeMode] = []
+    /// The advertised codecs as picker rows: one per family, carrying the bit depths the body
+    /// offers for it so the CODEC drum can flank the row with a depth choice (#276 follow-up).
+    var codecFamilies: [PTPCameraCodecFamily] {
+        PTPCameraPropertyDecoders.codecFamilies(cameraFileTypeModes)
+    }
     /// Codec labels for the codec picker, in the camera's advertised order.
-    var codecOptions: [String] { cameraFileTypeModes.map(\.label) }
+    var codecOptions: [String] { codecFamilies.map(\.label) }
+    /// The advertised codec mode the body is currently on — the source of the CODEC picker's
+    /// selected bit depth. Nil until the descriptor and the readback agree.
+    var activeCodecMode: PTPCameraFileTypeMode? {
+        PTPCameraPropertyDecoders.fileTypeMode(
+            forFileType: cameraPropertySnapshot.fileType, in: cameraFileTypeModes)
+    }
     /// Camera-advertised option lists for the moded AF / shutter / WB-preset settings, keyed by PTP
     /// property. Read once per poll cycle; an absent or empty entry means the picker keeps its
     /// hardcoded fallback. Reading the real values lets the pickers track whatever the connected body
@@ -7665,12 +7676,12 @@ final class NativeAppModel {
         switch picker {
         case .resolution: cameraState.resolutionFrameRate
         case .codec:
-            // Match the body's exact `MovFileType` readback onto the advertised row so the drum
-            // centres on the right H.265 bit depth. The bar's short label ("H.265") is ambiguous
-            // whenever the body offers both depths (#276) — falling back to it only while the
-            // descriptor has not landed.
-            PTPCameraPropertyDecoders.fileTypeMode(
-                forFileType: cameraPropertySnapshot.fileType, in: cameraFileTypeModes
+            // Match the body's exact `MovFileType` readback onto the advertised row, so the drum
+            // centres on the codec it is really recording — and, when that row carries a depth
+            // choice, the flanking buttons read the depth off the same match (#276). Falling back
+            // to the bar's short label only while the descriptor has not landed.
+            PTPCameraPropertyDecoders.codecFamily(
+                forFileType: cameraPropertySnapshot.fileType, in: codecFamilies
             )?.label ?? cameraState.codec
         case .mode, .stillMode: commandExposureMode
         case .stillISO: cameraPropertySnapshot.iso.map(String.init) ?? ""
@@ -8626,6 +8637,25 @@ final class NativeAppModel {
         startLiveView(session: session, skipPropertyBootstrap: true)
     }
 
+    /// The exact advertised codec mode a CODEC pick resolves to. Two shapes reach here and both
+    /// name an advertised value outright — never a label the body did not report:
+    ///
+    /// - a **bit-depth button** passes that variant's own label ("H.265 10-bit"), which matches a
+    ///   mode directly;
+    /// - a **drum row** passes the row label ("H.265"), which resolves through the codec family so
+    ///   a depth-choice row keeps the depth the body is already on rather than snapping back to
+    ///   the first advertised variant — the #276 defect, in the other direction.
+    private func codecMode(forPickedLabel label: String) -> PTPCameraFileTypeMode? {
+        if let exact = cameraFileTypeModes.first(where: { $0.label == label }) { return exact }
+        guard let family = codecFamilies.first(where: { $0.label == label }) else { return nil }
+        if let depth = activeCodecMode?.bitDepth,
+            let held = family.depths.first(where: { $0.bitDepth == depth })
+        {
+            return held
+        }
+        return family.depths.first
+    }
+
     func applyPickerValue(_ value: String, for picker: CameraPicker) {
         guard !isDemoSession else {
             applyLocalPickerValue(value, for: picker)
@@ -8660,7 +8690,7 @@ final class NativeAppModel {
             }
             writes = [PTPCameraPropertyWrite.screenSize(raw: mode.raw)]
         } else if cameraControl == .codec {
-            guard let mode = cameraFileTypeModes.first(where: { $0.label == value }) else {
+            guard let mode = codecMode(forPickedLabel: value) else {
                 connectionMessage =
                     "\(value) isn't a codec the camera reported — pick a listed one."
                 return
@@ -8702,6 +8732,14 @@ final class NativeAppModel {
                 property: write.property, data: write.data)
             publishCameraDisplayState()
             return
+        }
+        // Codec picks also land in the property snapshot when the staged descriptor can name the
+        // pick, exactly as a body's readback would — that is what the CODEC bit-depth pair reads
+        // to fill the active side, so without it the demo shows a pair that never moves.
+        if picker == .codec, let mode = codecMode(forPickedLabel: value) {
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: .movieFileType,
+                data: PTPCameraPropertyWrite.fileType(raw: mode.raw).data)
         }
         let updated = cameraState.values.map { item in
             item.label == picker.valueLabel

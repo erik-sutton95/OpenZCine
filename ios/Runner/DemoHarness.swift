@@ -199,6 +199,17 @@ enum DemoHarness {
                 if model.liveFrameImage == nil {
                     model.demoSelectFeedImage(1)
                 }
+                if env["ZC_DEMO_CODEC_DESCRIPTOR"] == "1" {
+                    // Demo/screenshot affordance: stage a Z6III-shaped `MovFileType` descriptor
+                    // (H.264 8-bit, plus H.265 at BOTH depths) and put the body on H.265 10-bit,
+                    // so the CODEC picker's advertised rows — and the bit-depth pair the
+                    // two-variant family earns — can be captured without a camera.
+                    model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+                        fromEnum: [0x0000_0801, 0x0001_0800, 0x0001_0A00, 0x0031_0A03])
+                    model.applyDemoProperty(
+                        .movieFileType,
+                        data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data)
+                }
                 if let raw = env["ZC_DEMO_PICKER"], let picker = CameraPicker(rawValue: raw) {
                     // ZC_DEMO_PICKER_MODE opens the picker on a specific mode tab (e.g. WB Tint).
                     model.showPicker(

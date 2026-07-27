@@ -1431,6 +1431,77 @@ extension RunnerTests {
         XCTAssertNil(model.mfDriveAtEnd)
     }
 
+    // MARK: - CODEC bit-depth pair (#276 follow-up)
+
+    /// The Z6III's `MovFileType` enum: H.264 once, H.265 at both depths.
+    private static let hevcBothDepthsEnum: [UInt32] = [0x0000_0801, 0x0001_0800, 0x0001_0A00]
+
+    /// The codec drum lists ONE H.265 row, and the depth beside it is whatever the body's own
+    /// readback reports — never a remembered UI choice that could disagree with the camera.
+    /// Picking a depth writes that exact advertised value; settling the drum on a family carries
+    /// the depth the body is currently recording at, and only falls back to the family's lowest
+    /// advertised depth when the body's current depth is not one it offers.
+    @MainActor
+    func testCodecRowsCarryTheirBitDepthAndKeepItAcrossAFamilySwitch() {
+        let model = NativeAppModel()
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: Self.hevcBothDepthsEnum)
+
+        // One row per family; only the two-variant family offers a depth choice.
+        XCTAssertEqual(model.codecOptions, ["H.264", "H.265"])
+        XCTAssertEqual(model.codecFamilies.map(\.offersBitDepthChoice), [false, true])
+        let hevc = model.codecFamilies[1]
+        XCTAssertEqual(hevc.depths.map(\.bitDepthLabel), ["8-bit", "10-bit"])
+
+        // Body on H.265 8-bit: the drum centres on the family row, the pair reads 8-bit.
+        model.applyDemoProperty(
+            .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0800).data)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.265")
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 8)
+
+        // Tapping "10-bit" writes the advertised 10-bit value.
+        model.applyPickerValue("H.265 10-bit", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 10)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.265")
+
+        // Settling the drum on a family row carries the depth the body is on: H.264 is 8-bit, so
+        // coming back to H.265 records 8-bit, and the pair — not a second row — moves it to 10.
+        model.applyPickerValue("H.264", for: .codec)
+        XCTAssertEqual(model.cameraValue(for: .codec), "H.264")
+        model.applyPickerValue("H.265", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0800)
+        model.applyPickerValue("H.265 10-bit", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0A00)
+    }
+
+    /// A depth the body is on but does not advertise for the codec being selected must not be
+    /// carried across — the row falls back to that family's lowest advertised depth instead of
+    /// writing a combination the body never offered.
+    @MainActor
+    func testAFamilyThatCannotHoldTheCurrentDepthFallsBackToItsLowest() {
+        let model = NativeAppModel()
+        // R3D NE is 12-bit only; H.265 is offered at 8 and 10.
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: [0x0031_0C03, 0x0001_0800, 0x0001_0A00])
+        model.applyDemoProperty(
+            .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: 0x0031_0C03).data)
+        XCTAssertEqual(model.activeCodecMode?.bitDepth, 12)
+
+        model.applyPickerValue("H.265", for: .codec)
+        XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0800)
+    }
+
+    /// A body that advertises one variant of a codec gets no depth buttons at all — a dead button
+    /// for a depth the body cannot record is exactly what this feature must not ship.
+    @MainActor
+    func testASingleVariantCodecOffersNoBitDepthChoice() {
+        let model = NativeAppModel()
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
+            fromEnum: [0x0031_0A03, 0x0002_0C02, 0x0001_0A01])
+        XCTAssertEqual(model.codecOptions, ["R3D NE", "N-RAW", "H.265"])
+        XCTAssertTrue(model.codecFamilies.allSatisfy { !$0.offersBitDepthChoice })
+    }
+
     // MARK: - Picker option sourcing (#274)
 
     /// Every function picker must name the PTP property whose descriptor drives its drum. A nil
